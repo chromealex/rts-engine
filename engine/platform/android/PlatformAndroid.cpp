@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 
 namespace rts::platform {
@@ -24,6 +25,7 @@ EGLSurface g_surf = EGL_NO_SURFACE;
 EGLConfig g_cfg = nullptr;
 std::unique_ptr<gfx::Device> g_device;
 bool g_inited = false;
+detail::FrameClock g_clock;
 
 bool initEGL() {
     if (g_dpy == EGL_NO_DISPLAY) {
@@ -68,7 +70,7 @@ void onCmd(android_app* app, int32_t cmd) {
             Event e; e.type = EventType::Resized; detail::dispatch(e);
         }
         break;
-    case APP_CMD_TERM_WINDOW: termSurface(); g_inited = false; break;
+    case APP_CMD_TERM_WINDOW: termSurface(); g_inited = false; g_clock.reset(); break;
     case APP_CMD_GAINED_FOCUS: { Event e; e.type = EventType::FocusGained; detail::dispatch(e); break; }
     case APP_CMD_LOST_FOCUS: { Event e; e.type = EventType::FocusLost; detail::dispatch(e); break; }
     case APP_CMD_DESTROY: S.quit = true; break;
@@ -165,7 +167,6 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 
     g_app->onAppCmd = onCmd;
     g_app->onInputEvent = onInput;
-    auto last = std::chrono::steady_clock::now();
     while (!S.quit) {
         int events = 0;
         android_poll_source* src = nullptr;
@@ -181,9 +182,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
             S.fbW = w; S.fbH = h; S.winW = float(w) / S.scale; S.winH = float(h) / S.scale;
             Event e; e.type = EventType::Resized; detail::dispatch(e);
         }
-        auto now = std::chrono::steady_clock::now();
-        double dt = std::chrono::duration<double>(now - last).count();
-        last = now;
+        double dt = g_clock.tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
         g_device->beginFrame(S.fbW, S.fbH);
         if (S.cb.frame) S.cb.frame(*g_device, dt);
         g_device->endFrame();
@@ -204,4 +203,9 @@ void android_main(android_app* app) {
     char arg0[] = "rts";
     char* argv[] = {arg0, nullptr};
     rtsMain(1, argv);
+    // NativeActivity may call android_main again in the same process when the activity is
+    // recreated, but the engine and the app keep function-level statics (platform state with
+    // quit=true, the game client) that are not designed to be re-entered. Ending the process
+    // gives the next launch a clean start, which is what players expect after "back".
+    std::exit(0);
 }

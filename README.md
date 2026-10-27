@@ -193,14 +193,85 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 ```
 
 Для `wss://` (страница игры по HTTPS) поставьте перед сервером TLS-прокси (nginx, Caddy).
+## Звук
+
+`engine/audio` — микшер, банки звуков из данных, процедурный синтез, музыка; вывод через
+[miniaudio](third_party/miniaudio) (CoreAudio, AAudio/OpenSL ES, Web Audio, WASAPI, ALSA/PulseAudio).
+`modules/rts/audio` превращает события симуляции в звуки; в симуляцию ничего не пишет.
+Нет устройства — игра идёт молча. Нет `audio.json` — игра просто без звука.
+
+Звук игры — файл `audio.json` рядом с `game.json` (другое имя: `"audio"` в game.json):
+
+```jsonc
+{
+  "volume": { "sfx": 0.9, "music": 0.6, "voice": 1, "ui": 0.7, "ambient": 0.7 },
+  "sounds": {
+    "sword": { "files": ["sfx/sword1.ogg", "sfx/sword2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 3, "cooldown": 0.06 },
+    "alarm": { "file": "voice/under_attack.ogg", "bus": "voice", "priority": 10 },
+    "blip":  { "synth": { "wave": "square", "freq": [880, 440], "duration": 0.08 }, "bus": "ui" }
+  },
+  "music":     { "menu": "music/menu.ogg", "match": { "files": ["music/a.ogg", "music/b.ogg"], "shuffle": true } },
+  "events":    { "died": "death", "underAttack": "alarm", "notEnough.gold": "need_gold" },
+  "weapons":   { "bow": { "attack": "bow_release", "hit": "arrow_hit" } },
+  "abilities": { "heal": "heal_cast" },
+  "types":     { "footman": { "select": "footman_what", "move": "footman_yes", "died": "death_human" } }
+}
+```
+
+| Что | Смысл |
+|---|---|
+| форматы | WAV, OGG Vorbis, MP3, FLAC; `"synth"` — звук из параметров (`sine/square/saw/triangle/noise`, свип частоты, огибающая, вибрато, фильтр, слои) |
+| шины | `sfx` и `ambient` — позиционные (затухание и панорама от камеры), `voice`, `ui`, `music` — нет |
+| `maxInstances`, `cooldown`, `priority` | прореживание в больших боях: 40 лучников не дают 40 одинаковых выстрелов |
+| события (cues) | `attack hit miss died spawned trainStarted ready buildPlaced buildDone gathered captured lost playerDefeated victory defeat notEnough notEnoughSupply noRoom researched levelUp ability readyToPlace sold regionClaimed wave lowPower upgraded message underAttack baseUnderAttack select move attackOrder buildOrder click error` |
+| поиск звука | тип → оружие/способность по id → `events` |
+| музыка | плейлисты `menu`, `match`, `battle` (включается при сильном бое у камеры), `victory`, `defeat`; кроссфейд |
+
+Звуки боя слышны только там, где нет тумана войны; «нас атакуют» — с паузой, и только если камера
+смотрит в другое место. Громкость (общая и музыка) — в меню паузы, хранится в `userDataDir/audio.cfg`.
+На телефоне при сворачивании звук ставится на паузу.
+
+Отладка без звуковой карты: `RTS_AUDIO=null` (настоящий аудиопоток без железа), `RTS_AUDIO=off`,
+`RTS_AUDIO_CAPTURE=/tmp/mix.wav` — записать всё, что прозвучало, в WAV.
 
 ## Проверено / не проверено
 
 - ✅ Linux: клиент, редактор, тесты; Windows .exe (кросс-сборка MinGW, запуск под Wine).
 - ✅ macOS: сборка, тесты, запуск игры на Metal; rtsbuild → .app и проект iOS (+ сборка для симулятора).
-- ⏳ Android: проект Gradle генерируется, APK не собирался (нет SDK в среде проверки).
-- ⏳ Web: не собирался (нет emsdk в среде проверки).
-- ⏳ Windows на реальном железе и iOS на устройстве — не запускались.
+- ✅ Web: собирается (Emscripten 3.1.50), матч запускается в headless Chromium (WebGL2/SwiftShader).
+- ⏳ Android: проект Gradle генерируется; APK и запуск в эмуляторе — в CI (job `android`), локально не собирался.
+- ⏳ Windows на реальном железе и iOS на устройстве — не запускались (в CI: MSVC-сборка и сборка iOS для симулятора).
+
+## Платформы и CI
+
+`.github/workflows/ci.yml` на каждый push в `master`/`agent-*` и на pull request:
+
+| Job | Что делает |
+|---|---|
+| `linux` | gcc и clang (x64) + gcc (ARM64), предупреждения = ошибки, тесты, матчи ботов, скриншоты под Xvfb |
+| `windows-msvc` | Visual Studio 2022, тесты, матчи, `rtsbuild --target windows` |
+| `windows-mingw` | кросс-сборка MinGW-w64, тесты и матчи под Wine |
+| `macos` | universal-сборка Xcode, тесты, матчи, `rtsbuild` → .app и проект iOS со сборкой для симулятора |
+| `android` | `.so` через NDK, APK через `rtsbuild`, в эмуляторе: запуск → касание → фон → возврат → «назад» → повторный запуск, проверка logcat на падения |
+| `web` | Emscripten, запуск матча в headless Chromium, проверка консоли и кадра |
+| `determinism` | сравнивает контрольные суммы матчей (обе игры × 3 сида) со всех платформ — должны совпасть побитово |
+
+Скриншоты, APK, web-сборка и .app сохраняются как артефакты прогона.
+
+Локально:
+
+```bash
+# Windows .exe с Linux/macOS
+cmake -S . -B build/mingw -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=platform/cmake/mingw-w64.cmake
+# матчи ботов на всех играх → файл контрольных сумм (сравнить между машинами через diff)
+.github/scripts/headless-checksums.sh build/linux-release/rts_headless sums.txt
+# смоук-тест web-сборки
+node platform/web/smoke.mjs build/web
+```
+
+Параметры командной строки в web-сборке задаются через URL: `index.html?map=0&spectate` = `--map 0 --spectate`.
+Режим скриншота (`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`) шагает ровно по 1/60 с на кадр, поэтому
+кадр N одинаков на любой машине.
 
 ## Дальше
 

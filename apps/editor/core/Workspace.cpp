@@ -613,6 +613,168 @@ void Workspace::registerCoreOps() {
             r.set("summary", str("Карта: " + ps(p, "path")));
             return r;
         });
+    add("map_generate", "Generate a playable map procedurally: terrain (water, blocked rock, cliff plateaus with ramps), optional resource "
+        "fields, decorations/resources placed as objects, start positions for N players, symmetric for fairness. Replaces the open map "
+        "(undo restores it). Then refine it with the painting tools.",
+        R"JS({"properties": {"width": {"type": "integer"}, "height": {"type": "integer"}, "players": {"type": "integer"}, "seed": {"type": "integer"},
+            "symmetry": {"type": "string", "enum": ["mirror", "point", "none"]}, "water": {"type": "number", "description": "0..1 amount of lakes/rivers"},
+            "rock": {"type": "number", "description": "0..1 impassable rock"}, "plateaus": {"type": "integer", "description": "number of cliff plateaus (levels 1-2) with ramps"},
+            "field": {"type": "string", "description": "resource id painted as fields (ore/spice)"}, "fields": {"type": "integer"},
+            "decor": {"type": "string", "description": "type id scattered as forests (trees)"}, "decorDensity": {"type": "number"},
+            "nodes": {"type": "string", "description": "type id of resource nodes near each start (mines)"}, "nodesPerPlayer": {"type": "integer"},
+            "startObjects": {"type": "array", "items": {"type": "string"}, "description": "type ids placed at every start (e.g. town hall, workers)"},
+            "name": {"type": "string"}}})JS",
+        [this](const Json& p) {
+            const int W = std::clamp(pi(p, "width", 64), 16, 512), H = std::clamp(pi(p, "height", 48), 16, 512);
+            const int players = std::clamp(pi(p, "players", 2), 1, 8);
+            uint32_t seed = uint32_t(pi(p, "seed", 1));
+            std::string sym = ps(p, "symmetry", players == 2 ? "point" : "none");
+            auto rnd = [&seed]() { seed = seed * 1664525u + 1013904223u; return float((seed >> 8) & 0xFFFFFF) / float(0x1000000); };
+            // value noise on a coarse lattice, bilinear (editor tool: floats are fine here)
+            auto makeNoise = [&](int cell) {
+                int gw = W / cell + 2, gh = H / cell + 2;
+                std::vector<float> g(size_t(gw * gh));
+                for (auto& v : g) v = rnd();
+                return [g, gw, cell](float x, float y) {
+                    float fx = x / float(cell), fy = y / float(cell);
+                    int ix = int(fx), iy = int(fy);
+                    float tx = fx - float(ix), ty = fy - float(iy);
+                    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+                    auto at = [&](int a, int b) { return g[size_t(b * gw + a)]; };
+                    return (at(ix, iy) * (1 - tx) + at(ix + 1, iy) * tx) * (1 - ty) + (at(ix, iy + 1) * (1 - tx) + at(ix + 1, iy + 1) * tx) * ty;
+                };
+            };
+            auto n1 = makeNoise(std::max(6, W / 6)), n2 = makeNoise(std::max(3, W / 14));
+            const float water = std::clamp(pf(p, "water", 0.12f), 0.0f, 0.6f), rockAmt = std::clamp(pf(p, "rock", 0.06f), 0.0f, 0.5f);
+            map.beginEdit();
+            std::string file = map.path;
+            MapDoc fresh;
+            fresh.reset(W, H);
+            map.data = fresh.data;
+            map.path = file;
+            auto& d = map.data;
+            d.name = ps(p, "name", "Generated");
+            // start positions on a ring, mirrored/rotated by the symmetry
+            std::vector<std::pair<float, float>> starts;
+            for (int i = 0; i < players; ++i) {
+                float a = 6.2831853f * float(i) / float(players) + (players == 2 ? 3.14159265f : 0.5f);
+                starts.push_back({W * 0.5f + std::cos(a) * W * 0.36f, H * 0.5f + std::sin(a) * H * 0.34f});
+            }
+            auto nearStart = [&](float x, float y, float r) {
+                for (auto& s : starts) if (std::hypot(s.first - x, s.second - y) < r) return true;
+                return false;
+            };
+            // source half: left (mirror) or left half (point); copy to the other half afterwards
+            const int srcW = sym == "none" ? W : (W + 1) / 2;
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < srcW; ++x) {
+                    float v = n1(float(x), float(y)) * 0.7f + n2(float(x), float(y)) * 0.3f;
+                    char c = '.';
+                    if (v < water) c = v < water * 0.82f ? '~' : '=';
+                    else if (v > 1.0f - rockAmt) c = '#';
+                    if (nearStart(float(x), float(y), 7)) c = '.';
+                    d.cells[d.idx(x, y)] = c;
+                }
+            // plateaus: rounded blobs of level 1 (and a level-2 core), each with two ramps
+            int plateaus = std::clamp(pi(p, "plateaus", 2), 0, 12);
+            for (int k = 0; k < plateaus; ++k) {
+                float cx = 4 + rnd() * float(srcW - 8), cy = 4 + rnd() * float(H - 8);
+                if (nearStart(cx, cy, 9)) continue;
+                float r = 3.5f + rnd() * float(std::min(W, H)) * 0.08f;
+                for (int y = int(cy - r) - 1; y <= int(cy + r) + 1; ++y)
+                    for (int x = int(cx - r) - 1; x <= int(cx + r) + 1; ++x) {
+                        if (!d.inside(x, y) || x >= srcW) continue;
+                        float dd = std::hypot(float(x) - cx, float(y) - cy) + n2(float(x) * 3, float(y) * 3) * 1.5f;
+                        if (dd < r && d.cells[d.idx(x, y)] != '~') { d.levels[d.idx(x, y)] = int8_t(dd < r * 0.45f && r > 6 ? 2 : 1); if (d.cells[d.idx(x, y)] == '=') d.cells[d.idx(x, y)] = '.'; }
+                    }
+                // ramps on two opposite sides
+                for (float a : {rnd() * 6.28f}) for (float side : {0.0f, 3.14159f}) {
+                    float rx = cx + std::cos(a + side) * (r - 0.5f), ry = cy + std::sin(a + side) * (r - 0.5f);
+                    for (int t = -1; t <= 1; ++t) {
+                        int x = int(rx + std::sin(a + side) * float(t)), y = int(ry - std::cos(a + side) * float(t));
+                        for (int q = -1; q <= 1; ++q) {
+                            int xx = x + int(std::round(std::cos(a + side) * float(q))), yy = y + int(std::round(std::sin(a + side) * float(q)));
+                            if (d.inside(xx, yy) && xx < srcW && d.cells[d.idx(xx, yy)] != '~') d.cells[d.idx(xx, yy)] = '/';
+                        }
+                    }
+                }
+            }
+            if (sym != "none")
+                for (int y = 0; y < H; ++y)
+                    for (int x = srcW; x < W; ++x) {
+                        int sx = W - 1 - x, sy = sym == "point" ? H - 1 - y : y;
+                        d.cells[d.idx(x, y)] = d.cells[d.idx(sx, sy)];
+                        d.levels[d.idx(x, y)] = d.levels[d.idx(sx, sy)];
+                    }
+            // players and their start objects
+            d.players.clear();
+            static const char* names[] = {"Blue", "Red", "Green", "Yellow", "Purple", "Teal", "Orange", "Pink"};
+            const auto& R = project.rules;
+            for (int i = 0; i < players; ++i) {
+                DocPlayer pl(names[i], i + 1);
+                pl.hasStart = true;
+                pl.startX = std::round(starts[size_t(i)].first * 2) / 2;
+                pl.startZ = std::round(starts[size_t(i)].second * 2) / 2;
+                d.players.push_back(pl);
+                float ox = 0;
+                for (auto& t : p["startObjects"].items()) {
+                    int ti = R.findType(t.str());
+                    if (ti < 0) throw std::runtime_error("unknown start type '" + t.str() + "'");
+                    const auto& ty = R.types[size_t(ti)];
+                    DocEntity e;
+                    e.type = t.str(); e.owner = i + 1;
+                    e.x = pl.startX + ox; e.z = pl.startZ;
+                    if (ty.structure) { e.x = (ty.footprintW % 2) ? std::floor(e.x) + 0.5f : std::round(e.x); e.z = (ty.footprintH % 2) ? std::floor(e.z) + 0.5f : std::round(e.z); ox += float(ty.footprintW) * 0.5f + 1.5f; }
+                    else { e.z += 2.5f; ox += 0.8f; }
+                    d.entities.push_back(e);
+                }
+                // resource nodes near the start
+                std::string node = ps(p, "nodes");
+                if (!node.empty()) {
+                    if (R.findType(node) < 0) throw std::runtime_error("unknown node type '" + node + "'");
+                    int n = std::clamp(pi(p, "nodesPerPlayer", 1), 0, 8);
+                    for (int k = 0; k < n; ++k) {
+                        float a = 6.2831853f * float(k) / float(std::max(1, n)) + rnd();
+                        DocEntity e;
+                        e.type = node; e.owner = 0;
+                        e.x = std::round(pl.startX + std::cos(a) * 7.5f); e.z = std::round(pl.startZ + std::sin(a) * 7.5f);
+                        d.entities.push_back(e);
+                    }
+                }
+            }
+            // fields: patches between bases and near each start
+            std::string field = ps(p, "field");
+            if (!field.empty()) {
+                if (R.findResource(field) < 0) throw std::runtime_error("unknown resource '" + field + "'");
+                int nf = std::clamp(pi(p, "fields", players + 2), 0, 32);
+                for (int k = 0; k < nf; ++k) {
+                    float fx, fy;
+                    if (k < players) { float a = rnd() * 6.28f; fx = starts[size_t(k)].first + std::cos(a) * 9; fy = starts[size_t(k)].second + std::sin(a) * 9; }
+                    else { fx = 4 + rnd() * float(W - 8); fy = 4 + rnd() * float(H - 8); }
+                    map.paintField(int(fx), int(fy), 2 + int(rnd() * 3), field, 7 + int(rnd() * 3));
+                }
+            }
+            // forests of decor objects on free ground
+            std::string decor = ps(p, "decor");
+            if (!decor.empty()) {
+                if (R.findType(decor) < 0) throw std::runtime_error("unknown decor type '" + decor + "'");
+                float dens = std::clamp(pf(p, "decorDensity", 0.08f), 0.0f, 0.5f);
+                auto forest = makeNoise(std::max(4, W / 10));
+                for (int y = 1; y < H - 1; ++y)
+                    for (int x = 1; x < W - 1; ++x) {
+                        size_t i = d.idx(x, y);
+                        if (d.cells[i] != '.' || nearStart(float(x), float(y), 8) || d.fieldAmt[i] > 0) continue;
+                        if (forest(float(x), float(y)) > 1.0f - dens * 2.2f && rnd() < 0.55f) { DocEntity e; e.type = decor; e.owner = 0; e.x = x + 0.5f; e.z = y + 0.5f; d.entities.push_back(e); }
+                    }
+            }
+            map.autoRamps();
+            map.touched();
+            note({Change::Map, 0, 0, W - 1, H - 1, -1, "Сгенерирована карта"});
+            Json r = ok();
+            r.set("summary", str("Сгенерирована карта " + std::to_string(W) + "x" + std::to_string(H) + " на " + std::to_string(players) + " игроков"));
+            r.set("entities", Json::number(int64_t(d.entities.size())));
+            return r;
+        });
     add("map_resize", "Resize the map (keeps the top-left part).",
         R"({"properties": {"width": {"type": "integer"}, "height": {"type": "integer"}}, "required": ["width", "height"]})", [this](const Json& p) {
             map.resize(pi(p, "width"), pi(p, "height"));
