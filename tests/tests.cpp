@@ -598,6 +598,177 @@ TEST(mech_surrender_ends_match_and_replays) {
     CHECK(sim->checksum() == live.first && sim->result() == 1);
 }
 
+// ------------------------------------------------------------------ dungeon management (Dungeon Keeper class)
+
+static const char* kDungeonRules = R"({
+  "resources": {"gold": {"start": 1000}, "food": {"start": 0}, "research": {"start": 0}},
+  "diggable": {"D": {"hardness": 2}, "G": {"hardness": 2, "yields": {"gold": 150}}},
+  "territory": {"startRadius": 2, "buildOnlyOwned": true},
+  "hand": {"max": 4, "slapDamage": 5},
+  "possession": {"cost": {"gold": 10}},
+  "victory": "keyUnits",
+  "rooms": {
+    "lair": {"cost": {"gold": 10}, "supply": 1},
+    "hatchery": {"cost": {"gold": 10}, "income": {"food": 0.5}},
+    "library": {"cost": {"gold": 20}, "work": {"yields": {"research": 1}}}
+  },
+  "types": {
+    "heart": {"structure": {"footprint": [2, 2]}, "health": {"max": 3000}, "key": true, "sight": 12, "produces": ["imp"]},
+    "shrine": {"structure": {"footprint": [1, 1]}},
+    "imp": {"move": {"speed": 4}, "digs": {"rate": 2}, "claimer": {"time": 0.5}, "health": {"max": 60}, "sight": 6},
+    "portal": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "claimedByTerritory": true, "portal": {"interval": 3}},
+    "goblin": {"move": {"speed": 3}, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 8}], "cost": {"supply": 1}, "sight": 6,
+               "attractedBy": {"rooms": {"lair": 1}},
+               "needs": {"hunger": {"interval": 5, "room": "hatchery", "time": 1, "cost": {"food": 1}},
+                         "pay": {"interval": 4, "amount": {"gold": 30}}, "works": ["library"],
+                         "happiness": {"unpaid": 0.5, "leaveBelow": 0.3, "leaveAfter": 2}}}
+  }})";
+
+// 24x12: own pocket on the left (x 1..9), dirt wall with a gold vein at x 10..13, open ground on the right.
+static std::string dungeonMap(const std::string& entities) {
+    std::string rows;
+    for (int y = 0; y < 12; ++y) {
+        std::string r(24, '.');
+        r[0] = r[23] = '#';
+        if (y == 0 || y == 11) r = std::string(24, '#');
+        else for (int x = 10; x <= 13; ++x) r[size_t(x)] = (x == 10 && y == 6) ? 'G' : 'D';
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+    }
+    return R"({"size":[24,12],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":[)" + rows + "]},\"entities\":[" +
+           R"({"type":"heart","owner":1,"pos":[4,6]},{"type":"heart","owner":2,"pos":[20,6]})" + entities + "]}";
+}
+static Command rectCmd(uint8_t player, uint16_t type, int x, int y, int w, int h, int extra) {
+    Command c; c.player = player; c.type = type;
+    c.point = {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)};
+    c.param = game::rectParam(w, h, extra);
+    return c;
+}
+
+TEST(mech_dungeon_dig_and_claim) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"imp","owner":1,"pos":[7,6]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    auto& g = gs.grid;
+    CHECK(g.dig[size_t(g.index(10, 6))] == 2 && !g.passable(10, 6, game::kLayerGround));   // gold vein, solid
+    CHECK(g.territory[size_t(g.index(4, 6))] == 1 && g.territory[size_t(g.index(8, 6))] == 0); // start radius around the heart
+    int before = m.territoryOf(*sim, 1);
+    Fixed gold = stockOf(*sim, 1, "gold");
+    sim->submit(rectCmd(1, game::kCmdDig, 10, 5, 2, 3, 0));
+    sim->submit(rectCmd(2, game::kCmdDig, 12, 5, 1, 1, 0));                                   // B's mark is not A's job
+    run(*sim, 60);
+    CHECK(g.dig[size_t(g.index(10, 6))] == 0 && g.passable(10, 6, game::kLayerGround));      // dug out
+    CHECK(g.dig[size_t(g.index(11, 5))] == 0 && g.dig[size_t(g.index(11, 7))] == 0);
+    CHECK(g.dig[size_t(g.index(12, 5))] != 0);                                                // only own marks
+    CHECK(stockOf(*sim, 1, "gold") == gold + Fixed::fromInt(150));                            // vein yield
+    CHECK(m.territoryOf(*sim, 1) > before + 10);                                              // claimed the pocket and the tunnel
+    CHECK(g.territory[size_t(g.index(9, 6))] == 1 && g.territory[size_t(g.index(11, 6))] == 1);
+    std::vector<Vec3> path;                                                                   // pathfinding sees the tunnel
+    CHECK(g.findPath(g.cellCenter(7, 6), g.cellCenter(11, 7), game::kLayerGround, path));
+    // build only on own territory
+    std::string why;
+    bool ok = m.canPlace(*sim, 1, uint16_t(m.rules().findType("shrine")), g.cellCenter(8, 3), kNullEntity, &why);
+    if (!ok) std::printf("    canPlace: %s (territory %d)\n", why.c_str(), g.territory[size_t(g.index(8, 3))]);
+    CHECK(ok);
+    CHECK(!m.canPlace(*sim, 1, uint16_t(m.rules().findType("shrine")), g.cellCenter(16, 3)));
+}
+
+TEST(mech_dungeon_rooms_portal_recruit) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"portal","owner":0,"pos":[8,9]},{"type":"imp","owner":1,"pos":[7,6]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    run(*sim, 6);
+    Entity portal = findType(*sim, "portal", 1);
+    CHECK(portal.valid());                                    // claimed when the imp claimed the floor next to it
+    CHECK(countType(*sim, "goblin", 1) == 0);                 // no lair: nothing is attracted
+    Fixed gold = stockOf(*sim, 1, "gold");
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, m.rules().findRoom("lair")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 15, 3, 2, 2, m.rules().findRoom("lair"))); // not own floor: ignored
+    run(*sim, 0.5);
+    CHECK(m.roomCellsOf(*sim, 1, m.rules().findRoom("lair")) == 4);
+    CHECK(stockOf(*sim, 1, "gold") == gold - Fixed::fromInt(40));
+    CHECK(gs.players[1].supplyCap == Fixed::fromInt(4));       // lair capacity per cell
+    run(*sim, 12);
+    int goblins = countType(*sim, "goblin", 1);
+    CHECK(goblins >= 1 && goblins <= 4);                       // recruited up to the lair capacity
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, -1)); // erase: refunds half
+    run(*sim, 0.5);
+    CHECK(m.roomCellsOf(*sim, 1, m.rules().findRoom("lair")) == 0);
+    CHECK(gs.roomZones.empty());
+}
+
+TEST(mech_dungeon_needs_work_and_leaving) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"portal","owner":1,"pos":[8,9]},{"type":"goblin","owner":1,"pos":[6,4]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, m.rules().findRoom("lair")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 7, 2, 2, m.rules().findRoom("hatchery")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 5, 3, 2, 2, m.rules().findRoom("library")));
+    run(*sim, 4);
+    CHECK(stockOf(*sim, 1, "research") > Fixed{});            // works in the library when idle
+    CHECK(stockOf(*sim, 1, "food") > Fixed{});                // hatchery produces food per cell
+    Fixed gold = stockOf(*sim, 1, "gold");
+    run(*sim, 6);
+    Entity gob = findType(*sim, "goblin", 1);
+    CHECK(gob.valid());
+    CHECK(stockOf(*sim, 1, "gold") <= gold - Fixed::fromInt(30)); // payday
+    auto& nd = sim->world().get<game::Needs>(gob);
+    CHECK(nd.hunger < Fixed::fromInt(1));                      // ate in the hatchery
+    CHECK(nd.happiness > Fixed::fromRatio(9, 10));
+    // unpaid wages make it unhappy; it walks out through the portal
+    gs.players[1].stock[size_t(m.rules().findResource("gold"))] = Fixed{};
+    bool left = false;
+    for (int i = 0; i < 20 * 20 && !left; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvCreatureLeft && ev.a == gob) left = true; }
+    CHECK(left);
+    run(*sim, 0.2);
+    CHECK(!sim->world().alive(gob));
+}
+
+TEST(mech_dungeon_hand_slap_possess) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"goblin","owner":1,"pos":[6,4]},{"type":"goblin","owner":2,"pos":[18,4]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    World& w = sim->world();
+    Entity gob = findType(*sim, "goblin", 1), enemy = findType(*sim, "goblin", 2);
+    run(*sim, 0.5);
+    Command pick; pick.player = 1; pick.type = game::kCmdPickUp; pick.units = {gob, enemy};
+    sim->submit(pick);
+    run(*sim, 0.2);
+    CHECK(gs.hand[1].size() == 1 && (w.get<game::Unit>(gob).flags & game::kUnitInHand));
+    CHECK(!(w.get<game::Unit>(enemy).flags & game::kUnitInHand));
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {gob}; mv.point = {Fixed::fromInt(2), Fixed{}, Fixed::fromInt(8)};
+    sim->submit(mv);                                           // units in the hand ignore orders
+    sim->submit(rectCmd(1, game::kCmdDrop, 16, 4, 1, 1, 0));    // not own floor: refused
+    run(*sim, 0.5);
+    CHECK(gs.hand[1].size() == 1);
+    sim->submit(rectCmd(1, game::kCmdDrop, 2, 8, 1, 1, 0));
+    run(*sim, 0.2);
+    CHECK(gs.hand[1].empty() && !(w.get<game::Unit>(gob).flags & game::kUnitInHand));
+    CHECK((w.get<Transform>(gob).pos - Vec3{Fixed::fromRatio(5, 2), Fixed{}, Fixed::fromRatio(17, 2)}).xz().length() < Fixed::fromInt(1));
+    Fixed speed = m.stat(*sim, gob, game::Stat::Speed);
+    Command slap; slap.player = 1; slap.type = game::kCmdSlap; slap.units = {gob};
+    sim->submit(slap);
+    run(*sim, 0.2);
+    CHECK(w.get<game::Unit>(gob).hp == Fixed::fromInt(95));
+    CHECK(m.stat(*sim, gob, game::Stat::Speed) > speed);
+    CHECK(w.get<game::Needs>(gob).happiness < Fixed::fromInt(1));
+    // possession: direct steering, AI-style orders ignored
+    Command pos; pos.player = 1; pos.type = game::kCmdPossess; pos.units = {gob};
+    sim->submit(pos);
+    run(*sim, 0.2);
+    CHECK(gs.possessed[1] == gob && (w.get<game::Unit>(gob).flags & game::kUnitPossessed));
+    Fixed x0 = w.get<Transform>(gob).pos.x;
+    for (int i = 0; i < 20; ++i) {
+        Command d; d.player = 1; d.type = game::kCmdDirect; d.point = {Fixed::fromInt(1), Fixed{}, Fixed{}};
+        sim->submit(d);
+        sim->step();
+    }
+    CHECK(w.get<Transform>(gob).pos.x > x0 + Fixed::fromInt(2));
+    Command rel; rel.player = 1; rel.type = game::kCmdPossess;
+    sim->submit(rel);
+    run(*sim, 0.2);
+    CHECK(!gs.possessed[1].valid() && !(w.get<game::Unit>(gob).flags & game::kUnitPossessed));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

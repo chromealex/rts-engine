@@ -29,6 +29,11 @@ void MapGrid::init(int width, int h_) {
     fieldRes.assign(n, -1);
     fieldAmt.assign(n, Fixed{});
     region.assign(n, -1);
+    dig.assign(n, 0);
+    digHp.assign(n, Fixed{});
+    digMark.assign(n, 0);
+    territory.assign(n, 0);
+    room.assign(n, -1);
 }
 
 bool MapGrid::passable(int x, int y, uint8_t layer) const {

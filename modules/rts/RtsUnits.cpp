@@ -314,6 +314,12 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
     }
     case OrderType::Build:
         return runBuild(sim, e, o);
+    case OrderType::Dig:
+        return runDig(sim, e, o);
+    case OrderType::ClaimCell:
+        return runClaimCell(sim, e, o);
+    case OrderType::Need:
+        return runNeed(sim, e, o);
     case OrderType::Repair: {
         if (!w.alive(o.target) || !w.has<Unit>(o.target)) return true;
         Unit& tu = w.get<Unit>(o.target);
@@ -415,7 +421,7 @@ void RtsModule::sysOrders(Simulation& sim) {
     World& w = sim.world();
     std::vector<Entity> ents;
     w.each<Orders, Unit>([&](Entity e, Orders& ord, Unit& u) {
-        if (!ord.queue.empty() && u.hp.raw > 0) ents.push_back(e);
+        if (!ord.queue.empty() && u.hp.raw > 0 && !(u.flags & (kUnitInHand | kUnitPossessed))) ents.push_back(e);
     });
     // Orders may spawn entities (construction), so they run outside the iteration.
     for (Entity e : ents) {
@@ -446,11 +452,11 @@ void RtsModule::sysMovement(Simulation& sim) {
     const Fixed dt = sim.dt();
 
     gs.hash.reset(g.w, g.h, 4);
-    w.each<Unit, Transform>([&](Entity e, Unit&, Transform& t) { t.prevPos = t.pos; gs.hash.insert(e, t.pos); });
+    w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitInHand)) gs.hash.insert(e, t.pos); });
 
     // 1) desired movement along paths
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (!m.moving) return;
+        if (!m.moving || (u.flags & (kUnitInHand | kUnitPossessed))) return;
         auto* b = w.tryGet<Buffs>(e);
         if (b && b->stunUntil > sim.tick()) return;
         const UnitType& t = rules_.types[u.type];
@@ -479,10 +485,13 @@ void RtsModule::sysMovement(Simulation& sim) {
         }
     });
 
+    if (rules_.dungeon) movePossessed(sim);
+
     // 2) separation between overlapping mobile units on the same layer
     struct Push { Entity e; Vec3 d; };
     std::vector<Push> pushes;
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+        if (u.flags & kUnitInHand) return;
         const UnitType& t = rules_.types[u.type];
         Vec3 acc{};
         bool any = false;
