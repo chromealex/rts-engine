@@ -20,7 +20,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <functional>
 #include <string>
+#include <vector>
 
 namespace rts::gfx {
 
@@ -137,6 +139,10 @@ public:
     // Frame (driven by the platform layer)
     virtual void beginFrame(int framebufferWidth, int framebufferHeight) = 0;
     virtual void endFrame() = 0; // presents
+    // Tools (editor screenshots, MCP): deliver the next presented frame as top-down RGBA8.
+    // The callback may run one or two frames later; it always runs on the main thread.
+    using CaptureFn = std::function<void(int w, int h, std::vector<uint8_t> rgba)>;
+    virtual void captureNextFrame(CaptureFn fn) { if (fn) fn(0, 0, {}); }
     int framebufferWidth() const { return fbW_; }
     int framebufferHeight() const { return fbH_; }
 

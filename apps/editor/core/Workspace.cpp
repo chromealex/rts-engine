@@ -156,6 +156,51 @@ bool Project::saveManifest(std::string* err) {
 // ================================================================= workspace
 
 Workspace::Workspace() { registerCoreOps(); }
+Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
+
+namespace {
+std::string shellQuote(const std::string& s) {
+#if defined(_WIN32)
+    return "\"" + s + "\"";
+#else
+    std::string o = "'";
+    for (char c : s) { if (c == '\'') o += "'\\''"; else o += c; }
+    return o + "'";
+#endif
+}
+} // namespace
+
+void Workspace::startBuild(const std::string& target, const std::string& config) {
+    if (building_) throw std::runtime_error("a build is already running");
+    if (project.dir.empty()) throw std::runtime_error("no game is open");
+    if (buildThread_.joinable()) buildThread_.join();
+    if (map.dirty && !map.path.empty()) map.save(map.path, nullptr);
+    building_ = true;
+    std::string cmd = shellQuote(buildTool) + " --project " + shellQuote(project.dir) + " --engine " + shellQuote(engineDir) +
+                      " --target " + target + " --config " + config + " 2>&1";
+    { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ = "$ rtsbuild --target " + target + " --config " + config + "\n"; }
+    buildThread_ = std::thread([this, cmd] {
+#if defined(_WIN32)
+        FILE* p = _popen(cmd.c_str(), "r");
+#else
+        FILE* p = popen(cmd.c_str(), "r");
+#endif
+        if (!p) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += "cannot start rtsbuild\n"; buildRc_ = -1; }
+        else {
+            char buf[512];
+            while (std::fgets(buf, sizeof buf, p)) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += buf; }
+#if defined(_WIN32)
+            int rc = _pclose(p);
+#else
+            int rc = pclose(p);
+#endif
+            std::lock_guard<std::mutex> lk(buildMutex_);
+            buildRc_ = rc;
+            buildLog_ += rc == 0 ? "\n=== OK ===\n" : "\n=== FAILED ===\n";
+        }
+        building_ = false;
+    });
+}
 
 void Workspace::registerOp(Op op) {
     for (auto& o : ops_) if (o.name == op.name) { o = std::move(op); return; }
@@ -919,6 +964,43 @@ void Workspace::registerCoreOps() {
             r.set("files", arr);
             return r;
         });
+
+    // ---------------------------------------------------------------- build
+    add("build_start", "Package the open game for a platform in the background: macos, ios, android, web, windows, linux, all. Poll build_status.",
+        R"({"properties": {"target": {"type": "string"}, "config": {"type": "string", "enum": ["Debug", "Release"]}}, "required": ["target"]})",
+        [this](const Json& p) {
+            startBuild(ps(p, "target"), ps(p, "config", "Release"));
+            Json r = ok();
+            r.set("summary", str("Сборка " + ps(p, "target") + " запущена"));
+            return r;
+        });
+    add("build_status", "State and log tail of the current/last build.", R"({"properties": {"tail": {"type": "integer"}}})", [this](const Json& p) {
+        std::string log = buildLog();
+        size_t tail = size_t(std::max(200, pi(p, "tail", 4000)));
+        if (log.size() > tail) log = "..." + log.substr(log.size() - tail);
+        Json r = Json::object();
+        r.set("running", Json::fromBool(building_));
+        r.set("exitCode", Json::number(int64_t(buildRc_)));
+        r.set("log", str(log));
+        return r;
+    });
+
+    // ---------------------------------------------------------------- editor-only (implemented by the GUI)
+    auto gui = [this](const char* name, const char* desc, const char* sch) {
+        Op op{name, desc, schema(sch), [](const Json&) -> Json { throw std::runtime_error("this tool needs the editor window (start rts_editor)"); }, true};
+        registerOp(std::move(op));
+    };
+    gui("view_screenshot", "Screenshot of the editor viewport (what the user sees), optionally inside a device frame. Returns a PNG image.",
+        R"({"properties": {"device": {"type": "string", "description": "device preset id (see device_list) or 'none'"}, "x": {"type": "number"}, "z": {"type": "number"}, "distance": {"type": "number"}}})");
+    gui("view_focus", "Move the editor camera to look at x,z (distance optional).",
+        R"({"properties": {"x": {"type": "number"}, "z": {"type": "number"}, "distance": {"type": "number"}}, "required": ["x", "z"]})");
+    gui("play_start", "Play-test the open map inside the editor window (bots on all sides unless 'human' is set). The user watches live.",
+        R"({"properties": {"speed": {"type": "number"}, "human": {"type": "integer", "description": "player slot controlled by the user, 0 = bots only"}, "device": {"type": "string"}}})");
+    gui("play_stop", "Stop the play-test and return to editing.", "{}");
+    gui("play_status", "Current play-test state: time, players, resources, units, result.", "{}");
+    gui("device_list", "Device presets for the simulator (phones, tablets, desktops).", "{}");
+    gui("device_set", "Show the viewport in a device frame (resolution, notch/safe area, orientation) like a phone simulator. 'none' turns it off.",
+        R"({"properties": {"device": {"type": "string"}, "orientation": {"type": "string", "enum": ["portrait", "landscape"]}}, "required": ["device"]})");
 }
 
 } // namespace rts::editor

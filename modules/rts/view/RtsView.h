@@ -41,7 +41,8 @@ public:
     // Terrain mesh from the grid; call again after the editor changes the grid.
     void buildTerrain(gfx::Device& dev, const MapGrid& grid);
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid);
-    void drawOverlays(const render::RTSCamera& cam, const RtsScene& s, float viewW, float viewH); // ImGui: bars, counts
+    // ImGui: bars, counts. ox/oy: top-left of the view on screen; drawList: ImDrawList* (default: background list)
+    void drawOverlays(const render::RTSCamera& cam, const RtsScene& s, float viewW, float viewH, float ox = 0, float oy = 0, void* drawList = nullptr);
     static render::float4 playerColor(int player);
     float selectionRadius(uint16_t type) const;
     float heightAt(const MapGrid& grid, float x, float z) const;

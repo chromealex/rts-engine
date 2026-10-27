@@ -25,6 +25,8 @@ struct DocEntity {
 };
 
 struct DocPlayer {
+    DocPlayer() = default;
+    DocPlayer(std::string n, int t) : name(std::move(n)), team(t) {}
     std::string name;
     int team = 1;
     std::string faction;     // empty = rules default

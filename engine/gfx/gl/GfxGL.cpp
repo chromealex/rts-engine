@@ -219,6 +219,7 @@ public:
     void destroyPipeline(PipelineHandle h) override { pipelines_.remove(h.id); }
 
     // ---------- frame ----------
+    CaptureFn capture_;
     void beginFrame(int w, int h) override {
         fbW_ = w; fbH_ = h;
         uboOffset_ = 0;
@@ -226,7 +227,24 @@ public:
         glBufferData(GL_UNIFORM_BUFFER, kUniformRingSize, nullptr, GL_STREAM_DRAW); // orphan the ring
         glBindVertexArray(vao_);
     }
-    void endFrame() override {} // swap is done by the platform layer (EGL/WGL/browser)
+    void endFrame() override { // swap is done by the platform layer (EGL/WGL/browser)
+        if (!capture_) return;
+        std::vector<uint8_t> px(size_t(fbW_) * size_t(fbH_) * 4);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, fbW_, fbH_, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        const size_t row = size_t(fbW_) * 4;
+        std::vector<uint8_t> tmp(row);
+        for (int y = 0; y < fbH_ / 2; ++y) { // GL is bottom-up
+            uint8_t* a = px.data() + size_t(y) * row;
+            uint8_t* b = px.data() + size_t(fbH_ - 1 - y) * row;
+            std::copy(a, a + row, tmp.data()); std::copy(b, b + row, a); std::copy(tmp.data(), tmp.data() + row, b);
+        }
+        auto fn = std::move(capture_);
+        capture_ = nullptr;
+        fn(fbW_, fbH_, std::move(px));
+    }
+    void captureNextFrame(CaptureFn fn) override { capture_ = std::move(fn); }
 
     void beginPass(const PassDesc& d) override {
         glBindVertexArray(vao_);

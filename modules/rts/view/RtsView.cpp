@@ -264,8 +264,8 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
     }
 }
 
-void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, float h) {
-    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, float h, float ox, float oy, void* drawList) {
+    ImDrawList* dl = drawList ? static_cast<ImDrawList*>(drawList) : ImGui::GetBackgroundDrawList();
     ImFont* font = ImGui::GetFont();
     const float fs = ImGui::GetFontSize();
     char buf[32];
@@ -276,6 +276,7 @@ void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, flo
         if (looks_[o.type].air) top += 2.4f;
         float2 sp;
         if (!cam.worldToScreen({o.pos.x, top, o.pos.z}, w, h, sp)) continue;
+        sp.x += ox; sp.y += oy;
         if (o.garrison >= 0) {
             std::snprintf(buf, sizeof buf, "%d", o.garrison);
             float4 c = playerColor(o.owner);

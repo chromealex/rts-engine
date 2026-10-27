@@ -5,6 +5,8 @@
 #import <QuartzCore/CAMetalLayer.h>
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -96,7 +98,9 @@ public:
     // ---------- textures ----------
     TextureHandle createTexture(const TextureDesc& d) override {
         MTLPixelFormat pf = d.format == PixelFormat::R8 ? MTLPixelFormatR8Unorm
-                          : d.format == PixelFormat::Depth ? MTLPixelFormatDepth32Float : MTLPixelFormatRGBA8Unorm;
+                          : d.format == PixelFormat::Depth ? MTLPixelFormatDepth32Float
+                          : d.renderTarget ? MTLPixelFormatBGRA8Unorm   // same format as the screen: pipelines are shared
+                          : MTLPixelFormatRGBA8Unorm;
         MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
             width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:NO];
         td.usage = MTLTextureUsageShaderRead | (d.renderTarget || d.format == PixelFormat::Depth ? MTLTextureUsageRenderTarget : 0);
@@ -179,9 +183,29 @@ public:
     void destroyPipeline(PipelineHandle h) override { pipelines_.remove(h.id); }
 
     // ---------- frame ----------
+    // ---------- capture (tools) ----------
+    CaptureFn capture_;              // requested, waiting for a readable drawable
+    int captureDelay_ = 0;
+    struct Captured { int w = 0, h = 0; std::vector<uint8_t> px; std::atomic<bool> ready{false}; CaptureFn fn; };
+    std::shared_ptr<Captured> captured_;
+    void captureNextFrame(CaptureFn fn) override {
+        capture_ = std::move(fn);
+        layer_.framebufferOnly = NO; // drawables acquired from now on can be blitted
+        captureDelay_ = 1;
+    }
+    void deliverCapture() {
+        if (captured_ && captured_->ready) {
+            auto c = captured_;
+            captured_.reset();
+            layer_.framebufferOnly = YES;
+            if (c->fn) c->fn(c->w, c->h, std::move(c->px));
+        }
+    }
+
     void beginFrame(int w, int h) override {
         fbW_ = w; fbH_ = h;
         dispatch_semaphore_wait(frameSemaphore_, DISPATCH_TIME_FOREVER);
+        deliverCapture(); // the previous frame's GPU work is done here
         ++frame_;
         layer_.drawableSize = CGSizeMake(w, h);
         drawable_ = [layer_ nextDrawable];
@@ -199,6 +223,28 @@ public:
     }
     void endFrame() override {
         if (enc_) { [enc_ endEncoding]; enc_ = nil; }
+        if (capture_ && drawable_ && captureDelay_-- <= 0 && !drawable_.texture.framebufferOnly) {
+            // copy the finished frame into a shared buffer before presenting it
+            const NSUInteger w = drawable_.texture.width, h = drawable_.texture.height, row = w * 4;
+            id<MTLBuffer> buf = [device_ newBufferWithLength:row * h options:MTLResourceStorageModeShared];
+            id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
+            [blit copyFromTexture:drawable_.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
+                       sourceSize:MTLSizeMake(w, h, 1) toBuffer:buf destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:row * h];
+            [blit endEncoding];
+            auto c = std::make_shared<Captured>();
+            c->w = int(w); c->h = int(h); c->fn = std::move(capture_);
+            capture_ = nullptr;
+            captured_ = c;
+            [cmd_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+                const uint8_t* src = static_cast<const uint8_t*>(buf.contents);
+                c->px.resize(size_t(row * h));
+                for (size_t i = 0; i < size_t(w * h); ++i) { // BGRA -> RGBA
+                    c->px[i * 4 + 0] = src[i * 4 + 2]; c->px[i * 4 + 1] = src[i * 4 + 1];
+                    c->px[i * 4 + 2] = src[i * 4 + 0]; c->px[i * 4 + 3] = 255;
+                }
+                c->ready = true; // read on the main thread in the next beginFrame (after the semaphore)
+            }];
+        }
         if (drawable_) [cmd_ presentDrawable:drawable_];
         [cmd_ commit];
         cmd_ = nil;
