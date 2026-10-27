@@ -94,7 +94,9 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
         int nx = x, ny = y;
         if (e2 > -dy) { err -= dy; nx += sx; }
         if (e2 < dx) { err += dx; ny += sy; }
-        if (nx != x && ny != y && (!canStep(x, y, nx, y, layer) || !canStep(x, y, x, ny, layer))) return false;
+        // diagonal: every continuous route through the 2x2 block must be legal (cliff corners)
+        if (nx != x && ny != y && (!canStep(x, y, nx, y, layer) || !canStep(x, y, x, ny, layer) ||
+                                   !canStep(nx, y, nx, ny, layer) || !canStep(x, ny, nx, ny, layer))) return false;
         if (!canStep(x, y, nx, ny, layer)) return false;
         x = nx; y = ny;
     }
@@ -143,7 +145,8 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
         for (int k = 0; k < 8; ++k) {
             int nx = cx + dxs[k], ny = cy + dys[k];
             if (!canStep(cx, cy, nx, ny, layer)) continue;
-            if (k >= 4 && (!canStep(cx, cy, nx, cy, layer) || !canStep(cx, cy, cx, ny, layer))) continue; // no corner cutting
+            if (k >= 4 && (!canStep(cx, cy, nx, cy, layer) || !canStep(cx, cy, cx, ny, layer) ||
+                           !canStep(nx, cy, nx, ny, layer) || !canStep(cx, ny, nx, ny, layer))) continue; // no corner cutting
             int ni = index(nx, ny);
             uint32_t ng = g + (k >= 4 ? 14u : 10u);
             if (stamp_[size_t(ni)] == search_ && gCost_[size_t(ni)] <= ng) continue;

@@ -16,6 +16,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     rules_ = loadRules(rulesJson);
     sim.world().setResource<GameState>();
     setupMap(sim, map);
+    loadTriggers(rules_, rulesJson, map, triggers_);
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
@@ -36,6 +37,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("creep", [this](Simulation& s) { sysCreep(s); });
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
     sim.addSystem("victory", [this](Simulation& s) { sysVictory(s); });
+    sim.addSystem("triggers", [this](Simulation& s) { sysTriggers(s); }); // last: sees every event of the tick
     sysCreep(sim);
     sysEconomy(sim); // initial supply/tech counts
 }
@@ -159,6 +161,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         e.typeCountAll.assign(rules_.types.size(), 0);
         e.researched.assign(rules_.techs.size(), 0);
         e.researching.assign(rules_.techs.size(), 0);
+        e.typeDisabled.assign(rules_.types.size(), 0);
         for (size_t r = 0; r < nr; ++r) e.stock[r] = rules_.resources[r].start;
         if (p >= 1) {
             const Json& pj = map["players"][p - 1];
@@ -338,6 +341,7 @@ bool RtsModule::canTrain(Simulation& sim, uint8_t player, uint16_t type) const {
     auto* gs = sim.world().resource<GameState>();
     const UnitType& t = rules_.types[type];
     if (!requirementsMet(sim, player, t.requires_)) return false;
+    if (player < gs->players.size() && !gs->players[player].typeDisabled.empty() && gs->players[player].typeDisabled[type]) return false;
     if (t.unique && player < gs->players.size() && gs->players[player].typeCountAll[type] > 0) return false;
     return true;
 }
@@ -995,6 +999,8 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     for (auto o : gs.regionOwner) h.u32(o);
     for (auto t : gs.tickets) h.fx(t);
     for (auto t : gs.score) h.fx(t);
+    for (auto& [k, v] : gs.trig.vars) { h.str(k); h.fx(v); }
+    for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
     for (size_t i = 0; i < gs.grid.fieldAmt.size(); i += 7) h.fx(gs.grid.fieldAmt[i]);
     h.u32(uint32_t(w.count<Unit>()));
