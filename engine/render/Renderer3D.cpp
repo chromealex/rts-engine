@@ -252,7 +252,8 @@ void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
     float aspect = fbH > 0 ? float(fbW) / float(fbH) : 1.0f;
     viewProj_ = cam.proj(aspect, dev_->info().clipDepthZeroToOne) * cam.view();
     camPos_ = cam.eye();
-    items_.clear(); lines_.clear(); tris_.clear();
+    cam_ = cam;
+    items_.clear(); lines_.clear(); tris_.clear(); custom_.clear();
     computeShadowMatrix(cam, aspect);
 }
 
@@ -394,6 +395,12 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         ++drawCalls_;
     };
     for (auto& it : items_) if (it.color.w >= 0.99f) drawItem(it);
+    if (!custom_.empty()) {
+        for (auto& fn : custom_) fn(*dev_);
+        dev_->setPipeline(litPipe_);   // custom renderers bind their own state; restore ours
+        uploadFrameUniforms(false);
+        dev_->setTexture(0, shadowMap_);
+    }
     // translucent meshes (water, ghosts) before overlays so that overlays (fog of war, markers) stay on top
     bool any = false;
     for (auto& it : items_) {

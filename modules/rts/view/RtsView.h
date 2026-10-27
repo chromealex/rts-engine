@@ -5,6 +5,7 @@
 //   units:      worker, soldier, ranged, vehicle, tank, flyer, mushroom, generic
 //   structures: hall, house, barracks, workshop, factory, tower, mine, tree, rock, mushroomhouse, generic
 #pragma once
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -12,6 +13,7 @@
 #include "../../../engine/sim/Simulation.h"
 #include "../RtsData.h"
 #include "../RtsMap.h"
+#include "Rts2DView.h"
 
 namespace rts::game {
 
@@ -25,6 +27,7 @@ struct SceneObject {
     int garrison = -1;           // shown when >= 0
     float carry = 0;             // > 0: carrying resources
     bool selected = false, hovered = false, visible = true, isProjectile = false;
+    uint8_t action = 0;          // SpriteAction (sprite animations): idle, move, attack, work
 };
 
 struct RtsScene {
@@ -47,6 +50,15 @@ public:
     float selectionRadius(uint16_t type) const;
     float heightAt(const MapGrid& grid, float x, float z) const;
 
+    // ---- 2D games (Rts2DView): sprite types and tile maps
+    // Prefix for content paths (editor: "<project dir>/"); call before init().
+    void setContentBase(const std::string& base) { contentBase_ = base; }
+    // The map's "tiles" block (null = none); takes effect at the next buildTerrain().
+    void setTiles(const Json& tiles) { if (twoD_) twoD_->setTiles(tiles); }
+    bool hasTiles() const { return twoD_ && twoD_->hasTiles(); }
+    // Screen-space hit test for sprite objects (they are drawn above their ground point).
+    bool spriteHit(const render::RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const;
+
 private:
     struct Part { render::Mesh* mesh; render::mat4 xf; render::float4 color; bool team; };
     struct Shape { std::vector<Part> parts; };
@@ -60,6 +72,9 @@ private:
     std::vector<TypeLook> looks_;
     render::Mesh terrain_, water_, projectile_;
     bool hasTerrain_ = false;
+    std::unique_ptr<Rts2DView> twoD_;
+    std::string contentBase_;
+    std::vector<render::float3> bars_;   // per scene object: health bar anchor of sprite objects
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters
