@@ -434,3 +434,6 @@ add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/Text
 target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_render2d)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
+endif()
