@@ -53,11 +53,17 @@ bool Simulation::allied(uint8_t a, uint8_t b) {
 }
 
 uint32_t Simulation::submit(Command cmd) {
+    if (sink_) return sink_(std::move(cmd));
     if (cmd.tick <= tick_) cmd.tick = tick_ + cfg_.inputDelayTicks;
     if (cmd.seq == 0) cmd.seq = ++seqByPlayer_[cmd.player];
     const uint32_t t = cmd.tick;
     pending_[t].push_back(std::move(cmd));
     return t;
+}
+
+void Simulation::inject(Command cmd) {
+    const uint32_t t = cmd.tick;
+    pending_[t].push_back(std::move(cmd));
 }
 
 void Simulation::step() {
@@ -92,6 +98,28 @@ int Simulation::advance(double realSeconds, int maxTicks) {
     while (accumulator_ >= tickLen && n < maxTicks) { step(); accumulator_ -= tickLen; ++n; }
     if (n == maxTicks && accumulator_ > tickLen) accumulator_ = tickLen; // spiral-of-death guard
     return n;
+}
+
+void Simulation::saveState(SimSnapshot& out) const {
+    out.world = world_;
+    out.rng = rng_;
+    out.tick = tick_;
+    out.pending = pending_;
+    out.executedCount = executed_.size();
+    out.players = players_;
+    out.seqByPlayer = seqByPlayer_;
+}
+
+void Simulation::loadState(const SimSnapshot& in) {
+    world_ = in.world;
+    rng_ = in.rng;
+    tick_ = in.tick;
+    pending_ = in.pending;
+    if (executed_.size() > in.executedCount) executed_.resize(in.executedCount);
+    players_ = in.players;
+    seqByPlayer_ = in.seqByPlayer;
+    events_.clear();
+    accumulator_ = 0.0;
 }
 
 uint64_t Simulation::checksum() {

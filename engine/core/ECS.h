@@ -39,6 +39,9 @@ public:
     virtual void remove(uint32_t index) = 0;
     virtual bool has(uint32_t index) const = 0;
     virtual void clear() = 0;
+    // Snapshots for rollback netcode: deep copy that reuses this pool's memory when possible.
+    virtual std::unique_ptr<IPool> clone() const = 0;
+    virtual void copyFrom(const IPool& other) = 0;
 };
 
 template <class T>
@@ -69,6 +72,8 @@ public:
     }
     bool has(uint32_t index) const override { return index < sparse_.size() && sparse_[index] != kNone; }
     void clear() override { sparse_.clear(); dense_.clear(); data_.clear(); }
+    std::unique_ptr<IPool> clone() const override { return std::make_unique<Pool<T>>(*this); }
+    void copyFrom(const IPool& other) override { *this = static_cast<const Pool<T>&>(other); }
 
     T* tryGet(uint32_t index) { return has(index) ? &data_[sparse_[index]] : nullptr; }
     T& get(uint32_t index) { assert(has(index)); return data_[sparse_[index]]; }
@@ -85,6 +90,33 @@ private:
 
 class World {
 public:
+    World() = default;
+    World(World&&) = default;
+    World& operator=(World&&) = default;
+    World(const World& o) { copyFrom(o); }
+    World& operator=(const World& o) { if (this != &o) copyFrom(o); return *this; }
+
+    // Deep copy of every pool and resource (rollback snapshots). Pools and resources that already
+    // exist here are assigned in place so a ring of snapshots stops allocating after warm-up.
+    void copyFrom(const World& o) {
+        pools_.resize(o.pools_.size());
+        for (size_t i = 0; i < o.pools_.size(); ++i) {
+            if (!o.pools_[i]) pools_[i].reset();
+            else if (pools_[i]) pools_[i]->copyFrom(*o.pools_[i]);
+            else pools_[i] = o.pools_[i]->clone();
+        }
+        resources_.resize(o.resources_.size());
+        resourceOps_.resize(o.resourceOps_.size());
+        for (size_t i = 0; i < o.resources_.size(); ++i) {
+            const ResourceOps& op = o.resourceOps_[i];
+            if (!o.resources_[i]) resources_[i].reset();
+            else if (resources_[i] && resourceOps_[i].assign == op.assign) op.assign(resources_[i].get(), o.resources_[i].get());
+            else resources_[i] = op.make(o.resources_[i].get());
+            resourceOps_[i] = op;
+        }
+        gens_ = o.gens_; alive_ = o.alive_; free_ = o.free_; pendingDestroy_ = o.pendingDestroy_;
+    }
+
     Entity create() {
         if (!free_.empty()) {
             uint32_t idx = free_.back(); free_.pop_back();
@@ -154,8 +186,11 @@ public:
     // Singleton "resources" (game config, map graph, etc.) stored outside the ECS pools.
     template <class T, class... Args> T& setResource(Args&&... args) {
         uint32_t id = detail::componentTypeId<T>();
-        if (id >= resources_.size()) resources_.resize(id + 1);
+        if (id >= resources_.size()) { resources_.resize(id + 1); resourceOps_.resize(id + 1); }
         resources_[id] = std::make_shared<T>(std::forward<Args>(args)...);
+        resourceOps_[id] = {
+            [](const void* src) -> std::shared_ptr<void> { return std::make_shared<T>(*static_cast<const T*>(src)); },
+            [](void* dst, const void* src) { *static_cast<T*>(dst) = *static_cast<const T*>(src); }};
         return *static_cast<T*>(resources_[id].get());
     }
     template <class T> T* resource() {
@@ -164,7 +199,7 @@ public:
     }
 
     void clear() {
-        pools_.clear(); resources_.clear(); gens_.clear(); alive_.clear(); free_.clear(); pendingDestroy_.clear();
+        pools_.clear(); resources_.clear(); resourceOps_.clear(); gens_.clear(); alive_.clear(); free_.clear(); pendingDestroy_.clear();
     }
 
 private:
@@ -179,6 +214,11 @@ private:
 
     std::vector<std::unique_ptr<IPool>> pools_;
     std::vector<std::shared_ptr<void>> resources_;
+    struct ResourceOps {
+        std::shared_ptr<void> (*make)(const void*) = nullptr;
+        void (*assign)(void*, const void*) = nullptr;
+    };
+    std::vector<ResourceOps> resourceOps_;
     std::vector<uint32_t> gens_;
     std::vector<uint8_t> alive_;
     std::vector<uint32_t> free_;
