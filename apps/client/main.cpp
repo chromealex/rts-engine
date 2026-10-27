@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -23,11 +24,13 @@
 #include <vector>
 
 #include "GameClient.h"
+#include "modules/rts/RtsLocalize.h"
 
 using namespace rts;
 using platform::Event;
 using platform::EventType;
 using platform::Key;
+using i18n::Args;
 
 namespace rts::client {
 
@@ -37,6 +40,10 @@ GameClient* g_client = nullptr;
 
 void GameClient::init(gfx::Device& dev) {
     dev_ = &dev;
+    { // settings (language, online name) are saved here; platforms do not create it
+        std::error_code ec;
+        std::filesystem::create_directories(platform::userDataDir(), ec);
+    }
     std::string text;
     try {
         if (!platform::readContentFile("game.json", text)) throw std::runtime_error("game.json not found in content");
@@ -44,12 +51,14 @@ void GameClient::init(gfx::Device& dev) {
         gameName_ = manifest_.getStr("name", gameName_);
         if (!platform::readContentFile(manifest_.getStr("rules", "rules.json"), text)) throw std::runtime_error("rules not found");
         rulesJson_ = Json::parse(text);
-        rules_ = loadRules(rulesJson_);
-        for (auto& m : manifest_["maps"].items()) maps_.push_back({m.getStr("file"), m.getStr("title", m.getStr("file"))});
+        langs_ = i18n::readGameLanguages(manifest_);
+        applyLanguage(!forcedLanguage_.empty() ? forcedLanguage_
+                                               : i18n::chooseLanguage(langs_, i18n::readSavedLanguage(platform::userDataDir())), false);
     } catch (const std::exception& e) {
         error_ = e.what();
     }
     platform::setTitle(gameName_);
+    loadNetSettings();
     overlay_.init(dev, "fonts/ui.ttf", 17.0f);
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
@@ -121,7 +130,35 @@ void GameClient::toMenu() {
     menuMusic();
 }
 
+
+// Display copy of the rules and every data text in the chosen language. Safe at any time: a running
+// simulation has its own Rules and never sees translated names.
+void GameClient::applyLanguage(const std::string& tag, bool save) {
+    auto reader = [](const std::string& path, std::string& out) { return platform::readContentFile(path, out); };
+    try {
+        i18n::loadGameLocalization(loc_, reader, langs_, tag);
+    } catch (const std::exception& e) {
+        error_ = e.what();
+        loc_.clear();
+        loc_.setLanguage(langs_.source);
+    }
+    if (save) i18n::saveLanguage(platform::userDataDir(), loc_.language());
+    langNames_.clear();
+    for (auto& l : langs_.available) langNames_.push_back(i18n::languageSelfName(reader, l));
+    gameName_ = loc_.trOr("game.name", manifest_.getStr("name", "RTSEngine"));
+    platform::setTitle(gameName_);
+    rules_ = loadRules(rulesJson_);
+    localizeRules(rules_, loc_);
+    maps_.clear();
+    for (auto& m : manifest_["maps"].items()) {
+        std::string file = m.getStr("file");
+        maps_.push_back({file, loc_.trOr("map." + mapStem(file) + ".title", m.getStr("title", file))});
+    }
+    if (!netMaps_.empty()) describeNetMaps(); // localized titles
+}
+
 void GameClient::shutdown() {
+    net_.reset(); // detaches from the simulation before it goes away
     sound_.detach();
     audio_.shutdown();
     view_.shutdown(*dev_);
@@ -132,7 +169,7 @@ void GameClient::shutdown() {
 }
 
 void GameClient::startMatch(size_t idx) {
-    if (idx >= maps_.size()) return;
+    if (idx >= maps_.size() || netMatch_) return;
     std::string text;
     if (!platform::readContentFile(maps_[idx].file, text)) { error_ = "map not found: " + maps_[idx].file; return; }
     try {
@@ -502,23 +539,30 @@ void GameClient::processEvents() {
     for (auto& ev : sim_->events()) {
         if (ev.player != human_ || spectator_) continue;
         if (ev.type == kEvNotEnough) {
-            if (ev.value == 255) notice("Нужно больше лимита (дома / склады)");
-            else if (ev.value == 254) notice("Нет места для постройки");
-            else if (ev.value >= 0 && size_t(ev.value) < rules_.resources.size()) notice("Не хватает: " + rules_.resources[size_t(ev.value)].name);
-        } else if (ev.type == kEvBuildDone) notice("Построено: " + rules_.types[size_t(ev.value)].name);
-        else if (ev.type == kEvReadyToPlace) notice("Готово к установке: " + rules_.types[size_t(ev.value)].name);
-        else if (ev.type == kEvResearched) notice("Исследовано: " + rules_.techs[size_t(ev.value)].name);
-        else if (ev.type == kEvLevelUp) notice("Герой достиг уровня " + std::to_string(ev.value));
-        else if (ev.type == kEvLowPower) notice("Не хватает энергии!");
-        else if (ev.type == kEvUpgraded) notice("Улучшено: " + rules_.types[size_t(ev.value)].name);
-        else if (ev.type == kEvRegionClaimed) notice("Регион присоединён");
-        else if (ev.type == kEvPlayerDefeated) notice("Вы проиграли");
+            if (ev.value == 255) notice(tr("notice.need_supply"));
+            else if (ev.value == 254) notice(tr("notice.no_room"));
+            else if (ev.value >= 0 && size_t(ev.value) < rules_.resources.size()) notice(tr("notice.not_enough", Args().str("resource", rules_.resources[size_t(ev.value)].name)));
+        } else if (ev.type == kEvBuildDone) notice(tr("notice.built", Args().str("name", rules_.types[size_t(ev.value)].name)));
+        else if (ev.type == kEvReadyToPlace) notice(tr("notice.ready_to_place", Args().str("name", rules_.types[size_t(ev.value)].name)));
+        else if (ev.type == kEvResearched) notice(tr("notice.researched", Args().str("name", rules_.techs[size_t(ev.value)].name)));
+        else if (ev.type == kEvLevelUp) notice(tr("notice.hero_level", Args().num("level", ev.value)));
+        else if (ev.type == kEvLowPower) notice(tr("notice.low_power"));
+        else if (ev.type == kEvUpgraded) notice(tr("notice.upgraded", Args().str("name", rules_.types[size_t(ev.value)].name)));
+        else if (ev.type == kEvRegionClaimed) notice(tr("notice.region_claimed"));
+        else if (ev.type == kEvPlayerDefeated) notice(tr("notice.defeated"));
     }
 }
 
 void GameClient::frame(gfx::Device& dev, double dt) {
     time_ += dt;
     float alpha = 0;
+    bool netAdvanced = false;
+    updateNet(dt, netAdvanced);   // online: the network session drives the sim, even behind the pause menu
+    if (netAdvanced && sim_) {
+        alpha = float(sim_->alpha());
+        processEvents();
+        if (sim_->result() != 0 && screen_ != Screen::Over) setScreen(Screen::Over);
+    }
     if (sim_ && screen_ == Screen::Playing) {
         // keyboard / edge scrolling
         float speed = cam_.distance * 0.9f * float(dt);
@@ -539,14 +583,16 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         cam_.target.x = std::clamp(cam_.target.x, 0.0f, float(g.w));
         cam_.target.z = std::clamp(cam_.target.z, 0.0f, float(g.h));
 
-        for (auto& b : bots_) b.update(*sim_);
-        sim_->advance(dt);
-        alpha = float(sim_->alpha());
-        processEvents();
-        if (sim_->result() != 0) {
-            setScreen(Screen::Over);
-            auto* me = sim_->player(human_);
-            if (!spectator_) sound_.onMatchEnd(me && me->team == sim_->result());
+        if (!netMatch_) {
+            for (auto& b : bots_) b.update(*sim_);
+            sim_->advance(dt);
+            alpha = float(sim_->alpha());
+            processEvents();
+            if (sim_->result() != 0) {
+                setScreen(Screen::Over);
+                auto* me = sim_->player(human_);
+                if (!spectator_) sound_.onMatchEnd(me && me->team == sim_->result());
+            }
         }
     }
     if (sim_) {
@@ -611,6 +657,7 @@ int rtsMain(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
+        if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);
         if (a == "--map" && i + 1 < argc) {
             size_t idx = size_t(std::stoul(argv[++i]));
             auto oldInit = cb.init;
