@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>RTSEngine</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1214; overflow: hidden; }
+  canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
+  #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+            color: #cfd6dc; font: 15px system-ui, sans-serif; pointer-events: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<div id="status">Loading…</div>
+<script>
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    setStatus: function (t) { var s = document.getElementById('status'); s.textContent = t; s.style.display = t ? 'flex' : 'none'; },
+    monitorRunDependencies: function (left) { if (!left) Module.setStatus(''); },
+    onRuntimeInitialized: function () { Module.setStatus(''); Module.canvas.focus(); }
+  };
+  window.onerror = function () { Module.setStatus('Error: see the browser console'); };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
