@@ -1,0 +1,20 @@
+// Mushroom Clash — ru. Keys: see modules/rts/RtsLocalize.h.
+{
+  "@language": "Русский",
+
+  // game.json
+  "game.name": "Грибная битва",
+  "map.duel.title": "Дуэль",
+
+  // maps/duel.json
+  "map.duel.name": "Дуэль",
+  "map.duel.player.1": "Синие",
+  "map.duel.player.2": "Красные",
+
+  // rules.json types
+  "type.mushroom": "Гриб",
+  "type.village": "Деревня",
+  "type.bigvillage": "Большая деревня",
+  "type.tower": "Башня",
+  "type.forge": "Кузница"
+}
