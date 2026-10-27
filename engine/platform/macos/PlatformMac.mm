@@ -163,13 +163,13 @@ static void updateSizes(NSView* view) {
     self.view = [[RTSView alloc] initWithFrame:frame];
     g_window.contentView = self.view;
     [g_window center];
+    updateSizes(self.view);
+    g_device = gfx::createMetalDevice((__bridge void*)self.view.layer);
+    if (S.cb.init) S.cb.init(*g_device);   // before the window becomes key: no events reach an uninitialised app
     [g_window makeKeyAndOrderFront:nil];
     [g_window makeFirstResponder:self.view];
     [NSApp activateIgnoringOtherApps:YES];
     updateSizes(self.view);
-
-    g_device = gfx::createMetalDevice((__bridge void*)self.view.layer);
-    if (S.cb.init) S.cb.init(*g_device);
     g_last = std::chrono::steady_clock::now();
     self.timer = [NSTimer timerWithTimeInterval:1.0 / 120.0 target:self selector:@selector(tick) userInfo:nil repeats:YES];
     [[NSRunLoop currentRunLoop] addTimer:self.timer forMode:NSRunLoopCommonModes];

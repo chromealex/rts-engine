@@ -249,15 +249,15 @@ public:
     }
 
     void setViewport(const Rect& r) override {
-        if (enc_) [enc_ setViewport:(MTLViewport){double(r.x), double(r.y), double(r.w), double(r.h), 0.0, 1.0}];
+        if (enc_) [enc_ setViewport:MTLViewport{double(r.x), double(r.y), double(r.w), double(r.h), 0.0, 1.0}];
     }
     void setScissor(const Rect& r) override {
         if (!enc_) return;
-        if (r.w <= 0 || r.h <= 0) { [enc_ setScissorRect:(MTLScissorRect){0, 0, NSUInteger(passW_), NSUInteger(passH_)}]; return; }
+        if (r.w <= 0 || r.h <= 0) { [enc_ setScissorRect:MTLScissorRect{0, 0, NSUInteger(passW_), NSUInteger(passH_)}]; return; }
         int x0 = std::max(0, r.x), y0 = std::max(0, r.y);
         int x1 = std::min(passW_, r.x + r.w), y1 = std::min(passH_, r.y + r.h);
         if (x1 <= x0 || y1 <= y0) { x0 = y0 = 0; x1 = y1 = 1; } // Metal forbids empty rects; 1px is invisible enough
-        [enc_ setScissorRect:(MTLScissorRect){NSUInteger(x0), NSUInteger(y0), NSUInteger(x1 - x0), NSUInteger(y1 - y0)}];
+        [enc_ setScissorRect:MTLScissorRect{NSUInteger(x0), NSUInteger(y0), NSUInteger(x1 - x0), NSUInteger(y1 - y0)}];
     }
     void setPipeline(PipelineHandle h) override {
         auto* p = pipelines_.get(h.id);

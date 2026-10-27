@@ -113,6 +113,7 @@ void ImGuiLayer::shutdown() {
 
 bool ImGuiLayer::handleEvent(const platform::Event& e) {
     using platform::EventType;
+    if (!dev_ || !ImGui::GetCurrentContext()) return false; // platforms may send focus/resize before init
     ImGuiIO& io = ImGui::GetIO();
     auto mods = [&](uint8_t m) {
         io.AddKeyEvent(ImGuiMod_Ctrl, m & platform::kModCtrl);

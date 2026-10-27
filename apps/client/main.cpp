@@ -767,7 +767,8 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         float3 fwd{-fx, 0, -fz}, right{fz, 0, -fx};
         auto key = [&](Key k) { return keys_[int(k)]; };
         float W = platform::windowWidth(), H = platform::windowHeight();
-        bool edges = !platform::isTouchDevice() && mouseX_ >= 0 && std::string(platform::name()) != "web";
+        // edge scrolling only while the cursor is inside the window (macOS reports moves outside it too)
+        bool edges = !platform::isTouchDevice() && std::string(platform::name()) != "web" && mouseX_ >= 0 && mouseY_ >= 0 && mouseX_ <= W && mouseY_ <= H;
         bool noSel = selection_.empty();
         if (!ui_.wantsKeyboard()) {
             if (key(Key::Up) || (noSel && key(Key::W)) || (edges && mouseY_ < 3)) cam_.target += fwd * speed;
