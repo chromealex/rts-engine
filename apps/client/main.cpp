@@ -27,6 +27,8 @@
 #include "imgui.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/RtsLocalize.h"
+#include "engine/i18n/GameLanguage.h"
 #include "modules/rts/view/RtsView.h"
 
 using namespace rts;
@@ -35,11 +37,20 @@ using namespace rts::game;
 using platform::Event;
 using platform::EventType;
 using platform::Key;
+using i18n::Args;
 
 namespace {
 
 struct MapEntry { std::string file, title; };
 struct Notice { std::string text; double until; };
+
+// First n characters (not bytes): queue buttons show short names, and Cyrillic is 2 bytes a letter.
+std::string utf8Prefix(const std::string& s, size_t n) {
+    size_t i = 0;
+    for (size_t chars = 0; i < s.size() && chars < n; ++chars)
+        do ++i; while (i < s.size() && (static_cast<unsigned char>(s[i]) & 0xC0) == 0x80);
+    return s.substr(0, i);
+}
 
 class GameClient {
 public:
@@ -49,6 +60,7 @@ public:
     void shutdown();
     void autostart(size_t i) { startMatch(i); }
     void spectate() { spectator_ = true; }
+    void forceLanguage(std::string tag) { forcedLanguage_ = std::move(tag); }
 
 private:
     enum class Screen { Menu, Playing, Paused, Over };
@@ -75,6 +87,11 @@ private:
     void drawMinimap();
     void drawPause();
 
+    // localization (presentation only: rules_ is the display copy, the sim loads its own)
+    void applyLanguage(const std::string& tag, bool save);
+    std::string tr(std::string_view key, const Args& a = {}) const { return loc_.tr(key, a); }
+    static std::string clock(int64_t seconds);
+
     gfx::Device* dev_ = nullptr;
     ImGuiLayer ui_;
     Renderer3D r3d_;
@@ -84,6 +101,10 @@ private:
     std::vector<MapEntry> maps_;
     std::string gameName_ = "RTSEngine";
     Rules rules_;
+    i18n::Localization loc_;
+    i18n::GameLanguages langs_;
+    std::vector<std::string> langNames_;
+    std::string forcedLanguage_;
 
     Screen screen_ = Screen::Menu;
     std::unique_ptr<Simulation> sim_;
@@ -129,8 +150,10 @@ void GameClient::init(gfx::Device& dev) {
         gameName_ = manifest_.getStr("name", gameName_);
         if (!platform::readContentFile(manifest_.getStr("rules", "rules.json"), text)) throw std::runtime_error("rules not found");
         rulesJson_ = Json::parse(text);
-        rules_ = loadRules(rulesJson_);
-        for (auto& m : manifest_["maps"].items()) maps_.push_back({m.getStr("file"), m.getStr("title", m.getStr("file"))});
+        langs_ = i18n::readGameLanguages(manifest_);
+        std::string tag = !forcedLanguage_.empty() ? forcedLanguage_
+                        : i18n::chooseLanguage(langs_, i18n::readSavedLanguage(platform::userDataDir()));
+        applyLanguage(tag, false);
     } catch (const std::exception& e) {
         error_ = e.what();
     }
@@ -139,6 +162,37 @@ void GameClient::init(gfx::Device& dev) {
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
+}
+
+// Display copy of the rules and every data text in the chosen language. Safe to call any time:
+// the running simulation has its own Rules and never sees translated names.
+void GameClient::applyLanguage(const std::string& tag, bool save) {
+    auto reader = [](const std::string& path, std::string& out) { return platform::readContentFile(path, out); };
+    try {
+        i18n::loadGameLocalization(loc_, reader, langs_, tag);
+    } catch (const std::exception& e) {
+        error_ = e.what();
+        loc_.clear();
+        loc_.setLanguage(langs_.source);
+    }
+    if (save) i18n::saveLanguage(platform::userDataDir(), loc_.language());
+    langNames_.clear();
+    for (auto& l : langs_.available) langNames_.push_back(i18n::languageSelfName(reader, l));
+    gameName_ = loc_.trOr("game.name", manifest_.getStr("name", "RTSEngine"));
+    platform::setTitle(gameName_);
+    rules_ = loadRules(rulesJson_);
+    localizeRules(rules_, loc_);
+    maps_.clear();
+    for (auto& m : manifest_["maps"].items()) {
+        std::string file = m.getStr("file");
+        maps_.push_back({file, loc_.trOr("map." + mapStem(file) + ".title", m.getStr("title", file))});
+    }
+}
+
+std::string GameClient::clock(int64_t seconds) {
+    char b[32];
+    std::snprintf(b, sizeof b, "%lld:%02lld", (long long)(seconds / 60), (long long)(seconds % 60));
+    return b;
 }
 
 void GameClient::shutdown() {
@@ -502,17 +556,17 @@ void GameClient::processEvents() {
     for (auto& ev : sim_->events()) {
         if (ev.player != human_ || spectator_) continue;
         if (ev.type == kEvNotEnough) {
-            if (ev.value == 255) notice("Нужно больше лимита (дома / склады)");
-            else if (ev.value == 254) notice("Нет места для постройки");
-            else if (ev.value >= 0 && size_t(ev.value) < rules_.resources.size()) notice("Не хватает: " + rules_.resources[size_t(ev.value)].name);
-        } else if (ev.type == kEvBuildDone) notice("Построено: " + rules_.types[size_t(ev.value)].name);
-        else if (ev.type == kEvReadyToPlace) notice("Готово к установке: " + rules_.types[size_t(ev.value)].name);
-        else if (ev.type == kEvResearched) notice("Исследовано: " + rules_.techs[size_t(ev.value)].name);
-        else if (ev.type == kEvLevelUp) notice("Герой достиг уровня " + std::to_string(ev.value));
-        else if (ev.type == kEvLowPower) notice("Не хватает энергии!");
-        else if (ev.type == kEvUpgraded) notice("Улучшено: " + rules_.types[size_t(ev.value)].name);
-        else if (ev.type == kEvRegionClaimed) notice("Регион присоединён");
-        else if (ev.type == kEvPlayerDefeated) notice("Вы проиграли");
+            if (ev.value == 255) notice(tr("notice.need_supply"));
+            else if (ev.value == 254) notice(tr("notice.no_room"));
+            else if (ev.value >= 0 && size_t(ev.value) < rules_.resources.size()) notice(tr("notice.not_enough", Args().str("resource", rules_.resources[size_t(ev.value)].name)));
+        } else if (ev.type == kEvBuildDone) notice(tr("notice.built", Args().str("name", rules_.types[size_t(ev.value)].name)));
+        else if (ev.type == kEvReadyToPlace) notice(tr("notice.ready_to_place", Args().str("name", rules_.types[size_t(ev.value)].name)));
+        else if (ev.type == kEvResearched) notice(tr("notice.researched", Args().str("name", rules_.techs[size_t(ev.value)].name)));
+        else if (ev.type == kEvLevelUp) notice(tr("notice.hero_level", Args().num("level", ev.value)));
+        else if (ev.type == kEvLowPower) notice(tr("notice.low_power"));
+        else if (ev.type == kEvUpgraded) notice(tr("notice.upgraded", Args().str("name", rules_.types[size_t(ev.value)].name)));
+        else if (ev.type == kEvRegionClaimed) notice(tr("notice.region_claimed"));
+        else if (ev.type == kEvPlayerDefeated) notice(tr("notice.defeated"));
     }
 }
 
@@ -528,16 +582,27 @@ void GameClient::drawMenu() {
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
     if (!error_.empty()) { ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", error_.c_str()); ImGui::Separator(); }
-    ImGui::TextUnformatted("Сложность");
-    ImGui::RadioButton("Лёгкая", &difficulty_, 0); ImGui::SameLine();
-    ImGui::RadioButton("Обычная", &difficulty_, 1); ImGui::SameLine();
-    ImGui::RadioButton("Сложная", &difficulty_, 2);
-    ImGui::Checkbox("Только наблюдать (боты против ботов)", &spectator_);
+    ImGui::TextUnformatted(tr("menu.difficulty").c_str());
+    ImGui::RadioButton(tr("menu.easy").c_str(), &difficulty_, 0); ImGui::SameLine();
+    ImGui::RadioButton(tr("menu.normal").c_str(), &difficulty_, 1); ImGui::SameLine();
+    ImGui::RadioButton(tr("menu.hard").c_str(), &difficulty_, 2);
+    ImGui::Checkbox(tr("menu.spectate").c_str(), &spectator_);
     ImGui::Spacing();
-    ImGui::TextUnformatted("Карта");
+    ImGui::TextUnformatted(tr("menu.map").c_str());
     for (size_t i = 0; i < maps_.size(); ++i)
         if (ImGui::Button(maps_[i].title.c_str(), ImVec2(-1, 0))) startMatch(i);
     ImGui::Spacing();
+    if (langs_.available.size() > 1) {
+        int cur = 0;
+        for (size_t i = 0; i < langs_.available.size(); ++i) if (langs_.available[i] == loc_.language()) cur = int(i);
+        ImGui::SetNextItemWidth(160);
+        std::string label = tr("menu.language") + "##lang";
+        if (ImGui::BeginCombo(label.c_str(), langNames_[size_t(cur)].c_str())) {
+            for (size_t i = 0; i < langs_.available.size(); ++i)
+                if (ImGui::Selectable(langNames_[i].c_str(), int(i) == cur) && int(i) != cur) applyLanguage(langs_.available[i], true);
+            ImGui::EndCombo();
+        }
+    }
     ImGui::TextDisabled("%s · %s", platform::name(), dev_->info().name.c_str());
     ImGui::End();
 }
@@ -561,12 +626,12 @@ void GameClient::drawHud() {
         }
         ImGui::Text("%s: %lld", rd.name.c_str(), (long long)eco.stock[r].toInt());
         if ((rd.kind == ResourceKind::Flow || rd.capped) && eco.cap[r].raw > 0) { ImGui::SameLine(0, 2); ImGui::TextDisabled("/%lld", (long long)eco.cap[r].toInt()); }
-        if (rd.kind == ResourceKind::Flow) { ImGui::SameLine(0, 4); ImGui::TextDisabled("(%+.1f/с)", eco.income[r].toDouble()); }
+        if (rd.kind == ResourceKind::Flow) { ImGui::SameLine(0, 4); char v[32]; std::snprintf(v, sizeof v, "%+.1f", eco.income[r].toDouble()); ImGui::TextDisabled("%s", tr("hud.per_second", Args().str("value", v)).c_str()); }
     }
     if (eco.supplyCap.raw > 0 || eco.supplyUsed.raw > 0) {
         sep();
         bool full = eco.supplyUsed >= eco.supplyCap;
-        ImGui::TextColored(full ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(1, 1, 1, 1), "Лимит: %lld/%lld", (long long)eco.supplyUsed.toInt(), (long long)eco.supplyCap.toInt());
+        ImGui::TextColored(full ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(1, 1, 1, 1), "%s", tr("hud.supply", Args().num("used", eco.supplyUsed.toInt()).num("cap", eco.supplyCap.toInt())).c_str());
     }
     if (rules_.resources.empty()) {
         for (auto& p : sim_->players()) {
@@ -575,38 +640,38 @@ void GameClient::drawHud() {
             sim_->world().each<Unit, Owner>([&](Entity en, Unit&, Owner& o) { if (o.player == p.slot && sim_->world().has<Mobile>(en)) ++g; });
             float4 c = RtsView::playerColor(p.slot);
             sep();
-            ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%s %d%s", p.name.c_str(), g, p.alive ? "" : " (выбыл)");
+            ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%s %d%s", localizedPlayerName(loc_, maps_[mapIndex_].file, size_t(p.slot - 1), p.name).c_str(), g, p.alive ? "" : tr("hud.eliminated").c_str());
         }
     }
     // mode-specific counters
     const auto& vic = gs.victory;
     if (vic.mode == VictoryMode::Tickets)
-        for (size_t t = 1; t < gs.tickets.size(); ++t) { sep(); ImGui::Text("Команда %zu: %lld", t, (long long)gs.tickets[t].toInt()); }
+        for (size_t t = 1; t < gs.tickets.size(); ++t) { sep(); ImGui::TextUnformatted(tr("hud.team", Args().num("team", int64_t(t)).num("tickets", gs.tickets[t].toInt())).c_str()); }
     if (vic.mode == VictoryMode::Score)
         for (size_t t = 1; t < gs.score.size(); ++t) { sep(); float4 c = RtsView::playerColor(uint8_t(t)); ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%lld", (long long)gs.score[t].toInt()); }
     if (vic.mode == VictoryMode::Survive || vic.mode == VictoryMode::Score) {
         int64_t left = std::max<int64_t>(0, (vic.surviveSeconds * int64_t(sim_->tickRate())).toInt() - int64_t(sim_->tick())) / sim_->tickRate();
-        sep(); ImGui::Text("Осталось %lld:%02lld", (long long)(left / 60), (long long)(left % 60));
+        sep(); ImGui::TextUnformatted(tr("hud.time_left", Args().str("time", clock(left))).c_str());
     }
-    if (uint32_t wt = mod().ticksUntilWave(*sim_)) { sep(); ImGui::Text("Волна через %u", wt / sim_->tickRate() + 1); }
+    if (uint32_t wt = mod().ticksUntilWave(*sim_)) { sep(); ImGui::TextUnformatted(tr("hud.wave_in", Args().num("count", wt / sim_->tickRate() + 1)).c_str()); }
     if (gs.regionCount > 0 && !spectator_) {
         int owned = 0;
         for (auto o : gs.regionOwner) if (o == human_) ++owned;
-        sep(); ImGui::Text("Регионы: %d", owned);
+        sep(); ImGui::TextUnformatted(tr("hud.regions", Args().num("count", owned)).c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Занять")) mode_ = Mode::Claim;
+        if (ImGui::SmallButton(tr("hud.claim").c_str())) mode_ = Mode::Claim;
     }
     if (!rules_.autoBuildPool.empty() && !spectator_) {
         sep();
         auto cost = mod().autoBuildCost(*sim_, human_, rules_.autoBuildPool[0]);
-        std::string label = "СТРОИТЬ";
+        std::string label = tr("hud.auto_build");
         for (auto& c : cost) label += " " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
         if (ImGui::Button(label.c_str())) { Command c; c.type = kCmdAutoBuild; c.param = -1; issue(c); }
     }
     sep();
     ImGui::Text("%u:%02u", sim_->tick() / sim_->tickRate() / 60, sim_->tick() / sim_->tickRate() % 60);
     ImGui::SameLine(0, 18);
-    if (ImGui::SmallButton("Меню")) screen_ = Screen::Paused;
+    if (ImGui::SmallButton((tr("hud.menu") + "##menu").c_str())) screen_ = Screen::Paused;
     ImGui::End();
 
     float y = 48;
@@ -632,10 +697,10 @@ void GameClient::drawHud() {
         }
     }
     if (mode_ != Mode::Normal) {
-        const char* m = mode_ == Mode::AttackMove ? "Атака: выберите цель" : mode_ == Mode::Patrol ? "Патруль: выберите точку"
-                      : mode_ == Mode::Rally ? "Точка сбора" : mode_ == Mode::Ability ? "Способность: выберите цель"
-                      : mode_ == Mode::Claim ? "Выберите соседний регион" : "Постройка: выберите место (Esc — отмена)";
-        fg->AddText(ImVec2(mouseX_ + 16, mouseY_ + 8), IM_COL32(255, 255, 255, 230), m);
+        std::string m = tr(mode_ == Mode::AttackMove ? "mode.attack" : mode_ == Mode::Patrol ? "mode.patrol"
+                         : mode_ == Mode::Rally ? "mode.rally" : mode_ == Mode::Ability ? "mode.ability"
+                         : mode_ == Mode::Claim ? "mode.claim" : "mode.place");
+        fg->AddText(ImVec2(mouseX_ + 16, mouseY_ + 8), IM_COL32(255, 255, 255, 230), m.c_str());
     }
 }
 
@@ -647,8 +712,8 @@ void GameClient::drawCommandCard() {
     ImGui::SetNextWindowSizeConstraints(ImVec2(260, 0), ImVec2(380, io.DisplaySize.y * 0.6f));
     ImGui::Begin("##card", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
     if (selection_.empty()) {
-        ImGui::TextDisabled(platform::isTouchDevice() ? "Нажмите на свой объект" : "Выделите юнитов рамкой");
-        if (ImGui::Button("Все войска", ImVec2(-1, 0))) {
+        ImGui::TextDisabled("%s", tr(platform::isTouchDevice() ? "card.hint_touch" : "card.hint_mouse").c_str());
+        if (ImGui::Button(tr("card.all_army").c_str(), ImVec2(-1, 0))) {
             for (auto& o : scene_.objects)
                 if (o.owner == human_ && !o.isProjectile && !rules_.types[o.type].structure && !rules_.types[o.type].worker && !rules_.types[o.type].weapons.empty())
                     selection_.push_back(o.entity);
@@ -668,27 +733,27 @@ void GameClient::drawCommandCard() {
     const UnitType& t0 = rules_.types[w.get<Unit>(e0).type];
     if (selection_.size() == 1) {
         const Unit& u = w.get<Unit>(e0);
-        if (!t0.invulnerable) ImGui::TextDisabled("Здоровье %lld / %lld", (long long)u.hp.toInt(), (long long)t0.maxHp.toInt());
-        if (auto* rs = w.tryGet<ResourceStock>(e0)) ImGui::TextDisabled("Запас: %lld", (long long)rs->amount.toInt());
-        if (auto* g = w.tryGet<Garrison>(e0)) ImGui::TextDisabled("Гарнизон: %d / %d", g->count, t0.garrisonMax);
+        if (!t0.invulnerable) ImGui::TextDisabled("%s", tr("card.health", Args().num("hp", u.hp.toInt()).num("max", t0.maxHp.toInt())).c_str());
+        if (auto* rs = w.tryGet<ResourceStock>(e0)) ImGui::TextDisabled("%s", tr("card.stock", Args().num("amount", rs->amount.toInt())).c_str());
+        if (auto* g = w.tryGet<Garrison>(e0)) ImGui::TextDisabled("%s", tr("card.garrison", Args().num("count", g->count).num("max", t0.garrisonMax)).c_str());
     }
     if (w.get<Owner>(e0).player != human_) { ImGui::End(); return; }
 
     auto costText = [&](uint16_t type) {
         std::string s;
         for (auto& c : rules_.types[type].cost) s += "  " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
-        if (rules_.types[type].supplyUsed.raw > 0) s += "  " + std::to_string(rules_.types[type].supplyUsed.toInt()) + " лим.";
+        if (rules_.types[type].supplyUsed.raw > 0) s += "  " + tr("card.supply_cost", Args().num("count", rules_.types[type].supplyUsed.toInt()));
         return s;
     };
     if (selectionHasGarrison()) {
         ImGui::Separator();
-        ImGui::TextUnformatted("Отправить:");
+        ImGui::TextUnformatted(tr("card.send").c_str());
         for (int p : {25, 50, 75, 100}) {
             ImGui::SameLine();
             char b[8]; std::snprintf(b, sizeof b, "%d%%", p);
             if (ImGui::Selectable(b, sendPercent_ == p, 0, ImVec2(40, 0))) sendPercent_ = p;
         }
-        ImGui::TextDisabled("Перетащите от здания к цели");
+        ImGui::TextDisabled("%s", tr("card.send_hint").c_str());
     }
     bool anyMobile = false, anyWeapon = false;
     std::vector<uint16_t> buildable;
@@ -700,16 +765,16 @@ void GameClient::drawCommandCard() {
     }
     if (anyMobile) {
         ImGui::Separator();
-        if (anyWeapon) { if (ImGui::Button("Атака (A)")) mode_ = Mode::AttackMove; ImGui::SameLine(); }
-        if (ImGui::Button("Стоп (S)")) { Command c; c.type = kCmdStop; c.units = selection_; issue(c); }
+        if (anyWeapon) { if (ImGui::Button(tr("card.attack").c_str())) mode_ = Mode::AttackMove; ImGui::SameLine(); }
+        if (ImGui::Button(tr("card.stop").c_str())) { Command c; c.type = kCmdStop; c.units = selection_; issue(c); }
         ImGui::SameLine();
-        if (ImGui::Button("Держать (H)")) { Command c; c.type = kCmdHold; c.units = selection_; issue(c); }
+        if (ImGui::Button(tr("card.hold").c_str())) { Command c; c.type = kCmdHold; c.units = selection_; issue(c); }
         ImGui::SameLine();
-        if (ImGui::Button("Патруль (P)")) mode_ = Mode::Patrol;
+        if (ImGui::Button((tr("card.patrol") + "##patrol").c_str())) mode_ = Mode::Patrol;
     }
     if (!buildable.empty()) {
         ImGui::Separator();
-        ImGui::TextUnformatted("Строить:");
+        ImGui::TextUnformatted(tr("card.build").c_str());
         for (uint16_t b : buildable) {
             bool ok = mod().canTrain(*sim_, human_, b);
             ImGui::BeginDisabled(!ok);
@@ -720,19 +785,19 @@ void GameClient::drawCommandCard() {
     }
     auto reqTooltip = [&](const std::vector<Requirement>& req) {
         std::string r;
-        for (auto& q : req) r += (q.tech ? rules_.techs[q.index].name : rules_.types[q.index].name) + " ";
-        ImGui::SetTooltip("Требуется: %s", r.c_str());
+        for (auto& q : req) r += (r.empty() ? "" : ", ") + (q.tech ? rules_.techs[q.index].name : rules_.types[q.index].name);
+        ImGui::SetTooltip("%s", tr("card.requires", Args().str("list", r)).c_str());
     };
     // abilities of the selection (by index of the first unit's type)
     if (!t0.abilities.empty()) {
         ImGui::Separator();
         for (size_t i = 0; i < t0.abilities.size(); ++i) {
             const AbilityDef& a = t0.abilities[i];
-            if (a.aura) { ImGui::TextDisabled("Аура: %s", a.name.c_str()); continue; }
+            if (a.aura) { ImGui::TextDisabled("%s", tr("card.aura", Args().str("name", a.name)).c_str()); continue; }
             bool ok = mod().canCast(*sim_, e0, int(i));
             ImGui::BeginDisabled(!ok);
             std::string label = a.name;
-            if (a.energyCost.raw > 0) label += "  (" + std::to_string(a.energyCost.toInt()) + " эн.)";
+            if (a.energyCost.raw > 0) label += "  " + tr("card.energy_cost", Args().num("count", a.energyCost.toInt()));
             ImGui::PushID(int(i) + 1000);
             if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) {
                 if (a.target == TargetKind::None || a.target == TargetKind::Self) { Command c; c.type = kCmdAbility; c.param = int64_t(i); c.units = selection_; issue(c); }
@@ -745,10 +810,10 @@ void GameClient::drawCommandCard() {
     if (auto* prod = w.tryGet<Production>(e0); prod && !(w.get<Unit>(e0).flags & kUnitUnderConstruction)) {
         ImGui::Separator();
         if (prod->ready != kNoType) {
-            std::string label = "Установить: " + rules_.types[prod->ready].name;
+            std::string label = tr("card.place", Args().str("name", rules_.types[prod->ready].name));
             if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { mode_ = Mode::Place; placeType_ = prod->ready; placeProducer_ = e0; }
         }
-        if (t0.chargesMax > 0) ImGui::TextDisabled("Заряды: %d / %d", prod->charges, t0.chargesMax);
+        if (t0.chargesMax > 0) ImGui::TextDisabled("%s", tr("card.charges", Args().num("count", prod->charges).num("max", t0.chargesMax)).c_str());
         for (uint16_t p : t0.produces) {
             bool ok = mod().canTrain(*sim_, human_, p);
             ImGui::BeginDisabled(!ok);
@@ -772,7 +837,7 @@ void GameClient::drawCommandCard() {
             const TechDef& tech = rules_.techs[k];
             if (eco.researched[k]) continue;
             bool ok = !eco.researching[k] && mod().requirementsMet(*sim_, human_, tech.requires_);
-            std::string label = "Исследовать: " + tech.name;
+            std::string label = tr("card.research", Args().str("name", tech.name));
             for (auto& c : tech.cost) label += "  " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
             ImGui::BeginDisabled(!ok);
             ImGui::PushID(int(k) + 5000);
@@ -782,7 +847,7 @@ void GameClient::drawCommandCard() {
             if (!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) reqTooltip(tech.requires_);
         }
         for (uint16_t up : t0.upgrades) {
-            std::string label = "Улучшить: " + rules_.types[up].name + costText(up);
+            std::string label = tr("card.upgrade", Args().str("name", rules_.types[up].name)) + costText(up);
             ImGui::PushID(int(up) + 9000);
             if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { Command c; c.type = kCmdUpgrade; c.param = up; c.units = {e0}; issue(c); }
             ImGui::PopID();
@@ -797,29 +862,29 @@ void GameClient::drawCommandCard() {
             std::string name = it.item >= 0 ? rules_.types[size_t(it.item)].name : rules_.techs[size_t(~it.item)].name;
             if (i) ImGui::SameLine();
             ImGui::PushID(int(i));
-            if (ImGui::SmallButton((name.substr(0, 6) + " x").c_str())) {
+            if (ImGui::SmallButton((utf8Prefix(name, 6) + " x").c_str())) {
                 Command c; c.type = kCmdCancelTrain; c.units = {e0}; c.param = int64_t(i); issue(c);
             }
             ImGui::PopID();
         }
-        if (!t0.produces.empty() && ImGui::Button("Точка сбора")) mode_ = Mode::Rally;
+        if (!t0.produces.empty() && ImGui::Button((tr("card.rally") + "##rally").c_str())) mode_ = Mode::Rally;
     }
     {
         // structure / unit specials
         bool row = false;
         auto rowItem = [&] { if (row) ImGui::SameLine(); row = true; };
-        if (t0.structure && t0.sellable && !w.has<Construction>(e0)) { rowItem(); if (ImGui::Button("Продать")) { Command c; c.type = kCmdSell; c.units = {e0}; issue(c); } }
-        if (t0.deploysTo != kNoType) { rowItem(); if (ImGui::Button("Развернуть")) { Command c; c.type = kCmdDeploy; c.units = {e0}; issue(c); } }
+        if (t0.structure && t0.sellable && !w.has<Construction>(e0)) { rowItem(); if (ImGui::Button(tr("card.sell").c_str())) { Command c; c.type = kCmdSell; c.units = {e0}; issue(c); } }
+        if (t0.deploysTo != kNoType) { rowItem(); if (ImGui::Button(tr("card.deploy").c_str())) { Command c; c.type = kCmdDeploy; c.units = {e0}; issue(c); } }
         if (t0.members > 1) {
             rowItem();
-            ImGui::Text("Бойцов: %d/%d", mod().membersAlive(*sim_, e0), t0.members);
+            ImGui::TextUnformatted(tr("card.squad", Args().num("alive", mod().membersAlive(*sim_, e0)).num("max", t0.members)).c_str());
             ImGui::SameLine();
-            if (ImGui::Button("Пополнить")) { Command c; c.type = kCmdReinforce; c.units = selection_; issue(c); }
+            if (ImGui::Button(tr("card.reinforce").c_str())) { Command c; c.type = kCmdReinforce; c.units = selection_; issue(c); }
         }
-        if (auto* h = w.tryGet<Hero>(e0)) { rowItem(); ImGui::Text("Уровень %d  (опыт %lld)", h->level, (long long)h->xp.toInt()); }
-        if (t0.maxEnergy.raw > 0) { rowItem(); ImGui::Text("Энергия %lld/%lld", (long long)w.get<Unit>(e0).energy.toInt(), (long long)t0.maxEnergy.toInt()); }
+        if (auto* h = w.tryGet<Hero>(e0)) { rowItem(); ImGui::TextUnformatted(tr("card.hero", Args().num("level", h->level).num("xp", h->xp.toInt())).c_str()); }
+        if (t0.maxEnergy.raw > 0) { rowItem(); ImGui::TextUnformatted(tr("card.energy", Args().num("energy", w.get<Unit>(e0).energy.toInt()).num("max", t0.maxEnergy.toInt())).c_str()); }
     }
-    if (w.has<Construction>(e0) && ImGui::Button("Отменить постройку")) { Command c; c.type = kCmdCancelTrain; c.units = {e0}; issue(c); }
+    if (w.has<Construction>(e0) && ImGui::Button(tr("card.cancel_build").c_str())) { Command c; c.type = kCmdCancelTrain; c.units = {e0}; issue(c); }
     ImGui::End();
 }
 
@@ -874,19 +939,20 @@ void GameClient::drawPause() {
         auto* me = sim_->player(human_);
         bool won = !spectator_ && res > 0 && me && me->team == res;
         ImGui::SetWindowFontScale(1.6f);
-        ImGui::TextUnformatted(spectator_ ? "Матч окончен" : won ? "Победа!" : "Поражение");
+        ImGui::TextUnformatted(tr(spectator_ ? "pause.match_over" : won ? "pause.victory" : "pause.defeat").c_str());
         ImGui::SetWindowFontScale(1.0f);
-        ImGui::Text("Время: %u:%02u", sim_->tick() / sim_->tickRate() / 60, sim_->tick() / sim_->tickRate() % 60);
+        ImGui::TextUnformatted(tr("pause.time", Args().str("time", clock(sim_->tick() / sim_->tickRate()))).c_str());
     } else {
-        ImGui::TextUnformatted("Пауза");
-        if (ImGui::Button("Продолжить", ImVec2(220, 0))) screen_ = Screen::Playing;
+        ImGui::TextUnformatted(tr("pause.title").c_str());
+        if (ImGui::Button(tr("pause.resume").c_str(), ImVec2(220, 0))) screen_ = Screen::Playing;
     }
-    static const char* q[] = {"Тени: выкл", "Тени: низкие", "Тени: средние", "Тени: высокие"};
+    const std::string qs[] = {tr("pause.shadows_off"), tr("pause.shadows_low"), tr("pause.shadows_medium"), tr("pause.shadows_high")};
+    const char* q[] = {qs[0].c_str(), qs[1].c_str(), qs[2].c_str(), qs[3].c_str()};
     int qi = int(r3d_.shadowQuality());
     ImGui::SetNextItemWidth(220);
     if (ImGui::Combo("##shadows", &qi, q, 4)) r3d_.setShadowQuality(ShadowQuality(qi));
-    if (ImGui::Button("Заново", ImVec2(220, 0))) startMatch(mapIndex_);
-    if (ImGui::Button("В меню", ImVec2(220, 0))) { screen_ = Screen::Menu; sim_.reset(); }
+    if (ImGui::Button(tr("pause.restart").c_str(), ImVec2(220, 0))) startMatch(mapIndex_);
+    if (ImGui::Button(tr("pause.to_menu").c_str(), ImVec2(220, 0))) { screen_ = Screen::Menu; sim_.reset(); }
     ImGui::End();
 }
 
@@ -982,6 +1048,7 @@ int rtsMain(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
+        if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);   // e.g. --lang en, --lang qps
         if (a == "--map" && i + 1 < argc) {
             size_t idx = size_t(std::stoul(argv[++i]));
             auto oldInit = cb.init;
