@@ -102,9 +102,40 @@ Linux ARM64 (GCC), macOS ARM64 (AppleClang) — одинаковые контр�
 
 - ✅ Linux: клиент, редактор, тесты; Windows .exe (кросс-сборка MinGW, запуск под Wine).
 - ✅ macOS: сборка, тесты, запуск игры на Metal; rtsbuild → .app и проект iOS (+ сборка для симулятора).
-- ⏳ Android: проект Gradle генерируется, APK не собирался (нет SDK в среде проверки).
-- ⏳ Web: не собирался (нет emsdk в среде проверки).
-- ⏳ Windows на реальном железе и iOS на устройстве — не запускались.
+- ✅ Web: собирается (Emscripten 3.1.50), матч запускается в headless Chromium (WebGL2/SwiftShader).
+- ⏳ Android: проект Gradle генерируется; APK и запуск в эмуляторе — в CI (job `android`), локально не собирался.
+- ⏳ Windows на реальном железе и iOS на устройстве — не запускались (в CI: MSVC-сборка и сборка iOS для симулятора).
+
+## Платформы и CI
+
+`.github/workflows/ci.yml` на каждый push в `master`/`agent-*` и на pull request:
+
+| Job | Что делает |
+|---|---|
+| `linux` | gcc и clang (x64) + gcc (ARM64), предупреждения = ошибки, тесты, матчи ботов, скриншоты под Xvfb |
+| `windows-msvc` | Visual Studio 2022, тесты, матчи, `rtsbuild --target windows` |
+| `windows-mingw` | кросс-сборка MinGW-w64, тесты и матчи под Wine |
+| `macos` | universal-сборка Xcode, тесты, матчи, `rtsbuild` → .app и проект iOS со сборкой для симулятора |
+| `android` | `.so` через NDK, APK через `rtsbuild`, в эмуляторе: запуск → касание → фон → возврат → «назад» → повторный запуск, проверка logcat на падения |
+| `web` | Emscripten, запуск матча в headless Chromium, проверка консоли и кадра |
+| `determinism` | сравнивает контрольные суммы матчей (обе игры × 3 сида) со всех платформ — должны совпасть побитово |
+
+Скриншоты, APK, web-сборка и .app сохраняются как артефакты прогона.
+
+Локально:
+
+```bash
+# Windows .exe с Linux/macOS
+cmake -S . -B build/mingw -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=platform/cmake/mingw-w64.cmake
+# матчи ботов на всех играх → файл контрольных сумм (сравнить между машинами через diff)
+.github/scripts/headless-checksums.sh build/linux-release/rts_headless sums.txt
+# смоук-тест web-сборки
+node platform/web/smoke.mjs build/web
+```
+
+Параметры командной строки в web-сборке задаются через URL: `index.html?map=0&spectate` = `--map 0 --spectate`.
+Режим скриншота (`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`) шагает ровно по 1/60 с на кадр, поэтому
+кадр N одинаков на любой машине.
 
 ## Дальше
 
