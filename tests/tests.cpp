@@ -1140,6 +1140,201 @@ TEST(audio_decode_and_stream_ogg_vorbis) {
     CHECK(l > 0.05 && r > 0.05);
 }
 
+// ------------------------------------------------------------------ unpacker plugins (foreign archives)
+
+#include <filesystem>
+#include <fstream>
+#include "engine/pack/Unpacker.h"
+
+namespace {
+namespace tfs = std::filesystem;
+
+tfs::path testDir(const std::string& name) {
+    tfs::path d = tfs::temp_directory_path() / ("rts_tests_" + name);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+    tfs::create_directories(d);
+    return d;
+}
+void writeFile(const tfs::path& p, const std::string& s) {
+    tfs::create_directories(p.parent_path());
+    std::ofstream f(p, std::ios::binary);
+    f << s;
+}
+bool havePython() {
+#if defined(_WIN32)
+    return std::system("py -3 --version >NUL 2>&1") == 0;
+#else
+    return std::system("python3 --version >/dev/null 2>&1") == 0;
+#endif
+}
+std::string le32(uint32_t v) { std::string s; for (int i = 0; i < 4; ++i) s += char(uint8_t(v >> (8 * i))); return s; }
+} // namespace
+
+TEST(pack_external_flag_and_merge) {
+    using namespace rts::pack;
+    PackWriter a;
+    a.addData("x.txt", "hello");
+    WriteOptions ext; ext.external = true;
+    std::string bytes;
+    CHECK(a.writeToString(bytes, ext));
+    auto pa = Pack::open(memorySource(bytes));
+    CHECK(pa && pa->external());
+    PackWriter b;
+    b.addData("own.json", "{}");
+    CHECK(b.addPack(*pa, "imported/a") == 1);
+    CHECK(b.external());                              // external-ness is contagious
+    std::string merged;
+    CHECK(b.writeToString(merged, WriteOptions{}));
+    auto pm = Pack::open(memorySource(merged));
+    std::string out;
+    CHECK(pm && pm->external() && pm->read("imported/a/x.txt", out) && out == "hello");
+    PackWriter c;
+    c.addData("y", "z");
+    CHECK(c.writeToString(bytes, WriteOptions{}));
+    CHECK(!Pack::open(memorySource(bytes))->external());
+}
+
+TEST(unpacker_manifests_are_validated) {
+    using namespace rts::pack;
+    tfs::path d = testDir("manifests");
+    writeFile(d / "good" / "unpacker.json", R"({"protocol":1,"name":"good","extensions":["ABC"],"magic":[{"offset":-4,"ascii":"TAIL"}],"command":["tool"]})");
+    writeFile(d / "oldproto" / "unpacker.json", R"({"protocol":7,"name":"old","extensions":[".x"],"command":["t"]})");
+    writeFile(d / "nocmd" / "unpacker.json", R"({"protocol":1,"name":"nocmd","extensions":[".x"]})");
+    writeFile(d / "reserved" / "unpacker.json", R"({"protocol":1,"name":"rpak","extensions":[".x"],"command":["t"]})");
+    writeFile(d / "undetectable" / "unpacker.json", R"({"protocol":1,"name":"nothing","command":["t"]})");
+    writeFile(d / "badhex" / "unpacker.json", R"({"protocol":1,"name":"badhex","magic":[{"hex":"zz"}],"command":["t"]})");
+    writeFile(d / "broken" / "unpacker.json", R"({"protocol":1, oops)");
+    UnpackerRegistry reg;
+    reg.addSearchDir(d.string());
+    CHECK(reg.errors().size() == 6);
+    const UnpackerInfo* g = reg.byName("good");
+    CHECK(g && g->extensions.size() == 1 && g->extensions[0] == ".abc" && g->external && g->magic[0].offset == -4);
+    CHECK(reg.byName("rpak") && reg.byName("rpak")->builtin);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+TEST(unpacker_plugins_import_synthetic_archives) {
+    using namespace rts::pack;
+    if (!havePython()) { std::printf("  (python3 not found: plugin tests skipped)\n"); return; }
+    tfs::path d = testDir("plugins");
+    UnpackerRegistry reg;
+    reg.addDefaultDirs(RTS_SOURCE_DIR);
+    CHECK(reg.errors().empty());
+    for (const char* n : {"zip", "tar", "war", "zpac", "zrsc", "dmg"}) {
+        const UnpackerInfo* u = reg.byName(n);
+        std::string err;
+        CHECK(u && reg.handshake(*u, &err));
+    }
+    // zip with hostile names: everything must land inside the pack namespace, sanitized.
+    std::string py = "python3 -c \"import zipfile; z=zipfile.ZipFile(r'" + (d / "t.zip").string() +
+                     "','w'); z.writestr('a/b.txt','bee'); z.writestr('../evil.txt','e'); z.writestr('/abs.txt','abs'); z.close()\"";
+    CHECK(std::system(py.c_str()) == 0);
+    // Warcraft-style archive: one stored entry, one placeholder, one LZ entry (8 literals + ref).
+    std::string war = le32(0x19) + std::string("\x03\x00\xe8\x03", 4);
+    uint32_t base = 8 + 12;
+    std::string e0 = le32(5) + "hello";
+    std::string e2 = le32(0x20000000u | 11) + std::string("\xff", 1) + "RIFFabcd" + std::string("\x00", 1) + std::string("\x00\x00", 2);
+    war += le32(base) + le32(base + uint32_t(e0.size())) + le32(base + uint32_t(e0.size()) + 1);
+    war += e0 + "x" + e2;
+    writeFile(d / "T.WAR", war);
+    // Z .PAC: zero header, LZSS with MSB-first flags: 4 literals, a 3-byte ref to ring pos 1.
+    writeFile(d / "T.PAC", std::string("\0\0\0\0", 4) + std::string("\xf0", 1) + "abcd" + std::string("\x11\x00", 2));
+    PackWriter w;
+    std::string err;
+    ImportResult r1, r2, r3;
+    ImportOptions o1; o1.prefix = "z";
+    CHECK(importArchive(reg, (d / "t.zip").string(), o1, w, &r1, &err));
+    ImportOptions o2; o2.prefix = "w";
+    CHECK(importArchive(reg, (d / "T.WAR").string(), o2, w, &r2, &err));
+    ImportOptions o3; o3.prefix = "p";
+    CHECK(importArchive(reg, (d / "T.PAC").string(), o3, w, &r3, &err));
+    CHECK(r1.format == "zip" && r1.files == 3 && r2.format == "war" && r2.files == 2 && r3.format == "zpac" && r1.external);
+    std::string bytes;
+    CHECK(w.writeToString(bytes, WriteOptions{}));
+    auto p = Pack::open(memorySource(bytes));
+    std::string out;
+    CHECK(p && p->external());
+    CHECK(p && p->read("z/a/b.txt", out) && out == "bee");
+    CHECK(p && p->read("z/evil.txt", out) && out == "e" && p->read("z/abs.txt", out) && out == "abs");
+    CHECK(p && p->read("w/0000.bin", out) && out == "hello");
+    CHECK(p && p->read("w/0002.wav", out) && out == "RIFFabcdRIF");   // ref copies ring[0..2]
+    CHECK(p && p->read("p/T.bin", out) && out == "abcdabc");        // pos 1 = first output byte
+    // Unknown data is refused with a readable reason.
+    writeFile(d / "mystery.qqq", "????");
+    CHECK(!importArchive(reg, (d / "mystery.qqq").string(), ImportOptions{}, w, nullptr, &err) && err.find("no unpacker") != std::string::npos);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+#if !defined(_WIN32)
+TEST(unpacker_hostile_plugin_is_contained) {
+    using namespace rts::pack;
+    if (!havePython()) return;
+    tfs::path d = testDir("hostile");
+    writeFile(d / "plug" / "unpacker.json", R"({"protocol":1,"name":"evil","extensions":[".evil"],"command":["python3","p.py"]})");
+    writeFile(d / "plug" / "p.py", R"(import json, os, sys
+m = sys.argv[1]
+req = json.load(open(sys.argv[2]))
+if m == 'info': print(json.dumps({'protocol': 1, 'name': 'evil'}))
+elif m == 'probe': print(json.dumps({'match': 'fail' not in req['archive']}))
+elif m == 'extract':
+    if 'fail' in req['archive'] or 'bad' in req['archive']: pass
+    out = req['out']; os.makedirs(out, exist_ok=True)
+    open(os.path.join(out, 'ok.txt'), 'w').write('ok')
+    os.symlink('/etc/hosts', os.path.join(out, 'link.txt'))
+    os.symlink('/etc', os.path.join(out, 'linkdir'))
+    print('library noise')
+    print(json.dumps({'files': 3}))
+)");
+    writeFile(d / "plug2" / "unpacker.json", R"({"protocol":1,"name":"broken","extensions":[".broken"],"command":["python3","p.py"]})");
+    writeFile(d / "plug2" / "p.py", "import sys\nprint('{\"error\": {\"message\": \"bad header\"}}'); sys.exit(1)\n");
+    writeFile(d / "a.evil", "x");
+    writeFile(d / "a.broken", "x");
+    UnpackerRegistry reg;
+    reg.addSearchDir(d.string());
+    CHECK(reg.errors().empty());
+    PackWriter w;
+    std::string err;
+    ImportResult r;
+    CHECK(importArchive(reg, (d / "a.evil").string(), ImportOptions{}, w, &r, &err));
+    CHECK(r.files == 1 && w.size() == 1);                           // symlinks never followed
+    CHECK(!importArchive(reg, (d / "a.broken").string(), ImportOptions{"broken", "", {}, "", false}, w, nullptr, &err));
+    CHECK(err.find("bad header") != std::string::npos);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+#endif
+
+TEST(unpacker_westwood_pak) {
+    using namespace rts::pack;
+    if (!havePython()) return;
+    tfs::path d = testDir("wwpak");
+    // Dune II layout: (offset, name\0)... 0 terminator, then data.
+    std::string a = "AAAA", b = "Creative Voice File";
+    uint32_t hdr = 4 + 6 + 4 + 6 + 4;            // "A.CPS\0" and "B.VOC\0"
+    std::string pak = le32(hdr) + std::string("A.CPS\0", 6) + le32(hdr + 4) + std::string("B.VOC\0", 6) + le32(0) + a + b;
+    writeFile(d / "T.PAK", pak);
+    writeFile(d / "Q.PAK", "PACK" + std::string(12, '\0'));  // Quake pak must not be taken for Westwood
+    UnpackerRegistry reg;
+    reg.addDefaultDirs(RTS_SOURCE_DIR);
+    std::string why;
+    const UnpackerInfo* u = reg.detect((d / "T.PAK").string(), &why);
+    CHECK(u && u->name == "wwpak");
+    CHECK(!reg.detect((d / "Q.PAK").string(), &why));
+    PackWriter w;
+    ImportResult r;
+    std::string err;
+    CHECK(importArchive(reg, (d / "T.PAK").string(), ImportOptions{}, w, &r, &err) && r.files == 2);
+    std::string bytes, out;
+    CHECK(w.writeToString(bytes, WriteOptions{}));
+    auto p = Pack::open(memorySource(bytes));
+    CHECK(p && p->read("A.CPS", out) && out == a && p->read("B.VOC", out) && out == b);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

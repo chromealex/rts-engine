@@ -5,7 +5,7 @@
 //   Header, 64 bytes
 //     0  char[4] "RPAK"
 //     4  u32     version (kPackVersion)
-//     8  u32     flags (bit 0: TOC is zstd-compressed)
+//     8  u32     flags (kFlagTocZstd, kFlagExternal)
 //    12  u32     entry count
 //    16  u64     TOC offset
 //    24  u64     TOC stored size
@@ -36,6 +36,11 @@ constexpr size_t kHeaderSize = 64;
 constexpr size_t kEntrySize = 40;
 
 enum class Codec : uint8_t { Stored = 0, Zstd = 1 };
+
+constexpr uint32_t kFlagTocZstd = 1u << 0;
+// Pack contains content imported from third-party archives (e.g. the user's own copy of a
+// commercial game). Such packs must never be committed or redistributed.
+constexpr uint32_t kFlagExternal = 1u << 1;
 
 // Random-access byte source behind a pack (file, Android asset, memory).
 class Source {
@@ -70,6 +75,8 @@ public:
     const std::string& name() const { return name_; }
     void setName(std::string n) { name_ = std::move(n); }
     uint64_t contentHash() const { return contentHash_; }
+    uint32_t flags() const { return flags_; }
+    bool external() const { return (flags_ & kFlagExternal) != 0; }
     size_t size() const { return entries_.size(); }
     const Entry& entry(size_t i) const { return entries_[i]; }
     const Entry* find(std::string_view normalizedPath) const;
@@ -87,6 +94,7 @@ private:
     std::string toc_;            // raw TOC; entry paths point into it
     std::vector<Entry> entries_;
     uint64_t contentHash_ = 0;
+    uint32_t flags_ = 0;
     std::string name_, error_;
     std::mutex mutex_;           // guards the decoder context and staging buffer
     void* dctx_ = nullptr;

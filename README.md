@@ -85,6 +85,30 @@ assetpipe diff old.rpak new.rpak  # что изменилось между ве�
 Скрытые файлы (`.git`, `.DS_Store`), реплеи `*.rpl` и вложенные `*.rpak` пропускаются всегда. Сборка пака
 воспроизводима: одинаковый контент даёт байт-в-байт одинаковый файл; «хеш контента» пака идентифицирует набор данных.
 
+### Импорт чужих архивов (распаковщики)
+
+Форматы, которых движок не знает (zip, tar, dmg, архивы других игр), подключаются плагинами-распаковщиками
+без пересборки движка: папка с `unpacker.json` и программой на любом языке (протокол —
+[`tools/unpackers/PROTOCOL.md`](tools/unpackers/PROTOCOL.md)). Распаковщики работают только в инструментах сборки:
+чужой архив превращается в файлы внутри `.rpak`, игра по-прежнему читает только `.rpak`.
+
+Из коробки: zip (и `.oramap`), tar, dmg, архивы Warcraft I/II (`.WAR/.SUD/.INS`), Westwood `.PAK` (Dune II, Lands of Lore,
+Kyrandia), Z от Bitmap Brothers (`.PAC`, `.RSC`).
+
+```bash
+assetpipe formats                                   # какие форматы известны
+assetpipe probe ~/Downloads/Warcraft2/war2/DATA/*   # что это за файлы
+assetpipe list MAINDAT.WAR                          # что внутри
+assetpipe import -o war2.rpak MAINDAT.WAR=imported/war2 SFXDAT.SUD=imported/war2/sfx
+assetpipe unpackers new tools/unpackers myformat    # заготовка нового распаковщика
+assetpipe unpackers check                           # проверить все плагины
+```
+
+У всех команд есть `--json` — так их вызывает MCP-сервер. В `game.json` можно перечислить `"imports"`, и `rtsbuild`
+сам распакует их в пак при сборке (`"optional": true` — если файла нет на этой машине, сборка идёт без него).
+Пак с импортированным сторонним контентом помечается флагом «external»: такие сборки только для личного
+использования, их нельзя коммитить и распространять.
+
 ## Как описывается игра
 
 Тип объекта — набор необязательных блоков; что задано, то объект и умеет:

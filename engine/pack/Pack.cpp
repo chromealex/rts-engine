@@ -109,7 +109,7 @@ std::unique_ptr<Pack> Pack::open(std::unique_ptr<Source> src, std::string* error
     std::unique_ptr<Pack> p(new Pack());
     std::string stored(size_t(tocStored), '\0');
     if (!src->read(tocOff, stored.data(), stored.size())) { fail(error, "cannot read TOC"); return nullptr; }
-    if (flags & 1u) {
+    if (flags & kFlagTocZstd) {
         p->toc_.resize(size_t(tocRaw));
         size_t r = ZSTD_decompress(p->toc_.data(), p->toc_.size(), stored.data(), stored.size());
         if (ZSTD_isError(r) || r != tocRaw) { fail(error, "corrupt TOC (decompression failed)"); return nullptr; }
@@ -138,6 +138,7 @@ std::unique_ptr<Pack> Pack::open(std::unique_ptr<Source> src, std::string* error
         p->entries_.push_back(e);
     }
     p->contentHash_ = rd64(h + 48);
+    p->flags_ = flags;
     p->src_ = std::move(src);
     return p;
 }

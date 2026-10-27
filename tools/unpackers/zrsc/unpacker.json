@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "name": "zrsc",
+  "title": "Z (Bitmap Brothers, 1996) sprite resource .RSC",
+  "version": "1.0.0",
+  "extensions": [".rsc"],
+  "magic": [],
+  "capabilities": ["probe", "list", "extract"],
+  "external": true,
+  "command": ["python3", "unpack.py"],
+  "command_windows": ["py", "-3", "unpack.py"]
+}
