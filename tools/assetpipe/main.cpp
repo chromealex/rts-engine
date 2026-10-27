@@ -10,8 +10,11 @@
 //   assetpipe probe <file>...              which format a file is
 //   assetpipe unpackers new <dir> <name>   skeleton of a new unpacker plugin
 //   assetpipe unpackers check [<name>...]  validate manifests and run the protocol handshake
+//   assetpipe atlas [--profile P] -o <dir> <dir>[=<prefix>]...
+//                                          texture atlas preview: pages as PNG + atlas.json + report
 //
-// pack options: --level N, --store, --threads N, --ignore <glob>
+// pack options: --level N, --store, --threads N, --ignore <glob>, --atlas <profile> (pack 2D images
+//               into texture atlases like rtsbuild; settings from game.json "atlas" of the root input)
 // global: --json (one JSON object on stdout, for the MCP server / editor), --unpackers <dir>
 //         (extra plugin folder, repeatable), --project <dir> (also loads <dir>/unpackers),
 //         --engine <dir> (default: source tree; plugins in <engine>/tools/unpackers)
@@ -31,6 +34,7 @@
 #include "engine/pack/PackWriter.h"
 #include "engine/data/Json.h"
 #include "engine/pack/Unpacker.h"
+#include "tools/atlas/AtlasBuild.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -61,6 +65,8 @@ void usage() {
                  "  assetpipe probe <file>...\n"
                  "  assetpipe unpackers new <dir> <name>\n"
                  "  assetpipe unpackers check [<name>...]\n"
+                 "  assetpipe atlas [--profile P] -o <dir> <dir>[=<prefix>]...\n"
+                 "pack/import also take --atlas <profile>\n"
                  "global: --json  --unpackers <dir>  --project <dir>  --engine <dir>\n";
 }
 
@@ -94,7 +100,7 @@ std::pair<std::string, std::string> splitPrefix(const std::string& a) {
 }
 
 struct PackArgs {
-    std::string out, format;
+    std::string out, format, atlas;
     WriteOptions opt;
     IgnoreRules rules;
     std::vector<std::string> include;
@@ -111,6 +117,7 @@ bool parsePackArgs(int argc, char** argv, PackArgs& a, bool importMode) {
         else if (s == "--threads") a.opt.threads = unsigned(std::atoi(next().c_str()));
         else if (s == "--store") a.opt.compress = false;
         else if (s == "--ignore") a.rules.add(next());
+        else if (s == "--atlas") a.atlas = next();
         else if (importMode && s == "--format") a.format = next();
         else if (importMode && s == "--include") a.include.push_back(next());
         else if (importMode && s == "--external") a.external = true;
@@ -120,23 +127,43 @@ bool parsePackArgs(int argc, char** argv, PackArgs& a, bool importMode) {
     return !a.out.empty() && !a.inputs.empty();
 }
 
+// game.json of the input mounted at the pack root ("" prefix), or an empty object.
+Json rootGameJson(const std::vector<std::pair<std::string, std::string>>& inputs) {
+    for (auto& [dir, prefix] : inputs) {
+        std::error_code ec;
+        if (prefix.empty() && fs::exists(fs::path(dir) / "game.json", ec)) return Json::parseFile((fs::path(dir) / "game.json").string());
+    }
+    return Json::object();
+}
+
 int finishPack(PackWriter& w, const PackArgs& a, const std::string& importsJson) {
     WriteStats st;
     std::string err;
     WriteOptions opt = a.opt;
     opt.external = opt.external || a.external;
+    rts::atlas::AtlasStats as;
+    if (!a.atlas.empty()) {
+        try {
+            auto cfg = rts::atlas::AtlasConfig::fromGame(rootGameJson(a.inputs), a.atlas);
+            if (!rts::atlas::applyAtlas(w, cfg, as, &err)) return die(err);
+        } catch (const std::exception& e) { return die(e.what()); }
+    }
     if (!w.write(a.out, opt, &st, &err)) return die(err);
+    rts::atlas::finishStats(as, st);
     bool external = opt.external || w.external();
     if (G.json) {
         std::cout << "{\"ok\":true,\"out\":" << q(a.out) << ",\"files\":" << st.items.size() << ",\"rawBytes\":" << st.rawBytes
                   << ",\"packBytes\":" << st.packBytes << ",\"duplicates\":" << st.duplicates << ",\"external\":" << (external ? "true" : "false")
-                  << ",\"contentHash\":" << q(hex64(st.contentHash)) << ",\"imports\":[" << importsJson << "],\"warnings\":[";
+                  << ",\"contentHash\":" << q(hex64(st.contentHash)) << ",\"imports\":[" << importsJson << "]";
+        if (!a.atlas.empty()) std::cout << ",\"atlas\":" << as.toJson().dump(-1);
+        std::cout << ",\"warnings\":[";
         for (size_t i = 0; i < st.warnings.size(); ++i) std::cout << (i ? "," : "") << q(st.warnings[i]);
         std::cout << "]}" << std::endl;
         return 0;
     }
     for (auto& m : st.warnings) std::cout << "предупреждение: " << m << "\n";
-    std::cout << a.out << "\n" << sizeReport(st) << "хеш контента: " << hex64(st.contentHash) << std::endl;
+    for (auto& m : as.warnings) std::cout << "предупреждение: " << m << "\n";
+    std::cout << a.out << "\n" << sizeReport(st) << (a.atlas.empty() ? std::string() : as.report()) << "хеш контента: " << hex64(st.contentHash) << std::endl;
     if (external) std::cout << "ВНИМАНИЕ: пак содержит внешний (сторонний) контент — не коммитить и не распространять." << std::endl;
     return 0;
 }
@@ -155,6 +182,51 @@ int cmdPack(int argc, char** argv) {
         }
     }
     return finishPack(w, a, "");
+}
+
+int cmdAtlas(int argc, char** argv) {
+    std::string out, profile = "linux";
+    std::vector<std::pair<std::string, std::string>> inputs;
+    for (int i = 0; i < argc; ++i) {
+        std::string s = argv[i];
+        auto next = [&]() -> std::string { if (i + 1 >= argc) { usage(); std::exit(2); } return argv[++i]; };
+        if (s == "-o" || s == "--out") out = next();
+        else if (s == "--profile") profile = next();
+        else if (!s.empty() && s[0] == '-') { usage(); return 2; }
+        else inputs.push_back(splitPrefix(s));
+    }
+    if (out.empty() || inputs.empty()) { usage(); return 2; }
+    PackWriter w;
+    IgnoreRules rules;
+    std::string err;
+    for (auto& [dir, prefix] : inputs) if (w.addDirectory(dir, prefix, rules, &err) < 0) return die(err);
+    std::vector<rts::atlas::SourceImage> imgs;
+    rts::atlas::AtlasOutput res;
+    try {
+        auto cfg = rts::atlas::AtlasConfig::fromGame(rootGameJson(inputs), profile);
+        for (const std::string& p : w.paths()) {
+            if (!rts::atlas::isImagePath(p)) continue;
+            rts::atlas::SourceImage src;
+            src.path = p;
+            if (!w.readInput(p, src.bytes)) return die("не удалось прочитать " + p);
+            imgs.push_back(std::move(src));
+        }
+        if (!rts::atlas::buildAtlas(imgs, cfg, res, &err)) return die(err);
+    } catch (const std::exception& e) { return die(e.what()); }
+    auto save = [&](const fs::path& f, const std::string& data) {
+        fs::create_directories(f.parent_path());
+        std::ofstream o(f, std::ios::binary);
+        o.write(data.data(), std::streamsize(data.size()));
+    };
+    for (size_t i = 0; i < res.pageImages.size(); ++i) {
+        fs::path f = fs::path(out) / res.manifest.pages()[i].file;
+        save(f.replace_extension(".png"), rts::atlas::encodePng(res.pageImages[i]));
+    }
+    save(fs::path(out) / rts::atlas::kManifestPath, res.manifest.serialize());
+    save(fs::path(out) / "atlas-report.json", res.stats.toJson().dump(2) + "\n");
+    if (G.json) std::cout << "{\"ok\":true,\"out\":" << q(out) << ",\"atlas\":" << res.stats.toJson().dump(-1) << "}" << std::endl;
+    else std::cout << res.stats.report() << "-> " << out << std::endl;
+    return 0;
 }
 
 int cmdImport(int argc, char** argv) {
@@ -404,6 +476,7 @@ int main(int argc, char** argv) {
     if (cmd == "formats") return cmdFormats();
     if (cmd == "probe" && n >= 1) return cmdProbe(n, rest);
     if (cmd == "unpackers") return cmdUnpackers(n, rest);
+    if (cmd == "atlas") return cmdAtlas(n, rest);
     if (cmd == "-h" || cmd == "--help") { usage(); return 0; }
     usage();
     return 2;
