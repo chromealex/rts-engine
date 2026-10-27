@@ -27,7 +27,9 @@ private:
     void economy(Simulation& sim, RtsModule& m);
     void military(Simulation& sim, RtsModule& m);
     void garrisonPlay(Simulation& sim, RtsModule& m);
+    void special(Simulation& sim, RtsModule& m);   // deploy, sidebar placement, claims, auto-build, upgrades, research
     bool build(Simulation& sim, RtsModule& m, uint16_t type);
+    bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
 
     uint8_t player_;
@@ -36,6 +38,7 @@ private:
     uint32_t next_ = 0;
     int wave_ = 0;
     uint32_t lastBuildTick_ = 0;
+    uint32_t lastTechTick_ = 0;
 };
 
 } // namespace rts::game

@@ -66,6 +66,7 @@ struct Lighting {
     float3 groundColor{0.33f, 0.29f, 0.23f};
     float3 fogColor{0.62f, 0.70f, 0.80f};
     float fogDensity = 0.0025f;
+    float shadowSoftness = 0.22f;          // penumbra radius in world units (same look at every quality tier)
 };
 
 enum class ShadowQuality { Off, Low, Medium, High };
@@ -107,6 +108,8 @@ private:
     gfx::BufferHandle lineVB_, triVB_;
     gfx::TextureHandle shadowMap_;
     int shadowSize_ = 0;
+    float shadowTexelWorld_ = 0.05f;   // world size of one shadow-map texel
+    float shadowExtent_ = 50.0f;       // world size covered by the shadow map
     ShadowQuality quality_ = ShadowQuality::Medium;
     std::vector<DrawItem> items_;
     std::vector<ColorVertex> lines_, tris_;

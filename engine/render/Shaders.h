@@ -12,7 +12,7 @@ namespace rts::render::shaders {
 //   U0 (per draw):  mat4 model; vec4 color; vec4 params(x unlit, y specular, z receiveShadow, w emissive)
 //   U1 (per frame): mat4 viewProj; mat4 lightViewProj; vec4 sunDir(xyz, w intensity); vec4 sunColor;
 //                   vec4 skyColor; vec4 groundColor; vec4 fog(rgb, density); vec4 camPos;
-//                   vec4 shadow(x uvFlipY, y depthScale, z depthOffset, w texel); vec4 quality(x taps, y enabled)
+//                   vec4 shadow(x uvFlipY, y depthScale, z depthOffset, w texel); vec4 quality(x taps, y enabled, z radius uv, w normal offset)
 #define RTS_GLSL_BLOCKS \
     "layout(std140) uniform U0 { mat4 u_model; vec4 u_color; vec4 u_params; };\n" \
     "layout(std140) uniform U1 { mat4 u_viewProj; mat4 u_lightViewProj; vec4 u_sunDir; vec4 u_sunColor;\n" \
@@ -50,27 +50,44 @@ in vec3 v_wpos;
 in vec4 v_col;
 out vec4 o_color;
 
-float shadowFactor() {
+// Soft shadows: rotated Poisson-disc PCF over hardware 2x2 compare taps.
+//   u_quality.x taps (1 / 4 / 8 / 16), u_quality.z filter radius in shadow UV, u_quality.w normal offset (world)
+const vec2 kDisk[16] = vec2[16](
+    vec2(-0.613, 0.617), vec2(0.170, -0.040), vec2(-0.299, 0.791), vec2(0.645, 0.493),
+    vec2(-0.651, 0.717), vec2(0.421, 0.027), vec2(-0.817, -0.271), vec2(-0.705, -0.668),
+    vec2(0.977, -0.108), vec2(0.063, -0.233), vec2(0.346, -0.894), vec2(-0.272, 0.416),
+    vec2(-0.025, 0.919), vec2(-0.389, -0.144), vec2(0.733, -0.627), vec2(0.282, 0.512));
+float shadowFactor(vec3 n) {
     if (u_quality.y < 0.5 || u_params.z < 0.5) return 1.0;
-    vec4 lp = u_lightViewProj * vec4(v_wpos, 1.0);
+    vec3 L = normalize(u_sunDir.xyz);
+    float k = 1.0 - clamp(dot(n, L), 0.0, 1.0);          // grazing surfaces need the most offset
+    vec4 lp = u_lightViewProj * vec4(v_wpos + n * u_quality.w * (0.35 + k), 1.0);
     vec3 p = lp.xyz / lp.w;
     vec2 uv = p.xy * 0.5 + 0.5;
     if (u_shadow.x > 0.5) uv.y = 1.0 - uv.y;
     float d = p.z * u_shadow.y + u_shadow.z;
     if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || d >= 1.0) return 1.0;
-    float t = u_shadow.w;
+    float r = u_quality.z;
     if (u_quality.x < 2.0) return texture(tex0, vec3(uv, d));
-    if (u_quality.x < 5.0) {
-        float s = texture(tex0, vec3(uv + vec2(-0.5, -0.5) * t, d));
-        s += texture(tex0, vec3(uv + vec2( 0.5, -0.5) * t, d));
-        s += texture(tex0, vec3(uv + vec2(-0.5,  0.5) * t, d));
-        s += texture(tex0, vec3(uv + vec2( 0.5,  0.5) * t, d));
+    if (u_quality.x < 5.0) { // weak GPUs: fixed 4 taps, each a bilinear 2x2 compare
+        float s = texture(tex0, vec3(uv + vec2(-0.5, -0.5) * r, d));
+        s += texture(tex0, vec3(uv + vec2( 0.5, -0.5) * r, d));
+        s += texture(tex0, vec3(uv + vec2(-0.5,  0.5) * r, d));
+        s += texture(tex0, vec3(uv + vec2( 0.5,  0.5) * r, d));
         return s * 0.25;
     }
+    // per-pixel rotation (interleaved gradient noise) turns banding into fine grain
+    float a = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+    vec2 cs = vec2(cos(a), sin(a));
+    int n_ = int(u_quality.x);
     float s = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x) s += texture(tex0, vec3(uv + vec2(float(x), float(y)) * t, d));
-    return s / 9.0;
+    for (int i = 0; i < 16; ++i) {
+        if (i >= n_) break;
+        vec2 o = kDisk[i];
+        o = vec2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);
+        s += texture(tex0, vec3(uv + o * r, d));
+    }
+    return s / float(n_);
 }
 
 void main() {
@@ -80,7 +97,7 @@ void main() {
     vec3 L = normalize(u_sunDir.xyz);
     vec3 V = normalize(u_camPos.xyz - v_wpos);
     float ndl = max(dot(n, L), 0.0);
-    float sh = ndl > 0.0 ? shadowFactor() : 1.0;
+    float sh = ndl > 0.0 ? shadowFactor(n) : 1.0;
     vec3 sun = u_sunColor.rgb * u_sunColor.rgb * u_sunDir.w;
     vec3 sky = u_skyColor.rgb * u_skyColor.rgb, ground = u_groundColor.rgb * u_groundColor.rgb;
     vec3 amb = mix(ground, sky, n.y * 0.5 + 0.5);
@@ -110,27 +127,41 @@ vertex VOut vs_main(VIn in [[stage_in]], constant U0& u [[buffer(1)]], constant 
     o.pos = f.viewProj * wp;
     return o;
 }
-static float shadowFactor(constant U0& u, constant U1& f, float3 wpos, depth2d<float> sm, sampler ss) {
+constant float2 kDisk[16] = {
+    float2(-0.613, 0.617), float2(0.170, -0.040), float2(-0.299, 0.791), float2(0.645, 0.493),
+    float2(-0.651, 0.717), float2(0.421, 0.027), float2(-0.817, -0.271), float2(-0.705, -0.668),
+    float2(0.977, -0.108), float2(0.063, -0.233), float2(0.346, -0.894), float2(-0.272, 0.416),
+    float2(-0.025, 0.919), float2(-0.389, -0.144), float2(0.733, -0.627), float2(0.282, 0.512)};
+static float shadowFactor(constant U0& u, constant U1& f, float3 wpos, float3 n, float2 fragCoord, depth2d<float> sm, sampler ss) {
     if (f.quality.y < 0.5 || u.params.z < 0.5) return 1.0;
-    float4 lp = f.lightViewProj * float4(wpos, 1.0);
+    float3 L = normalize(f.sunDir.xyz);
+    float k = 1.0 - clamp(dot(n, L), 0.0, 1.0);
+    float4 lp = f.lightViewProj * float4(wpos + n * f.quality.w * (0.35 + k), 1.0);
     float3 p = lp.xyz / lp.w;
     float2 uv = p.xy * 0.5 + 0.5;
     if (f.shadow.x > 0.5) uv.y = 1.0 - uv.y;
     float d = p.z * f.shadow.y + f.shadow.z;
     if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || d >= 1.0) return 1.0;
-    float t = f.shadow.w;
+    float r = f.quality.z;
     if (f.quality.x < 2.0) return sm.sample_compare(ss, uv, d);
     if (f.quality.x < 5.0) {
-        float s = sm.sample_compare(ss, uv + float2(-0.5, -0.5) * t, d);
-        s += sm.sample_compare(ss, uv + float2( 0.5, -0.5) * t, d);
-        s += sm.sample_compare(ss, uv + float2(-0.5,  0.5) * t, d);
-        s += sm.sample_compare(ss, uv + float2( 0.5,  0.5) * t, d);
+        float s = sm.sample_compare(ss, uv + float2(-0.5, -0.5) * r, d);
+        s += sm.sample_compare(ss, uv + float2( 0.5, -0.5) * r, d);
+        s += sm.sample_compare(ss, uv + float2(-0.5,  0.5) * r, d);
+        s += sm.sample_compare(ss, uv + float2( 0.5,  0.5) * r, d);
         return s * 0.25;
     }
+    float a = 6.2831853 * fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));
+    float2 cs = float2(cos(a), sin(a));
+    int cnt = int(f.quality.x);
     float s = 0.0;
-    for (int y = -1; y <= 1; ++y)
-        for (int x = -1; x <= 1; ++x) s += sm.sample_compare(ss, uv + float2(float(x), float(y)) * t, d);
-    return s / 9.0;
+    for (int i = 0; i < 16; ++i) {
+        if (i >= cnt) break;
+        float2 o = kDisk[i];
+        o = float2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);
+        s += sm.sample_compare(ss, uv + o * r, d);
+    }
+    return s / float(cnt);
 }
 fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], constant U1& f [[buffer(2)]],
                         depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]]) {
@@ -140,7 +171,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], cons
     float3 L = normalize(f.sunDir.xyz);
     float3 V = normalize(f.camPos.xyz - in.wpos);
     float ndl = max(dot(n, L), 0.0);
-    float sh = ndl > 0.0 ? shadowFactor(u, f, in.wpos, tex0, s0) : 1.0;
+    float sh = ndl > 0.0 ? shadowFactor(u, f, in.wpos, n, in.pos.xy, tex0, s0) : 1.0;
     float3 sun = f.sunColor.rgb * f.sunColor.rgb * f.sunDir.w;
     float3 amb = mix(f.groundColor.rgb * f.groundColor.rgb, f.skyColor.rgb * f.skyColor.rgb, n.y * 0.5 + 0.5);
     float3 H = normalize(L + V);

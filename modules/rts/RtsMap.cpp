@@ -6,11 +6,29 @@
 
 namespace rts::game {
 
+uint8_t cellFlagsFromChar(char c) {
+    switch (c) {
+        case '~': return kCellWater;
+        case '#': return 0;
+        case ',': return uint8_t(kCellGround | kCellNoBuild);
+        case '=': return uint8_t(kCellGround | kCellWater | kCellNoBuild);
+        case '/': return uint8_t(kCellGround | kCellRamp | kCellNoBuild);
+        case 'R': return uint8_t(kCellGround | kCellRock);
+        default: return kCellGround;
+    }
+}
+
 void MapGrid::init(int width, int h_) {
     w = width; h = h_;
-    flags.assign(size_t(w * h), kCellGround);
-    height.assign(size_t(w * h), 0);
-    blocked.assign(size_t(w * h), 0);
+    const size_t n = size_t(w * h);
+    flags.assign(n, kCellGround);
+    level.assign(n, 0);
+    height.assign(n, 0);
+    blocked.assign(n, 0);
+    creep.assign(n, 0);
+    fieldRes.assign(n, -1);
+    fieldAmt.assign(n, Fixed{});
+    region.assign(n, -1);
 }
 
 bool MapGrid::passable(int x, int y, uint8_t layer) const {
@@ -19,7 +37,19 @@ bool MapGrid::passable(int x, int y, uint8_t layer) const {
     const size_t i = size_t(index(x, y));
     if (blocked[i]) return false;
     if (layer & 4 /*naval*/) return flags[i] & kCellWater;
+    if (layer & 8 /*sand only*/) return (flags[i] & kCellGround) && !(flags[i] & (kCellRock | kCellRamp));
     return flags[i] & kCellGround;
+}
+
+bool MapGrid::canStep(int x0, int y0, int x1, int y1, uint8_t layer) const {
+    if (!passable(x1, y1, layer)) return false;
+    if (layer & 2) return true;
+    const size_t a = size_t(index(x0, y0)), b = size_t(index(x1, y1));
+    int la = level[a], lb = level[b];
+    if (la == lb) return true;
+    // different levels: only through a ramp, one level at a time
+    if (std::abs(la - lb) > 1) return false;
+    return (flags[a] & kCellRamp) || (flags[b] & kCellRamp);
 }
 
 void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
@@ -28,12 +58,15 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
 }
 
-bool MapGrid::areaFree(int x0, int y0, int fw, int fh) const {
+bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
+    if (!inside(x0, y0)) return false;
+    const int lv = level[size_t(index(x0, y0))];
     for (int y = y0; y < y0 + fh; ++y)
         for (int x = x0; x < x0 + fw; ++x) {
             if (!inside(x, y)) return false;
             size_t i = size_t(index(x, y));
-            if (blocked[i] || !(flags[i] & kCellGround) || (flags[i] & kCellNoBuild)) return false;
+            if (blocked[i] || !(flags[i] & kCellGround) || (flags[i] & kCellNoBuild) || level[i] != lv) return false;
+            if (fieldRes[i] >= 0 && fieldAmt[i].raw > 0) return false;
         }
     return true;
 }
@@ -54,14 +87,15 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
     int dx = std::abs(x1 - x0), dy = std::abs(y1 - y0);
     int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
     int err = dx - dy, x = x0, y = y0;
+    if (!passable(x, y, layer)) return false;
     for (;;) {
-        if (!passable(x, y, layer)) return false;
         if (x == x1 && y == y1) return true;
         int e2 = 2 * err;
         int nx = x, ny = y;
         if (e2 > -dy) { err -= dy; nx += sx; }
         if (e2 < dx) { err += dx; ny += sy; }
-        if (nx != x && ny != y && (!passable(nx, y, layer) || !passable(x, ny, layer))) return false;
+        if (nx != x && ny != y && (!canStep(x, y, nx, y, layer) || !canStep(x, y, x, ny, layer))) return false;
+        if (!canStep(x, y, nx, ny, layer)) return false;
         x = nx; y = ny;
     }
 }
@@ -108,8 +142,8 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
         if (cur.hh < bestH) { bestH = cur.hh; best = cur.idx; }
         for (int k = 0; k < 8; ++k) {
             int nx = cx + dxs[k], ny = cy + dys[k];
-            if (!passable(nx, ny, layer)) continue;
-            if (k >= 4 && (!passable(nx, cy, layer) || !passable(cx, ny, layer))) continue; // no corner cutting
+            if (!canStep(cx, cy, nx, ny, layer)) continue;
+            if (k >= 4 && (!canStep(cx, cy, nx, cy, layer) || !canStep(cx, cy, cx, ny, layer))) continue; // no corner cutting
             int ni = index(nx, ny);
             uint32_t ng = g + (k >= 4 ? 14u : 10u);
             if (stamp_[size_t(ni)] == search_ && gCost_[size_t(ni)] <= ng) continue;
