@@ -290,7 +290,7 @@ void RtsModule::sysVictory(Simulation& sim) {
             }
         });
         if (v.mode == VictoryMode::Tickets && p.team < gs.tickets.size() && gs.tickets[p.team].raw <= 0) has = false;
-        if (v.mode == VictoryMode::Territory && rules_.territory.enabled && territoryOf(sim, p.slot) <= 0) has = false; // no ground left
+        if (v.mode == VictoryMode::Territory && rules_.territory.enabled) has = territoryOf(sim, p.slot) > 0; // out when no ground is left
         if (!has) {
             p.alive = false;
             sim.emit({kEvPlayerDefeated, p.slot, kNullEntity, kNullEntity, 0, {}});
