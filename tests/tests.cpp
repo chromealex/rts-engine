@@ -569,6 +569,35 @@ TEST(json_edit_and_dump_roundtrip) {
     CHECK(Json::parse(j.dump(-1)) == j);
 }
 
+TEST(mech_surrender_ends_match_and_replays) {
+    auto play = [](std::vector<Command>* cmds, uint32_t* end, bool* surrenderEvent) {
+        auto sim = makeSim(kSkirmish, "maps/valley.json", 9);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, 9);
+        for (uint32_t t = 0; t < 20 * 60 && sim->result() == 0; ++t) {
+            for (auto& b : bots) b.update(*sim);
+            if (sim->tick() == 20 * 30) { Command c; c.player = 2; c.type = game::kCmdSurrender; sim->submit(c); }
+            sim->step();
+            for (auto& ev : sim->events())
+                if (ev.type == game::kEvPlayerDefeated && ev.player == 2 && ev.value == game::kDefeatSurrendered) *surrenderEvent = true;
+        }
+        *cmds = sim->executedCommands();
+        *end = sim->tick();
+        return std::pair{sim->checksum(), sim->result()};
+    };
+    std::vector<Command> cmds;
+    uint32_t end = 0;
+    bool ev = false;
+    auto live = play(&cmds, &end, &ev);
+    CHECK(ev);
+    CHECK(live.second == 1);                                   // team of player 1 wins by surrender
+    CHECK(end > 20 * 30 && end < 20 * 32);
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 9);
+    for (auto& c : cmds) sim->submit(c);
+    while (sim->tick() < end) sim->step();
+    CHECK(sim->checksum() == live.first && sim->result() == 1);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

@@ -40,9 +40,12 @@ enum CommandType : uint16_t {
     kCmdClaim,        // point inside a region (Northgard)
     kCmdAutoBuild,    // no units; param = type or -1 (random from rules.autoBuild pool); spot chosen by the sim
     kCmdUpgrade,      // structures, param = target type from `upgrades`
+    kCmdSurrender,    // no units: the issuing player is defeated (kEvPlayerDefeated with value kDefeatSurrendered)
 };
 
 // ---------------------------------------------------------------- events (presentation)
+enum DefeatReason : int64_t { kDefeatEliminated = 0, kDefeatSurrendered = 1 }; // kEvPlayerDefeated value
+
 enum GameEvent : uint16_t {
     kEvSpawned = 1, kEvDied, kEvAttack, kEvHit, kEvTrainStarted, kEvTrainDone, kEvBuildPlaced, kEvBuildDone,
     kEvGathered, kEvCaptured, kEvPlayerDefeated, kEvNotEnough, kEvResearched, kEvLevelUp, kEvAbility, kEvMiss,
