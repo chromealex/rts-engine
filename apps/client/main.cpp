@@ -9,6 +9,8 @@
 //         Garrison buildings: drag from your building to a target to send troops (percent in the HUD)
 // Touch:  tap = select / command, drag = scroll (or send from your garrison building), pinch = zoom
 // F8:     RmlUi debugger. The UI itself is data: engine/assets/ui/*.rml (see ClientUi.cpp).
+#include <fstream>
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -52,10 +54,76 @@ void GameClient::init(gfx::Device& dev) {
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
+    initAudio();
     initUi();
 }
 
+void GameClient::initAudio() {
+    audio::AudioConfig ac;
+    ac.maxVoices = platform::isTouchDevice() ? 24 : 32;
+    if (const char* mode = std::getenv("RTS_AUDIO")) { // off | null (audio thread without hardware, CI)
+        ac.openDevice = std::string(mode) != "off";
+        ac.nullBackend = std::string(mode) == "null";
+    }
+    if (const char* wav = std::getenv("RTS_AUDIO_CAPTURE")) ac.capturePath = wav;
+    audio_.init(ac);
+    std::ifstream settings(platform::userDataDir() + "/audio.cfg");
+    if (settings) audio_.loadSettings(std::string(std::istreambuf_iterator<char>(settings), {}));
+    volume_ = boundVolume_ = int(std::lround(audio_.masterVolume() * 100));
+    musicVolume_ = boundMusicVolume_ = int(std::lround(audio_.volume(audio::Bus::Music) * 100));
+    std::string text;
+    if (platform::readContentFile(manifest_.getStr("audio", "audio.json"), text)) { // a game without audio.json is silent
+        try {
+            Json bank = Json::parse(text);
+            std::string err;
+            if (!audio_.loadBank(bank, platform::readContentFile, &err) || !sound_.init(audio_, rules_, bank, &err)) error_ = err;
+            for (auto& w : sound_.warnings()) std::fprintf(stderr, "audio: %s\n", w.c_str());
+        } catch (const std::exception& e) {
+            error_ = std::string("audio.json: ") + e.what();
+        }
+    }
+    menuMusic();
+}
+
+void GameClient::saveAudioSettings() {
+    std::ofstream f(platform::userDataDir() + "/audio.cfg");
+    if (f) f << audio_.saveSettings();
+}
+
+// After the simulation advanced: sounds of what happened, acknowledgements, listener at the camera.
+void GameClient::updateAudio(double dt) {
+    if (sim_) {
+        if (screen_ == Screen::Playing) sound_.update(*sim_, dt);
+        if (selection_ != heardSelection_) { // a newly selected own unit answers
+            Entity first = selection_.empty() ? Entity{} : selection_[0];
+            auto* own = first.valid() ? sim_->world().tryGet<Owner>(first) : nullptr;
+            if (own && own->player == human_ && std::find(heardSelection_.begin(), heardSelection_.end(), first) == heardSelection_.end())
+                sound_.onSelect(*sim_, first);
+            heardSelection_ = selection_;
+        }
+        audio_.setListener(cam_.target.x, cam_.target.z, cam_.yaw, std::max(8.0f, cam_.distance * 0.75f));
+    }
+    if (volume_ != boundVolume_ || musicVolume_ != boundMusicVolume_) { // changed from the pause menu
+        audio_.setMasterVolume(float(std::clamp(volume_, 0, 100)) / 100);
+        audio_.setVolume(audio::Bus::Music, float(std::clamp(musicVolume_, 0, 100)) / 100);
+        boundVolume_ = volume_;
+        boundMusicVolume_ = musicVolume_;
+        saveAudioSettings();
+    }
+    audio_.update(dt);
+}
+
+void GameClient::toMenu() {
+    sound_.detach();
+    audio_.stopAll(0.2f);
+    sim_.reset();
+    setScreen(Screen::Menu);
+    menuMusic();
+}
+
 void GameClient::shutdown() {
+    sound_.detach();
+    audio_.shutdown();
     view_.shutdown(*dev_);
     r3d_.shutdown();
     shutdownUi();
@@ -94,6 +162,9 @@ void GameClient::startMatch(size_t idx) {
     ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
     mode_ = Mode::Normal;
     setScreen(Screen::Playing);
+    audio_.stopAll(0.1f);
+    sound_.attach(*sim_, spectator_ ? 0 : human_);
+    heardSelection_.clear();
 }
 
 void GameClient::fitCamera() {
@@ -221,6 +292,9 @@ void GameClient::event(const Event& e) {
     if (!uiWants) overlay_.handleEvent(e);
     if (e.type == EventType::KeyDown || e.type == EventType::KeyUp) keys_[int(e.key)] = e.type == EventType::KeyDown;
     if (e.type == EventType::MouseMove || e.type == EventType::MouseDown) { mouseX_ = e.x; mouseY_ = e.y; }
+    // mobile apps go quiet in the background; desktop keeps playing when the window loses focus
+    if (e.type == EventType::FocusLost && platform::isTouchDevice()) audio_.setPaused(true);
+    if (e.type == EventType::FocusGained) audio_.setPaused(false);
     if (screen_ == Screen::Paused && e.type == EventType::KeyDown && e.key == Key::Escape && !uiWants) { setScreen(Screen::Playing); return; }
     if (screen_ != Screen::Playing || !sim_) return;
     World& w = sim_->world();
@@ -469,7 +543,11 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         sim_->advance(dt);
         alpha = float(sim_->alpha());
         processEvents();
-        if (sim_->result() != 0) setScreen(Screen::Over);
+        if (sim_->result() != 0) {
+            setScreen(Screen::Over);
+            auto* me = sim_->player(human_);
+            if (!spectator_) sound_.onMatchEnd(me && me->team == sim_->result());
+        }
     }
     if (sim_) {
         sceneFromSim(*sim_, scene_, alpha, spectator_ ? 0 : human_);
@@ -483,6 +561,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         markers_.erase(std::remove_if(markers_.begin(), markers_.end(), [&](auto& m) { return m.second < time_; }), markers_.end());
     }
 
+    updateAudio(dt);
     overlay_.newFrame(dt);
     updateUi();
     gfx::PassDesc pass;

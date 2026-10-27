@@ -80,6 +80,8 @@ void GameClient::initUi() {
     c.Bind("difficulty", &difficulty_);
     c.Bind("spectator", &spectator_);
     c.Bind("shadows", &shadowQuality_);
+    c.Bind("volume", &volume_);
+    c.Bind("music", &musicVolume_);
 
     using Args = const Rml::VariantList&;
     c.BindEventCallback("start", [this](Rml::DataModelHandle, Rml::Event&, Args a) { if (!a.empty()) startMatch(size_t(a[0].Get<int>())); });
@@ -91,7 +93,7 @@ void GameClient::initUi() {
     c.BindEventCallback("pause", [this](Rml::DataModelHandle, Rml::Event&, Args) { if (screen_ == Screen::Playing) setScreen(Screen::Paused); });
     c.BindEventCallback("resume", [this](Rml::DataModelHandle, Rml::Event&, Args) { if (screen_ == Screen::Paused) setScreen(Screen::Playing); });
     c.BindEventCallback("restart", [this](Rml::DataModelHandle, Rml::Event&, Args) { startMatch(mapIndex_); });
-    c.BindEventCallback("tomenu", [this](Rml::DataModelHandle, Rml::Event&, Args) { sim_.reset(); setScreen(Screen::Menu); });
+    c.BindEventCallback("tomenu", [this](Rml::DataModelHandle, Rml::Event&, Args) { toMenu(); });
     model_ = c.GetModelHandle();
 
     shadowQuality_ = boundShadowQuality_ = int(r3d_.shadowQuality());

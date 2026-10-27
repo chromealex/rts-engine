@@ -187,6 +187,7 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 ```
 
 Для `wss://` (страница игры по HTTPS) поставьте перед сервером TLS-прокси (nginx, Caddy).
+
 ## Звук
 
 `engine/audio` — микшер, банки звуков из данных, процедурный синтез, музыка; вывод через
@@ -194,7 +195,8 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 `modules/rts/audio` превращает события симуляции в звуки; в симуляцию ничего не пишет.
 Нет устройства — игра идёт молча. Нет `audio.json` — игра просто без звука.
 
-Звук игры — файл `audio.json` рядом с `game.json` (другое имя: `"audio"` в game.json):
+Звук игры — файл `audio.json` рядом с `game.json` (другое имя: `"audio"` в game.json). Полное описание
+формата — `docs/game-format.md`, раздел audio.json; коротко:
 
 ```jsonc
 {
