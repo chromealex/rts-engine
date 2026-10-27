@@ -6,6 +6,7 @@ A game is a folder `games/<id>/`:
 game.json        manifest: name, id, version, rules file, maps list, orientation, icon, input
 rules.json       resources, types (units/structures/objects), techs, factions, game rules, triggers
 maps/*.json      terrain, players, objects, waves, triggers, areas, victory overrides
+audio.json       sounds, music and which sound plays on which game event (optional: no file = silent)
 models/ ui/ ...  assets (glTF models, textures, UI, sounds)
 ```
 
@@ -21,6 +22,7 @@ is optional — the blocks present on a type decide what it can do.
   "maps": [{ "file": "maps/valley.json", "title": "River Valley (1v1)" }],
   "orientation": "landscape", "icon": "icon.png" }
 ```
+`"audio"`: another name for the sound file (default `audio.json`).
 
 ## rules.json — top level
 
@@ -181,6 +183,104 @@ Map players choose a faction and a `start` point; start objects spawn there.
   "triggers": []
 }
 ```
+
+## audio.json
+
+Presentation only: nothing here reaches the simulation. A missing file or audio device just means
+no sound. Malformed structure is an error (`audio: sound 'x': unknown bus 'drums'`); a missing or
+undecodable sound file, an unknown key, type, weapon or sound name is a warning and only that sound
+stays silent.
+
+```json
+{
+  "volume": {"master": 1, "sfx": 0.9, "ui": 0.7, "voice": 1, "music": 0.6, "ambient": 0.7},
+  "sounds": {
+    "swing": {"files": ["sfx/swing1.ogg", "sfx/swing2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 4, "cooldown": 0.05},
+    "alarm": {"file": "voice/under_attack.ogg", "bus": "voice", "priority": 10},
+    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"}
+  },
+  "music": {
+    "menu":  "music/menu.ogg",
+    "match": {"files": ["music/a.ogg", "music/b.ogg"], "shuffle": true, "loop": true, "volume": 0.8},
+    "battle": ["music/fight.ogg"]
+  },
+  "events":    {"died": "death", "underAttack": "alarm", "notEnough": "need_more", "notEnough.gold": "need_gold"},
+  "weapons":   {"sword": {"attack": "swing", "hit": "clang"}, "bow": {"attack": "bow", "hit": "arrow_hit"}},
+  "abilities": {"storm": "thunder"},
+  "types":     {"footman": {"select": "footman_what", "move": "footman_yes", "died": "death_human",
+                            "weapons": {"sword": {"hit": "clang_heavy"}}, "abilities": {"roar": "roar"}}}
+}
+```
+
+`volume`: mix level per bus, 0..4 (default 1); the player's own volume settings multiply on top.
+
+### sounds
+
+| key | meaning |
+|---|---|
+| `file` / `files` / `synth` | exactly one. Files: WAV, OGG Vorbis, MP3, FLAC, paths relative to the game folder; `files` = variations, a random one per play, never the same twice in a row |
+| `bus` | `sfx` (default), `ambient`, `voice`, `ui`, `music` |
+| `spatial` | attenuated and panned around the camera when the event has a position; default true for `sfx` / `ambient`, false otherwise (announcements are heard anywhere) |
+| `volume` | 0..4 (1) |
+| `pitch` | number or `[min, max]` random per play (1) |
+| `maxInstances` | at most this many at once; a new play stops the oldest (4; 0 = no limit) |
+| `cooldown` | seconds between two starts (0) — 40 archers firing together make a few sounds, not 40 |
+| `priority` | -100..100 (0): when all voices are busy, the lowest priority (oldest first) is stopped; a new sound below everything playing is dropped |
+| `loop` | loops until stopped (false) |
+
+`synth` — a sound made from parameters instead of a file (prototypes, playables); an object or an
+array of layers that are mixed:
+
+| key | meaning |
+|---|---|
+| `wave` | `sine` (default), `square`, `saw`, `triangle`, `noise` |
+| `freq` | Hz, or `[start, end]` for an exponential sweep (440); for `noise` it is the grain rate |
+| `duration` | seconds, 0.001..10 (0.2) |
+| `attack`, `release` | seconds of fade-in / fade-out (0.005, min(0.1, duration)) |
+| `volume` | 0..4 (1) |
+| `duty` | square pulse width 0.02..0.98 (0.5) |
+| `vibrato` | `[rate Hz, depth]`, depth as a fraction of the frequency |
+| `lowpass` | cutoff Hz (off) |
+| `crush` | keep only N bits, 1..15 (off) |
+| `delay` | seconds before this layer starts (0) |
+
+### music
+
+A playlist: a file name, an array of files, or `{"files": [...], "shuffle": false, "loop": true,
+"volume": 1}`. Changes crossfade. Playlists the client plays by name: `menu` (main menu), `match`,
+`battle` (replaces `match` while heavy fighting happens near the camera, back after ~15 s of calm),
+`victory`, `defeat`. All optional.
+
+### events, types, weapons, abilities
+
+Which sound plays on which game event ("cue"). Lookup for an object: its entry in `types`, then its
+weapon / ability by id in `weapons` / `abilities`, then `events`.
+
+| cue | when | heard by |
+|---|---|---|
+| `attack` | a weapon fires (`weapons.<id>.attack` first) | everyone who sees the spot |
+| `hit` | damage lands (`weapons.<id>.hit` of the shooter's type first) | everyone who sees the spot |
+| `miss` | a shot misses (uphill) | everyone who sees the spot |
+| `died` | an object dies (`types.<id>.died`) | everyone who sees the spot |
+| `spawned` | an object appears | everyone who sees the spot |
+| `ability` | an ability is cast (`abilities.<id>` first) | everyone who sees the spot |
+| `captured` | the player captures a building / point; for others: someone captured something in view | owner |
+| `lost` | the player's building / point was captured | previous owner |
+| `trainStarted`, `ready` | production started / a unit is ready | owner |
+| `buildPlaced`, `buildDone` | construction placed / finished | owner |
+| `readyToPlace`, `sold`, `upgraded`, `researched`, `levelUp`, `regionClaimed`, `lowPower`, `gathered` | as named | owner |
+| `notEnough`, `notEnough.<resource>` | can't afford (the resource-specific one first) | owner |
+| `notEnoughSupply`, `noRoom` | supply cap / no place for an automatic build (fallbacks: `notEnough`, `error`) | owner |
+| `underAttack`, `baseUnderAttack` | an enemy hits the player's unit / structure where the camera isn't looking; at most every 12 s | owner |
+| `select` | the player selects an own unit (`types.<id>.select`) | player |
+| `move`, `attackOrder`, `buildOrder` | the player gives an order (fallback: `move`) | player |
+| `victory`, `defeat`, `playerDefeated` | match end / another player is out | player |
+| `wave` | a scripted wave starts | everyone |
+| `message` | a trigger message | its addressees (everyone for a message to all) |
+| `click`, `error` | interface | player |
+
+"Everyone who sees the spot" respects fog of war; a spectator hears all world sounds and no
+player-only cues.
 
 ## Triggers
 

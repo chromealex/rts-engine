@@ -963,7 +963,10 @@ TEST(audio_bank_errors_are_readable) {
     CHECK(a->warnings().size() == 2);                               // missing file + unknown key 'volum'
     CHECK(a->play("boom") == audio::kNoVoice && a->play("beep") != audio::kNoVoice);
     // a failed load keeps the previous bank
+    CHECK(loadBank(*a, R"({"sounds":{"beep":{"synth":{}}}})", &err));
     CHECK(!loadBank(*a, R"({"sounds":{"y":{}}})", &err) && a->find("beep") != audio::kNoSound);
+    // a typo in a section name is reported instead of silently producing a game without sound
+    CHECK(loadBank(*a, R"({"sound":{}})", &err) && a->warnings().size() == 1 && a->warnings()[0].find("'sound'") != std::string::npos);
 }
 
 TEST(audio_voice_limits_and_cooldown) {
