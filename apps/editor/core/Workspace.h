@@ -1,0 +1,80 @@
+// Editor core shared by the editor GUI and the MCP server: the open game project (manifest +
+// rules), the open map, and a registry of named operations with JSON parameters. Every edit an
+// agent makes goes through `call()`, so the GUI shows it live, records it in the activity feed and
+// in undo history. No UI or rendering in here.
+#pragma once
+#include <functional>
+#include <map>
+#include <string>
+#include <vector>
+#include "MapDoc.h"
+#include "engine/data/Json.h"
+#include "modules/rts/RtsData.h"
+
+namespace rts::editor {
+
+struct GameInfo { std::string id, dir, name; int maps = 0; };
+
+struct Project {
+    std::string dir;              // folder with game.json
+    Json manifest = Json::object();
+    Json rulesJson = Json::object();
+    game::Rules rules;
+    std::string rulesError;       // last loader error (rules stay usable from the previous good state)
+    bool rulesDirty = false, manifestDirty = false;
+
+    bool load(const std::string& dir, std::string* err);
+    bool saveRules(std::string* err);
+    bool saveManifest(std::string* err);
+    std::string rulesPath() const;
+    bool reloadRules();           // parse rulesJson -> rules; false keeps the previous rules
+};
+
+// What changed, so views can fly the camera there and flash it.
+struct Change {
+    enum Kind { Cells, Entity, Players, Map, Rules, Project, View } kind = Map;
+    int x0 = 0, y0 = 0, x1 = -1, y1 = -1;   // cell rect (inclusive)
+    int entity = -1;
+    std::string text;                        // human readable, Russian
+};
+
+struct Activity { double time = 0; std::string source, text; bool error = false; };
+
+class Workspace {
+public:
+    using OpFn = std::function<Json(const Json& params)>;
+    struct Op { std::string name, description; Json schema; OpFn fn; bool guiOnly = false; };
+
+    Workspace();
+    std::string engineDir;        // engine checkout (games/, docs/, rtsbuild)
+    std::string buildTool;        // rtsbuild executable
+    Project project;
+    MapDoc map;
+    std::vector<Activity> activity;
+    std::vector<Change> changes;  // consumed by the GUI each frame
+    std::function<double()> clock = [] { return 0.0; };
+
+    // Run an operation. Never throws: errors come back as {"error": "..."}.
+    Json call(const std::string& name, const Json& params, const std::string& source = "editor");
+    const std::vector<Op>& ops() const { return ops_; }
+    void registerOp(Op op);       // GUI adds view/play/screenshot ops
+    Json toolList() const;        // MCP tools/list payload
+
+    std::vector<GameInfo> listGames() const;
+    bool openGame(const std::string& idOrDir, std::string* err);
+    std::string gamesDir() const { return engineDir + "/games"; }
+    std::string mapsDir() const { return project.dir + "/maps"; }
+    std::string relative(const std::string& file) const;
+    void note(Change c) { changes.push_back(std::move(c)); }
+    void log(const std::string& source, const std::string& text, bool error = false);
+
+private:
+    void registerCoreOps();
+    std::vector<Op> ops_;
+};
+
+// "types.footman.weapons[0].damage" -> pointer into j (created when `create`), nullptr if missing.
+Json* jsonPath(Json& j, const std::string& path, bool create);
+const Json* jsonPath(const Json& j, const std::string& path);
+
+} // namespace rts::editor

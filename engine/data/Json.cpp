@@ -1,6 +1,9 @@
 #include "Json.h"
 #include <fstream>
 #include <sstream>
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 
 namespace rts {
 
@@ -154,6 +157,142 @@ Fixed Json::fx(Fixed def) const {
 int64_t Json::integer(int64_t def) const {
     if (type_ != Type::Number) return def;
     return fx().toInt();
+}
+
+
+// ---------------------------------------------------------------- building / editing
+
+Json Json::number(Fixed v) { return number(v.toDouble(), 5); }
+Json Json::number(int64_t v) { Json j; j.type_ = Type::Number; j.text_ = std::to_string(v); return j; }
+Json Json::number(double v, int decimals) {
+    Json j;
+    j.type_ = Type::Number;
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.*f", decimals, v);
+    std::string s = buf;
+    if (s.find('.') != std::string::npos) {
+        while (!s.empty() && s.back() == '0') s.pop_back();
+        if (!s.empty() && s.back() == '.') s.pop_back();
+    }
+    if (s == "-0") s = "0";
+    j.text_ = s;
+    return j;
+}
+Json Json::numberText(std::string literal) { Json j; j.type_ = Type::Number; j.text_ = std::move(literal); return j; }
+
+Json& Json::set(const std::string& key, Json v) {
+    if (type_ != Type::Object) { *this = object(); }
+    for (auto& [k, x] : object_) if (k == key) { x = std::move(v); return x; }
+    object_.emplace_back(key, std::move(v));
+    return object_.back().second;
+}
+bool Json::erase(const std::string& key) {
+    for (size_t i = 0; i < object_.size(); ++i)
+        if (object_[i].first == key) { object_.erase(object_.begin() + long(i)); return true; }
+    return false;
+}
+Json& Json::push(Json v) {
+    if (type_ != Type::Array) *this = array();
+    array_.push_back(std::move(v));
+    return array_.back();
+}
+void Json::eraseAt(size_t i) { if (i < array_.size()) array_.erase(array_.begin() + long(i)); }
+Json* Json::find(const std::string& key) {
+    for (auto& [k, v] : object_) if (k == key) return &v;
+    return nullptr;
+}
+Json& Json::member(const std::string& key) {
+    if (Json* j = find(key)) return *j;
+    return set(key, object());
+}
+double Json::toDouble(double def) const { return type_ == Type::Number ? std::strtod(text_.c_str(), nullptr) : def; }
+
+bool Json::operator==(const Json& o) const {
+    if (type_ != o.type_) return false;
+    switch (type_) {
+        case Type::Null: return true;
+        case Type::Bool: return bool_ == o.bool_;
+        case Type::Number: case Type::String: return text_ == o.text_;
+        case Type::Array: return array_ == o.array_;
+        case Type::Object: return object_ == o.object_;
+    }
+    return false;
+}
+
+namespace {
+void escapeTo(std::string& out, const std::string& s) {
+    out += '"';
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (c < 0x20) { char b[8]; std::snprintf(b, sizeof b, "\\u%04x", c); out += b; }
+                else out += char(c);
+        }
+    }
+    out += '"';
+}
+bool isScalar(const Json& j) { return !j.isArray() && !j.isObject(); }
+} // namespace
+
+void Json::dumpTo(std::string& out, int indent, int depth) const {
+    auto nl = [&](int d) { if (indent >= 0) { out += '\n'; out.append(size_t(d * indent), ' '); } };
+    switch (type_) {
+    case Type::Null: out += "null"; break;
+    case Type::Bool: out += bool_ ? "true" : "false"; break;
+    case Type::Number: out += text_; break;
+    case Type::String: escapeTo(out, text_); break;
+    case Type::Array: {
+        if (array_.empty()) { out += "[]"; break; }
+        // rows of terrain strings / short numeric tuples read best on one line each or inline
+        bool inlineArr = indent < 0;
+        if (!inlineArr) {
+            bool allScalar = true;
+            size_t len = 0;
+            for (auto& v : array_) { if (!isScalar(v)) allScalar = false; len += v.text_.size() + 2; }
+            inlineArr = allScalar && (len < 80 || !array_[0].isString());
+        }
+        out += '[';
+        for (size_t i = 0; i < array_.size(); ++i) {
+            if (i) out += indent >= 0 && inlineArr ? ", " : ",";
+            if (!inlineArr) nl(depth + 1);
+            array_[i].dumpTo(out, inlineArr ? -1 : indent, depth + 1);
+        }
+        if (!inlineArr) nl(depth);
+        out += ']';
+        break;
+    }
+    case Type::Object: {
+        if (object_.empty()) { out += "{}"; break; }
+        // small flat objects ({"x": 1, "y": 2}) stay on one line
+        bool small = indent >= 0 && object_.size() <= 4;
+        size_t len = 0;
+        for (auto& [k, v] : object_) { if (!isScalar(v) && !(v.isArray() && v.array_.size() <= 4 && std::all_of(v.array_.begin(), v.array_.end(), isScalar))) small = false; len += k.size() + v.text_.size() + 6; }
+        if (len > 90) small = false;
+        out += '{';
+        for (size_t i = 0; i < object_.size(); ++i) {
+            if (i) out += ',';
+            if (small) out += i ? " " : "";
+            else nl(depth + 1);
+            escapeTo(out, object_[i].first);
+            out += indent >= 0 ? ": " : ":";
+            object_[i].second.dumpTo(out, small ? -1 : indent, depth + 1);
+        }
+        if (!small) nl(depth);
+        out += '}';
+        break;
+    }
+    }
+}
+
+std::string Json::dump(int indent) const {
+    std::string out;
+    dumpTo(out, indent, 0);
+    return out;
 }
 
 } // namespace rts
