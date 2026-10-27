@@ -211,6 +211,9 @@ if(RTS_BUILD_EDITOR)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
             MACOSX_BUNDLE_BUNDLE_NAME "RTS Editor" MACOSX_BUNDLE_GUI_IDENTIFIER "com.rtsengine.editor"
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/Info.plist.in")
+        # engine assets (UI font) inside the bundle, so the editor works when moved elsewhere
+        add_custom_command(TARGET rts_editor POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources/content/engine")
     elseif(WIN32)
         set_target_properties(rts_editor PROPERTIES WIN32_EXECUTABLE TRUE)
     endif()
