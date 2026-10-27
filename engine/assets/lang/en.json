@@ -1,0 +1,98 @@
+// Engine and client strings (menu, HUD, command card). English is the base language: every other
+// table is checked against this one (rts_i18n check). A game can override any key in lang/<tag>.json.
+{
+  "@language": "English",
+
+  "menu": {
+    "difficulty": "Difficulty",
+    "easy": "Easy",
+    "normal": "Normal",
+    "hard": "Hard",
+    "spectate": "Spectate only (bots vs bots)",
+    "map": "Map",
+    "language": "Language"
+  },
+
+  "notice": {
+    "need_supply": "More supply needed (houses / depots)",
+    "no_room": "No room to build there",
+    "not_enough": "Not enough {resource}",
+    "built": "Built: {name}",
+    "ready_to_place": "Ready to place: {name}",
+    "researched": "Researched: {name}",
+    "hero_level": "Hero reached level {level}",
+    "low_power": "Low power!",
+    "upgraded": "Upgraded: {name}",
+    "region_claimed": "Region claimed",
+    "defeated": "You have been defeated"
+  },
+
+  "hud": {
+    "per_second": "({value}/s)",
+    "supply": "Supply: {used}/{cap}",
+    "eliminated": " (out)",
+    "team": "Team {team}: {tickets}",
+    "time_left": "Time left {time}",
+    "wave_in": { "one": "Next wave in {count} second", "other": "Next wave in {count} seconds" },
+    "regions": "Regions: {count}",
+    "claim": "Claim",
+    "auto_build": "BUILD",
+    "menu": "Menu"
+  },
+
+  "mode": {
+    "attack": "Attack: choose a target",
+    "patrol": "Patrol: choose a point",
+    "rally": "Rally point",
+    "ability": "Ability: choose a target",
+    "claim": "Choose a neighbouring region",
+    "place": "Build: choose a place (Esc to cancel)"
+  },
+
+  "card": {
+    "hint_touch": "Tap one of your units",
+    "hint_mouse": "Drag a box to select units",
+    "all_army": "All army",
+    "health": "Health {hp} / {max}",
+    "stock": "Amount: {amount}",
+    "garrison": "Garrison: {count} / {max}",
+    "supply_cost": "{count} supply",
+    "send": "Send:",
+    "send_hint": "Drag from a building to the target",
+    "attack": "Attack (A)",
+    "stop": "Stop (S)",
+    "hold": "Hold (H)",
+    "patrol": "Patrol (P)",
+    "build": "Build:",
+    "requires": "Requires: {list}",
+    "aura": "Aura: {name}",
+    "energy_cost": "({count} energy)",
+    "place": "Place: {name}",
+    "charges": "Charges: {count} / {max}",
+    "research": "Research: {name}",
+    "upgrade": "Upgrade: {name}",
+    "rally": "Rally point",
+    "sell": "Sell",
+    "deploy": "Deploy",
+    "squad": "Squad: {alive}/{max}",
+    "reinforce": "Reinforce",
+    "hero": "Level {level}  (XP {xp})",
+    "energy": "Energy {energy}/{max}",
+    "cancel_build": "Cancel construction"
+  },
+
+  "pause": {
+    "title": "Paused",
+    "resume": "Resume",
+    "match_over": "Match over",
+    "victory": "Victory!",
+    "defeat": "Defeat",
+    "time": "Time: {time}",
+    "shadows_off": "Shadows: off",
+    "shadows_low": "Shadows: low",
+    "shadows_medium": "Shadows: medium",
+    "shadows_high": "Shadows: high",
+    "restart": "Restart",
+    "to_menu": "Main menu"
+  }
+}

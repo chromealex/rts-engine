@@ -1,0 +1,98 @@
+// Строки движка и клиента (меню, HUD, панель команд). Ключи — см. engine/i18n/README.md.
+// Игра может переопределить любую строку в своём lang/ru.json.
+{
+  "@language": "Русский",
+
+  "menu": {
+    "difficulty": "Сложность",
+    "easy": "Лёгкая",
+    "normal": "Обычная",
+    "hard": "Сложная",
+    "spectate": "Только наблюдать (боты против ботов)",
+    "map": "Карта",
+    "language": "Язык"
+  },
+
+  "notice": {
+    "need_supply": "Нужно больше лимита (дома / склады)",
+    "no_room": "Нет места для постройки",
+    "not_enough": "Не хватает: {resource}",
+    "built": "Построено: {name}",
+    "ready_to_place": "Готово к установке: {name}",
+    "researched": "Исследовано: {name}",
+    "hero_level": "Герой достиг уровня {level}",
+    "low_power": "Не хватает энергии!",
+    "upgraded": "Улучшено: {name}",
+    "region_claimed": "Регион присоединён",
+    "defeated": "Вы проиграли"
+  },
+
+  "hud": {
+    "per_second": "({value}/с)",
+    "supply": "Лимит: {used}/{cap}",
+    "eliminated": " (выбыл)",
+    "team": "Команда {team}: {tickets}",
+    "time_left": "Осталось {time}",
+    "wave_in": { "one": "Волна через {count} секунду", "few": "Волна через {count} секунды", "many": "Волна через {count} секунд", "other": "Волна через {count} секунды" },
+    "regions": "Регионы: {count}",
+    "claim": "Занять",
+    "auto_build": "СТРОИТЬ",
+    "menu": "Меню"
+  },
+
+  "mode": {
+    "attack": "Атака: выберите цель",
+    "patrol": "Патруль: выберите точку",
+    "rally": "Точка сбора",
+    "ability": "Способность: выберите цель",
+    "claim": "Выберите соседний регион",
+    "place": "Постройка: выберите место (Esc — отмена)"
+  },
+
+  "card": {
+    "hint_touch": "Нажмите на свой объект",
+    "hint_mouse": "Выделите юнитов рамкой",
+    "all_army": "Все войска",
+    "health": "Здоровье {hp} / {max}",
+    "stock": "Запас: {amount}",
+    "garrison": "Гарнизон: {count} / {max}",
+    "supply_cost": "{count} лим.",
+    "send": "Отправить:",
+    "send_hint": "Перетащите от здания к цели",
+    "attack": "Атака (A)",
+    "stop": "Стоп (S)",
+    "hold": "Держать (H)",
+    "patrol": "Патруль (P)",
+    "build": "Строить:",
+    "requires": "Требуется: {list}",
+    "aura": "Аура: {name}",
+    "energy_cost": "({count} эн.)",
+    "place": "Установить: {name}",
+    "charges": "Заряды: {count} / {max}",
+    "research": "Исследовать: {name}",
+    "upgrade": "Улучшить: {name}",
+    "rally": "Точка сбора",
+    "sell": "Продать",
+    "deploy": "Развернуть",
+    "squad": "Бойцов: {alive}/{max}",
+    "reinforce": "Пополнить",
+    "hero": "Уровень {level}  (опыт {xp})",
+    "energy": "Энергия {energy}/{max}",
+    "cancel_build": "Отменить постройку"
+  },
+
+  "pause": {
+    "title": "Пауза",
+    "resume": "Продолжить",
+    "match_over": "Матч окончен",
+    "victory": "Победа!",
+    "defeat": "Поражение",
+    "time": "Время: {time}",
+    "shadows_off": "Тени: выкл",
+    "shadows_low": "Тени: низкие",
+    "shadows_medium": "Тени: средние",
+    "shadows_high": "Тени: высокие",
+    "restart": "Заново",
+    "to_menu": "В меню"
+  }
+}
