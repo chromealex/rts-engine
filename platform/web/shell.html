@@ -15,7 +15,16 @@
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
 <div id="status">Loading…</div>
 <script>
+  // URL query → command line, e.g. index.html?map=0&spectate → --map 0 --spectate
+  function argsFromQuery() {
+    var a = [];
+    new URLSearchParams(location.search).forEach(function (v, k) { a.push('--' + k); if (v) a.push(v); });
+    return a;
+  }
+  if (!document.createElement('canvas').getContext('webgl2'))
+    document.getElementById('status').textContent = 'Нужен браузер с поддержкой WebGL 2';
   var Module = {
+    arguments: argsFromQuery(),
     canvas: document.getElementById('canvas'),
     setStatus: function (t) { var s = document.getElementById('status'); s.textContent = t; s.style.display = t ? 'flex' : 'none'; },
     monitorRunDependencies: function (left) { if (!left) Module.setStatus(''); },
