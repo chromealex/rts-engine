@@ -165,7 +165,8 @@ struct UnitType {
     Fixed regen{};
     bool invulnerable = false;
     // body / movement
-    Fixed radius = Fixed::fromRatio(1, 2);
+    Fixed radius = Fixed::fromRatio(1, 2);     // body radius: collisions, pathing clearance, edge-to-edge ranges
+    Fixed mass = Fixed::fromInt(1);            // push resistance (default 4 * radius^2)
     uint8_t layer = kLayerGround;
     Fixed speed{};
     int footprintW = 0, footprintH = 0;
@@ -349,6 +350,9 @@ struct RoadNetworkRules {
     bool required = true;                      // deliveries only between buildings on one road network
 };
 
+// Local avoidance between moving units.
+struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2); };
+
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
 struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing = Fixed::fromRatio(35, 100); };
 
@@ -397,6 +401,7 @@ struct Rules {
     bool buildingStorage = false;              // "storage": "buildings": goods live in building inventories
     RoadNetworkRules roadNetwork;
     LaneRules lanes;
+    MovementRules movement;
     bool settlers = false;                     // any settlers-economy mechanic present
     bool dungeon = false;                      // any dungeon / territory mechanic present (systems run)
 

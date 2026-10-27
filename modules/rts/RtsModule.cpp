@@ -777,6 +777,34 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     for (Entity e : sel) if (w.has<Mobile>(e)) ++movers;
     Vec3 target = cmd.point;
     if (w.alive(cmd.target)) if (auto* t = w.tryGet<Transform>(cmd.target)) target = t->pos;
+    // attack-move of a group: spread into an arc facing the goal, flanks ahead (they wrap around the enemy)
+    std::vector<std::pair<Entity, Vec3>> arc;
+    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3) {
+        Vec3 c{};
+        Fixed maxR{};
+        std::vector<Entity> ms;
+        for (Entity e : sel) if (w.has<Mobile>(e)) { ms.push_back(e); c += w.get<Transform>(e).pos; maxR = fxMax(maxR, rules_.types[w.get<Unit>(e).type].radius); }
+        c = c / Fixed::fromInt(int64_t(ms.size()));
+        Vec3 dir = flat(target - c);
+        Fixed dl = dir.length();
+        if (dl > Fixed::fromInt(2)) {
+            dir = dir / dl;
+            Vec3 perp{-dir.z, Fixed{}, dir.x};
+            // order the units by their current lateral position so paths don't cross
+            std::sort(ms.begin(), ms.end(), [&](Entity a, Entity b) {
+                Fixed la = (w.get<Transform>(a).pos - c).dot(perp), lb = (w.get<Transform>(b).pos - c).dot(perp);
+                return la != lb ? la < lb : a.index < b.index;
+            });
+            const Fixed spacing = maxR * 2 + Fixed::fromRatio(2, 5);
+            const int n = int(ms.size());
+            const Fixed R = fxMax(Fixed::fromInt(4), spacing * n / 2);
+            for (int i = 0; i < n; ++i) {
+                Fixed lat = spacing * (2 * i - (n - 1)) / 2;
+                Vec3 p = target + perp * lat + dir * (lat * lat / (R * 2));
+                arc.push_back({ms[size_t(i)], flat(p)});
+            }
+        }
+    }
 
     for (Entity e : sel) {
         if (!w.alive(e)) continue;
@@ -790,6 +818,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             issue(sim, e, o, queue); break;
         case kCmdAttack:
             o.type = o.target.valid() ? OrderType::Attack : OrderType::AttackMove; o.param = movers;
+            for (auto& [ae, ap] : arc) if (ae == e) { o.point = ap; o.param = 1; }
             if (t.weapons.empty()) { o.type = OrderType::Move; o.target = kNullEntity; }
             issue(sim, e, o, queue); break;
         case kCmdPatrol:
@@ -1108,7 +1137,8 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         h.u64(e.packed()); h.u32(u.type); h.fx(u.hp); h.u32(u.flags); h.u32(o.player); h.v3(t.pos); h.fx(u.energy);
         if (auto* ord = w.tryGet<Orders>(e)) { h.u32(uint32_t(ord->queue.size())); if (!ord->queue.empty()) { h.u32(uint32_t(ord->queue.front().type)); h.u32(ord->queue.front().state); } }
-        if (auto* c = w.tryGet<Combat>(e)) h.u64(c->target.packed());
+        if (auto* c = w.tryGet<Combat>(e)) { h.u64(c->target.packed()); h.i32(c->slot); h.u64(c->slotTarget.packed()); }
+        if (auto* mb = w.tryGet<Mobile>(e)) { h.v3(mb->vel); h.u32(mb->yielded); h.u32(mb->yieldUntil); h.u32(mb->pathPos); h.u32(mb->moving); }
         if (auto* g = w.tryGet<Garrison>(e)) { h.i32(g->count); h.fx(g->growth); h.i32(g->pendingOut); }
         if (auto* p = w.tryGet<Production>(e)) { h.u32(uint32_t(p->queue.size())); if (!p->queue.empty()) h.fx(p->queue[0].progress); h.u32(p->ready); h.i32(p->charges); }
         if (auto* r = w.tryGet<ResourceStock>(e)) h.fx(r->amount);

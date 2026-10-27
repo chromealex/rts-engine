@@ -124,6 +124,10 @@ struct Mobile {
     Fixed goalRadius{};
     Fixed stuck{};
     std::vector<uint16_t> roadPath;
+    Vec3 vel{};                  // last velocity (local avoidance)
+    Vec3 yieldHome{};            // stepped aside for a passing unit; walks back here
+    uint32_t yieldUntil = 0;
+    bool yielded = false;
 };
 
 struct Orders { std::vector<Order> queue; };
@@ -133,6 +137,11 @@ struct Combat {
     Entity target = kNullEntity;
     uint8_t acquireTimer = 0;
     bool autoTarget = false;
+    // melee surround: the attack slot (ring around the target) this unit is heading for
+    Entity slotTarget = kNullEntity;
+    int8_t slot = -1;
+    uint32_t slotTick = 0;
+    Vec3 slotPos{};
 };
 
 struct Cargo { int16_t res = -1; Fixed amount{}; Entity lastNode = kNullEntity; Vec3 lastPos{}; bool field = false; };
@@ -376,6 +385,7 @@ private:
     bool runClaimCell(Simulation& sim, Entity e, Order& o);
     bool runNeed(Simulation& sim, Entity e, Order& o);
     void movePossessed(Simulation& sim);
+    void moveAgents(Simulation& sim);     // RtsAvoidance.cpp: path following with ORCA avoidance and yielding
     void recomputeRooms(Simulation& sim);
     void roomEconomy(Simulation& sim);
     void hashDungeon(Simulation& sim, Hasher& h);
@@ -390,6 +400,8 @@ private:
     void sysLanes(Simulation& sim);       // RtsLanes.cpp
     void rebuildLanes(Simulation& sim);
     bool runLaneWalk(Simulation& sim, Entity e, Order& o);
+    bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
+    void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
     void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
     bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
@@ -402,6 +414,8 @@ private:
 
     Rules rules_;
     TriggerSet triggers_;
+    struct SlotClaim { uint64_t target = 0; int slot = 0; uint64_t claimer = 0; };
+    std::vector<SlotClaim> slotClaims_;   // rebuilt every tick from Combat slots (derived, not state)
 };
 
 } // namespace rts::game

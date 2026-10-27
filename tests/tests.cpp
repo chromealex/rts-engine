@@ -1002,6 +1002,61 @@ TEST(mech_lanes_generated_and_followed) {
     CHECK(w.get<Owner>(b).player == 1);                                  // arrived and captured the empty village
 }
 
+// ------------------------------------------------------------------ movement: bodies, surround, avoidance
+
+TEST(mech_melee_surround_big_target) {
+    const char* rules = R"({
+      "victory": "noUnits",
+      "types": {
+        "grunt": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 100}, "weapons": [{"range": 0.5, "damage": 1, "cooldown": 0.5}]},
+        "titan": {"move": {"speed": 0.01, "radius": 1.5, "mass": 50}, "health": {"max": 100000}}
+      }})";
+    std::string ents;
+    for (int i = 0; i < 10; ++i) ents += std::string(",") + R"({"type":"grunt","owner":1,"pos":[)" + std::to_string(3 + (i / 3)) + "." + "5," + std::to_string(9 + (i % 3)) + R"(.5]})";
+    auto play = [&](bool print) {
+        auto sim = makeSimJson(rules, flatMap(32, 20, ",\"entities\":[{\"type\":\"titan\",\"owner\":2,\"pos\":[16,10]}" + ents + "]"));
+        Command c; c.player = 1; c.type = game::kCmdAttack; c.target = findType(*sim, "titan", 2);
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit&, Owner& o) { if (o.player == 1) c.units.push_back(e); });
+        sim->submit(c);
+        run(*sim, 6);
+        std::vector<uint64_t> hitters;
+        for (int i = 0; i < 40; ++i) {
+            sim->step();
+            for (auto& ev : sim->events())
+                if (ev.type == game::kEvAttack && ev.player == 1 && std::find(hitters.begin(), hitters.end(), ev.a.packed()) == hitters.end()) hitters.push_back(ev.a.packed());
+        }
+        if (print) std::printf("    %zu of 10 attackers hitting\n", hitters.size());
+        return std::pair{hitters.size(), sim->checksum()};
+    };
+    auto a = play(true), b = play(false);
+    CHECK(a.first >= 6);                                        // they spread around instead of queueing
+    CHECK(a == b);
+}
+
+TEST(mech_rvo_corridor_pass_through_idle_units) {
+    const char* rules = R"({"victory": "noUnits", "types": {"walker": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 50}}}})";
+    std::string map = R"({"size":[20,5],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":["####################","....................","....................","....................","####################"]},
+      "entities":[{"type":"walker","owner":1,"pos":[10.5,1.5]},{"type":"walker","owner":1,"pos":[10.5,2.5]},{"type":"walker","owner":1,"pos":[10.5,3.5]},
+                  {"type":"walker","owner":1,"pos":[2.5,2.5]},{"type":"walker","owner":2,"pos":[19.5,3.5]}]})";
+    auto play = [&]() {
+        auto sim = makeSimJson(rules, map);
+        Entity mover;
+        sim->world().each<game::Unit, Owner, Transform>([&](Entity e, game::Unit&, Owner& o, Transform& t) { if (o.player == 1 && t.pos.x < Fixed::fromInt(5)) mover = e; });
+        Command c; c.player = 1; c.type = game::kCmdMove; c.units = {mover}; c.point = {Fixed::fromRatio(35, 2), Fixed{}, Fixed::fromRatio(5, 2)};
+        sim->submit(c);
+        uint32_t arrived = 0;
+        for (int i = 0; i < 20 * 15 && !arrived; ++i) {
+            sim->step();
+            if ((sim->world().get<Transform>(mover).pos - c.point).xz().length() < Fixed::fromRatio(6, 10)) arrived = sim->tick();
+        }
+        return std::pair{arrived, sim->checksum()};
+    };
+    auto a = play(), b = play();
+    std::printf("    corridor: arrived at tick %u\n", a.first);
+    CHECK(a.first > 0 && a.first < 20 * 10);                   // got through the three standing units within 10 s
+    CHECK(a == b);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

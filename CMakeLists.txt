@@ -79,6 +79,7 @@ add_library(rts_game STATIC
     modules/rts/RtsDungeon.cpp
     modules/rts/RtsSettlers.cpp
     modules/rts/RtsLanes.cpp
+    modules/rts/RtsAvoidance.cpp
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 
