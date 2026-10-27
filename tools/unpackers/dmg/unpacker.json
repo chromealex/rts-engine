@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "name": "dmg",
+  "title": "Apple disk image (.dmg) — via hdiutil on macOS, 7-Zip elsewhere",
+  "version": "1.0.0",
+  "extensions": [".dmg"],
+  "magic": [{"offset": -512, "ascii": "koly"}],
+  "capabilities": ["probe", "list", "extract"],
+  "external": true,
+  "command": ["python3", "unpack.py"],
+  "command_windows": ["py", "-3", "unpack.py"]
+}

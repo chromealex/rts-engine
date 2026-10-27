@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "name": "zip",
+  "title": "ZIP archive (also OpenRA .oramap, Quake .pk3)",
+  "version": "1.0.0",
+  "extensions": [".zip", ".oramap", ".pk3", ".pk4"],
+  "magic": [{"offset": 0, "hex": "504b0304"}, {"offset": 0, "hex": "504b0506"}],
+  "capabilities": ["probe", "list", "extract"],
+  "external": true,
+  "command": ["python3", "unpack.py"],
+  "command_windows": ["py", "-3", "unpack.py"]
+}
