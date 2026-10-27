@@ -215,6 +215,11 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         else return fail("volume: unknown bus '" + key + "' (master, sfx, ui, voice, music, ambient)");
     }
 
+    // RtsAudio reads the gameplay mapping sections; anything else is most likely a typo
+    static const std::set<std::string> kTopKeys = {"volume", "sounds", "music", "events", "types", "weapons", "abilities"};
+    for (auto& [k, unused] : bank.members())
+        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, sounds, music, events, types, weapons, abilities)");
+
     std::map<std::string, std::shared_ptr<const Clip>> cache; // a file used by several sounds decodes once
     auto loadClip = [&](const std::string& who, const std::string& path) -> std::shared_ptr<const Clip> {
         if (auto it = cache.find(path); it != cache.end()) return it->second;

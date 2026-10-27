@@ -87,7 +87,8 @@ DISPLAY=:97 RTS_SHADOWS=medium RTS_SCREENSHOT=/tmp/shot.ppm RTS_EXIT_AFTER_FRAME
   build/linux-release/RTSGame --map 0 --spectate
 ```
 
-Environment knobs: `RTS_CONTENT` (content root), `RTS_SHADOWS=off|low|medium|high`,
+Environment knobs: `RTS_CONTENT` (content root), `RTS_SHADOWS=off|low|medium|high`, `RTS_AUDIO=off|null`
+(null: real audio thread without hardware), `RTS_AUDIO_CAPTURE=mix.wav` (record what was played),
 `RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`.
 
 A change is done when: it builds without warnings on gcc/clang (`-Wall -Wextra`), tests pass, the
@@ -108,6 +109,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
 | Resource packs `.rpak`, build size/compression | `engine/pack`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
 | Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
+| Audio | `engine/audio`, `modules/rts/audio`, `third_party/miniaudio`, `games/*/audio.json`, `docs/game-format.md` § audio.json | audio agent |
 | Other areas | as assigned by the user | the agent the user assigned |
 
 If your task is not in this table, the user's first message to you defines your area: write it
