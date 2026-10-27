@@ -555,6 +555,20 @@ TEST(mech_survive_waves) {
     CHECK(sim->result() == 1);                                   // survived to 30 s
 }
 
+TEST(json_edit_and_dump_roundtrip) {
+    Json j = Json::parse(R"({"a": 1.5, "b": [1, 2, 3], "c": {"x": "y\n"}, "rows": ["....", "~~~~"]})");
+    j.set("a", Json::number(int64_t(7)));
+    j.member("c").set("z", Json::fromBool(true));
+    j.find("b")->push(Json::number(2.25));
+    j.erase("rows");
+    std::string text = j.dump();
+    Json k = Json::parse(text);
+    CHECK(k == j);
+    CHECK(k["a"].integer() == 7 && k["c"]["z"].boolean() && k["b"].size() == 4 && !k.has("rows"));
+    CHECK(Json::number(0.1 + 0.2, 3).numberLiteral() == "0.3");
+    CHECK(Json::parse(j.dump(-1)) == j);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

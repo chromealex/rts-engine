@@ -98,14 +98,17 @@ the commit message; prefer adding a new file over editing a shared one.
 | Area | Paths | Owner |
 |---|---|---|
 | Simulation & mechanics, AI, triggers | `engine/core`, `engine/sim`, `modules/rts/*.{h,cpp}` | main agent |
-| Editor, MCP server, device simulator, sample games | `apps/editor`, `tools/mcp`, `games/*` | main agent |
+| Editor, MCP server, device simulator | `apps/editor`, `tools/mcp`, `docs/game-format.md` | main agent |
 | Models, PBR materials, skinning, procedural animation | `engine/render`, `engine/gfx`, `modules/rts/view` | models agent |
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
 | Resource packs `.rpak`, build size/compression | `engine/assets/Pack*`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
-| Audio | `engine/audio` (new) | free |
-| Networking / multiplayer transport, lobby | `engine/net` (new) | free |
-| Platforms, device testing, CI | `platform/`, `engine/platform`, `.github/` | free |
-| Localization, campaigns, save/load | `engine/i18n` (new), `games/*/campaign` | free |
+| Other areas | as assigned by the user | the agent the user assigned |
+
+If your task is not in this table, the user's first message to you defines your area: write it
+here in your branch (one row) so the integrator sees it.
+
+Partial earlier attempts for models / UI / packs exist as branches `agent-models`, `agent-ui`,
+`agent-rpak` (WIP, unverified) — you may look at them for ideas, nothing more.
 
 Shared touch points and how to use them:
 - `CMakeLists.txt`: add your sources in your own `add_library` block; don't reorder others.

@@ -47,7 +47,32 @@ public:
     std::string getStr(const std::string& key, const std::string& def = "") const { return (*this)[key].str(def); }
     bool getBool(const std::string& key, bool def = false) const { return (*this)[key].boolean(def); }
 
+    // ---- building / editing (editor, MCP, tools; the simulation only reads)
+    static Json object() { Json j; j.type_ = Type::Object; return j; }
+    static Json array() { Json j; j.type_ = Type::Array; return j; }
+    static Json string(std::string s) { Json j; j.type_ = Type::String; j.text_ = std::move(s); return j; }
+    static Json fromBool(bool b) { Json j; j.type_ = Type::Bool; j.bool_ = b; return j; }
+    static Json number(Fixed v);
+    static Json number(int64_t v);
+    static Json number(double v, int decimals = 3);       // tools only: rounded, no exponent
+    static Json numberText(std::string literal);           // keeps the literal exactly
+    Json& set(const std::string& key, Json v);             // replaces in place or appends (keeps order)
+    bool erase(const std::string& key);
+    Json& push(Json v);
+    void eraseAt(size_t i);
+    Json* find(const std::string& key);                    // mutable member, nullptr if missing
+    Json& at(size_t i) { return array_[i]; }
+    Json& member(const std::string& key);                  // creates an empty object member if missing
+    std::vector<Json>& itemsMut() { return array_; }
+    std::vector<std::pair<std::string, Json>>& membersMut() { return object_; }
+    const std::string& numberLiteral() const { return text_; }
+    double toDouble(double def = 0) const;                 // tools only
+    // Serialize. indent < 0: compact. Short arrays of scalars stay on one line.
+    std::string dump(int indent = 2) const;
+    bool operator==(const Json& o) const;
+
 private:
+    void dumpTo(std::string& out, int indent, int depth) const;
     friend class JsonParser;
     Type type_ = Type::Null;
     bool bool_ = false;

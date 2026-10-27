@@ -159,6 +159,7 @@ static void updateSizes(NSView* view) {
         backing:NSBackingStoreBuffered defer:NO];
     g_window.title = [NSString stringWithUTF8String:S.cfg.title.c_str()];
     g_window.delegate = self;
+    g_window.releasedWhenClosed = NO; // we keep using it until terminate (no ARC here)
     g_window.acceptsMouseMovedEvents = YES;
     self.view = [[RTSView alloc] initWithFrame:frame];
     g_window.contentView = self.view;
@@ -176,8 +177,8 @@ static void updateSizes(NSView* view) {
 }
 - (void)tick {
     auto& S = state();
-    if (S.quit) { [NSApp terminate:nil]; return; }
-    if (S.fbW <= 0 || S.fbH <= 0 || g_window.isMiniaturized) return;
+    if (S.quit || !g_window) { [self.timer invalidate]; [NSApp terminate:nil]; return; }
+    if (S.fbW <= 0 || S.fbH <= 0 || g_window.isMiniaturized || !g_window.visible) return;
     @autoreleasepool {
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - g_last).count();
@@ -192,10 +193,18 @@ static void updateSizes(NSView* view) {
     Event e; e.type = EventType::QuitRequested; detail::dispatch(e);
     return YES;
 }
+- (void)windowWillClose:(NSNotification*)n {
+    // Stop rendering before the layer goes away; terminate follows (last window closed).
+    [self.timer invalidate];
+    state().quit = true;
+}
 - (void)windowDidBecomeKey:(NSNotification*)n { Event e; e.type = EventType::FocusGained; detail::dispatch(e); }
 - (void)windowDidResignKey:(NSNotification*)n { Event e; e.type = EventType::FocusLost; detail::dispatch(e); }
 - (void)applicationWillTerminate:(NSNotification*)n {
     [self.timer invalidate];
+    static bool done = false; // terminate may arrive twice (window close + menu)
+    if (done) return;
+    done = true;
     if (state().cb.shutdown) state().cb.shutdown();
     g_device.reset();
 }
