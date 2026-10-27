@@ -13,6 +13,7 @@
 #include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/EventListener.h>
 
+#include "engine/audio/Audio.h"
 #include "engine/gfx/Gfx.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
@@ -21,6 +22,7 @@
 #include "engine/ui/UiLayer.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
 
 namespace Rml { class ElementDocument; class Element; }
@@ -113,13 +115,24 @@ private:
     void selectBox(float x0, float y0, float x1, float y1, bool add);
     void selectSameType(Entity e);
     void command(uint16_t type, float sx, float sy, bool queue);
-    void issue(Command c) { c.player = human_; sim_->submit(c); }
+    void issue(Command c) {
+        c.player = human_;
+        if (!c.units.empty()) sound_.onCommand(*sim_, c.units[0], c.type);
+        sim_->submit(c);
+    }
     void processEvents();
     void notice(const std::string& t) { notices_.push_back({t, time_ + 2.5}); if (notices_.size() > 4) notices_.erase(notices_.begin()); }
     void cleanSelection();
     bool selectionHasGarrison() const;
     Vec3 placeCentre(float sx, float sy, bool& ok);
     void setScreen(Screen s);
+    void toMenu();
+
+    // audio (main.cpp)
+    void initAudio();
+    void updateAudio(double dt);
+    void menuMusic() { if (!audio_.playMusic("menu")) audio_.stopMusic(); }
+    void saveAudioSettings();
 
     // ClientUi.cpp
     void initUi();
@@ -142,11 +155,15 @@ private:
     UiState ui_state_, bound_;
     std::vector<std::function<void()>> actions_, nextActions_;
     int shadowQuality_ = 0, boundShadowQuality_ = 0;
+    int volume_ = 100, boundVolume_ = 100, musicVolume_ = 100, boundMusicVolume_ = 100;  // percent, pause menu
     bool uiOwnsPointer_ = false;
     Minimap minimap_;
 
     Renderer3D r3d_;
     RtsView view_;
+    audio::AudioEngine audio_;
+    RtsAudio sound_;
+    std::vector<Entity> heardSelection_;  // selection when the last select sound played
     RTSCamera cam_;
     Json manifest_, rulesJson_;
     std::vector<MapEntry> maps_;
