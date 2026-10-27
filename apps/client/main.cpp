@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "GameClient.h"
+#include "modules/rts/RtsTiles.h"
+#include "modules/rts/view/RtsCamera.h"
 
 using namespace rts;
 using platform::Event;
@@ -67,8 +69,11 @@ void GameClient::startMatch(size_t idx) {
     if (idx >= maps_.size()) return;
     std::string text;
     if (!platform::readContentFile(maps_[idx].file, text)) { error_ = "map not found: " + maps_[idx].file; return; }
+    Json map;
     try {
-        Json map = Json::parse(text);
+        map = Json::parse(text);
+        std::string terr; // 2D tile maps: the tileset decides cell kinds / levels / fields
+        if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         SimConfig cfg;
         cfg.seed = uint64_t(std::time(nullptr));
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
@@ -87,6 +92,7 @@ void GameClient::startMatch(size_t idx) {
     }
     selection_.clear();
     for (auto& g : groups_) g.clear();
+    view_.setTiles(map["tiles"]);
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();
@@ -106,6 +112,7 @@ void GameClient::fitCamera() {
     cam_.maxDistance = std::max(40.0f, float(std::max(g.w, g.h)) * 1.3f);
     float aspect = platform::windowHeight() > 0 ? platform::windowWidth() / platform::windowHeight() : 1.6f;
     cam_.distance = small ? std::max(g.w / aspect, float(g.h)) * 1.05f + 4 : 24.0f;
+    applyCameraSetup(cameraSetupFrom(manifest_), cam_, float(platform::framebufferHeight())); // game.json "camera" (2D games)
 }
 
 // ------------------------------------------------------------------ picking / selection
@@ -121,6 +128,10 @@ Entity GameClient::pick(float sx, float sy) const {
     for (auto& o : scene_.objects) {
         if (!o.visible || o.isProjectile) continue;
         const UnitType& t = rules_.types[o.type];
+        if (view_.spriteHit(cam_, o, static_cast<RtsModule&>(sim_->module()).state(*sim_).grid, sx, sy, platform::windowWidth(), platform::windowHeight())) {
+            if (bestD > 0.01f) { best = o.entity; bestD = 0.01f; } // sprites stand above their ground point
+            continue;
+        }
         if (t.layer & kLayerAir) { // flyers are drawn above the ground: test in screen space
             float2 sp;
             if (cam_.worldToScreen({o.pos.x, 2.4f, o.pos.z}, platform::windowWidth(), platform::windowHeight(), sp)) {
