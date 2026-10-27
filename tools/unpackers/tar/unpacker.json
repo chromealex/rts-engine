@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "name": "tar",
+  "title": "tar archive (.tar, .tar.gz/.tgz, .tar.bz2, .tar.xz)",
+  "version": "1.0.0",
+  "extensions": [".tar", ".tgz", ".tar.gz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz"],
+  "magic": [{"offset": 257, "ascii": "ustar"}],
+  "capabilities": ["probe", "list", "extract"],
+  "external": true,
+  "command": ["python3", "unpack.py"],
+  "command_windows": ["py", "-3", "unpack.py"]
+}

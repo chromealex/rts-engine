@@ -33,7 +33,8 @@ the *engine* add mechanics generically — never a special case for one game.
 | `tools/mcp` | `rtsmcp`: MCP server (stdio) for agents; forwards to the running editor | game data only, never engine code |
 | `apps/headless` | bot matches, replays, CI | |
 | `tools/rtsbuild` | packager: macOS .app, iOS Xcode project, Android Gradle project, web, Windows | ships content as `content.rpak` |
-| `tools/assetpipe` | build / list / verify / extract / diff `.rpak` | |
+| `tools/assetpipe` | build / list / verify / extract / diff `.rpak`, import foreign archives (`--json` for MCP) | |
+| `tools/unpackers` | unpacker plugins for foreign archive formats (zip, tar, dmg, Warcraft WAR, Westwood PAK, Z PAC/RSC) | protocol: `tools/unpackers/PROTOCOL.md`; host tools only |
 | `games/*` | sample games | data only |
 | `tests/tests.cpp` | unit + mechanics + determinism tests | must stay green |
 | `third_party/` | vendored libraries with licenses | MIT/BSD/zlib/OFL/CC0/CC-BY only |
@@ -107,7 +108,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | Editor, MCP server, device simulator | `apps/editor`, `tools/mcp`, `docs/game-format.md` | main agent |
 | Models, PBR materials, skinning, procedural animation | `engine/render`, `engine/gfx`, `modules/rts/view` | models agent |
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
-| Resource packs `.rpak`, build size/compression | `engine/pack`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
+| Resource packs `.rpak`, build size/compression | `engine/pack`, `tools/assetpipe`, `tools/unpackers`, `tools/rtsbuild` | packs agent |
 | Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
 | Audio | `engine/audio`, `modules/rts/audio`, `third_party/miniaudio`, `games/*/audio.json`, `docs/game-format.md` § audio.json | audio agent |
 | Other areas | as assigned by the user | the agent the user assigned |

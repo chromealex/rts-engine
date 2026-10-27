@@ -104,7 +104,7 @@ bool PackWriter::addFile(const std::string& packPath, const std::string& diskPat
     in.disk = diskPath;
     if (in.path.empty()) return fail(error, "empty pack path for " + diskPath);
     if (in.path.size() > 0xffff) return fail(error, "path too long: " + in.path);
-    for (const Input& o : inputs_) if (o.path == in.path) return fail(error, "duplicate path in pack: " + in.path);
+    if (!paths_.insert(in.path).second) return fail(error, "duplicate path in pack: " + in.path);
     inputs_.push_back(std::move(in));
     return true;
 }
@@ -116,7 +116,8 @@ bool PackWriter::addData(const std::string& packPath, std::string data, std::str
     return true;
 }
 
-int PackWriter::addDirectory(const std::string& dir, const std::string& prefix, const IgnoreRules& base, std::string* error) {
+int PackWriter::addDirectory(const std::string& dir, const std::string& prefix, const IgnoreRules& base, std::string* error,
+                             bool followSymlinks) {
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) { fail(error, "not a directory: " + dir); return -1; }
     IgnoreRules rules = base;
@@ -126,6 +127,7 @@ int PackWriter::addDirectory(const std::string& dir, const std::string& prefix, 
     for (auto it = fs::recursive_directory_iterator(dir, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
         std::string rel = fs::relative(it->path(), dir, ec).generic_string();
+        if (!followSymlinks && it->is_symlink(ec)) { it.disable_recursion_pending(); continue; }
         bool isDir = it->is_directory(ec);
         if (rules.ignored(rel, isDir)) { if (isDir) it.disable_recursion_pending(); continue; }
         if (!it->is_regular_file(ec)) continue;
@@ -136,6 +138,18 @@ int PackWriter::addDirectory(const std::string& dir, const std::string& prefix, 
     for (auto& [rel, disk] : files)
         if (!addFile(prefix.empty() ? rel : prefix + "/" + rel, disk, error)) return -1;
     return int(files.size());
+}
+
+int PackWriter::addPack(Pack& pack, const std::string& prefix, std::string* error) {
+    std::string data;
+    for (size_t i = 0; i < pack.size(); ++i) {
+        const Entry& e = pack.entry(i);
+        if (!pack.read(e, data, true)) { fail(error, pack.name() + ": " + pack.lastError()); return -1; }
+        std::string path = prefix.empty() ? std::string(e.path) : prefix + "/" + std::string(e.path);
+        if (!addData(path, std::move(data), error)) return -1;
+    }
+    if (pack.external()) external_ = true;
+    return int(pack.size());
 }
 
 bool PackWriter::write(const std::string& outPath, const WriteOptions& opt, WriteStats* stats, std::string* error) {
@@ -250,12 +264,12 @@ bool PackWriter::writeToString(std::string& out, const WriteOptions& opt, WriteS
     }
     toc += strings;
 
-    uint32_t flags = 0;
+    uint32_t flags = (opt.external || external_) ? kFlagExternal : 0;
     std::string tocStored = toc;
     if (opt.compress && toc.size() >= kMinCompressSize) {
         std::string z(ZSTD_compressBound(toc.size()), '\0');
         size_t n = ZSTD_compress(z.data(), z.size(), toc.data(), toc.size(), std::clamp(opt.level, 1, ZSTD_maxCLevel()));
-        if (!ZSTD_isError(n) && n < toc.size()) { z.resize(n); tocStored = std::move(z); flags |= 1u; }
+        if (!ZSTD_isError(n) && n < toc.size()) { z.resize(n); tocStored = std::move(z); flags |= kFlagTocZstd; }
     }
     while (out.size() % 16) out += '\0';
     uint64_t tocOff = out.size();
