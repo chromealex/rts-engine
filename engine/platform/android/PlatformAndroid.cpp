@@ -10,6 +10,7 @@
 #include <android_native_app_glue.h>
 
 #include <chrono>
+#include <cstring>
 #include <memory>
 
 namespace rts::platform {
@@ -105,8 +106,44 @@ int32_t onInput(android_app*, AInputEvent* ev) {
 const char* name() { return "android"; }
 void setTitle(const std::string&) {}
 
+namespace {
+// Packs inside the APK. `noCompress 'rpak'` in Gradle keeps them uncompressed in the APK, so
+// AASSET_MODE_BUFFER maps the file instead of inflating it into memory.
+class AssetSource final : public pack::Source {
+public:
+    explicit AssetSource(AAsset* a) : a_(a), size_(uint64_t(AAsset_getLength64(a))), map_(static_cast<const uint8_t*>(AAsset_getBuffer(a))) {}
+    ~AssetSource() override { AAsset_close(a_); }
+    uint64_t size() const override { return size_; }
+    bool read(uint64_t off, void* dst, size_t n) override {
+        if (off > size_ || n > size_ - off) return false;
+        if (map_) { std::memcpy(dst, map_ + off, n); return true; }
+        if (AAsset_seek64(a_, off64_t(off), SEEK_SET) < 0) return false;
+        return AAsset_read(a_, dst, n) == int(n);
+    }
+    const uint8_t* mapped() const override { return map_; }
+
+private:
+    AAsset* a_;
+    uint64_t size_;
+    const uint8_t* map_;
+};
+
+std::unique_ptr<pack::Source> openAssetPack(const std::string& path) {
+    if (!g_app) return nullptr;
+    AAsset* a = AAssetManager_open(g_app->activity->assetManager, path.c_str(), AASSET_MODE_BUFFER);
+    return a ? std::make_unique<AssetSource>(a) : nullptr;
+}
+} // namespace
+
+bool mountPack(const std::string& path) {
+    detail::ensurePacks(openAssetPack);
+    return detail::mountPackWith(openAssetPack, path.rfind("content/", 0) == 0 ? path : "content/" + path);
+}
+
 bool readContentFile(const std::string& rel, std::string& out) {
     if (!g_app) return false;
+    detail::ensurePacks(openAssetPack);
+    if (!state().packs.empty() && state().packs.read(rel, out)) return true;
     AAsset* a = AAssetManager_open(g_app->activity->assetManager, ("content/" + rel).c_str(), AASSET_MODE_BUFFER);
     if (!a) return false;
     out.assign(static_cast<const char*>(AAsset_getBuffer(a)), size_t(AAsset_getLength(a)));
