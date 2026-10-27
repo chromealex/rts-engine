@@ -555,6 +555,167 @@ TEST(mech_survive_waves) {
     CHECK(sim->result() == 1);                                   // survived to 30 s
 }
 
+// ---------------- Localization (engine/i18n) ----------------
+#include "engine/i18n/GameLanguage.h"
+#include "modules/rts/RtsLocalize.h"
+#include <fstream>
+#include <sstream>
+
+namespace {
+// Content layout as packaged: "engine/..." from engine/assets, everything else from the game folder.
+i18n::FileReader contentReader(const std::string& game) {
+    return [game](const std::string& rel, std::string& out) {
+        std::string path = rel.rfind("engine/", 0) == 0 ? std::string(RTS_SOURCE_DIR) + "/engine/assets/" + rel.substr(7)
+                                                         : std::string(RTS_SOURCE_DIR) + "/games/" + game + "/" + rel;
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return false;
+        std::stringstream ss; ss << f.rdbuf(); out = ss.str();
+        return true;
+    };
+}
+}
+
+TEST(i18n_plural_rules) {
+    using i18n::Plural; using i18n::pluralOf;
+    CHECK(pluralOf("ru", 1) == Plural::One && pluralOf("ru", 21) == Plural::One && pluralOf("ru", 11) == Plural::Many);
+    CHECK(pluralOf("ru-RU", 2) == Plural::Few && pluralOf("ru", 24) == Plural::Few && pluralOf("ru", 12) == Plural::Many);
+    CHECK(pluralOf("ru", 0) == Plural::Many && pluralOf("ru", 5) == Plural::Many && pluralOf("ru", 111) == Plural::Many);
+    CHECK(pluralOf("uk", 22) == Plural::Few && pluralOf("pl", 1) == Plural::One && pluralOf("pl", 21) == Plural::Many);
+    CHECK(pluralOf("en", 1) == Plural::One && pluralOf("en", 0) == Plural::Other && pluralOf("de", 2) == Plural::Other);
+    CHECK(pluralOf("fr", 0) == Plural::One && pluralOf("pt-BR", 0) == Plural::One && pluralOf("pt-PT", 0) == Plural::Other);
+    CHECK(pluralOf("ja", 1) == Plural::Other && pluralOf("zh-Hans", 1) == Plural::Other);
+    CHECK(pluralOf("ar", 0) == Plural::Zero && pluralOf("ar", 2) == Plural::Two && pluralOf("ar", 103) == Plural::Few && pluralOf("ar", 111) == Plural::Many);
+    CHECK(pluralOf("cs", 3) == Plural::Few && pluralOf("cs", 5) == Plural::Other);
+    auto ru = i18n::requiredPlurals("ru");
+    CHECK(ru.size() == 4 && ru[0] == Plural::One && ru[1] == Plural::Few && ru[2] == Plural::Many && ru[3] == Plural::Other);
+    CHECK(i18n::requiredPlurals("ja").size() == 1);
+}
+
+TEST(i18n_tags_and_negotiation) {
+    CHECK(i18n::normalizeTag("ru_RU.UTF-8") == "ru-RU");
+    CHECK(i18n::normalizeTag("ZH_hant_tw") == "zh-Hant-TW");
+    CHECK(i18n::normalizeTag("C").empty() && i18n::normalizeTag("POSIX").empty());
+    CHECK(i18n::baseLanguage("pt-BR") == "pt");
+    std::vector<std::string> avail = {"en", "ru", "pt-BR"};
+    CHECK(i18n::negotiate({"ru-UA", "en"}, avail) == "ru");          // same base language
+    CHECK(i18n::negotiate({"de", "pt-PT"}, avail) == "pt-BR");       // later preference, sibling region
+    CHECK(i18n::negotiate({"de"}, avail, "en") == "en");
+    i18n::GameLanguages g; g.source = "en"; g.available = {"en", "ru"};
+    CHECK(i18n::chooseLanguage(g, "ru", {"en-US"}) == "ru");          // saved choice wins
+    CHECK(i18n::chooseLanguage(g, "fr", {"ru-RU", "en"}) == "ru");    // stale choice: system language
+    CHECK(i18n::chooseLanguage(g, "", {"ja"}) == "en");               // nothing matches: source
+}
+
+TEST(i18n_format_and_lookup) {
+    CHECK(i18n::format("{a} + {b} = {{c}}", i18n::Args().num("a", 1).str("b", "x")) == "1 + x = {c}");
+    CHECK(i18n::format("{missing}", {}) == "{missing}");
+    CHECK((i18n::placeholders("{b} {a} {a} {{x}}") == std::vector<std::string>{"a", "b"}));
+
+    i18n::Localization L;
+    L.addTable("en", Json::parse(R"({"@language": "English", "hud": {"wave": {"one": "{count} wave", "other": "{count} waves"}, "menu": "Menu", "only_en": "E"}})"));
+    L.addTable("ru", Json::parse(R"({"@language": "Русский", "hud": {"wave": {"one": "{count} волна", "few": "{count} волны", "many": "{count} волн", "other": "{count} волны"}, "menu": "Меню"}})"));
+    L.setLanguage("ru-RU");
+    CHECK((L.chain() == std::vector<std::string>{"ru-RU", "ru", "en"}));
+    CHECK(L.tr("hud.menu") == "Меню");
+    CHECK(L.tr("hud.only_en") == "E");                                // falls back to English
+    CHECK(L.tr("no.such.key") == "no.such.key");                      // visible, never empty
+    CHECK(L.trOr("type.x", "Footman") == "Footman");
+    CHECK(L.tr("hud.wave", i18n::Args().num("count", 1)) == "1 волна");
+    CHECK(L.tr("hud.wave", i18n::Args().num("count", 3)) == "3 волны");
+    CHECK(L.tr("hud.wave", i18n::Args().num("count", 11)) == "11 волн");
+    CHECK(L.text("@hud.menu") == "Меню" && L.text("@@tag") == "@tag" && L.text("Plain") == "Plain");
+    CHECK(L.meta("@language") == "Русский");
+    L.setLanguage("en");
+    CHECK(L.tr("hud.wave", i18n::Args().num("count", 1)) == "1 wave" && L.tr("hud.wave", i18n::Args().num("count", 2)) == "2 waves");
+    L.setPseudo(true);
+    std::string p = L.tr("hud.wave", i18n::Args().num("count", 2));
+    CHECK(p.front() == '[' && p.back() == ']' && p.find('2') != std::string::npos && p != "2 waves");
+}
+
+TEST(i18n_check_finds_problems) {
+    i18n::Catalog en, ru;
+    en.merge(Json::parse(R"({"a": "Hello {name}", "b": "B", "c": {"one": "{count} x", "other": "{count} xs"}, "d": "D"})"));
+    ru.merge(Json::parse(R"({"a": "Привет {nmae}", "b": "B", "c": {"one": "{count} х", "other": "{count} х"}, "e": "лишний", "d": "Д {"})"));
+    auto issues = i18n::check(en, "en", ru, "ru");
+    auto has = [&](const std::string& key, const std::string& part, i18n::Issue::Severity s) {
+        for (auto& i : issues) if (i.key == key && i.message.find(part) != std::string::npos && i.severity == s) return true;
+        return false;
+    };
+    CHECK(has("a", "unknown placeholder {nmae}", i18n::Issue::Error));
+    CHECK(has("c", "missing plural form 'few'", i18n::Issue::Error));
+    CHECK(has("c", "missing plural form 'many'", i18n::Issue::Error));
+    CHECK(has("e", "stale", i18n::Issue::Warning));
+    CHECK(has("b", "not translated yet", i18n::Issue::Warning));
+    CHECK(has("d", "unbalanced braces", i18n::Issue::Error));
+}
+
+TEST(i18n_engine_tables_complete) {
+    auto read = contentReader("skirmish");
+    for (const char* lang : {"ru"}) {
+        std::string enText, text;
+        CHECK(read("engine/lang/en.json", enText) && read(std::string("engine/lang/") + lang + ".json", text));
+        i18n::Catalog en, other;
+        en.merge(Json::parse(enText));
+        other.merge(Json::parse(text));
+        int problems = 0;
+        for (auto& i : i18n::check(en, "en", other, lang))
+            if (i.message.find("not translated yet") == std::string::npos) { ++problems; std::printf("  %s %s: %s\n", lang, i.key.c_str(), i.message.c_str()); }
+        CHECK(problems == 0);
+        CHECK(!other.meta().at("@language").empty());
+    }
+}
+
+TEST(i18n_game_data_names) {
+    auto read = contentReader("skirmish");
+    std::string text;
+    CHECK(read("game.json", text));
+    Json manifest = Json::parse(text);
+    auto langs = i18n::readGameLanguages(manifest);
+    CHECK(langs.source == "en" && langs.available.size() == 2);
+    CHECK(read("rules.json", text));
+    Json rulesJson = Json::parse(text);
+
+    i18n::Localization L;
+    i18n::loadGameLocalization(L, read, langs, "ru");
+    game::Rules display = game::loadRules(rulesJson);
+    game::localizeRules(display, L);
+    CHECK(display.types[size_t(display.findType("footman"))].name == "Пехотинец");
+    CHECK(display.resources[size_t(display.findResource("gold"))].name == "Золото");
+    CHECK(L.tr("menu.map") == "Карта");                                         // engine table
+    CHECK(L.trOr("game.name", "?") == "Железо и золото");                        // game table
+    CHECK(game::localizedPlayerName(L, "maps/valley.json", 0, "Blue") == "Синие");
+    CHECK(i18n::languageSelfName(read, "ru") == "Русский");
+
+    i18n::loadGameLocalization(L, read, langs, "en");
+    game::Rules en = game::loadRules(rulesJson);
+    game::localizeRules(en, L);
+    CHECK(en.types[size_t(en.findType("footman"))].name == "Footman");          // source text from data
+    CHECK(L.tr("menu.map") == "Map");
+
+    // Every data string is reachable through a key, and the shipped tables cover them.
+    std::vector<std::pair<std::string, Json>> maps;
+    for (auto& m : manifest["maps"].items()) { CHECK(read(m.getStr("file"), text)); maps.push_back({m.getStr("file"), Json::parse(text)}); }
+    auto strings = game::collectSourceStrings(manifest, rulesJson, maps);
+    CHECK(strings.size() > 10);
+    i18n::loadGameLocalization(L, read, langs, "ru");
+    for (auto& s : strings) CHECK(L.catalog("ru") && L.catalog("ru")->find(s.key));
+}
+
+TEST(i18n_localize_rules_changes_only_names) {
+    // The client localizes only its display copy of the rules; nothing but names may change.
+    auto read = contentReader("skirmish");
+    std::string rulesText, mapText;
+    CHECK(read("rules.json", rulesText) && read("maps/valley.json", mapText));
+    game::Rules a = game::loadRules(Json::parse(rulesText)), b = a;
+    i18n::Localization L;
+    L.addTable("ru", Json::parse(R"({"type": {"footman": "Пехотинец"}})"));
+    L.setLanguage("ru");
+    game::localizeRules(b, L);
+    CHECK(a.types.size() == b.types.size());
+    for (size_t i = 0; i < a.types.size(); ++i) CHECK(a.types[i].id == b.types[i].id && a.types[i].maxHp == b.types[i].maxHp && a.types[i].cost.size() == b.types[i].cost.size());
+    CHECK(b.types[size_t(b.findType("footman"))].name == "Пехотинец" && b.types[size_t(b.findType("archer"))].name == "Archer");
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
