@@ -31,6 +31,36 @@ inline bool readFileStd(const std::string& path, std::string& out) {
     return true;
 }
 
+// Frame timing shared by all backends. Clamps dt so a frame after a long stall (app in background,
+// tab hidden, window dragged, debugger break) doesn't teleport the camera or flood the sim with
+// catch-up ticks. In capture mode (RTS_EXIT_AFTER_FRAMES) frames advance by exactly 1/60 s so CI
+// screenshots show the same moment of the match on every platform regardless of GPU speed.
+class FrameClock {
+public:
+    static constexpr double kMaxDt = 0.25;
+    explicit FrameClock(bool fixedStep = false) : fixed_(fixedStep) {}
+    double tick(double nowSeconds) {
+        double dt = started_ ? nowSeconds - last_ : 1.0 / 60.0;
+        last_ = nowSeconds; started_ = true;
+        if (fixed_) return 1.0 / 60.0;
+        return dt < 0 ? 0 : dt > kMaxDt ? kMaxDt : dt;
+    }
+    void reset() { started_ = false; } // call when rendering resumes after a pause
+private:
+    double last_ = 0;
+    bool started_ = false, fixed_ = false;
+};
+
+// RTS_SCREENSHOT=out.ppm RTS_EXIT_AFTER_FRAMES=N: render N frames, save the last one, quit.
+struct CaptureRequest {
+    std::string path;
+    long frames = 0;
+    bool active() const { return frames > 0; }
+};
+CaptureRequest captureRequestFromEnv();
+// rgba: bottom-up rows (as glReadPixels returns them); written as a top-down binary PPM.
+bool writePPM(const std::string& path, int w, int h, const unsigned char* rgba);
+
 // Map an ASCII letter/digit to Key.
 inline Key keyFromAscii(int c) {
     if (c >= 'a' && c <= 'z') c -= 32;

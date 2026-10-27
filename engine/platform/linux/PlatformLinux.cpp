@@ -56,15 +56,10 @@ Key mapKey(KeySym k) {
     }
 }
 
-void writePPM(const char* path, int w, int h) {
-    std::vector<uint8_t> px(size_t(w) * h * 4);
+void saveScreenshot(const std::string& path, int w, int h) {
+    std::vector<uint8_t> px(size_t(w) * size_t(h) * 4);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    FILE* f = std::fopen(path, "wb");
-    if (!f) return;
-    std::fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (int y = h - 1; y >= 0; --y)
-        for (int x = 0; x < w; ++x) std::fwrite(&px[(size_t(y) * w + x) * 4], 1, 3, f);
-    std::fclose(f);
+    if (!detail::writePPM(path, w, h, px.data())) std::fprintf(stderr, "screenshot: cannot write %s\n", path.c_str());
 }
 } // namespace
 
@@ -118,11 +113,9 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     auto device = gfx::createGLDevice(gfx::Backend::GLES3);
     if (S.cb.init) S.cb.init(*device);
 
-    const char* shot = std::getenv("RTS_SCREENSHOT");
-    const char* exitAfter = std::getenv("RTS_EXIT_AFTER_FRAMES");
-    long maxFrames = exitAfter ? std::atol(exitAfter) : -1;
+    const detail::CaptureRequest capture = detail::captureRequestFromEnv();
+    detail::FrameClock clock(capture.active());
     long frameNo = 0;
-    auto last = std::chrono::steady_clock::now();
 
     while (!S.quit) {
         while (XPending(g_dpy)) {
@@ -185,17 +178,14 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
             default: break;
             }
         }
-        auto now = std::chrono::steady_clock::now();
-        double dt = std::chrono::duration<double>(now - last).count();
-        last = now;
-        if (maxFrames > 0) dt = 1.0 / 60.0; // deterministic pacing for captures
+        double dt = clock.tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
 
         device->beginFrame(S.fbW, S.fbH);
         if (S.cb.frame) S.cb.frame(*device, dt);
         device->endFrame();
         ++frameNo;
-        if (maxFrames > 0 && frameNo >= maxFrames) {
-            if (shot) writePPM(shot, S.fbW, S.fbH);
+        if (capture.active() && frameNo >= capture.frames) {
+            if (!capture.path.empty()) saveScreenshot(capture.path, S.fbW, S.fbH);
             S.quit = true;
         }
         eglSwapBuffers(ed, surf);

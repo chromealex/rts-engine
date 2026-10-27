@@ -73,6 +73,7 @@ static std::chrono::steady_clock::time_point g_last;
     @autoreleasepool {
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - g_last).count();
+        if (dt > rts::platform::detail::FrameClock::kMaxDt) dt = rts::platform::detail::FrameClock::kMaxDt; // after sleep/background
         g_last = now;
         g_device->beginFrame(S.fbW, S.fbH);
         if (S.cb.frame) S.cb.frame(*g_device, dt);
@@ -91,8 +92,16 @@ static std::chrono::steady_clock::time_point g_last;
     [self.window makeKeyAndVisible];
     return YES;
 }
-- (void)applicationWillResignActive:(UIApplication*)a { Event e; e.type = EventType::FocusLost; detail::dispatch(e); }
-- (void)applicationDidBecomeActive:(UIApplication*)a { Event e; e.type = EventType::FocusGained; detail::dispatch(e); }
+// iOS kills apps that submit GPU work in the background, so the display link stops while inactive.
+- (void)applicationWillResignActive:(UIApplication*)a {
+    ((RTSViewController*)self.window.rootViewController).link.paused = YES;
+    Event e; e.type = EventType::FocusLost; detail::dispatch(e);
+}
+- (void)applicationDidBecomeActive:(UIApplication*)a {
+    g_last = std::chrono::steady_clock::now(); // no catch-up for the time spent in background
+    ((RTSViewController*)self.window.rootViewController).link.paused = NO;
+    Event e; e.type = EventType::FocusGained; detail::dispatch(e);
+}
 - (void)applicationWillTerminate:(UIApplication*)a { if (state().cb.shutdown) state().cb.shutdown(); g_device.reset(); }
 @end
 
