@@ -92,7 +92,8 @@ assetpipe diff old.rpak new.rpak  # что изменилось между ве�
 [`tools/unpackers/PROTOCOL.md`](tools/unpackers/PROTOCOL.md)). Распаковщики работают только в инструментах сборки:
 чужой архив превращается в файлы внутри `.rpak`, игра по-прежнему читает только `.rpak`.
 
-Из коробки: zip (и `.oramap`), tar, dmg, архивы Warcraft I/II (`.WAR/.SUD/.INS`), Z от Bitmap Brothers (`.PAC`, `.RSC`).
+Из коробки: zip (и `.oramap`), tar, dmg, архивы Warcraft I/II (`.WAR/.SUD/.INS`), Westwood `.PAK` (Dune II, Lands of Lore,
+Kyrandia), Z от Bitmap Brothers (`.PAC`, `.RSC`).
 
 ```bash
 assetpipe formats                                   # какие форматы известны
