@@ -320,3 +320,29 @@ if(RTS_BUILD_TESTS)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
+
+# ---------------------------------------------------------------------------
+# In-game UI (UI agent): RmlUi (HTML/CSS) rendered through the RHI, fonts via stb_truetype.
+# Documents live in engine/assets/ui; a game overrides any of them with games/<id>/ui/<same name>.
+# ---------------------------------------------------------------------------
+file(GLOB RTS_RMLUI_SRC CONFIGURE_DEPENDS
+    third_party/rmlui/Source/Core/*.cpp third_party/rmlui/Source/Core/Elements/*.cpp
+    third_party/rmlui/Source/Core/Layout/*.cpp third_party/rmlui/Source/Debugger/*.cpp)
+add_library(rts_rmlui STATIC ${RTS_RMLUI_SRC})
+target_include_directories(rts_rmlui PUBLIC third_party/rmlui/Include)
+target_compile_definitions(rts_rmlui PUBLIC RMLUI_STATIC_LIB PRIVATE RMLUI_VERSION="6.1")
+if(NOT MSVC)
+    target_compile_options(rts_rmlui PRIVATE -w)
+endif()
+
+add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp)
+target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
+target_link_libraries(rts_ui PUBLIC rts_rmlui)
+if(TARGET rts_client)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp)
+    target_link_libraries(rts_client PRIVATE rts_ui)
+endif()
+if(TARGET main)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp)
+    target_link_libraries(main PRIVATE rts_ui)
+endif()

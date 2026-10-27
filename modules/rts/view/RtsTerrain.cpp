@@ -114,10 +114,10 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
             float* c = &ch[size_t(y * W + x) * 4];
             c[0] = corner(x, y, 0, 0); c[1] = corner(x, y, 1, 0); c[2] = corner(x, y, 0, 1); c[3] = corner(x, y, 1, 1);
         }
-    auto addQuad = [&](float3 p0, float3 p1, float3 p2, float3 p3, float3 n, float3 col) {
+    auto addQuad4 = [&](float3 p0, float3 p1, float3 p2, float3 p3, float3 n, float3 c0, float3 c1, float3 c2, float3 c3) {
         uint32_t base = uint32_t(b.vertexCount());
-        uint32_t c = rgbaf({col.x, col.y, col.z, 1});
-        b.addVertex(p0, n, c); b.addVertex(p1, n, c); b.addVertex(p2, n, c); b.addVertex(p3, n, c);
+        b.addVertex(p0, n, rgbaf({c0.x, c0.y, c0.z, 1})); b.addVertex(p1, n, rgbaf({c1.x, c1.y, c1.z, 1}));
+        b.addVertex(p2, n, rgbaf({c2.x, c2.y, c2.z, 1})); b.addVertex(p3, n, rgbaf({c3.x, c3.y, c3.z, 1}));
         // front faces satisfy cross(b - a, c - a) . n > 0 (same convention as the ground); fix the winding per triangle
         auto tri = [&](uint32_t i, uint32_t j, uint32_t k, float3 a, float3 bp, float3 cp) {
             if (dot(cross(bp - a, cp - a), n) >= 0) b.addTriangle(i, j, k); else b.addTriangle(i, k, j);
@@ -125,13 +125,30 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
         tri(base, base + 2, base + 1, p0, p2, p1);
         tri(base + 1, base + 2, base + 3, p1, p2, p3);
     };
+    auto addQuad = [&](float3 p0, float3 p1, float3 p2, float3 p3, float3 n, float3 col) { addQuad4(p0, p1, p2, p3, n, col, col, col, col); };
+    // corner colours blend the cells around the corner that share the level (soft ground, sharp cliffs)
+    std::vector<float3> cellCol(size_t(W * H));
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) cellCol[size_t(y * W + x)] = cellColor(x, y);
+    auto cornerCol = [&](int x, int y, int cx, int cy) {
+        float3 sum{};
+        float cnt = 0;
+        const int lv = level(x, y);
+        for (int dy = cy - 1; dy <= cy; ++dy)
+            for (int dx = cx - 1; dx <= cx; ++dx) {
+                int nx = x + dx, ny = y + dy;
+                if (!inside(nx, ny) || level(nx, ny) != lv) continue;
+                sum += cellCol[size_t(ny * W + nx)]; cnt += 1;
+            }
+        return cnt > 0 ? sum * (1.0f / cnt) : cellCol[size_t(y * W + x)];
+    };
     // top surfaces: per-cell quads (separate vertices so cliff edges stay sharp); smooth-ish
     // normals from the corner heights of the cell
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
             const float* c = &ch[size_t(y * W + x) * 4];
             float3 n = normalize({(c[0] + c[2]) - (c[1] + c[3]), 2.0f, (c[0] + c[1]) - (c[2] + c[3])});
-            addQuad({float(x), c[0], float(y)}, {float(x + 1), c[1], float(y)}, {float(x), c[2], float(y + 1)}, {float(x + 1), c[3], float(y + 1)}, n, cellColor(x, y));
+            addQuad4({float(x), c[0], float(y)}, {float(x + 1), c[1], float(y)}, {float(x), c[2], float(y + 1)}, {float(x + 1), c[3], float(y + 1)}, n,
+                     cornerCol(x, y, 0, 0), cornerCol(x, y, 1, 0), cornerCol(x, y, 0, 1), cornerCol(x, y, 1, 1));
         }
     // cliff walls where neighbouring edges don't meet
     auto wallColor = [&](int x, int y) {
@@ -169,8 +186,7 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
     for (int y = -apron; y < H + apron; ++y)
         for (int x = -apron; x < W + apron; ++x) {
             if (x >= 0 && y >= 0 && x < W && y < H) continue;
-            float nn = float(hashCell(x + 999, y) & 255) / 255.0f;
-            float3 c = float3{0.30f, 0.44f, 0.24f} * (0.9f + nn * 0.1f);
+            float3 c = float3{0.30f, 0.45f, 0.24f}; // flat apron: per-cell noise would show as a checkerboard
             float h = -0.05f;
             addQuad({float(x), h, float(y)}, {float(x + 1), h, float(y)}, {float(x), h, float(y + 1)}, {float(x + 1), h, float(y + 1)}, {0, 1, 0}, c);
         }

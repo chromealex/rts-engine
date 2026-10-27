@@ -1,0 +1,74 @@
+<rml>
+<head>
+    <title>hud</title>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<!-- Data model "game" (apps/client/ClientUi.cpp):
+     top[] {text, sub, style, warn}, topActions[], clock, notices[], minimapStyle,
+     hasSelection, ownSelection, selTitle, selInfo[], emptyHint, showCard,
+     card[] {header, kind, label, cost, hotkey, tip, enabled, active, progress, id} (header = section start),
+     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows.
+     Events: act(id), pause(), resume(), restart(), tomenu(). -->
+<body>
+<!-- the model is bound on a div: <body> is the document element itself and binds too late -->
+<div class="root" data-model="game" data-class-touch="touch">
+<div data-if="screen != 'menu'">
+    <div id="selbox" data-if="boxStyle != ''" data-attr-style="boxStyle"></div>
+    <div class="sendline" data-for="l : lines" data-attr-style="l"></div>
+
+    <div id="topwrap">
+        <div id="topbar" class="panel">
+            <span class="item" data-for="it : top" data-class-warn="it.warn" data-attr-style="it.style">{{it.text}}<span class="sub" data-if="it.sub != ''">{{it.sub}}</span></span>
+            <button class="small" data-for="a : topActions" data-class-active="a.active" data-event-click="act(a.id)" data-event-dblclick="act(a.id)">{{a.label}}<span class="cost" data-if="a.cost != ''">{{a.cost}}</span></button>
+            <span class="item">{{clock}}</span>
+            <button class="small" data-event-click="pause()">Меню</button>
+        </div>
+    </div>
+
+    <div id="notices">
+        <div class="notice" data-for="n : notices">{{n}}</div>
+    </div>
+
+    <div id="minimap" class="panel" data-attr-style="minimapStyle">
+        <img id="minimap-img" src="#minimap"/>
+    </div>
+
+    <div id="card" class="panel" data-if="showCard">
+        <div class="dim" data-if="!hasSelection">{{emptyHint}}</div>
+        <div class="title" data-if="hasSelection">{{selTitle}}</div>
+        <div class="info" data-for="l : selInfo">{{l}}</div>
+        <div class="cells">
+            <div data-for="a : card" data-attr-class="(a.header ? 'header ' : 'cell ') + a.kind">
+                <div class="section-title" data-if="a.header &amp;&amp; a.label != ''">{{a.label}}</div>
+                <button data-if="!a.header" data-class-disabled="!a.enabled" data-class-active="a.active" data-event-click="act(a.id)" data-event-dblclick="act(a.id)">
+                    <span class="label">{{a.label}}</span><span class="cost" data-if="a.cost != ''">{{a.cost}}</span><span class="hotkey" data-if="a.hotkey != ''">{{a.hotkey}}</span>
+                    <progress data-if="a.progress >= 0" data-attr-value="a.progress" max="1"></progress>
+                    <span class="tip" data-if="a.tip != ''">{{a.tip}}</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modehint" data-if="modeHint != ''" data-attr-style="hintStyle">{{modeHint}}</div>
+
+    <div id="modal-bg" data-if="screen == 'paused' || screen == 'over'">
+        <div id="modal" class="panel">
+            <h1 data-if="screen == 'over'">{{overTitle}}</h1>
+            <p class="dim" data-if="screen == 'over'">{{overTime}}</p>
+            <h1 data-if="screen == 'paused'">Пауза</h1>
+            <button class="wide" data-if="screen == 'paused'" data-event-click="resume()">Продолжить</button>
+            <div class="choice">
+                <span class="dim">Тени: </span>
+                <button data-class-active="shadows == 0" data-event-click="shadows = 0">выкл</button>
+                <button data-class-active="shadows == 1" data-event-click="shadows = 1">низк.</button>
+                <button data-class-active="shadows == 2" data-event-click="shadows = 2">средн.</button>
+                <button data-class-active="shadows == 3" data-event-click="shadows = 3">выс.</button>
+            </div>
+            <button class="wide" data-event-click="restart()">Заново</button>
+            <button class="wide" data-event-click="tomenu()">В меню</button>
+        </div>
+    </div>
+</div>
+</div>
+</body>
+</rml>
