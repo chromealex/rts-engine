@@ -1,0 +1,14 @@
+// Game manifest: read by the client at startup and by rtsbuild when packaging.
+{
+  "name": "Mushroom Clash",
+  "id": "com.rtsengine.mushroomclash",
+  "version": "0.1.0",
+  "build": 1,
+  "module": "rts",
+  "rules": "rules.json",
+  "maps": [
+    { "file": "maps/duel.json", "title": "Duel" }
+  ],
+  "orientation": "landscape",
+  "icon": "icon.png"
+}

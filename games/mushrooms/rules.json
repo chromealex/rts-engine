@@ -1,0 +1,50 @@
+// "Mushroom Clash" — Mushroom-Wars-style example on the same generic RTS layer.
+// Buildings are garrisons that grow units; players send a percentage of a garrison along roads;
+// units fight on arrival, towers shoot passing units. No workers, no resources.
+{
+  "victory": "noEntities",
+  "resources": {},
+  "types": {
+    "mushroom": {
+      "name": "Mushroom",
+      "health": { "max": 1 },
+      "move": { "speed": 2.2, "radius": 0.18 },
+      "sight": 3,
+      "entersGarrison": true,
+      "view": { "shape": "mushroom", "scale": 0.6 }
+    },
+    "village": {
+      "name": "Village",
+      "structure": { "footprint": [2, 2] },
+      "invulnerable": true,
+      "sight": 5,
+      "garrison": { "max": 20, "unit": "mushroom", "interval": 1.25, "capturable": true, "defense": 1.0 },
+      "view": { "shape": "mushroomhouse", "scale": 1.0 }
+    },
+    "bigvillage": {
+      "name": "Big Village",
+      "structure": { "footprint": [2, 2] },
+      "invulnerable": true,
+      "sight": 5,
+      "garrison": { "max": 35, "unit": "mushroom", "interval": 0.8, "capturable": true, "defense": 1.0 },
+      "view": { "shape": "mushroomhouse", "scale": 1.3 }
+    },
+    "tower": {
+      "name": "Tower",
+      "structure": { "footprint": [2, 2] },
+      "invulnerable": true,
+      "sight": 6,
+      "garrison": { "max": 15, "unit": "mushroom", "capturable": true, "defense": 1.5 },
+      "weapons": [ { "id": "spores", "range": 4.5, "damage": 1, "cooldown": 0.8, "projectileSpeed": 12 } ],
+      "view": { "shape": "tower" }
+    },
+    "forge": {
+      "name": "Forge",
+      "structure": { "footprint": [2, 2] },
+      "invulnerable": true,
+      "sight": 5,
+      "garrison": { "max": 25, "unit": "mushroom", "interval": 3.0, "capturable": true, "defense": 2.0 },
+      "view": { "shape": "barracks", "scale": 0.8 }
+    }
+  }
+}

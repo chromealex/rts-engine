@@ -1,0 +1,14 @@
+// Game manifest: read by the client at startup and by rtsbuild when packaging.
+{
+  "name": "Iron and Gold",
+  "id": "com.rtsengine.ironandgold",
+  "version": "0.1.0",
+  "build": 1,
+  "module": "rts",
+  "rules": "rules.json",
+  "maps": [
+    { "file": "maps/valley.json", "title": "River Valley (1v1)" }
+  ],
+  "orientation": "landscape",
+  "icon": "icon.png"
+}

@@ -1,0 +1,56 @@
+{
+  "name": "Duel",
+  "size": [
+    42,
+    28
+  ],
+  "roadsOnly": true,
+  "players": [
+    {
+      "name": "Blue",
+      "team": 1
+    },
+    {
+      "name": "Red",
+      "team": 2
+    }
+  ],
+  "terrain": {
+    "rows": []
+  },
+  "entities": [
+    {"id": "r_home", "type": "village", "owner": 1, "pos": [4.0, 14.0], "garrison": 20},
+    {"id": "r_a", "type": "village", "owner": 0, "pos": [9.6, 18.2], "garrison": 8},
+    {"id": "r_b", "type": "village", "owner": 0, "pos": [9.6, 9.8], "garrison": 8},
+    {"id": "r_t", "type": "tower", "owner": 0, "pos": [15.2, 14.0], "garrison": 12},
+    {"id": "r_f", "type": "forge", "owner": 0, "pos": [13.8, 23.8], "garrison": 14},
+    {"id": "mid_n", "type": "village", "owner": 0, "pos": [20.8, 21.0], "garrison": 18},
+    {"id": "mid", "type": "bigvillage", "owner": 0, "pos": [20.8, 14.0], "garrison": 25},
+    {"id": "mid_s", "type": "village", "owner": 0, "pos": [20.8, 7.0], "garrison": 18},
+    {"id": "b_f", "type": "forge", "owner": 0, "pos": [27.8, 4.2], "garrison": 14},
+    {"id": "b_t", "type": "tower", "owner": 0, "pos": [26.4, 14.0], "garrison": 12},
+    {"id": "b_a", "type": "village", "owner": 0, "pos": [32.0, 9.8], "garrison": 8},
+    {"id": "b_b", "type": "village", "owner": 0, "pos": [32.0, 18.2], "garrison": 8},
+    {"id": "b_home", "type": "village", "owner": 2, "pos": [37.6, 14.0], "garrison": 20}
+  ],
+  "roads": [
+    ["r_home", "r_a"],
+    ["r_home", "r_b"],
+    ["r_a", "r_t"],
+    ["r_b", "r_t"],
+    ["r_a", "r_f"],
+    ["r_f", "mid_n"],
+    ["r_t", "mid"],
+    ["r_b", "mid_s"],
+    ["mid_n", "mid"],
+    ["mid", "mid_s"],
+    ["mid_n", "b_b"],
+    ["mid", "b_t"],
+    ["mid_s", "b_f"],
+    ["b_f", "b_a"],
+    ["b_t", "b_a"],
+    ["b_t", "b_b"],
+    ["b_home", "b_a"],
+    ["b_home", "b_b"]
+  ]
+}
