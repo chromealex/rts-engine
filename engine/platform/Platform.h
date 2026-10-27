@@ -79,6 +79,12 @@ void setTitle(const std::string& title);
 // Android, preloaded virtual FS on web, folder next to the executable elsewhere.
 std::string contentRoot();
 bool readContentFile(const std::string& relativePath, std::string& out);
+// Resource packs: `<content>/content.rpak` is mounted automatically; files in packs win over
+// loose files. mountPack adds another pack on top (patch, DLC); path is relative to the content
+// root or absolute. Returns false (and logs why) if the pack can't be opened.
+bool mountPack(const std::string& path);
+// Content hash of the mounted packs (0 when running from loose files) — identifies the data set.
+uint64_t contentPacksHash();
 // Writable per-user directory (settings, saved replays).
 std::string userDataDir();
 // Text clipboard (editor copy/paste). May be a no-op on mobile.

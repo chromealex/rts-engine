@@ -3,6 +3,11 @@
 //   rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>
 //            [--engine <engine dir>] [--out <dir>] [--config Debug|Release]
 //            [--generate-only] [--team <Apple team id>] [--jobs N]
+//            [--no-pack] [--pack-level N]
+//
+// Content (game folder + engine/assets) ships as one compressed resource pack
+// content/content.rpak; --no-pack ships the loose folder instead (debugging). Every build prints
+// a size report and writes it to <out>/<target>/size-report.txt.
 //
 // Outputs (default <project>/../dist/<target>):
 //   macos    <Name>.app                     (universal arm64+x86_64, ad-hoc signed)
@@ -28,6 +33,7 @@
 #include <vector>
 
 #include "engine/data/Json.h"
+#include "engine/pack/PackWriter.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -54,6 +60,9 @@ struct Options {
     fs::path project, engine, out;
     std::string target, config = "Release", team;
     bool generateOnly = false;
+    bool pack = true;
+    int packLevel = 0;        // 0 = by config: 19 for Release, 3 for Debug
+    fs::path packFile;        // built once, shared by all targets
     unsigned jobs = std::max(2u, std::thread::hardware_concurrency());
 };
 
@@ -126,6 +135,63 @@ std::string sanitize(const std::string& s) {
     if (o.empty()) o = "Game";
     return o;
 }
+
+// ------------------------------------------------------------------ content pack
+// Builds <out>/_pack/content.rpak from the game folder and engine assets (once per run).
+fs::path contentPack(Options& o) {
+    if (!o.packFile.empty()) return o.packFile;
+    step("Контент: сборка ресурс-пака");
+    rts::pack::PackWriter w;
+    rts::pack::IgnoreRules rules;
+    std::string err;
+    if (w.addDirectory(o.project.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rules, &err) < 0)
+        die(err);
+    rts::pack::WriteOptions wo;
+    wo.level = o.packLevel ? o.packLevel : (o.config == "Debug" ? 3 : 19);
+    wo.threads = o.jobs;
+    rts::pack::WriteStats st;
+    fs::path out = o.out / "_pack" / "content.rpak";
+    if (!w.write(out.string(), wo, &st, &err)) die(err);
+    for (auto& m : st.warnings) info("предупреждение: " + m);
+    std::string report = rts::pack::sizeReport(st, 15);
+    std::stringstream ss(report);
+    for (std::string line; std::getline(ss, line);) info(line);
+    writeText(o.out / "_pack" / "size-report.txt", report);
+    o.packFile = out;
+    return out;
+}
+
+// Places the content next to a packaged game: content.rpak, or the loose folders with --no-pack.
+void placeContent(Options& o, const fs::path& contentDir) {
+    if (o.pack) {
+        fs::create_directories(contentDir);
+        fs::copy_file(contentPack(o), contentDir / "content.rpak", fs::copy_options::overwrite_existing);
+    } else {
+        copyDir(o.project, contentDir);
+        copyDir(o.engine / "engine" / "assets", contentDir / "engine");
+    }
+}
+
+// Size of a built artifact (file or folder), for the report at the end of each target.
+uint64_t treeSize(const fs::path& p) {
+    std::error_code ec;
+    if (fs::is_regular_file(p, ec)) return fs::file_size(p, ec);
+    uint64_t n = 0;
+    for (auto it = fs::recursive_directory_iterator(p, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+        if (it->is_regular_file(ec)) n += it->file_size(ec);
+    return n;
+}
+void reportSize(const Options& o, const std::string& target, const fs::path& artifact) {
+    std::error_code ec;
+    if (!fs::exists(artifact, ec)) return;
+    std::string line = target + ": " + artifact.filename().string() + " — " + rts::pack::formatBytes(treeSize(artifact));
+    info("размер: " + line);
+    std::string report = line + "\n";
+    if (o.pack && fs::exists(o.out / "_pack" / "size-report.txt", ec)) report += "\nконтент (content.rpak):\n" + readText(o.out / "_pack" / "size-report.txt");
+    writeText(o.out / target / "size-report.txt", report);
+}
+
+std::string packVar(Options& o) { return o.pack ? " -DRTS_CONTENT_PACK=" + quote(contentPack(o)) : std::string(" -DRTS_CONTENT_PACK="); }
 
 std::string cmakeVars(const Game& g, const Options& o, const fs::path& content, const fs::path& gen) {
     std::string s;
@@ -217,7 +283,7 @@ void exportSources(const Options& o, const fs::path& dst) {
 }
 
 // ------------------------------------------------------------------ targets
-void buildMac(const Game& g, const Options& o) {
+void buildMac(const Game& g, Options& o) {
     if (std::string(kHost) != "macos") { info("macOS-сборка возможна только на Mac — пропускаю"); return; }
     fs::path out = o.out / "macos", bdir = o.out / "_build" / "macos", gen = bdir / "gen";
     fs::create_directories(gen);
@@ -233,7 +299,7 @@ void buildMac(const Game& g, const Options& o) {
 
     step("macOS: конфигурация CMake");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, gen) + " -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, gen) + packVar(o) + " -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
     step("macOS: сборка");
     mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config + " -j " + std::to_string(o.jobs));
     fs::path app = bdir / (g.exe + ".app");
@@ -245,15 +311,16 @@ void buildMac(const Game& g, const Options& o) {
     step("macOS: подпись (ad-hoc)");
     run("codesign --force --deep --sign - " + quote(out / (g.exe + ".app")));
     info("Готово: " + (out / (g.exe + ".app")).string());
+    reportSize(o, "macos", out / (g.exe + ".app"));
 }
 
-void buildIOS(const Game& g, const Options& o) {
+void buildIOS(const Game& g, Options& o) {
     if (std::string(kHost) != "macos") { info("Xcode-проект для iOS генерируется только на Mac — пропускаю"); return; }
     fs::path out = o.out / "ios", src = out / "src", xc = out / "xcode", gen = out / "gen";
     step("iOS: экспорт исходников и контента");
     fs::remove_all(src);
     exportSources(o, src);
-    copyDir(o.project, src / "content");
+    placeContent(o, src / "content");
     step("iOS: иконка (asset catalog)");
     fs::path icon = masterIcon(g, o, gen);
     fs::path set = gen / "Assets.xcassets" / "AppIcon.appiconset";
@@ -266,6 +333,7 @@ void buildIOS(const Game& g, const Options& o) {
 
     step("iOS: генерация Xcode-проекта");
     std::string vars = cmakeVars(g, o, src / "content", gen);
+    vars += o.pack ? " -DRTS_CONTENT_PACK=" + quote(src / "content" / "content.rpak") : std::string(" -DRTS_CONTENT_PACK=");
     if (!o.team.empty()) vars += " -DRTS_APPLE_TEAM_ID=" + o.team;
     mustRun("cmake -S " + quote(src) + " -B " + quote(xc) + " -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0" + vars);
     fs::path proj = xc / "RTSEngine.xcodeproj";
@@ -302,7 +370,7 @@ std::string newestSubdir(const fs::path& dir) {
     return v.back();
 }
 
-void buildAndroid(const Game& g, const Options& o) {
+void buildAndroid(const Game& g, Options& o) {
     fs::path out = o.out / "android", proj = out / g.exe;
     step("Android: генерация Gradle-проекта");
     fs::remove_all(proj);
@@ -335,8 +403,7 @@ void buildAndroid(const Game& g, const Options& o) {
         writeText(proj / rel, t);
     }
     exportSources(o, proj / "app" / "src" / "main" / "cpp");
-    copyDir(o.project, proj / "app" / "src" / "main" / "assets" / "content");
-    copyDir(o.engine / "engine" / "assets", proj / "app" / "src" / "main" / "assets" / "content" / "engine");
+    placeContent(o, proj / "app" / "src" / "main" / "assets" / "content");
     fs::path gen = out / "_gen";
     fs::create_directories(gen);
     fs::path icon = masterIcon(g, o, gen);
@@ -372,6 +439,7 @@ void buildAndroid(const Game& g, const Options& o) {
         fs::copy_file(apk, out / (g.exe + "-" + variant + ".apk"), fs::copy_options::overwrite_existing);
         info("APK: " + (out / (g.exe + "-" + variant + ".apk")).string());
         info("Установка: adb install -r " + quote(out / (g.exe + "-" + variant + ".apk")));
+        reportSize(o, "android", out / (g.exe + "-" + variant + ".apk"));
     }
 }
 
@@ -383,13 +451,13 @@ fs::path findEmcmake() {
     return {};
 }
 
-void buildWeb(const Game& g, const Options& o) {
+void buildWeb(const Game& g, Options& o) {
     fs::path emcmake = findEmcmake();
     if (emcmake.empty()) { info("Emscripten не найден (emsdk). Установите: https://emscripten.org/docs/getting_started — пропускаю"); return; }
     fs::path out = o.out / "web", bdir = o.out / "_build" / "web";
     step("Web: конфигурация (Emscripten)");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun(quote(emcmake) + " cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, {}));
+    mustRun(quote(emcmake) + " cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, {}) + packVar(o));
     step("Web: сборка");
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::create_directories(out);
@@ -399,20 +467,22 @@ void buildWeb(const Game& g, const Options& o) {
     std::string html = readText(out / "index.html");
     writeText(out / "index.html", replaceAll(html, "<title>RTSEngine</title>", "<title>" + g.name + "</title>"));
     info("Готово: " + out.string() + "  (проверка: python3 -m http.server -d " + quote(out) + ")");
+    reportSize(o, "web", out);
 }
 
-void buildWindows(const Game& g, const Options& o) {
+void buildWindows(const Game& g, Options& o) {
     fs::path out = o.out / "windows";
     if (std::string(kHost) == "windows") {
         fs::path bdir = o.out / "_build" / "windows";
         step("Windows: конфигурация (Visual Studio)");
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, o.project, {}));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, o.project, {}) + packVar(o));
         step("Windows: сборка");
         mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config);
         fs::path dir = bdir / o.config;
         fs::remove_all(out / g.exe);
         copyDir(dir, out / g.exe);
         info("Готово: " + (out / g.exe / (g.exe + ".exe")).string());
+        reportSize(o, "windows", out / g.exe);
         return;
     }
     // Cross-compile with MinGW-w64 if present (brew install mingw-w64 / apt install mingw-w64).
@@ -427,50 +497,51 @@ void buildWindows(const Game& g, const Options& o) {
                       "set(CMAKE_EXE_LINKER_FLAGS_INIT \"-static -static-libgcc -static-libstdc++\")\n");
         step("Windows: кросс-компиляция (" + cxx + ")");
         std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, o.project, {}));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, o.project, {}) + packVar(o));
         mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
         fs::remove_all(out / g.exe);
         fs::create_directories(out / g.exe);
         fs::copy_file(bdir / (g.exe + ".exe"), out / g.exe / (g.exe + ".exe"), fs::copy_options::overwrite_existing);
-        copyDir(o.project, out / g.exe / "content");
-        copyDir(o.engine / "engine" / "assets", out / g.exe / "content" / "engine");
+        placeContent(o, out / g.exe / "content");
         info("Готово: " + (out / g.exe / (g.exe + ".exe")).string());
+        reportSize(o, "windows", out / g.exe);
         return;
     }
     step("Windows: экспорт исходников (компилятор для Windows не найден)");
     fs::path src = out / (g.exe + "-src");
     fs::remove_all(src);
     exportSources(o, src);
-    copyDir(o.project, src / "content");
-    copyDir(o.engine / "engine" / "assets", src / "content" / "engine");
+    placeContent(o, src / "content");
+    std::string packArg = o.pack ? " -DRTS_CONTENT_PACK=%~dp0content\\content.rpak" : "";
     writeText(src / "build.bat",
               "@echo off\r\nrem Requires Visual Studio 2022 (Desktop C++) and CMake.\r\n"
               "cmake -S . -B build -A x64 -DRTS_CONTENT_DIR=%~dp0content -DRTS_GAME_NAME=\"" + g.name + "\" -DRTS_GAME_ID=" + g.id +
-              " -DRTS_GAME_EXECUTABLE=" + g.exe + " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF || exit /b 1\r\n"
+              " -DRTS_GAME_EXECUTABLE=" + g.exe + packArg + " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF || exit /b 1\r\n"
               "cmake --build build --target rts_client --config Release || exit /b 1\r\n"
               "echo Done: build\\Release\\" + g.exe + ".exe\r\n");
     info("Исходники: " + src.string() + " — на Windows запустите build.bat.");
     info("Или установите кросс-компилятор: brew install mingw-w64");
 }
 
-void buildLinux(const Game& g, const Options& o) {
+void buildLinux(const Game& g, Options& o) {
     if (std::string(kHost) != "linux") { info("Linux-сборка выполняется на Linux — пропускаю"); return; }
     fs::path out = o.out / "linux", bdir = o.out / "_build" / "linux";
     step("Linux: сборка");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, {}));
+    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, {}) + packVar(o));
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::remove_all(out / g.exe);
     fs::create_directories(out / g.exe);
     fs::copy_file(bdir / g.exe, out / g.exe / g.exe, fs::copy_options::overwrite_existing);
-    copyDir(o.project, out / g.exe / "content");
-    copyDir(o.engine / "engine" / "assets", out / g.exe / "content" / "engine");
+    placeContent(o, out / g.exe / "content");
     info("Готово: " + (out / g.exe / g.exe).string());
+    reportSize(o, "linux", out / g.exe);
 }
 
 void usage() {
     std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
-                 "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n";
+                 "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
+                 "                [--no-pack] [--pack-level 1..22]\n";
 }
 
 } // namespace
@@ -489,6 +560,8 @@ int main(int argc, char** argv) {
         else if (a == "--team") o.team = next();
         else if (a == "--jobs") o.jobs = unsigned(std::atoi(next().c_str()));
         else if (a == "--generate-only") o.generateOnly = true;
+        else if (a == "--no-pack") o.pack = false;
+        else if (a == "--pack-level") o.packLevel = std::atoi(next().c_str());
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { usage(); return 2; }
     }
