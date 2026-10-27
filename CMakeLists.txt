@@ -33,6 +33,7 @@ option(RTS_BUILD_HEADLESS "Build headless runner" ${RTS_DESKTOP})
 option(RTS_BUILD_CLIENT "Build the game client" ON)
 option(RTS_BUILD_EDITOR "Build the map editor" ${RTS_DESKTOP})
 option(RTS_BUILD_TOOLS "Build rtsbuild packager" ${RTS_DESKTOP})
+option(RTS_BUILD_SERVER "Build the network game server and the network bot client" ${RTS_DESKTOP})
 
 # Game being built (rtsbuild overrides these).
 set(RTS_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/skirmish" CACHE PATH "Game content folder (contains game.json)")
@@ -78,6 +79,32 @@ add_library(rts_game STATIC
     modules/rts/RtsTriggers.cpp
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
+
+# ---------------------------------------------------------------------------
+# Networking: transports (UDP, WebSocket), rollback lockstep session, lobby client.
+# The server part needs no game data and no graphics.
+# ---------------------------------------------------------------------------
+add_library(rts_net STATIC
+    engine/net/Loopback.cpp
+    engine/net/Socket.cpp
+    engine/net/Reliable.cpp
+    engine/net/Udp.cpp
+    engine/net/WebSocket.cpp
+    engine/net/Protocol.cpp
+    engine/net/Rollback.cpp
+    engine/net/NetClient.cpp)
+target_link_libraries(rts_net PUBLIC rts_engine)
+if(WIN32)
+    target_link_libraries(rts_net PUBLIC ws2_32)
+elseif(EMSCRIPTEN)
+    target_link_options(rts_net PUBLIC -lwebsocket.js)
+endif()
+
+add_library(rts_net_server STATIC
+    engine/net/server/Server.cpp
+    engine/net/server/ServerMatch.cpp
+    engine/net/server/Matchmaker.cpp)
+target_link_libraries(rts_net_server PUBLIC rts_net)
 
 # ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
@@ -235,8 +262,19 @@ if(RTS_BUILD_HEADLESS)
     target_link_libraries(rts_headless PRIVATE rts_game)
 endif()
 
+if(RTS_BUILD_SERVER)
+    add_executable(rts_server apps/server/main.cpp)
+    target_link_libraries(rts_server PRIVATE rts_net_server)
+    add_executable(rts_netbot apps/netbot/main.cpp)
+    target_link_libraries(rts_netbot PRIVATE rts_net rts_game)
+endif()
+
 if(RTS_BUILD_TESTS)
     enable_testing()
+    add_executable(rts_net_tests tests/net_tests.cpp)
+    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game)
+    target_compile_definitions(rts_net_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
