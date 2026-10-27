@@ -769,6 +769,93 @@ TEST(mech_dungeon_hand_slap_possess) {
     CHECK(!gs.possessed[1].valid() && !(w.get<game::Unit>(gob).flags & game::kUnitPossessed));
 }
 
+// ------------------------------------------------------------------ territory war (State.io style)
+
+static const char* kTerritoryRules = R"({
+  "resources": {"money": {"start": 300}},
+  "territory": {"claimBy": "units", "startFromRegions": true},
+  "victory": {"mode": "territory", "share": 0.8},
+  "playerAbilities": [{"id": "strike", "cost": {"money": 50}, "cooldown": 2, "charges": {"max": 1, "rearmCost": {"money": 20}, "rearmTime": 3},
+                       "effects": [{"type": "damage", "amount": 500, "radius": 2}]}],
+  "techs": {"drill": {"cost": {"money": 10, "time": 0.5}, "levels": 3, "costGrowth": 1, "effects": [{"type": "soldier", "stat": "damage", "mul": 1.5}]}},
+  "types": {
+    "barracks": {"structure": {"footprint": [2, 2]}, "capturable": true, "health": {"max": 800}, "supply": 10,
+                 "autoTrain": {"unit": "soldier", "interval": 1}, "researches": ["drill"]},
+    "town": {"structure": {"footprint": [2, 2]}, "capturable": true, "invulnerable": true},
+    "soldier": {"move": {"speed": 3}, "health": {"max": 50}, "weapons": [{"range": 1.5, "damage": 6}], "cost": {"supply": 1}, "claim": {"radius": 1.5, "rate": 4}},
+    "ghost": {"move": {"speed": 1}, "invulnerable": true}
+  }})";
+
+static std::string territoryMap(const std::string& entities, const std::string& regionRow) {
+    std::string regions;
+    for (int y = 0; y < 8; ++y) regions += std::string(y ? "," : "") + "\"" + regionRow + "\"";
+    return flatMap(24, 8, ",\"regions\":{\"rows\":[" + regions + "]},\"entities\":[" + entities + "]");
+}
+
+TEST(mech_territory_front_line_and_contested_cells) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"town","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[21,4]},{"type":"soldier","owner":1,"pos":[8.5,4.5]},{"type":"ghost","owner":2,"pos":[11.5,1.5]})",
+        "AAAAAAAANNNNNNNNNNNNBBBB"));
+    auto& m = mod(*sim);
+    auto& g = m.state(*sim).grid;
+    CHECK(m.territoryOf(*sim, 1) == 64 && m.territoryOf(*sim, 2) == 32 && m.state(*sim).territoryTotal == 192);
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {findType(*sim, "soldier", 1)}; mv.point = {Fixed::fromRatio(23, 2), Fixed{}, Fixed::fromRatio(7, 2)};
+    sim->submit(mv);
+    run(*sim, 8);
+    CHECK(g.territory[size_t(g.index(8, 4))] == 1 && g.territory[size_t(g.index(10, 4))] == 1 && g.territory[size_t(g.index(11, 3))] == 1);
+    CHECK(g.territory[size_t(g.index(11, 1))] == 0);           // contested: an enemy stands there
+    CHECK(g.territory[size_t(g.index(16, 4))] == 0);           // only cells touching own territory near the unit
+    CHECK(m.territoryOf(*sim, 1) > 64);
+}
+
+TEST(mech_territory_autotrain_capture_victory) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"barracks","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[16,4]})", "AAAAAAAAAAAABBBBBBBBBBBB"));
+    auto& m = mod(*sim);
+    run(*sim, 5);
+    int soldiers = countType(*sim, "soldier", 1);
+    CHECK(soldiers >= 3 && soldiers <= 10);
+    bool captured = false;
+    for (int i = 0; i < 20 * 120 && sim->result() == 0; ++i) {
+        sim->step();
+        for (auto& ev : sim->events()) if (ev.type == game::kEvCaptured && ev.player == 1) captured = true;
+    }
+    CHECK(countType(*sim, "soldier", 1) <= 10);                // population cap
+    CHECK(captured && sim->world().get<Owner>(findType(*sim, "town", 1)).player == 1);
+    CHECK(sim->result() == 1);                                 // 80% share
+    CHECK(m.territoryOf(*sim, 1) * 10 >= m.state(*sim).territoryTotal * 8);
+}
+
+TEST(mech_player_abilities_and_tech_levels) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"town","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[21,4]},{"type":"soldier","owner":2,"pos":[12,4]},{"type":"soldier","owner":2,"pos":[12.5,5]},{"type":"barracks","owner":1,"pos":[6,4]})",
+        "AAAAAAAAAAAABBBBBBBBBBBB"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    gs.players[1].stock[0] = Fixed::fromInt(300);
+    Command a; a.player = 1; a.type = game::kCmdPlayerAbility; a.param = 0; a.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromRatio(9, 2)};
+    CHECK(m.canUsePlayerAbility(*sim, 1, 0));
+    sim->submit(a);
+    run(*sim, 0.2);
+    CHECK(countType(*sim, "soldier", 2) == 0);
+    CHECK(gs.playerAbilities[1][0].charges == 0 && !m.canUsePlayerAbility(*sim, 1, 0));
+    Fixed money = stockOf(*sim, 1, "money");
+    run(*sim, 3.5);
+    CHECK(gs.playerAbilities[1][0].charges == 1 && stockOf(*sim, 1, "money") == money - Fixed::fromInt(20)); // rearmed for a cost
+    // repeatable tech: 3 levels, cost 10, 20, 30, effects compound
+    Entity br = findType(*sim, "barracks", 1);
+    int drill = m.rules().findTech("drill");
+    for (int lv = 0; lv < 4; ++lv) {
+        Command r; r.player = 1; r.type = game::kCmdResearch; r.units = {br}; r.param = drill;
+        sim->submit(r);
+        run(*sim, 1);
+    }
+    CHECK(gs.players[1].researched[size_t(drill)] == 3);
+    CHECK(stockOf(*sim, 1, "money") == money - Fixed::fromInt(20 + 60));
+    Entity sol = findType(*sim, "soldier", 1);
+    CHECK(sol.valid() && m.stat(*sim, sol, game::Stat::Damage) == Fixed::parse("3.375"));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

@@ -166,12 +166,46 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             break;
         }
     }
+    // player abilities: strike the densest enemy group (offensive effects only)
+    if (!R.playerAbilities.empty() && sim.tick() % 40 == 0) {
+        for (size_t ai = 0; ai < R.playerAbilities.size(); ++ai) {
+            const PlayerAbilityDef& a = R.playerAbilities[ai];
+            bool offensive = false;
+            Fixed radius = Fixed::fromInt(2);
+            for (auto& ef : a.effects) {
+                if ((ef.kind == EffectKind::Damage || ef.kind == EffectKind::Stun) && ef.enemies) offensive = true;
+                radius = fxMax(radius, ef.radius);
+            }
+            if (!offensive || a.target != TargetKind::Point || !m.canUsePlayerAbility(sim, player_, int(ai))) continue;
+            std::vector<std::pair<Vec3, int>> foes, mine;
+            w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+                if (u.hp.raw <= 0 || R.types[u.type].invulnerable || (u.flags & kUnitInHand)) return;
+                int value = R.types[u.type].structure ? 3 : 1;
+                if (o.player == player_ || (o.player != 0 && o.player != kHostileNeutral && sim.allied(o.player, player_))) mine.push_back({tr.pos, value});
+                else if (m.hostile(sim, player_, o.player) && o.player != kHostileNeutral) foes.push_back({tr.pos, value});
+            });
+            if (foes.size() > 300) foes.resize(300);
+            int bestScore = 0;
+            Vec3 best{};
+            for (auto& [p, v] : foes) {
+                int score = 0, own = 0;
+                for (auto& [q, qv] : foes) if (dist(p, q) <= radius) score += qv;
+                for (auto& [q, qv] : mine) if (dist(p, q) <= radius + Fixed::fromInt(1)) own += qv;
+                if (own * 2 >= score) continue;
+                if (score > bestScore) { bestScore = score; best = p; }
+            }
+            if (bestScore < 3) continue;
+            Command c; c.type = kCmdPlayerAbility; c.param = int64_t(ai); c.point = best; send(sim, c);
+            break;
+        }
+    }
     // research: something affordable every now and then
     if (!R.techs.empty() && sim.tick() > lastTechTick_ + 300) {
         w.each<Production, Unit, Owner>([&](Entity e, Production& p, Unit& u, Owner& o) {
             if (o.player != player_ || !p.queue.empty() || (u.flags & kUnitUnderConstruction) || sim.tick() <= lastTechTick_ + 300) return;
             for (uint16_t k : R.types[u.type].researches) {
-                if (eco.researched[k] || eco.researching[k] || !m.requirementsMet(sim, player_, R.techs[k].requires_) || !m.canAfford(sim, player_, R.techs[k].cost)) continue;
+                if (int(eco.researched[k]) >= R.techs[k].levels || eco.researching[k] || !m.requirementsMet(sim, player_, R.techs[k].requires_) ||
+                    !m.canAfford(sim, player_, m.techCost(sim, player_, k))) continue;
                 Command c; c.type = kCmdResearch; c.units = {e}; c.param = k; send(sim, c);
                 lastTechTick_ = sim.tick();
                 break;
