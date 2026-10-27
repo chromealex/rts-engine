@@ -290,6 +290,271 @@ TEST(replay_file_roundtrip) {
     std::remove(path);
 }
 
+// ------------------------------------------------------------------ generic mechanics (inline mini games)
+
+static std::unique_ptr<Simulation> makeSimJson(const std::string& rules, const std::string& map, uint64_t seed = 1) {
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(Json::parse(rules), Json::parse(map));
+    return sim;
+}
+static int countType(Simulation& sim, const std::string& type, uint8_t owner, bool completeOnly = true) {
+    int t = mod(sim).rules().findType(type), n = 0;
+    sim.world().each<game::Unit, Owner>([&](Entity, game::Unit& u, Owner& o) {
+        if (u.type == t && o.player == owner && u.hp.raw > 0 && (!completeOnly || !(u.flags & game::kUnitUnderConstruction))) ++n;
+    });
+    return n;
+}
+static void run(Simulation& sim, double seconds) { for (int i = 0; i < int(seconds * sim.tickRate()); ++i) sim.step(); }
+static Fixed stockOf(Simulation& sim, uint8_t p, const std::string& res) { return mod(sim).state(sim).players[p].stock[size_t(mod(sim).rules().findResource(res))]; }
+static std::string flatMap(int w, int h, const std::string& extra, const std::string& players = R"([{"name":"A","team":1},{"name":"B","team":2}])") {
+    std::string rows;
+    for (int y = 0; y < h; ++y) rows += std::string(y ? "," : "") + "\"" + std::string(size_t(w), '.') + "\"";
+    return "{\"size\":[" + std::to_string(w) + "," + std::to_string(h) + "],\"players\":" + players + ",\"terrain\":{\"rows\":[" + rows + "]}" + extra + "}";
+}
+
+TEST(mech_field_harvest_and_regrow) {
+    const char* rules = R"({
+      "resources": {"ore": {"field": true, "regrow": 2, "cellMax": 50}},
+      "types": {
+        "refinery": {"structure": {"footprint": [2, 2]}, "dropoff": ["ore"], "health": {"max": 500}},
+        "harvester": {"move": {"speed": 3}, "gather": {"ore": {"carry": 40, "time": 2}}, "health": {"max": 200}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"fields":[{"resource":"ore","center":[20,8],"radius":2,"amount":50}],
+        "entities":[{"type":"refinery","owner":1,"pos":[6,8]},{"type":"harvester","owner":1,"pos":[9,8]},{"type":"refinery","owner":2,"pos":[28,2]}])"));
+    auto& g = mod(*sim).state(*sim).grid;
+    Fixed fieldBefore{};
+    for (auto a : g.fieldAmt) fieldBefore += a;
+    Command c; c.player = 1; c.type = game::kCmdSmart; c.units = {findType(*sim, "harvester", 1)}; c.point = {Fixed::fromInt(20), Fixed{}, Fixed::fromInt(8)};
+    sim->submit(c);
+    run(*sim, 40);
+    CHECK(stockOf(*sim, 1, "ore") >= Fixed::fromInt(40));        // at least one full load delivered
+    Fixed fieldAfter{};
+    for (auto a : g.fieldAmt) fieldAfter += a;
+    CHECK(fieldAfter < fieldBefore + Fixed::fromInt(200));        // harvested (regrowth is capped per cell)
+}
+
+TEST(mech_power_deficit_slows_and_disables) {
+    const char* rules = R"({
+      "resources": {"credits": {"start": 5000}, "power": {"kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense"]}},
+      "types": {
+        "plant": {"structure": {"footprint": [2, 2]}, "provides": {"power": 10}},
+        "tower": {"tags": ["defense"], "structure": {"footprint": [1, 1]}, "consumes": {"power": 8}, "weapons": [{"range": 6, "damage": 10}]},
+        "dummy": {"move": {"speed": 1}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(24, 12, R"(,"entities":[{"type":"plant","owner":1,"pos":[3,3]},{"type":"tower","owner":1,"pos":[8,3]},{"type":"tower","owner":1,"pos":[10,3]},{"type":"dummy","owner":2,"pos":[20,8]}])"));
+    run(*sim, 1);
+    auto& eco = mod(*sim).state(*sim).players[1];
+    CHECK(eco.productionMult == Fixed::fromRatio(1, 2));
+    Entity tower = findType(*sim, "tower", 1);
+    CHECK(sim->world().get<game::Unit>(tower).flags & game::kUnitDisabled);
+    CHECK(stockOf(*sim, 1, "power") == Fixed::fromInt(-6));       // provided - used
+}
+
+TEST(mech_progressive_cost_stalls_without_income) {
+    const char* rules = R"({
+      "costModel": "progressive", "victory": "keyUnits",
+      "resources": {"metal": {"kind": "flow", "start": 10, "storage": 1000}},
+      "types": {
+        "commander": {"move": {"speed": 2}, "builds": ["lab"], "buildPower": 1, "key": true},
+        "lab": {"structure": {"footprint": [2, 2]}, "cost": {"metal": 100, "time": 10}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(24, 12, R"(,"entities":[{"type":"commander","owner":1,"pos":[4,6]},{"type":"commander","owner":2,"pos":[20,6]}])"));
+    Command c; c.player = 1; c.type = game::kCmdBuild; c.units = {findType(*sim, "commander", 1)}; c.param = mod(*sim).rules().findType("lab");
+    c.point = {Fixed::fromInt(8), Fixed{}, Fixed::fromInt(6)};
+    sim->submit(c);
+    run(*sim, 30);
+    Entity lab = findType(*sim, "lab", 1);
+    CHECK(lab.valid());
+    auto* con = sim->world().tryGet<game::Construction>(lab);
+    CHECK(con != nullptr);                                         // stalled: only 10 of 100 metal available
+    CHECK(con && con->progress <= Fixed::fromRatio(11, 100) && con->progress >= Fixed::fromRatio(9, 100));
+}
+
+TEST(mech_cliffs_need_ramps) {
+    std::string rows, levels;
+    for (int y = 0; y < 12; ++y) {
+        std::string r(24, '.'), l(24, '0');
+        for (int x = 12; x < 24; ++x) l[size_t(x)] = '1';
+        if (y == 10) r[12] = '/', r[11] = '/';
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+        levels += std::string(y ? "," : "") + "\"" + l + "\"";
+    }
+    const char* rules = R"({"victory": "noUnits", "types": {"marine": {"move": {"speed": 3}}}})";
+    std::string map = "{\"size\":[24,12],\"players\":[{\"name\":\"A\"},{\"name\":\"B\"}],\"terrain\":{\"rows\":[" + rows + "],\"levels\":[" + levels + "]},"
+                      "\"entities\":[{\"type\":\"marine\",\"owner\":1,\"pos\":[6,2]},{\"type\":\"marine\",\"owner\":2,\"pos\":[20,2]}]}";
+    auto sim = makeSimJson(rules, map);
+    auto& g = mod(*sim).state(*sim).grid;
+    CHECK(!g.canStep(11, 2, 12, 2, game::kLayerGround));         // cliff edge
+    CHECK(g.canStep(11, 10, 12, 10, game::kLayerGround));        // ramp
+    Entity m = findType(*sim, "marine", 1);
+    Command c; c.player = 1; c.type = game::kCmdMove; c.units = {m}; c.point = {Fixed::fromInt(18), Fixed{}, Fixed::fromInt(2)};
+    sim->submit(c);
+    run(*sim, 20);
+    Vec3 p = sim->world().get<Transform>(m).pos;
+    CHECK((p - Vec3{Fixed::fromInt(18), Fixed{}, Fixed::fromInt(2)}).xz().length() < Fixed::fromInt(2)); // arrived via the ramp
+    CHECK(mod(*sim).levelAt(*sim, p) == 1);
+}
+
+TEST(mech_sidebar_and_morph) {
+    const char* rules = R"({
+      "resources": {"cash": {"start": 2000}},
+      "types": {
+        "yard": {"structure": {"footprint": [3, 3]}, "produces": ["barracks"]},
+        "barracks": {"structure": {"footprint": [2, 2]}, "cost": {"cash": 100, "time": 2}},
+        "drone": {"move": {"speed": 3}, "builds": ["pool"], "buildMode": "morph"},
+        "pool": {"structure": {"footprint": [2, 2]}, "cost": {"cash": 100, "time": 2}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"yard","owner":1,"pos":[5,5]},{"type":"drone","owner":1,"pos":[5,12]},{"type":"yard","owner":2,"pos":[27,8]}])"));
+    Entity yard = findType(*sim, "yard", 1);
+    Command t; t.player = 1; t.type = game::kCmdTrain; t.units = {yard}; t.param = mod(*sim).rules().findType("barracks");
+    sim->submit(t);
+    Command b; b.player = 1; b.type = game::kCmdBuild; b.units = {findType(*sim, "drone", 1)}; b.param = mod(*sim).rules().findType("pool");
+    b.point = {Fixed::fromInt(10), Fixed{}, Fixed::fromInt(12)};
+    sim->submit(b);
+    run(*sim, 3);
+    CHECK(sim->world().get<game::Production>(yard).ready == mod(*sim).rules().findType("barracks"));
+    Command pl; pl.player = 1; pl.type = game::kCmdPlace; pl.units = {yard}; pl.point = {Fixed::fromInt(10), Fixed{}, Fixed::fromInt(5)};
+    sim->submit(pl);
+    run(*sim, 5);
+    CHECK(countType(*sim, "barracks", 1) == 1);
+    CHECK(countType(*sim, "drone", 1) == 0);                     // morphed
+    CHECK(countType(*sim, "pool", 1) == 1);
+}
+
+TEST(mech_hero_levels_and_stun) {
+    const char* rules = R"({
+      "types": {
+        "hero": {"move": {"speed": 3}, "health": {"max": 500}, "weapons": [{"range": 1.5, "damage": 30, "cooldown": 1}],
+                 "energy": {"max": 100, "start": 100}, "hero": {"levels": [20, 60], "perLevel": [{"stat": "maxHp", "add": 50}]},
+                 "abilities": [{"id": "bolt", "target": "unit", "range": 6, "cooldown": 5, "energy": 20,
+                                "effects": [{"type": "stun", "duration": 3}, {"type": "damage", "amount": 10}]}]},
+        "grunt": {"move": {"speed": 2}, "health": {"max": 60}, "weapons": [{"range": 1, "damage": 5}], "xp": 25}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(24, 12, R"(,"entities":[{"type":"hero","owner":1,"pos":[6,6]},{"type":"grunt","owner":2,"pos":[9,6]},{"type":"grunt","owner":2,"pos":[20,10]}])"));
+    Entity hero = findType(*sim, "hero", 1), grunt = findType(*sim, "grunt", 2);
+    Command a; a.player = 1; a.type = game::kCmdAbility; a.units = {hero}; a.param = 0; a.target = grunt;
+    sim->submit(a);
+    run(*sim, 0.5);
+    CHECK(sim->world().get<game::Buffs>(grunt).stunUntil > sim->tick());
+    Command k; k.player = 1; k.type = game::kCmdAttack; k.units = {hero}; k.target = grunt;
+    sim->submit(k);
+    run(*sim, 10);
+    CHECK(!sim->world().alive(grunt));
+    CHECK(sim->world().get<game::Hero>(hero).level == 2);
+    CHECK(mod(*sim).stat(*sim, hero, game::Stat::MaxHp) == Fixed::fromInt(550));
+}
+
+static const char* kLaneRules = R"({
+  "resources": {"crystal": {"start": 100}},
+  "waveClock": 10,
+  "autoBuild": {"pool": ["barracks"], "cost": {"crystal": 50}, "growth": 0.5},
+  "victory": {"mode": "score", "seconds": 120},
+  "types": {
+    "core": {"key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 2000}, "income": {"crystal": 5}, "weapons": [{"range": 5, "damage": 8}]},
+    "barracks": {"structure": {"footprint": [2, 2]}, "cost": {"time": 3}, "waveSpawn": {"unit": "trooper", "count": 2}, "upgrades": ["barracks2"]},
+    "barracks2": {"structure": {"footprint": [2, 2]}, "cost": {"crystal": 40, "time": 3}, "waveSpawn": {"unit": "trooper", "count": 3}},
+    "trooper": {"move": {"speed": 2.5}, "health": {"max": 60}, "weapons": [{"range": 3, "damage": 6, "cooldown": 1}]}
+  }})";
+static std::string laneMap() {
+    return flatMap(20, 48, R"(,"entities":[{"type":"core","owner":1,"pos":[10.5,42.5]},{"type":"core","owner":2,"pos":[10.5,5.5]}])");
+}
+
+TEST(mech_lane_autobuild_waves_score) {
+    auto sim = makeSimJson(kLaneRules, laneMap());
+    Command c; c.player = 1; c.type = game::kCmdAutoBuild; c.param = -1;
+    sim->submit(c);
+    run(*sim, 5);
+    CHECK(countType(*sim, "barracks", 1) == 1);                  // placed automatically next to the core
+    CHECK(stockOf(*sim, 1, "crystal") < Fixed::fromInt(100));
+    Entity br = findType(*sim, "barracks", 1);
+    Vec3 bp = sim->world().get<Transform>(br).pos, cp = sim->world().get<Transform>(findType(*sim, "core", 1)).pos;
+    CHECK((bp - cp).xz().length() < Fixed::fromInt(8));
+    CHECK(bp.z > cp.z - Fixed::fromInt(1));                      // behind the core (away from the enemy)
+    run(*sim, 6);
+    CHECK(countType(*sim, "trooper", 1) == 2);                   // first wave released at t=10s
+    Command up; up.player = 1; up.type = game::kCmdUpgrade; up.units = {br}; up.param = mod(*sim).rules().findType("barracks2");
+    sim->submit(up);
+    run(*sim, 5);
+    CHECK(countType(*sim, "barracks2", 1) == 1);
+}
+
+TEST(mech_lane_bots_deterministic) {
+    auto play = [](uint64_t seed) {
+        auto sim = makeSimJson(kLaneRules, laneMap(), seed);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, seed);
+        for (int t = 0; t < 20 * 130 && sim->result() == 0; ++t) { for (auto& b : bots) b.update(*sim); sim->step(); }
+        return std::pair{sim->checksum(), sim->result()};
+    };
+    auto a = play(4), b = play(4);
+    CHECK(a == b);
+    CHECK(a.second != 0); // score victory decides the match at 120 s at the latest
+}
+
+TEST(mech_triggers) {
+    const char* rules = R"({
+      "resources": {"gold": {"start": 0}},
+      "types": {"scout": {"move": {"speed": 4}}, "hq": {"structure": {"footprint": [2, 2]}}},
+      "triggers": [
+        {"id": "salary", "event": {"type": "every", "seconds": 5}, "forEachPlayer": true, "actions": [{"type": "give", "resource": "gold", "amount": 10}]},
+        {"id": "relic", "event": {"type": "enterArea", "area": "relic", "player": 1},
+         "actions": [{"type": "message", "text": "Реликвия найдена"}, {"type": "setVariable", "name": "relic", "value": 1}]},
+        {"id": "win", "event": {"type": "variable", "name": "relic", ">=": 1}, "conditions": [{"type": "resource", "player": 1, "resource": "gold", ">=": 20}],
+         "actions": [{"type": "victory", "player": 1}]}
+      ]})";
+    auto sim = makeSimJson(rules, flatMap(32, 12, R"(,"areas":{"relic":[26,4,4,4]},"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"scout","owner":1,"pos":[4,6]},{"type":"hq","owner":2,"pos":[29,10]}])"));
+    run(*sim, 5.2);
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(10) && stockOf(*sim, 2, "gold") == Fixed::fromInt(10));
+    Command c; c.player = 1; c.type = game::kCmdMove; c.units = {findType(*sim, "scout", 1)}; c.point = {Fixed::fromInt(28), Fixed{}, Fixed::fromInt(6)};
+    sim->submit(c);
+    bool message = false;
+    for (int i = 0; i < 20 * 15 && sim->result() == 0; ++i) {
+        sim->step();
+        for (auto& ev : sim->events()) if (ev.type == game::kEvMessage) message = true;
+    }
+    CHECK(message);
+    CHECK(sim->result() == 1);
+}
+
+TEST(mech_regions_claim) {
+    const char* rules = R"({
+      "resources": {"food": {"start": 300}},
+      "regions": {"claimCost": {"food": 100}, "claimCostGrowth": 1},
+      "types": {"hall": {"structure": {"footprint": [2, 2]}}}
+    })";
+    std::string regions;
+    for (int y = 0; y < 8; ++y) regions += std::string(y ? "," : "") + "\"AAAAAAAABBBBBBBBCCCCCCCC\"";
+    auto sim = makeSimJson(rules, flatMap(24, 8, ",\"regions\":{\"rows\":[" + regions + "]},\"entities\":[{\"type\":\"hall\",\"owner\":1,\"pos\":[3,3]},{\"type\":\"hall\",\"owner\":2,\"pos\":[21,3]}]"));
+    auto& gs = mod(*sim).state(*sim);
+    CHECK(gs.regionCount == 3 && gs.regionOwner[0] == 1 && gs.regionOwner[2] == 2);
+    Command c; c.player = 1; c.type = game::kCmdClaim; c.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromInt(4)};
+    sim->submit(c);
+    run(*sim, 1);
+    CHECK(gs.regionOwner[1] == 1);
+    CHECK(stockOf(*sim, 1, "food") == Fixed::fromInt(200));
+    Command c2 = c; c2.player = 2; // no longer free
+    sim->submit(c2);
+    run(*sim, 1);
+    CHECK(gs.regionOwner[1] == 1);
+}
+
+TEST(mech_survive_waves) {
+    const char* rules = R"({
+      "victory": {"mode": "survive", "seconds": 30},
+      "types": {
+        "wall": {"structure": {"footprint": [2, 2]}, "health": {"max": 5000}},
+        "zombie": {"move": {"speed": 2}, "health": {"max": 20}, "weapons": [{"range": 1, "damage": 2}]},
+        "tower": {"structure": {"footprint": [1, 1]}, "weapons": [{"range": 7, "damage": 20, "cooldown": 0.5}], "health": {"max": 3000}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"waves":[{"time": 5, "player": 2, "at": [28, 8], "spawn": [{"type": "zombie", "count": 4}], "every": 8, "repeats": 2}],
+       "entities":[{"type":"wall","owner":1,"pos":[4,8]},{"type":"tower","owner":1,"pos":[7,8]}])"));
+    run(*sim, 6);
+    CHECK(countType(*sim, "zombie", 2) == 4);
+    run(*sim, 26);
+    CHECK(sim->result() == 1);                                   // survived to 30 s
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

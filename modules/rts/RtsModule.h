@@ -13,6 +13,7 @@
 #include "../../engine/sim/Simulation.h"
 #include "RtsData.h"
 #include "RtsMap.h"
+#include "RtsTriggers.h"
 
 namespace rts::game {
 
@@ -46,6 +47,7 @@ enum GameEvent : uint16_t {
     kEvSpawned = 1, kEvDied, kEvAttack, kEvHit, kEvTrainStarted, kEvTrainDone, kEvBuildPlaced, kEvBuildDone,
     kEvGathered, kEvCaptured, kEvPlayerDefeated, kEvNotEnough, kEvResearched, kEvLevelUp, kEvAbility, kEvMiss,
     kEvReadyToPlace, kEvSold, kEvRegionClaimed, kEvWave, kEvLowPower, kEvUpgraded,
+    kEvMessage,       // trigger message: value = index into GameState::trig.messages, player 0 = everyone
 };
 
 // ---------------------------------------------------------------- components
@@ -152,6 +154,7 @@ struct PlayerEconomy {
     Fixed gatherMult = Fixed::fromInt(1);      // upkeep
     int regions = 0;
     std::string faction;
+    std::vector<uint8_t> typeDisabled;         // per type: switched off by triggers
 };
 
 struct WaveDef {
@@ -189,7 +192,8 @@ struct GameState {
     uint32_t nextWaveTick = 0;
     std::vector<Fixed> score;            // per team
     std::vector<int> autoBuilt;          // per player
-    int winnerTeam = -1;                 // set by timed modes
+    int winnerTeam = -1;                 // set by timed modes / triggers
+    TriggerState trig;
 };
 
 // ---------------------------------------------------------------- module
@@ -202,6 +206,7 @@ public:
     int result(Simulation& sim) override;
 
     const Rules& rules() const { return rules_; }
+    const TriggerSet& triggers() const { return triggers_; }
     GameState& state(Simulation& sim) { return *sim.world().resource<GameState>(); }
 
     // ---- queries shared with AI, client and editor
@@ -264,6 +269,9 @@ private:
     void sysVision(Simulation& sim);
     void sysWaves(Simulation& sim);
     void sysVictory(Simulation& sim);
+    void sysTriggers(Simulation& sim);
+    void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
+    bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
     bool runOrder(Simulation& sim, Entity e, Order& o);
     bool runGather(Simulation& sim, Entity e, Order& o);
@@ -273,6 +281,7 @@ private:
     void grantKill(Simulation& sim, Entity victim, uint8_t killer);
 
     Rules rules_;
+    TriggerSet triggers_;
 };
 
 } // namespace rts::game
