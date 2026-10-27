@@ -656,6 +656,12 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
 
+    if (cmd.type == kCmdSurrender) {
+        pi->alive = false; // hashed with the player table; result() then reports the remaining team
+        sim.emit({kEvPlayerDefeated, cmd.player, kNullEntity, kNullEntity, kDefeatSurrendered, {}});
+        return;
+    }
+
     if (cmd.type == kCmdClaim) {
         int ri = regionAt(sim, cmd.point);
         std::vector<Amount> cost;
