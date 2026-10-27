@@ -23,6 +23,8 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("fields", [this](Simulation& s) { sysFields(s); });
     sim.addSystem("production", [this](Simulation& s) { sysProduction(s); });
     sim.addSystem("construction", [this](Simulation& s) { sysConstruction(s); });
+    if (rules_.settlers) sim.addSystem("settlers", [this](Simulation& s) { sysSettlers(s); });
+    if (rules_.lanes.enabled) sim.addSystem("lanes", [this](Simulation& s) { sysLanes(s); });
     sim.addSystem("garrison", [this](Simulation& s) { sysGarrison(s); });
     sim.addSystem("waves", [this](Simulation& s) { sysWaves(s); });
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
@@ -210,6 +212,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
 
     // placed entities
     std::vector<std::pair<std::string, Entity>> ids;
+    std::vector<Entity> placed;
     for (auto& ej : map["entities"].items()) {
         int t = rules_.findType(ej.getStr("type"));
         if (t < 0) throw std::runtime_error("map entity: unknown type '" + ej.getStr("type") + "'");
@@ -217,6 +220,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         if (owner == -1) owner = kHostileNeutral;
         if ((owner < 0 || owner > int(np)) && owner != kHostileNeutral) throw std::runtime_error("map entity: owner out of range");
         Entity e = spawn(sim, uint16_t(t), uint8_t(owner), readPos(ej["pos"]));
+        placed.push_back(e);
         if (auto* gg = w.tryGet<Garrison>(e)) gg->count = int(ej.getInt("garrison", 0));
         if (auto* rs = w.tryGet<ResourceStock>(e); rs && ej.has("amount")) rs->amount = ej.getFx("amount");
         if (ej.has("id")) ids.emplace_back(ej.getStr("id"), e);
@@ -266,6 +270,30 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         if (std::find(gs.wavePlayers.begin(), gs.wavePlayers.end(), wd.player) == gs.wavePlayers.end()) gs.wavePlayers.push_back(wd.player);
     }
     setupDungeon(sim, map);
+    if (rules_.buildingStorage) {
+        // starting goods are put into the storehouses (map entities may also set "inventory": {res: n})
+        for (size_t p = 1; p < gs.players.size(); ++p)
+            for (size_t r = 0; r < rules_.resources.size(); ++r) {
+                if (!isGood(uint16_t(r))) continue;
+                Fixed amt = gs.players[p].stock[r];
+                gs.players[p].stock[r] = Fixed{};
+                if (amt.raw > 0) addResource(sim, uint8_t(p), uint16_t(r), amt);
+            }
+        size_t k = 0;
+        for (auto& ej : map["entities"].items()) {
+            ++k;
+            if (!ej.has("inventory")) continue;
+            Entity e = placed[k - 1];
+            auto* inv = w.tryGet<Inventory>(e);
+            if (!inv) throw std::runtime_error("map entity: 'inventory' on a type without one");
+            for (auto& [rid, v] : ej["inventory"].members()) {
+                int ri = rules_.findResource(rid);
+                if (ri < 0) throw std::runtime_error("map entity inventory: unknown resource '" + rid + "'");
+                inv->have[size_t(ri)] += v.fx();
+            }
+        }
+        syncStorehouses(sim);
+    }
 }
 
 void RtsModule::footprintAt(const UnitType& t, Vec3 c, int& x0, int& y0) {
@@ -318,6 +346,12 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (t.portalInterval.raw > 0) w.add<PortalState>(e);
     if (t.autoTrainUnit != kNoType) w.add<AutoTrainState>(e);
     if (t.claimRate.raw > 0) w.add<ClaimState>(e);
+    const size_t nres = rules_.resources.size();
+    const bool needsInventory = t.storeCapacity.raw > 0 || t.recipe.enabled ||
+                                (underConstruction && rules_.buildingStorage && upfrontCost(t.cost).size() != t.cost.size());
+    if (needsInventory) w.add<Inventory>(e, Inventory{std::vector<Fixed>(nres), std::vector<Fixed>(nres), std::vector<Fixed>(nres)});
+    if (t.recipe.enabled) w.add<Workshop>(e);
+    if (t.carrierCapacity.raw > 0) w.add<Carrier>(e);
     w.add<Buffs>(e);
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
@@ -376,7 +410,11 @@ bool RtsModule::pay(Simulation& sim, uint8_t player, const std::vector<Amount>& 
     auto& gs = state(sim);
     if (player == 0 || player >= gs.players.size()) return true;
     auto& eco = gs.players[player];
-    for (auto& c : cost) if (rules_.resources[c.res].kind != ResourceKind::Capacity) eco.stock[c.res] -= c.value;
+    for (auto& c : cost) {
+        if (rules_.resources[c.res].kind == ResourceKind::Capacity) continue;
+        eco.stock[c.res] -= c.value;
+        if (isGood(c.res)) withdrawGoods(sim, player, c.res, c.value); // goods leave the storehouses
+    }
     eco.supplyUsed += supply; // reserved until the next economy pass
     return true;
 }
@@ -391,6 +429,20 @@ void RtsModule::addResource(Simulation& sim, uint8_t player, uint16_t res, Fixed
     auto& gs = state(sim);
     if (player == 0 || player >= gs.players.size()) return;
     auto& eco = gs.players[player];
+    if (isGood(res)) {
+        // goods go into storehouses; the stock is their sum
+        Fixed before = Fixed{};
+        sim.world().each<Inventory, Unit, Owner>([&](Entity, Inventory& inv, Unit& u, Owner& o) {
+            if (o.player == player && rules_.types[u.type].storeCapacity.raw > 0) before += inv.have[res];
+        });
+        depositGoods(sim, player, res, amount);
+        Fixed after = Fixed{};
+        sim.world().each<Inventory, Unit, Owner>([&](Entity, Inventory& inv, Unit& u, Owner& o) {
+            if (o.player == player && rules_.types[u.type].storeCapacity.raw > 0) after += inv.have[res];
+        });
+        eco.stock[res] += after - before;
+        return;
+    }
     eco.stock[res] += amount;
     const ResourceDef& rd = rules_.resources[res];
     bool capped = rd.kind == ResourceKind::Flow || (rd.kind == ResourceKind::Stock && rd.capped);
@@ -672,6 +724,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
+    if (cmd.type == kCmdBuildRoad || cmd.type == kCmdConnectRoad) { applySettlersCommand(sim, cmd); return; }
 
     if (cmd.type == kCmdSurrender) {
         pi->alive = false; // hashed with the player table; result() then reports the remaining team
@@ -770,7 +823,19 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!canTrain(sim, cmd.player, ut) || int(prod->queue.size()) >= rules_.maxQueue) break;
             if (prod->ready != kNoType && rules_.types[ut].structure) break; // place the finished one first
             if (t.chargesMax > 0 && prod->charges <= 0) break;
+            Entity recruit;
+            if (rules_.types[ut].trainFrom != kNoType) {
+                // made from an idle own unit standing near the producer (recruit + goods)
+                Vec3 at = w.get<Transform>(e).pos;
+                w.each<Unit, Owner, Transform>([&](Entity r, Unit& ru, Owner& ro, Transform& rt) {
+                    if (recruit.valid() || ro.player != cmd.player || ru.type != rules_.types[ut].trainFrom || ru.hp.raw <= 0 || (ru.flags & (kUnitInHand | kUnitPossessed))) return;
+                    if (auto* ord = w.tryGet<Orders>(r); ord && !ord->queue.empty()) return;
+                    if (dist2D(rt.pos, at) <= Fixed::fromInt(15)) recruit = r;
+                });
+                if (!recruit.valid()) break;
+            }
             if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, rules_.types[ut].cost, rules_.types[ut].supplyUsed)) break;
+            if (recruit.valid()) { Unit& ru = w.get<Unit>(recruit); ru.hp = Fixed{}; ru.flags |= kUnitSilent; }
             if (rules_.costModel == CostModel::Progressive && !canAfford(sim, cmd.player, {}, rules_.types[ut].supplyUsed)) {
                 sim.emit({kEvNotEnough, cmd.player, kNullEntity, kNullEntity, 255, {}});
                 break;
@@ -796,7 +861,9 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         }
         case kCmdCancelTrain: {
             if (auto* c = w.tryGet<Construction>(e)) {
-                refund(sim, cmd.player, t.cost, fxMin(kOne, c->paid));
+                refund(sim, cmd.player, upfrontCost(t.cost), fxMin(kOne, c->paid));
+                if (auto* inv = w.tryGet<Inventory>(e)) // delivered materials go back to the storehouses
+                    for (size_t r = 0; r < inv->have.size(); ++r) if (inv->have[r].raw > 0) addResource(sim, cmd.player, uint16_t(r), inv->have[r]);
                 w.get<Unit>(e).hp = Fixed{};
                 w.get<Unit>(e).flags |= kUnitSilent;
                 break;
@@ -1026,6 +1093,13 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     for (auto t : gs.score) h.fx(t);
     for (auto& [k, v] : gs.trig.vars) { h.str(k); h.fx(v); }
     if (rules_.dungeon) hashDungeon(sim, h);
+    if (rules_.settlers) hashSettlers(sim, h);
+    if (rules_.lanes.enabled) {
+        h.u32(gs.laneSignature); h.u32(uint32_t(gs.lanes.size()));
+        for (auto& l : gs.lanes) { h.u32(uint32_t(l.points.size())); if (!l.points.empty()) h.v3(l.points[l.points.size() / 2]); }
+        w.each<LaneWalker>([&](Entity e, LaneWalker& lw) { h.u64(e.packed()); h.i32(lw.lane); h.u32(lw.pos); h.u32(lw.reverse); });
+        for (auto rr : gs.laneRoundRobin) h.u32(rr);
+    }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
     for (size_t i = 0; i < gs.grid.fieldAmt.size(); i += 7) h.fx(gs.grid.fieldAmt[i]);

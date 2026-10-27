@@ -856,6 +856,152 @@ TEST(mech_player_abilities_and_tech_levels) {
     CHECK(sol.valid() && m.stat(*sim, sol, game::Stat::Damage) == Fixed::parse("3.375"));
 }
 
+// ------------------------------------------------------------------ settlers economy (Knights and Merchants style)
+
+static const char* kSettlersRules = R"({
+  "storage": "buildings",
+  "roadNetwork": {"cost": {"stone": 0.1}, "speed": 1.5},
+  "resources": {"wood": {}, "planks": {"start": 10}, "stone": {"start": 20}, "food": {}, "sword": {"start": 2}, "gold": {"global": true, "start": 100}},
+  "types": {
+    "store": {"structure": {"footprint": [2, 2]}, "storehouse": {"capacity": 500}, "health": {"max": 1000}},
+    "tree": {"invulnerable": true, "structure": {"footprint": [1, 1]}, "resourceNode": {"resource": "wood", "amount": 50}},
+    "woodcutter": {"structure": {"footprint": [2, 2]}, "recipe": {"out": {"wood": 1}, "time": 2, "from": "wood", "radius": 8}, "cost": {"planks": 2, "gold": 10, "time": 2}},
+    "sawmill": {"structure": {"footprint": [2, 2]}, "recipe": {"in": {"wood": 1}, "out": {"planks": 2}, "time": 2}},
+    "inn": {"structure": {"footprint": [2, 2]}},
+    "barracks": {"structure": {"footprint": [2, 2]}, "produces": ["soldier"]},
+    "serf": {"move": {"speed": 4}, "carrier": {"capacity": 1}},
+    "builder": {"move": {"speed": 3}, "builds": ["woodcutter"]},
+    "recruit": {"move": {"speed": 3}},
+    "soldier": {"move": {"speed": 3}, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 5}], "trainFrom": "recruit", "cost": {"sword": 1, "time": 1},
+                "needs": {"hunger": {"interval": 3, "at": "inn", "time": 0.5, "cost": {"food": 1}, "starve": 10}}}
+  }})";
+
+static Command connectCmd(Simulation& sim, std::vector<Entity> units) {
+    (void)sim;
+    Command c; c.player = 1; c.type = game::kCmdConnectRoad; c.units = std::move(units);
+    return c;
+}
+
+TEST(mech_settlers_chain_carriers_roads) {
+    auto sim = makeSimJson(kSettlersRules, flatMap(32, 14, R"(,"entities":[
+        {"type":"store","owner":1,"pos":[4,6]},{"type":"woodcutter","owner":1,"pos":[14,6]},{"type":"sawmill","owner":1,"pos":[9,11]},
+        {"type":"tree","owner":0,"pos":[18.5,4.5]},{"type":"tree","owner":0,"pos":[18.5,8.5]},
+        {"type":"serf","owner":1,"pos":[6,9]},{"type":"serf","owner":1,"pos":[7,9]},{"type":"store","owner":2,"pos":[29,2]}])"));
+    auto& m = mod(*sim);
+    World& w = sim->world();
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(10));           // starting goods are in the storehouse
+    CHECK(w.get<game::Inventory>(findType(*sim, "store", 1)).have[size_t(m.rules().findResource("planks"))] == Fixed::fromInt(10));
+    Entity wc = findType(*sim, "woodcutter", 1), saw = findType(*sim, "sawmill", 1), store = findType(*sim, "store", 1);
+    sim->submit(connectCmd(*sim, {wc}));                                 // the sawmill stays off the road network
+    run(*sim, 20);
+    CHECK(m.roadConnected(*sim, wc, store) && !m.roadConnected(*sim, saw, store));
+    CHECK(stockOf(*sim, 1, "stone") < Fixed::fromInt(20));               // roads cost stone
+    CHECK(stockOf(*sim, 1, "wood") >= Fixed::fromInt(2));                 // wood hauled to the store
+    CHECK(w.get<game::Inventory>(saw).have[size_t(m.rules().findResource("wood"))] == Fixed{}); // unconnected: no deliveries
+    sim->submit(connectCmd(*sim, {saw}));
+    Fixed planks = stockOf(*sim, 1, "planks");
+    run(*sim, 30);
+    CHECK(m.roadConnected(*sim, saw, store));
+    CHECK(stockOf(*sim, 1, "planks") > planks);                          // wood -> planks -> store
+    int trees = countType(*sim, "tree", 0);
+    CHECK(trees == 2);
+    Fixed left{};
+    w.each<game::ResourceStock>([&](Entity, game::ResourceStock& rs) { left += rs.amount; });
+    CHECK(left < Fixed::fromInt(100));                                    // raw producer depletes the trees
+}
+
+TEST(mech_settlers_construction_materials_and_recruits) {
+    auto sim = makeSimJson(kSettlersRules, flatMap(32, 14, R"(,"entities":[
+        {"type":"store","owner":1,"pos":[4,6]},{"type":"barracks","owner":1,"pos":[4,11]},{"type":"inn","owner":1,"pos":[9,3]},
+        {"type":"builder","owner":1,"pos":[7,7]},{"type":"serf","owner":1,"pos":[6,9]},{"type":"recruit","owner":1,"pos":[6,12]},
+        {"type":"store","owner":2,"pos":[29,2]}])"));
+    auto& m = mod(*sim);
+    World& w = sim->world();
+    Command b; b.player = 1; b.type = game::kCmdBuild; b.units = {findType(*sim, "builder", 1)}; b.param = m.rules().findType("woodcutter");
+    b.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromInt(7)};
+    sim->submit(b);
+    run(*sim, 2);
+    Entity site = findType(*sim, "woodcutter", 1);
+    CHECK(site.valid() && w.has<game::Construction>(site));
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(90));               // coins paid at once, planks delivered
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(10));
+    run(*sim, 3);
+    CHECK(w.has<game::Construction>(site));                              // no road yet: nothing delivered, no progress past 0
+    sim->submit(connectCmd(*sim, {site}));
+    run(*sim, 25);
+    CHECK(countType(*sim, "woodcutter", 1) == 1);                         // built once the planks arrived
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(8));
+    // soldiers are made from a recruit plus a sword
+    Entity br = findType(*sim, "barracks", 1);
+    Command t; t.player = 1; t.type = game::kCmdTrain; t.units = {br}; t.param = m.rules().findType("soldier");
+    sim->submit(t);
+    sim->submit(t);                                                      // second one: no recruit left
+    run(*sim, 2);
+    CHECK(countType(*sim, "soldier", 1) == 1 && countType(*sim, "recruit", 1) == 0);
+    CHECK(stockOf(*sim, 1, "sword") == Fixed::fromInt(1));
+    // food: no food in the store -> the soldier starves
+    Entity sol = findType(*sim, "soldier", 1);
+    run(*sim, 5);
+    CHECK(w.get<game::Unit>(sol).hp < Fixed::fromInt(100));
+    m.addResource(*sim, 1, uint16_t(m.rules().findResource("food")), Fixed::fromInt(5));
+    CHECK(stockOf(*sim, 1, "food") == Fixed::fromInt(5));
+    run(*sim, 4);
+    CHECK(stockOf(*sim, 1, "food") < Fixed::fromInt(5));                  // ate at the inn
+}
+
+// ------------------------------------------------------------------ Mushroom Wars 2 lanes
+
+TEST(mech_lanes_generated_and_followed) {
+    const char* rules = R"({
+      "lanes": {"left": 2, "right": 1, "spacing": 0.4},
+      "types": {
+        "village": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "garrison": {"max": 30, "unit": "shroom", "interval": 1}},
+        "shroom": {"move": {"speed": 3}, "entersGarrison": true}
+      }})";
+    std::string rows;
+    for (int y = 0; y < 16; ++y) {
+        std::string r(32, '.');
+        if (y >= 4 && y <= 11) for (int x = 15; x <= 16; ++x) r[size_t(x)] = '#';   // a rock between the villages
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+    }
+    std::string map = R"({"size":[32,16],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":[)" + rows + R"(]},
+        "entities":[{"type":"village","owner":1,"pos":[5,8],"garrison":20},{"type":"village","owner":0,"pos":[27,8],"garrison":0},{"type":"village","owner":2,"pos":[16,1],"garrison":5}]})";
+    auto sim = makeSimJson(rules, map);
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    World& w = sim->world();
+    run(*sim, 0.1);
+    CHECK(gs.lanes.size() == 3 * 4);                                     // 3 pairs x (1 main + 2 left + 1 right)
+    Entity a, b;
+    w.each<game::Garrison, Owner, Transform>([&](Entity e, game::Garrison&, Owner& o, Transform& t) {
+        if (o.player == 1) a = e;
+        if (o.player == 0 && t.pos.x > Fixed::fromInt(20)) b = e;
+    });
+    auto lanes = m.lanesBetween(*sim, a, b);
+    CHECK(lanes.size() == 4 && gs.lanes[size_t(lanes[0])].offset == 0);
+    bool clear = true, apart = false;
+    for (int li : lanes) {
+        const auto& L = gs.lanes[size_t(li)];
+        for (auto& p : L.points) {
+            int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+            if (cx >= 15 && cx <= 16 && cy >= 4 && cy <= 11) clear = false;  // never through the rock
+        }
+        if (L.offset != 0 && (L.points[L.points.size() / 2] - gs.lanes[size_t(lanes[0])].points[gs.lanes[size_t(lanes[0])].points.size() / 2]).xz().length() > Fixed::fromRatio(3, 10)) apart = true;
+    }
+    CHECK(clear && apart);
+    Command c; c.player = 1; c.type = game::kCmdSend; c.units = {a}; c.target = b; c.param = 50;
+    sim->submit(c);
+    run(*sim, 1.5);
+    std::vector<int> used(gs.lanes.size(), 0);
+    int walkers = 0;
+    w.each<game::LaneWalker>([&](Entity, game::LaneWalker& lw) { used[size_t(lw.lane)]++; ++walkers; });
+    int lanesUsed = 0;
+    for (int li : lanes) if (used[size_t(li)]) ++lanesUsed;
+    CHECK(walkers > 4 && lanesUsed == 4);                               // round-robin over all lanes
+    run(*sim, 15);
+    CHECK(w.get<Owner>(b).player == 1);                                  // arrived and captured the empty village
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

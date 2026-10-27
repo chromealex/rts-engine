@@ -37,6 +37,7 @@ struct ResourceDef {
     // Capacity deficit (used > provided)
     Fixed deficitProductionMult = Fixed::fromRatio(1, 2);
     uint64_t deficitDisableTags = 0; // objects with any of these tags stop working
+    bool global = false;      // with rules.storage == "buildings": stays a player-wide stock (coins), not a good
 };
 
 // ------------------------------------------------------------------ stats / modifiers
@@ -114,6 +115,8 @@ struct NeedDef {
     bool enabled = false;
     Fixed interval = Fixed::fromInt(60);   // seconds until the need becomes active
     int16_t room = -1;                     // room type that satisfies it
+    uint16_t structure = kNoType;          // ...or an own structure of this type (inn)
+    Fixed starve{};                        // hp lost per second while the need is active
     Fixed time = Fixed::fromInt(4);        // seconds spent in the room
     std::vector<Amount> cost;              // paid when satisfied (food)
 };
@@ -132,6 +135,16 @@ struct NeedsDef {
     Fixed leaveAfter = Fixed::fromInt(30);
 };
 // Portal recruitment requirements: rooms of a minimum size and resources in stock.
+// Production chain step (Knights and Merchants / Settlers): inputs from the building's inventory,
+// outputs into it; raw producers have no inputs and may deplete a resource node/field nearby.
+struct RecipeDef {
+    bool enabled = false;
+    std::vector<Amount> in, out;
+    Fixed time = Fixed::fromInt(8);
+    int16_t fromRes = -1;                  // depletes nodes / field cells of this resource within radius
+    Fixed radius = Fixed::fromInt(8);
+    int buffer = 2;                        // inputs kept / outputs held, in cycles
+};
 struct AttractDef {
     std::vector<std::pair<uint16_t, int>> rooms;   // room type, min cells (player total)
     std::vector<Amount> resources;                 // min stock
@@ -240,6 +253,11 @@ struct UnitType {
     AttractDef attract;
     Fixed portalInterval{};                    // >0: portal: recruits attracted creatures
     std::vector<uint16_t> portalPool;          // empty: every attractable type
+    // settlers economy
+    Fixed storeCapacity{};                     // >0: storehouse (general goods buffer)
+    RecipeDef recipe;
+    Fixed carrierCapacity{};                   // >0: carrier hauling goods between buildings
+    uint16_t trainFrom = kNoType;              // training consumes an idle own unit of this type (recruit)
     uint16_t autoTrainUnit = kNoType;          // continuous production into the field
     Fixed autoTrainInterval = Fixed::fromInt(5);
     Json view;
@@ -322,6 +340,16 @@ struct HandRules {
 
 struct PossessionRules { bool enabled = false; std::vector<Amount> cost, drain; };
 
+struct RoadNetworkRules {
+    bool enabled = false;
+    std::vector<Amount> cost;                  // per road cell
+    Fixed speed = Fixed::fromRatio(3, 2);      // movement multiplier on road cells
+    bool required = true;                      // deliveries only between buildings on one road network
+};
+
+// Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
+struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing = Fixed::fromRatio(35, 100); };
+
 // Player-level abilities (not tied to a unit): nukes, air strikes, reinforcements.
 struct PlayerAbilityDef {
     std::string id, name;
@@ -364,6 +392,10 @@ struct Rules {
     HandRules hand;
     PossessionRules possession;
     std::vector<PlayerAbilityDef> playerAbilities;
+    bool buildingStorage = false;              // "storage": "buildings": goods live in building inventories
+    RoadNetworkRules roadNetwork;
+    LaneRules lanes;
+    bool settlers = false;                     // any settlers-economy mechanic present
     bool dungeon = false;                      // any dungeon / territory mechanic present (systems run)
 
     int findRoom(const std::string& id) const;

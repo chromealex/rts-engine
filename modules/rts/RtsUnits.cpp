@@ -194,7 +194,7 @@ bool RtsModule::runBuild(Simulation& sim, Entity e, Order& o) {
         stopMoving(sim, e);
         const uint8_t owner = w.get<Owner>(e).player;
         if (!canPlace(sim, owner, uint16_t(o.param), o.point, e)) return true;
-        if (rules_.costModel == CostModel::Upfront && !pay(sim, owner, bt.cost, {})) return true;
+        if (rules_.costModel == CostModel::Upfront && !pay(sim, owner, upfrontCost(bt.cost), {})) return true; // goods are delivered later
         const BuildMode mode = t.buildMode;
         Entity s = placeStructure(sim, owner, uint16_t(o.param), o.point, e, false); // invalidates references
         if (mode == BuildMode::Morph) {
@@ -320,6 +320,8 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         return runClaimCell(sim, e, o);
     case OrderType::Need:
         return runNeed(sim, e, o);
+    case OrderType::Haul:
+        return runHaul(sim, e, o);
     case OrderType::Repair: {
         if (!w.alive(o.target) || !w.has<Unit>(o.target)) return true;
         Unit& tu = w.get<Unit>(o.target);
@@ -361,6 +363,11 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
     case OrderType::Enter: {
         if (!w.alive(o.target)) return true;
         Transform& tr = w.get<Transform>(e);
+        if (o.state == 3) {
+            if (!runLaneWalk(sim, e, o)) return false;
+            o.state = 1;
+            if (m) stopMoving(sim, e);
+        }
         if (o.state == 2 && m && !m->roadPath.empty()) {
             GameState& gs = state(sim);
             if (!m->moving) {
@@ -462,6 +469,8 @@ void RtsModule::sysMovement(Simulation& sim) {
         const UnitType& t = rules_.types[u.type];
         if (m.goalRadius.raw > 0 && dist2D(tr.pos, m.goal) <= m.goalRadius) { m.moving = false; m.path.clear(); return; }
         Fixed step = stat(sim, e, Stat::Speed) * dt;
+        if (rules_.roadNetwork.enabled && g.inside(g.cellX(tr.pos.x), g.cellY(tr.pos.z)) && (g.flags[size_t(g.index(g.cellX(tr.pos.x), g.cellY(tr.pos.z)))] & kCellRoad))
+            step = step * rules_.roadNetwork.speed;
         const bool ignoreGrid = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison); // road walkers pass through buildings
         while (m.pathPos < m.path.size() && step.raw > 0) {
             Vec3 wp = m.path[m.pathPos];
@@ -492,6 +501,7 @@ void RtsModule::sysMovement(Simulation& sim) {
     std::vector<Push> pushes;
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (u.flags & kUnitInHand) return;
+        if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];
         Vec3 acc{};
         bool any = false;
