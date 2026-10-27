@@ -55,6 +55,19 @@ public:
     virtual int result(Simulation& sim) = 0;
 };
 
+// Everything that changes while the simulation runs (rollback netcode saves one per tick).
+// GameModule implementations keep all mutable state in the World; module members are read-only
+// after setup(), so they are not part of the snapshot.
+struct SimSnapshot {
+    World world;
+    Random rng;
+    uint32_t tick = 0;
+    std::map<uint32_t, std::vector<Command>> pending;
+    size_t executedCount = 0;
+    std::vector<PlayerInfo> players;
+    std::map<uint8_t, uint32_t> seqByPlayer;
+};
+
 struct SimConfig {
     uint64_t seed = 1;
     uint32_t tickRate = 20;        // ticks per second
@@ -73,6 +86,15 @@ public:
     // Returns the tick it was scheduled for.
     uint32_t submit(Command cmd);
 
+    // Network play: when a sink is set, submit() hands the command to it (stamped with the
+    // player's next seq) instead of queuing it; the sink returns the tick it will execute on.
+    // The net session feeds confirmed/predicted commands back through inject().
+    using CommandSink = std::function<uint32_t(Command&&)>;
+    void setCommandSink(CommandSink sink) { sink_ = std::move(sink); }
+    bool hasCommandSink() const { return bool(sink_); }
+    // Queue a command exactly as given (tick and seq kept), bypassing the sink.
+    void inject(Command cmd);
+
     // Advance exactly one fixed tick.
     void step();
     // Advance by real time; returns number of ticks executed. Use alpha() for render interpolation.
@@ -80,6 +102,10 @@ public:
     double alpha() const { return accumulator_ * tickRate_; }
 
     uint64_t checksum();
+
+    // Rollback support. loadState() also drops executed commands recorded after the snapshot.
+    void saveState(SimSnapshot& out) const;
+    void loadState(const SimSnapshot& in);
 
     void addSystem(std::string name, SystemFn fn) { systems_.push_back({std::move(name), std::move(fn)}); }
     void emit(const SimEvent& e) { events_.push_back(e); }
@@ -115,6 +141,7 @@ private:
     std::vector<SimEvent> events_;
     std::vector<PlayerInfo> players_;
     std::map<uint8_t, uint32_t> seqByPlayer_;
+    CommandSink sink_;
 };
 
 } // namespace rts
