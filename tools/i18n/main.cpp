@@ -11,6 +11,7 @@
 #include "engine/i18n/Localization.h"
 #include "modules/rts/RtsLocalize.h"
 
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -107,6 +108,53 @@ int checkEngine(const fs::path& assets, int& warnings) {
         auto issues = i18n::check(en, "en", c, tag);
         for (auto& i : issues) if (i.severity == i18n::Issue::Warning) ++warnings;
         errors += report(issues, f.string());
+    }
+    return errors;
+}
+
+// UI documents: every {{ 'key' | tr(lang) }} must exist in `table`; visible text written directly
+// in markup (outside tags and {{ }}) is reported as not localizable.
+int checkMarkup(const fs::path& dir, const i18n::Catalog& table, const std::string& tableName, int& warnings) {
+    if (!fs::exists(dir)) return 0;
+    int errors = 0;
+    std::vector<fs::path> files;
+    for (auto& e : fs::directory_iterator(dir)) if (e.path().extension() == ".rml") files.push_back(e.path());
+    std::sort(files.begin(), files.end());
+    for (auto& f : files) {
+        std::string text;
+        readFile(f, text);
+        for (auto& k : i18n::markupKeys(text))
+            if (!table.find(k)) { std::printf("%s: error: key '%s' is not in %s\n", f.string().c_str(), k.c_str(), tableName.c_str()); ++errors; }
+        // text nodes: between '>' and '<', minus {{ }} expressions and comments
+        // (<title> is the document's internal name, not shown)
+        std::string plain;
+        bool inTag = false, inComment = false, inTitle = false;
+        char quote = 0;
+        for (size_t i = 0; i < text.size(); ++i) {
+            if (inComment) { if (text.compare(i, 3, "-->") == 0) { inComment = false; i += 2; } continue; }
+            if (inTag) {   // attribute values may contain '>' (data-if="a >= 0")
+                if (quote) { if (text[i] == quote) quote = 0; }
+                else if (text[i] == '"' || text[i] == '\'') quote = text[i];
+                else if (text[i] == '>') inTag = false;
+                continue;
+            }
+            if (text.compare(i, 4, "<!--") == 0) { inComment = true; continue; }
+            if (text.compare(i, 7, "<title>") == 0) inTitle = true;
+            if (text.compare(i, 8, "</title>") == 0) inTitle = false;
+            if (text[i] == '<') { inTag = true; plain += ' '; continue; }
+            if (inTitle) continue;
+            if (text.compare(i, 2, "{{") == 0) { size_t e = text.find("}}", i); i = e == std::string::npos ? text.size() : e + 1; continue; }
+            plain += text[i];
+        }
+        std::istringstream words(plain);
+        for (std::string w; words >> w;) {
+            bool letters = false;
+            for (unsigned char c : w) if (std::isalpha(c) || c >= 0x80) letters = true;
+            if (letters && w.find("&amp;") == std::string::npos) {
+                std::printf("%s: warning: hard-coded text '%s' (use {{ 'key' | tr(lang) }})\n", f.string().c_str(), w.c_str());
+                ++warnings;
+            }
+        }
     }
     return errors;
 }
@@ -246,6 +294,16 @@ int main(int argc, char** argv) {
     try {
         if (cmd == "check") {
             int warnings = 0, errors = checkEngine(assets, warnings);
+            i18n::Catalog engineEn;
+            if (fs::exists(assets / "lang" / "en.json")) engineEn.merge(parseFile(assets / "lang" / "en.json"));
+            errors += checkMarkup(assets / "ui", engineEn, "engine/assets/lang/en.json", warnings);
+            if (!project.empty()) {   // a game's ui/ overrides may use engine keys and its own
+                i18n::Catalog t = engineEn;
+                Game g = loadGame(project);
+                fs::path own = g.dir / "lang" / (g.langs.source + ".json");
+                if (fs::exists(own)) t.merge(parseFile(own));
+                errors += checkMarkup(g.dir / "ui", t, "engine en + " + own.string(), warnings);
+            }
             if (!project.empty()) errors += checkGame(loadGame(project), assets, warnings);
             std::printf("%d error(s), %d warning(s)\n", errors, warnings);
             return errors ? 1 : 0;

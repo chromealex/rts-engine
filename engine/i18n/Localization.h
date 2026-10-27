@@ -126,6 +126,9 @@ std::string pseudoLocalize(std::string_view s);
 // Placeholder names used in a pattern, sorted and unique.
 std::vector<std::string> placeholders(std::string_view pattern);
 
+// Keys used by UI markup as  {{ 'menu.map' | tr(lang) }}  (single or double quotes), in order.
+std::vector<std::string> markupKeys(std::string_view markup);
+
 // ---- validation (tools, tests, editor) ----
 struct Issue {
     enum Severity : uint8_t { Error, Warning } severity = Warning;
