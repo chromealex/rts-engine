@@ -248,6 +248,7 @@ void Renderer3D::shutdown() {
 }
 
 void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
+    sceneW_ = fbW; sceneH_ = fbH; // viewport of the main pass (screen or an offscreen target of this size)
     float aspect = fbH > 0 ? float(fbW) / float(fbH) : 1.0f;
     viewProj_ = cam.proj(aspect, dev_->info().clipDepthZeroToOne) * cam.view();
     camPos_ = cam.eye();
@@ -374,7 +375,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
 
     // ---- main pass (left open for the caller's UI)
     dev_->beginPass(screenPass);
-    dev_->setViewport({0, 0, dev_->framebufferWidth(), dev_->framebufferHeight()});
+    dev_->setViewport({0, 0, sceneW_ > 0 ? sceneW_ : dev_->framebufferWidth(), sceneH_ > 0 ? sceneH_ : dev_->framebufferHeight()});
     dev_->setPipeline(litPipe_);
     uploadFrameUniforms(false);
     dev_->setTexture(0, shadowMap_);

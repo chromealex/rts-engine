@@ -3,7 +3,10 @@
 // agent makes goes through `call()`, so the GUI shows it live, records it in the activity feed and
 // in undo history. No UI or rendering in here.
 #pragma once
+#include <atomic>
 #include <functional>
+#include <mutex>
+#include <thread>
 #include <map>
 #include <string>
 #include <vector>
@@ -46,6 +49,7 @@ public:
     struct Op { std::string name, description; Json schema; OpFn fn; bool guiOnly = false; };
 
     Workspace();
+    ~Workspace();
     std::string engineDir;        // engine checkout (games/, docs/, rtsbuild)
     std::string buildTool;        // rtsbuild executable
     Project project;
@@ -68,8 +72,18 @@ public:
     void note(Change c) { changes.push_back(std::move(c)); }
     void log(const std::string& source, const std::string& text, bool error = false);
 
+    // background build (rtsbuild)
+    bool building() const { return building_; }
+    std::string buildLog() { std::lock_guard<std::mutex> lk(buildMutex_); return buildLog_; }
+    void startBuild(const std::string& target, const std::string& config);
+
 private:
     void registerCoreOps();
+    std::thread buildThread_;
+    std::atomic<bool> building_{false};
+    std::mutex buildMutex_;
+    std::string buildLog_;
+    int buildRc_ = 0;
     std::vector<Op> ops_;
 };
 

@@ -116,6 +116,7 @@ private:
     mat4 viewProj_, lightViewProj_;
     float3 camPos_;
     uint32_t drawCalls_ = 0;
+    int sceneW_ = 0, sceneH_ = 0;
 };
 
 } // namespace rts::render

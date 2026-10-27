@@ -208,9 +208,19 @@ if(RTS_BUILD_CLIENT)
     endif()
 endif()
 
+if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
+    # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_game)
+    target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+    if(WIN32)
+        target_link_libraries(rts_editor_core PUBLIC ws2_32)
+    endif()
+endif()
+
 if(RTS_BUILD_EDITOR)
-    add_executable(rts_editor apps/editor/main.cpp apps/editor/MapDoc.cpp apps/editor/Editor.cpp $<TARGET_OBJECTS:rts_runtime>)
-    target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view)
+    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp $<TARGET_OBJECTS:rts_runtime>)
+    target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(APPLE)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
@@ -228,6 +238,10 @@ if(RTS_BUILD_TOOLS)
     add_executable(rtsbuild tools/rtsbuild/main.cpp)
     target_link_libraries(rtsbuild PRIVATE rts_engine)
     target_compile_definitions(rtsbuild PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    # MCP server for AI agents: drives the running editor live, or edits project files directly.
+    add_executable(rtsmcp tools/mcp/main.cpp)
+    target_link_libraries(rtsmcp PRIVATE rts_editor_core)
+    target_compile_definitions(rtsmcp PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
 if(RTS_BUILD_HEADLESS)

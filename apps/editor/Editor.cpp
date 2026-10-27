@@ -1,815 +1,556 @@
+// Editor: lifecycle, docking layout, menus, documents, play-test and viewport rendering.
+// Window contents live in apps/editor/windows/*.cpp; the agent link in EditorAgent.cpp.
 #include "Editor.h"
 #include "imgui.h"
-#include "modules/rts/RtsModule.h"
+#include "imgui_internal.h" // DockBuilder
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
-
-#if defined(_WIN32)
-#define popen _popen
-#define pclose _pclose
-#endif
 
 namespace fs = std::filesystem;
 
 namespace rts::editor {
 
 using namespace render;
-using platform::Event;
-using platform::EventType;
 
-namespace {
-const char* kToolNames[] = {"Выбор (V)", "Объекты (B)", "Рельеф: тип (T)", "Рельеф: высота (E)", "Дороги (R)", "Удаление (X)"};
-struct CellKind { char c; const char* name; };
-const CellKind kCells[] = {{'.', "Земля"}, {'~', "Вода"}, {'#', "Скалы"}, {',', "Земля без стройки"}, {'=', "Брод"}};
+// ============================ viewport ============================
 
-float distPointSegment(float px, float pz, float ax, float az, float bx, float bz) {
-    float dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
-    float t = l2 > 0 ? std::clamp(((px - ax) * dx + (pz - az) * dz) / l2, 0.0f, 1.0f) : 0.0f;
-    float qx = ax + dx * t - px, qz = az + dz * t - pz;
-    return std::sqrt(qx * qx + qz * qz);
-}
-std::string shellQuote(const std::string& s) {
-#if defined(_WIN32)
-    return "\"" + s + "\"";
-#else
-    std::string o = "'";
-    for (char c : s) { if (c == '\'') o += "'\\''"; else o += c; }
-    return o + "'";
-#endif
-}
-} // namespace
-
-Editor::~Editor() { if (buildThread_.joinable()) buildThread_.join(); }
-
-// ============================ project / files ============================
-
-void Editor::loadProject() {
-    projectError_.clear();
-    try {
-        Json manifest = Json::parseFile(opt_.projectDir + "/game.json");
-        gameName_ = manifest.getStr("name", "Game");
-        rulesJson_ = Json::parseFile(opt_.projectDir + "/" + manifest.getStr("rules", "rules.json"));
-        rules_ = game::loadRules(rulesJson_);
-        status_ = "Проект: " + gameName_ + " (" + std::to_string(rules_.types.size()) + " типов объектов)";
-    } catch (const std::exception& e) {
-        projectError_ = e.what();
-        status_ = "Ошибка проекта: " + projectError_;
-        rules_ = game::Rules{};
-        game::UnitType t; t.id = "unknown"; t.structure = true; t.footprintW = t.footprintH = 1;
-        rules_.types.push_back(t);
-    }
-    placeType_ = std::clamp(placeType_, 0, int(rules_.types.size()) - 1);
+void Viewport::ensure(gfx::Device& dev, int pw, int ph) {
+    pw = std::max(pw, 8); ph = std::max(ph, 8);
+    if (pw == w && ph == h && color.valid()) return;
+    release(dev);
+    gfx::TextureDesc td;
+    td.width = pw; td.height = ph;
+    td.renderTarget = true;
+    td.label = "editor viewport";
+    color = dev.createTexture(td);
+    td.format = gfx::PixelFormat::Depth;
+    td.filter = gfx::Filter::Nearest;
+    depth = dev.createTexture(td);
+    w = pw; h = ph;
 }
 
-std::string Editor::mapsDir() const { return (fs::path(opt_.projectDir) / "maps").string(); }
-
-std::string Editor::relativeToProject(const std::string& file) const {
-    std::error_code ec;
-    fs::path rel = fs::relative(fs::path(file), fs::path(opt_.projectDir), ec);
-    return ec ? file : rel.generic_string();
+void Viewport::release(gfx::Device& dev) {
+    if (color.valid()) dev.destroyTexture(color);
+    if (depth.valid()) dev.destroyTexture(depth);
+    color = depth = {};
+    w = h = 0;
 }
+
+void Viewport::image(gfx::Device& dev, float wPts, float hPts) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    originX = p.x; originY = p.y;
+    pointsW = wPts; pointsH = hPts;
+    // GL render targets are bottom-up; Metal's are top-down
+    bool flip = !dev.info().renderTargetFlipY;
+    ImGui::Image(ImTextureRef(ImTextureID(color.id)), ImVec2(wPts, hPts), ImVec2(0, flip ? 1.f : 0.f), ImVec2(1, flip ? 0.f : 1.f));
+    hovered = ImGui::IsItemHovered();
+}
+
+// ============================ lifecycle ============================
 
 void Editor::init(gfx::Device& dev) {
     dev_ = &dev;
-    loadProject();
-    // Font with Cyrillic: the game's own font if it has one, otherwise the engine's (Noto Sans).
-    std::string font = opt_.projectDir + "/fonts/ui.ttf";
+    ws_.engineDir = opt_.engineDir;
+    ws_.buildTool = opt_.buildTool;
+    ws_.clock = [this] { return time_; };
+    std::string font = opt_.engineDir + "/engine/assets/fonts/ui.ttf";
     std::error_code fec;
-    if (!fs::exists(font, fec)) font = opt_.engineDir + "/engine/assets/fonts/ui.ttf";
-    if (!fs::exists(font, fec)) font = "engine/fonts/ui.ttf"; // bundled copy (content root)
+    if (!fs::exists(font, fec)) font = "engine/fonts/ui.ttf";
     ui_.init(dev, font.c_str(), 16.0f);
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    static std::string iniPath = platform::userDataDir() + "/editor_layout.ini";
+    fs::create_directories(platform::userDataDir(), fec);
+    io.IniFilename = iniPath.c_str();
+    resetLayout_ = !fs::exists(iniPath, fec);
     r3d_.init(dev);
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, false));
-    view_.init(dev, rules_);
+    for (auto& f : WindowRegistry::factories()) {
+        windows_.push_back(f());
+        windows_.back()->open = windows_.back()->openByDefault();
+    }
+    registerGuiOps();
+    if (!opt_.projectDir.empty()) {
+        std::string err;
+        if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
+    } else showPicker_ = true;
+    view_.init(dev, rules());
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
-    else newMap(48, 32);
+    else if (doc().data.cells.empty()) newMap(48, 32);
+    ws_.changes.clear();
+    syncGrid();
+    fitScene();
+    gameCam = sceneCam;
+    if (opt_.listenPort > 0) {
+        if (server_.listen(opt_.listenPort)) ws_.log("editor", "Канал для агентов (MCP) открыт на порту " + std::to_string(opt_.listenPort));
+        else ws_.log("editor", "Порт " + std::to_string(opt_.listenPort) + " занят: агенты подключатся к другому окну редактора", true);
+    }
 }
 
 void Editor::shutdown() {
+    if (!dev_) return;
+    sim_.reset();
+    windows_.clear(); // windows release their viewports in their destructors via update()? keep simple: textures die with the device
     view_.shutdown(*dev_);
     r3d_.shutdown();
     ui_.shutdown();
+    dev_ = nullptr;
+}
+
+EditorWindow* Editor::window(const std::string& id) {
+    for (auto& w : windows_) if (id == w->id()) return w.get();
+    return nullptr;
+}
+
+// ============================ documents ============================
+
+void Editor::openGame(const std::string& idOrDir) {
+    std::string err;
+    if (playing()) stopPlay();
+    if (!ws_.openGame(idOrDir, &err)) { status = "Не удалось открыть игру: " + err; return; }
+    ws_.changes.clear();
+    reloadRules();
+    selection = {};
+    showPicker_ = false;
+    fitScene();
+    status = "Игра: " + ws_.project.manifest.getStr("name", idOrDir);
+}
+
+void Editor::reloadRules() {
+    view_.shutdown(*dev_);
+    view_.init(*dev_, rules());
+    gridRevision_ = ~0ull;
+    placeType = std::clamp(placeType, 0, std::max(0, int(rules().types.size()) - 1));
 }
 
 void Editor::newMap(int w, int h) {
-    doc_.reset(w, h);
-    selected_ = -1;
+    doc().reset(w, h);
+    selection = {};
     syncGrid();
-    fitCamera();
-    status_ = "Новая карта " + std::to_string(w) + "x" + std::to_string(h);
+    fitScene();
+    status = "Новая карта " + std::to_string(w) + "x" + std::to_string(h);
 }
 
 void Editor::openMap(const std::string& file) {
     std::string err;
     std::error_code ec;
     std::string norm = fs::weakly_canonical(fs::path(file), ec).string();
-    if (doc_.load(ec ? file : norm, &err)) {
-        status_ = "Открыто: " + relativeToProject(doc_.path);
-        selected_ = -1;
+    if (doc().load(ec ? file : norm, &err)) {
+        status = "Открыто: " + ws_.relative(doc().path);
+        selection = {};
         syncGrid();
-        fitCamera();
-    } else status_ = "Не удалось открыть: " + err;
+        fitScene();
+    } else status = "Не удалось открыть: " + err;
 }
 
 bool Editor::saveMap(const std::string& file) {
     std::string err;
     std::error_code ec;
     fs::create_directories(fs::path(file).parent_path(), ec);
-    if (!doc_.save(file, &err)) { status_ = "Ошибка сохранения: " + err; return false; }
-    status_ = "Сохранено: " + relativeToProject(file);
+    if (!doc().save(file, &err)) { status = "Ошибка сохранения: " + err; return false; }
+    status = "Сохранено: " + ws_.relative(file);
     return true;
 }
 
-void Editor::addCurrentMapToGame() {
-    if (doc_.path.empty()) { status_ = "Сначала сохраните карту"; return; }
-    std::string manifestPath = opt_.projectDir + "/game.json";
-    std::ifstream in(manifestPath);
-    std::stringstream ss; ss << in.rdbuf();
-    std::string text = ss.str(), rel = relativeToProject(doc_.path);
-    if (text.find("\"" + rel + "\"") != std::string::npos) { status_ = "Карта уже есть в game.json"; return; }
-    size_t k = text.find("\"maps\"");
-    size_t br = k == std::string::npos ? k : text.find('[', k);
-    if (br == std::string::npos) { status_ = "В game.json нет массива maps"; return; }
-    std::string entry = "\n    { \"file\": \"" + rel + "\", \"title\": \"" + doc_.data.name + "\" },";
-    size_t next = text.find_first_not_of(" \t\r\n", br + 1);
-    if (next != std::string::npos && text[next] == ']') entry.pop_back();
-    text.insert(br + 1, entry);
-    std::ofstream out(manifestPath, std::ios::binary);
-    out << text;
-    status_ = "Карта добавлена в game.json";
+void Editor::runBuild(const std::string& target) {
+    try {
+        ws_.startBuild(target, buildConfig ? "Release" : "Debug");
+        if (auto* w = window("console")) w->open = true;
+    } catch (const std::exception& e) { status = e.what(); }
 }
 
-// ============================ scene ============================
+// ============================ camera / helpers ============================
 
-void Editor::syncGrid() {
-    const auto& d = doc_.data;
-    if (grid_.w != d.w || grid_.h != d.h) grid_.init(d.w, d.h);
-    for (int i = 0; i < d.w * d.h; ++i) {
-        char c = d.cells[size_t(i)];
-        grid_.flags[size_t(i)] = c == '~' ? uint8_t(game::kCellWater) : c == '#' ? uint8_t(0) : c == ',' ? uint8_t(game::kCellGround | game::kCellNoBuild)
-                               : c == '=' ? uint8_t(game::kCellGround | game::kCellWater | game::kCellNoBuild) : uint8_t(game::kCellGround);
-        grid_.height[size_t(i)] = d.heights[size_t(i)];
-    }
-    view_.buildTerrain(*dev_, grid_);
-    gridDirty_ = false;
+void Editor::fitScene() {
+    const auto& d = doc().data;
+    sceneCam.target = {d.w * 0.5f, 0, d.h * 0.5f};
+    sceneCam.maxDistance = std::max(80.0f, float(std::max(d.w, d.h)) * 2.0f);
+    sceneCam.minDistance = 3.0f;
+    sceneCam.distance = std::clamp(float(std::max(d.w, d.h)) * 0.95f + 8, sceneCam.minDistance, sceneCam.maxDistance);
+    sceneFlying_ = false;
 }
 
-void Editor::buildScene() {
-    if (mode_ == Mode::Play && sim_) { game::sceneFromSim(*sim_, scene_, float(sim_->alpha()), 0); return; }
-    const auto& d = doc_.data;
-    scene_.objects.clear();
-    scene_.roads.clear();
-    for (size_t i = 0; i < d.entities.size(); ++i) {
-        const auto& e = d.entities[i];
-        int t = rules_.findType(e.type);
-        if (t < 0) continue;
-        game::SceneObject o;
-        o.type = uint16_t(t); o.owner = uint8_t(std::clamp(e.owner, 0, 8));
-        o.pos = {e.x, 0, e.z};
-        if (rules_.types[size_t(t)].garrisonMax > 0) o.garrison = e.garrison >= 0 ? e.garrison : 0;
-        o.selected = int(i) == selected_ || int(i) == roadStart_;
-        o.hovered = int(i) == hover_;
-        scene_.objects.push_back(o);
-    }
-    for (auto [a, b] : d.roads) scene_.roads.push_back({{d.entities[size_t(a)].x, 0, d.entities[size_t(a)].z}, {d.entities[size_t(b)].x, 0, d.entities[size_t(b)].z}});
-    scene_.moveMarkers.clear();
+void Editor::focusScene(float x, float z, float distance) {
+    sceneGoal_ = {x, 0, z};
+    sceneFlying_ = true;
+    if (distance > 0) sceneCam.distance = std::clamp(distance, sceneCam.minDistance, sceneCam.maxDistance);
 }
 
-void Editor::fitCamera() {
-    cam_.target = {doc_.data.w * 0.5f, 0, doc_.data.h * 0.5f};
-    cam_.maxDistance = std::max(60.0f, float(std::max(doc_.data.w, doc_.data.h)) * 1.6f);
-    cam_.distance = std::clamp(float(std::max(doc_.data.w, doc_.data.h)) * 0.95f + 8, cam_.minDistance, cam_.maxDistance);
-}
+void Editor::flash(float x0, float z0, float x1, float z1, double seconds) { flashes_.push_back({x0, z0, x1, z1, time_ + seconds, seconds}); }
 
-bool Editor::groundAt(float sx, float sy, float& x, float& z) const {
+bool Editor::groundAt(const Viewport& vp, const RTSCamera& cam, float sx, float sy, float& x, float& z) const {
     float3 g;
-    if (!cam_.screenToGround(sx, sy, platform::windowWidth(), platform::windowHeight(), g)) return false;
+    if (!cam.screenToGround(sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, g)) return false;
     x = g.x; z = g.z;
     return true;
 }
 
-float Editor::snap(float v, int typeIdx) const {
-    if (!snap_) return v;
-    const auto& t = rules_.types[size_t(std::clamp(typeIdx, 0, int(rules_.types.size()) - 1))];
+float Editor::snapCoord(float v, int typeIdx) const {
+    if (!snap || rules().types.empty()) return v;
+    const auto& t = rules().types[size_t(std::clamp(typeIdx, 0, int(rules().types.size()) - 1))];
     if (t.structure) return (t.footprintW % 2) ? std::floor(v) + 0.5f : std::round(v);
     return std::round(v * 4) / 4;
 }
 
-int Editor::pick(float sx, float sy) const {
+int Editor::pickEntity(const Viewport& vp, const RTSCamera& cam, float sx, float sy) const {
     float x, z;
-    if (!groundAt(sx, sy, x, z)) return -1;
-    int best = -1; float bestD = 1e9f;
-    for (size_t i = 0; i < doc_.data.entities.size(); ++i) {
-        const auto& e = doc_.data.entities[i];
-        int t = rules_.findType(e.type);
-        float r = t >= 0 ? view_.selectionRadius(uint16_t(t)) + 0.2f : 0.6f;
-        float d = std::hypot(x - e.x, z - e.z);
-        if (d < r && d < bestD) { best = int(i); bestD = d; }
+    if (!groundAt(vp, cam, sx, sy, x, z)) return -1;
+    int best = -1;
+    float bestD = 1e9f;
+    const auto& d = ws_.map.data;
+    for (size_t i = 0; i < d.entities.size(); ++i) {
+        const auto& e = d.entities[i];
+        int t = rules().findType(e.type);
+        float r = t >= 0 ? const_cast<game::RtsView&>(view_).selectionRadius(uint16_t(t)) + 0.2f : 0.6f;
+        float dd = std::hypot(x - e.x, z - e.z);
+        if (dd < r && dd < bestD) { best = int(i); bestD = dd; }
     }
     return best;
 }
 
-int Editor::pickRoad(float sx, float sy) const {
+int Editor::pickRoad(const Viewport& vp, const RTSCamera& cam, float sx, float sy) const {
     float x, z;
-    if (!groundAt(sx, sy, x, z)) return -1;
-    int best = -1; float bestD = 0.5f;
-    for (size_t i = 0; i < doc_.data.roads.size(); ++i) {
-        auto [a, b] = doc_.data.roads[i];
-        const auto& ea = doc_.data.entities[size_t(a)];
-        const auto& eb = doc_.data.entities[size_t(b)];
-        float d = distPointSegment(x, z, ea.x, ea.z, eb.x, eb.z);
-        if (d < bestD) { bestD = d; best = int(i); }
+    if (!groundAt(vp, cam, sx, sy, x, z)) return -1;
+    int best = -1;
+    float bestD = 0.5f;
+    const auto& d = ws_.map.data;
+    for (size_t i = 0; i < d.roads.size(); ++i) {
+        auto [a, b] = d.roads[i];
+        float ax = d.entities[size_t(a)].x, az = d.entities[size_t(a)].z, bx = d.entities[size_t(b)].x, bz = d.entities[size_t(b)].z;
+        float dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+        float t = l2 > 0 ? std::clamp(((x - ax) * dx + (z - az) * dz) / l2, 0.0f, 1.0f) : 0.0f;
+        float dd = std::hypot(ax + dx * t - x, az + dz * t - z);
+        if (dd < bestD) { bestD = dd; best = int(i); }
     }
     return best;
 }
 
-// ============================ input ============================
+// ============================ scene data ============================
 
-void Editor::onPrimaryDown(float sx, float sy, uint8_t mods) {
-    int n = pick(sx, sy);
-    float x = 0, z = 0;
-    bool ground = groundAt(sx, sy, x, z);
-    switch (tool_) {
-    case Tool::Select:
-        selected_ = n;
-        if (n >= 0) {
-            doc_.beginEdit();
-            dragging_ = true;
-            dragOffX_ = doc_.data.entities[size_t(n)].x - x;
-            dragOffZ_ = doc_.data.entities[size_t(n)].z - z;
-            if (mods & platform::kModAlt) { // Alt+drag copies
-                DocEntity copy = doc_.data.entities[size_t(n)];
-                copy.id.clear();
-                doc_.data.entities.push_back(copy);
-                selected_ = int(doc_.data.entities.size() - 1);
+void Editor::syncGrid() {
+    const auto& d = doc().data;
+    if (grid_.w != d.w || grid_.h != d.h) grid_.init(d.w, d.h);
+    for (int i = 0; i < d.w * d.h; ++i) {
+        grid_.flags[size_t(i)] = game::cellFlagsFromChar(d.cells[size_t(i)]);
+        grid_.height[size_t(i)] = d.heights[size_t(i)];
+        grid_.level[size_t(i)] = d.levels[size_t(i)];
+        grid_.region[size_t(i)] = d.regions[size_t(i)] == '.' ? int16_t(-1) : int16_t(d.regions[size_t(i)]);
+        int8_t fr = d.fieldRes[size_t(i)];
+        grid_.fieldRes[size_t(i)] = fr >= 0 ? int16_t(std::max(0, rules().findResource(d.fieldResources[size_t(fr)]))) : int16_t(-1);
+        grid_.fieldAmt[size_t(i)] = Fixed::fromInt(d.fieldAmt[size_t(i)]);
+    }
+    view_.buildTerrain(*dev_, grid_);
+    gridRevision_ = doc().revision;
+}
+
+void Editor::buildEditScene(game::RtsScene& out) const {
+    const auto& d = ws_.map.data;
+    out.objects.clear();
+    out.roads.clear();
+    out.moveMarkers.clear();
+    const int sel = selectedEntity();
+    for (size_t i = 0; i < d.entities.size(); ++i) {
+        const auto& e = d.entities[i];
+        int t = rules().findType(e.type);
+        if (t < 0) continue;
+        game::SceneObject o;
+        o.type = uint16_t(t);
+        o.owner = e.owner < 0 ? uint8_t(game::kHostileNeutral) : uint8_t(std::clamp(e.owner, 0, 16));
+        o.pos = {e.x, 0, e.z};
+        if (rules().types[size_t(t)].garrisonMax > 0) o.garrison = e.garrison >= 0 ? e.garrison : 0;
+        o.selected = int(i) == sel || int(i) == roadStart;
+        out.objects.push_back(o);
+    }
+    for (auto [a, b] : d.roads) out.roads.push_back({{d.entities[size_t(a)].x, 0, d.entities[size_t(a)].z}, {d.entities[size_t(b)].x, 0, d.entities[size_t(b)].z}});
+}
+
+void Editor::drawEditOverlays3D() {
+    const auto& d = doc().data;
+    const float W = float(d.w), H = float(d.h);
+    uint32_t border = rgba(255, 255, 255, 120);
+    r3d_.line({0, 0.05f, 0}, {W, 0.05f, 0}, border); r3d_.line({W, 0.05f, 0}, {W, 0.05f, H}, border);
+    r3d_.line({W, 0.05f, H}, {0, 0.05f, H}, border); r3d_.line({0, 0.05f, H}, {0, 0.05f, 0}, border);
+    auto cellQuad = [&](float x0, float z0, float x1, float z1, uint32_t col, float y) {
+        r3d_.triangle({x0, y, z0}, {x0, y, z1}, {x1, y, z1}, col);
+        r3d_.triangle({x0, y, z0}, {x1, y, z1}, {x1, y, z0}, col);
+    };
+    for (int y = 0; y < d.h; ++y)
+        for (int x = 0; x < d.w; ++x) {
+            size_t i = d.idx(x, y);
+            bool field = d.fieldRes[i] >= 0 && d.fieldAmt[i] > 0, region = showRegions && d.regions[i] != '.', ramp = showLevels && d.cells[i] == '/';
+            if (!field && !region && !ramp) continue;
+            float gy = view_.heightAt(grid_, x + 0.5f, y + 0.5f) + 0.06f;
+            if (field) {
+                uint32_t a = uint32_t(60 + d.fieldAmt[i] * 18);
+                uint32_t col = d.fieldRes[i] % 3 == 0 ? rgba(240, 170, 40, uint8_t(a)) : d.fieldRes[i] % 3 == 1 ? rgba(80, 220, 255, uint8_t(a)) : rgba(230, 90, 220, uint8_t(a));
+                cellQuad(x + 0.08f, y + 0.08f, x + 0.92f, y + 0.92f, col, gy);
             }
-        } else panning_ = true;
-        break;
-    case Tool::Place: {
-        if (n >= 0 && !(mods & platform::kModShift)) { selected_ = n; break; }
-        if (!ground) break;
-        DocEntity e;
-        e.type = rules_.types[size_t(placeType_)].id;
-        e.owner = placeOwner_;
-        e.x = snap(x, placeType_); e.z = snap(z, placeType_);
-        selected_ = doc_.addEntity(e);
-        status_ = "Добавлено: " + rules_.types[size_t(placeType_)].name;
-        break;
-    }
-    case Tool::Terrain:
-    case Tool::Height:
-        if (!ground) break;
-        doc_.beginEdit();
-        painting_ = true;
-        onPrimaryDrag(sx, sy, mods);
-        break;
-    case Tool::Road:
-        if (n < 0) { roadStart_ = -1; panning_ = true; break; }
-        if (roadStart_ < 0) { roadStart_ = n; break; }
-        if (n != roadStart_) {
-            bool added = doc_.toggleRoad(roadStart_, n);
-            status_ = added ? "Дорога добавлена" : "Дорога удалена";
-            roadStart_ = (mods & platform::kModShift) ? n : -1;
+            if (region) {
+                char c = d.regions[i];
+                uint32_t col = rgba(uint8_t(80 + (c * 47) % 175), uint8_t(80 + (c * 91) % 175), uint8_t(80 + (c * 23) % 175), 230);
+                if (d.inside(x + 1, y) && d.regions[d.idx(x + 1, y)] != c) r3d_.line({x + 1.0f, gy + 0.02f, float(y)}, {x + 1.0f, gy + 0.02f, y + 1.0f}, col);
+                if (d.inside(x, y + 1) && d.regions[d.idx(x, y + 1)] != c) r3d_.line({float(x), gy + 0.02f, y + 1.0f}, {x + 1.0f, gy + 0.02f, y + 1.0f}, col);
+            }
+            if (ramp) cellQuad(x + 0.2f, y + 0.2f, x + 0.8f, y + 0.8f, rgba(255, 255, 255, 60), gy);
         }
-        break;
-    case Tool::Erase:
-        if (n >= 0) { doc_.removeEntity(n); selected_ = -1; }
-        else if (int r = pickRoad(sx, sy); r >= 0) doc_.removeRoad(size_t(r));
-        else panning_ = true;
-        break;
+    if (showAreas)
+        for (auto& [name, a] : d.extra["areas"].members()) {
+            float x0 = float(a[0].toDouble()), z0 = float(a[1].toDouble()), x1 = x0 + float(a[2].toDouble(1)), z1 = z0 + float(a[3].toDouble(1));
+            bool sel = selection.kind == Selection::Area && selection.key == name;
+            uint32_t c = sel ? rgba(255, 255, 255, 255) : rgba(255, 220, 80, 200);
+            r3d_.line({x0, 0.3f, z0}, {x1, 0.3f, z0}, c); r3d_.line({x1, 0.3f, z0}, {x1, 0.3f, z1}, c);
+            r3d_.line({x1, 0.3f, z1}, {x0, 0.3f, z1}, c); r3d_.line({x0, 0.3f, z1}, {x0, 0.3f, z0}, c);
+            if (sel) cellQuad(x0, z0, x1, z1, rgba(255, 220, 80, 50), 0.3f);
+        }
+    for (size_t p = 0; p < d.players.size(); ++p) {
+        if (!d.players[p].hasStart) continue;
+        float4 c = game::RtsView::playerColor(int(p + 1));
+        float sx = d.players[p].startX, sz = d.players[p].startZ, gy = view_.heightAt(grid_, sx, sz);
+        r3d_.circleXZ({sx, 0, sz}, 1.2f, rgbaf({c.x, c.y, c.z, 1}), 24, gy + 0.15f);
+        r3d_.line({sx, gy, sz}, {sx, gy + 2.5f, sz}, rgbaf({c.x, c.y, c.z, 1}));
+    }
+    for (auto& f : flashes_) {
+        float k = float(std::clamp((f.until - time_) / f.length, 0.0, 1.0));
+        uint32_t c = rgba(120, 220, 255, uint8_t(40 + 150 * k));
+        float y = 0.35f + (1 - k) * 0.4f;
+        cellQuad(f.x0, f.z0, f.x1, f.z1, rgba(120, 220, 255, uint8_t(70 * k)), y);
+        r3d_.line({f.x0, y, f.z0}, {f.x1, y, f.z0}, c); r3d_.line({f.x1, y, f.z0}, {f.x1, y, f.z1}, c);
+        r3d_.line({f.x1, y, f.z1}, {f.x0, y, f.z1}, c); r3d_.line({f.x0, y, f.z1}, {f.x0, y, f.z0}, c);
     }
 }
 
-void Editor::onPrimaryDrag(float sx, float sy, uint8_t mods) {
-    float x, z;
-    if (!groundAt(sx, sy, x, z)) return;
-    if (dragging_ && selected_ >= 0) {
-        auto& e = doc_.data.entities[size_t(selected_)];
-        int t = rules_.findType(e.type);
-        e.x = snap(x + dragOffX_, t); e.z = snap(z + dragOffZ_, t);
-    }
-    if (painting_) {
-        int cx = int(std::floor(x)), cz = int(std::floor(z));
-        if (tool_ == Tool::Terrain) doc_.paint(cx, cz, brush_ - 1, paintCell_);
-        else doc_.raise(cx, cz, brush_, (mods & platform::kModShift) ? -2 : 2);
-        if (time_ >= gridRebuildAt_) { syncGrid(); gridRebuildAt_ = time_ + 0.05; } else gridDirty_ = true;
-    }
+void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) {
+    if (!vp.color.valid()) return;
+    if (playing()) { renderGame(vp, cam); return; }
+    buildEditScene(scene_);
+    r3d_.beginScene(cam, vp.w, vp.h);
+    view_.draw(r3d_, scene_, time_, nullptr, grid_);
+    if (editOverlays) drawEditOverlays3D();
+    gfx::PassDesc pass;
+    pass.colorTarget = vp.color;
+    pass.depthTarget = vp.depth;
+    pass.clearColor[0] = 0.13f; pass.clearColor[1] = 0.15f; pass.clearColor[2] = 0.17f;
+    r3d_.render(pass);
+    dev_->endPass();
+    view_.drawOverlays(cam, scene_, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
 
-void Editor::event(const Event& e) {
-    bool uiWants = ui_.handleEvent(e);
-    switch (e.type) {
-    case EventType::QuitRequested: quit_ = true; break;
-    case EventType::MouseDown:
-        if (uiWants) return;
-        lastX_ = e.x; lastY_ = e.y;
-        if (e.button == 0 && mode_ == Mode::Edit) onPrimaryDown(e.x, e.y, e.mods);
-        else if (e.button == 0) panning_ = true;
-        else if (e.button == 1) { rotating_ = (e.mods & platform::kModAlt) != 0; panning_ = !rotating_; }
-        else panning_ = true;
-        break;
-    case EventType::MouseMove:
-        hover_ = uiWants && !dragging_ ? -1 : pick(e.x, e.y);
-        if (dragging_ || painting_) onPrimaryDrag(e.x, e.y, e.mods);
-        if (panning_) {
-            float3 a, b;
-            float w = platform::windowWidth(), h = platform::windowHeight();
-            if (cam_.screenToGround(lastX_, lastY_, w, h, a) && cam_.screenToGround(e.x, e.y, w, h, b)) cam_.target += a - b;
+void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
+    if (!vp.color.valid() || !sim_) return;
+    auto& gs = simModule()->state(*sim_);
+    if (gs.fieldsDirty || !playTerrainBuilt_) { view_.buildTerrain(*dev_, gs.grid); gs.fieldsDirty = false; playTerrainBuilt_ = true; }
+    game::RtsScene sc;
+    game::sceneFromSim(*sim_, sc, float(sim_->alpha()), uint8_t(human_));
+    for (auto& o : sc.objects) o.selected = std::find(gameSelection.begin(), gameSelection.end(), o.entity) != gameSelection.end();
+    r3d_.beginScene(cam, vp.w, vp.h);
+    view_.draw(r3d_, sc, time_, human_ ? &gs.vision[size_t(human_)] : nullptr, gs.grid);
+    gfx::PassDesc pass;
+    pass.colorTarget = vp.color;
+    pass.depthTarget = vp.depth;
+    pass.clearColor[0] = 0.55f; pass.clearColor[1] = 0.66f; pass.clearColor[2] = 0.78f;
+    r3d_.render(pass);
+    dev_->endPass();
+    view_.drawOverlays(cam, sc, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
+}
+
+// Agent edits: fly the scene camera there and flash the area.
+void Editor::applyChanges() {
+    if (ws_.changes.empty()) return;
+    bool rulesChanged = false, projectChanged = false;
+    for (auto& c : ws_.changes) {
+        if (c.kind == Change::Rules) rulesChanged = true;
+        if (c.kind == Change::Project) projectChanged = true;
+        if (c.x1 >= c.x0 && c.y1 >= c.y0) {
+            flash(float(c.x0), float(c.y0), float(c.x1 + 1), float(c.y1 + 1));
+            if (followAgent && c.kind != Change::Map) focusScene((c.x0 + c.x1 + 1) * 0.5f, (c.y0 + c.y1 + 1) * 0.5f);
         }
-        if (rotating_) {
-            cam_.yaw -= (e.x - lastX_) * 0.008f;
-            cam_.pitch = std::clamp(cam_.pitch + (e.y - lastY_) * 0.006f, 0.35f, 1.5f);
-        }
-        lastX_ = e.x; lastY_ = e.y;
-        break;
-    case EventType::MouseUp:
-        dragging_ = painting_ = panning_ = rotating_ = false;
-        if (gridDirty_) syncGrid();
-        break;
-    case EventType::MouseWheel:
-        if (uiWants) return;
-        cam_.distance = std::clamp(cam_.distance * std::pow(0.88f, e.wheelY), cam_.minDistance, cam_.maxDistance);
-        break;
-    default: break;
+        if (c.entity >= 0 && c.kind == Change::Entity) selectEntity(c.entity);
     }
+    if (projectChanged || rulesChanged) reloadRules();
+    if (projectChanged) { fitScene(); selection = {}; }
+    ws_.changes.clear();
+    if (selectedEntity() >= int(doc().data.entities.size())) selection = {};
+}
+
+// ============================ play-test ============================
+
+void Editor::startPlay(int humanSlot) {
+    auto issues = doc().validate(rules(), ws_.project.rulesJson);
+    for (auto& i : issues) if (i.error) { status = "Нельзя запустить: " + i.text; return; }
+    try {
+        SimConfig cfg;
+        cfg.seed = uint64_t(std::time(nullptr));
+        sim_ = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+        sim_->setup(ws_.project.rulesJson, doc().toJson());
+    } catch (const std::exception& e) {
+        status = std::string("Ошибка запуска: ") + e.what();
+        sim_.reset();
+        return;
+    }
+    human_ = humanSlot;
+    bots_.clear();
+    for (auto& p : sim_->players()) if (p.slot != human_) bots_.emplace_back(p.slot, sim_->config().seed);
+    playPaused = false;
+    playTerrainBuilt_ = false;
+    playHistory.clear();
+    gameSelection.clear();
+    gameCam = sceneCam;
+    gameCam.pitch = 0.95f;
+    if (human_ > 0) {
+        const auto& d = doc().data;
+        for (auto& e : d.entities) if (e.owner == human_) { gameCam.target = {e.x, 0, e.z}; break; }
+        if (size_t(human_ - 1) < d.players.size() && d.players[size_t(human_ - 1)].hasStart) gameCam.target = {d.players[size_t(human_ - 1)].startX, 0, d.players[size_t(human_ - 1)].startZ};
+        gameCam.distance = 24;
+    }
+    if (auto* w = window("game")) { w->open = true; ImGui::SetWindowFocus(w->title()); }
+    status = human_ ? "Тест: вы играете за игрока " + std::to_string(human_) : "Тест: боты играют на карте";
+}
+
+void Editor::stopPlay() {
+    sim_.reset();
+    bots_.clear();
+    gameSelection.clear();
+    gridRevision_ = ~0ull; // the sim's grid was shown; rebuild the editor's
+    status = "Редактирование";
+}
+
+void Editor::issueCommand(Command c) {
+    if (!sim_ || human_ <= 0) return;
+    c.player = uint8_t(human_);
+    sim_->submit(c);
+}
+
+void Editor::samplePlayStats() {
+    if (!sim_) return;
+    float t = float(sim_->tick()) / float(sim_->tickRate());
+    if (!playHistory.empty() && t - playHistory.back().t < 1.0f) return;
+    auto* m = simModule();
+    auto& gs = m->state(*sim_);
+    PlaySample s;
+    s.t = t;
+    for (auto& p : sim_->players()) {
+        int units = 0, structs = 0;
+        sim_->world().each<game::Unit, Owner>([&](rts::Entity, game::Unit& u, Owner& o) { if (o.player == p.slot) (rules().types[u.type].structure ? structs : units)++; });
+        s.units.push_back(units);
+        s.structures.push_back(structs);
+        std::vector<float> res;
+        for (size_t r = 0; r < rules().resources.size(); ++r) res.push_back(float(gs.players[p.slot].stock[r].toDouble()));
+        s.resources.push_back(res);
+    }
+    playHistory.push_back(std::move(s));
+    if (playHistory.size() > 3600) playHistory.erase(playHistory.begin());
+}
+
+// ============================ frame ============================
+
+void Editor::event(const platform::Event& e) {
+    ui_.handleEvent(e);
+    if (e.type == platform::EventType::QuitRequested) quit_ = true;
 }
 
 void Editor::handleShortcuts() {
     ImGuiIO& io = ImGui::GetIO();
     const bool mod = io.KeyCtrl || io.KeySuper;
-    if (mod && ImGui::IsKeyPressed(ImGuiKey_S, false)) { if (doc_.path.empty()) { fileDialogOpen_ = true; fileDialogSave_ = true; } else saveMap(doc_.path); }
-    if (mod && ImGui::IsKeyPressed(ImGuiKey_O, false)) { fileDialogOpen_ = true; fileDialogSave_ = false; }
-    if (mod && ImGui::IsKeyPressed(ImGuiKey_N, false)) newDialogOpen_ = true;
-    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) { if (mode_ == Mode::Edit) startPlay(); else stopPlay(); }
-    if (mode_ != Mode::Edit) return;
-    if (mod && ImGui::IsKeyPressed(ImGuiKey_Z, false)) { if (io.KeyShift) doc_.redo(); else doc_.undo(); selected_ = -1; syncGrid(); }
-    if (mod && ImGui::IsKeyPressed(ImGuiKey_Y, false)) { doc_.redo(); selected_ = -1; syncGrid(); }
-    if (io.WantTextInput || mod) return;
-    if (ImGui::IsKeyPressed(ImGuiKey_V, false)) tool_ = Tool::Select;
-    if (ImGui::IsKeyPressed(ImGuiKey_B, false)) tool_ = Tool::Place;
-    if (ImGui::IsKeyPressed(ImGuiKey_T, false)) tool_ = Tool::Terrain;
-    if (ImGui::IsKeyPressed(ImGuiKey_E, false)) tool_ = Tool::Height;
-    if (ImGui::IsKeyPressed(ImGuiKey_R, false)) { tool_ = Tool::Road; roadStart_ = -1; }
-    if (ImGui::IsKeyPressed(ImGuiKey_X, false)) tool_ = Tool::Erase;
-    if ((ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) && selected_ >= 0) { doc_.removeEntity(selected_); selected_ = -1; }
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { selected_ = -1; roadStart_ = -1; }
-    if (ImGui::IsKeyPressed(ImGuiKey_F, false)) fitCamera();
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, false)) brush_ = std::max(1, brush_ - 1);
-    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, false)) brush_ = std::min(12, brush_ + 1);
+    if (showPicker_ || io.WantTextInput) return;
+    if (mod && ImGui::IsKeyPressed(ImGuiKey_S, false) && !doc().path.empty()) saveMap(doc().path);
+    if (mod && ImGui::IsKeyPressed(ImGuiKey_Z, false) && !playing()) { if (io.KeyShift) doc().redo(); else doc().undo(); selection = {}; }
+    if (mod && ImGui::IsKeyPressed(ImGuiKey_Y, false) && !playing()) { doc().redo(); selection = {}; }
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) { if (!playing()) startPlay(0); else stopPlay(); }
 }
 
-// ============================ play-test / build ============================
-
-void Editor::startPlay() {
-    issues_ = doc_.validate(rules_);
-    for (auto& i : issues_) if (i.error) { status_ = "Нельзя запустить: " + i.text; return; }
-    try {
-        SimConfig cfg;
-        cfg.seed = uint64_t(std::time(nullptr));
-        sim_ = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
-        sim_->setup(rulesJson_, Json::parse(doc_.toJsonText()));
-    } catch (const std::exception& e) {
-        status_ = std::string("Ошибка запуска: ") + e.what();
-        sim_.reset();
-        return;
+void Editor::drawDockspace() {
+    ImGuiViewport* mv = ImGui::GetMainViewport();
+    const float statusH = ImGui::GetFrameHeight() + 6;
+    ImVec2 pos(mv->WorkPos.x, mv->WorkPos.y), size(mv->WorkSize.x, mv->WorkSize.y - statusH);
+    ImGui::SetNextWindowPos(pos);
+    ImGui::SetNextWindowSize(size);
+    ImGui::SetNextWindowViewport(mv->ID);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin("##dockhost", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                           ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground);
+    ImGui::PopStyleVar(3);
+    ImGuiID dock = ImGui::GetID("MainDock");
+    if (resetLayout_ || !ImGui::DockBuilderGetNode(dock)) {
+        resetLayout_ = false;
+        ImGui::DockBuilderRemoveNode(dock);
+        ImGui::DockBuilderAddNode(dock, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dock, size);
+        ImGuiID center = dock;
+        ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.19f, nullptr, &center);
+        ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.27f, nullptr, &center);
+        ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.27f, nullptr, &center);
+        ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.45f, nullptr, &left);
+        for (auto& w : windows_) {
+            std::string a = w->dockArea();
+            ImGuiID node = a == "left" ? left : a == "left-bottom" ? leftBottom : a == "bottom" ? bottom : a == "center" ? center : right;
+            ImGui::DockBuilderDockWindow(w->title(), node);
+        }
+        ImGui::DockBuilderFinish(dock);
     }
-    bots_.clear();
-    for (auto& p : sim_->players()) bots_.emplace_back(p.slot, sim_->config().seed);
-    mode_ = Mode::Play;
-    playPaused_ = false;
-    selected_ = -1;
-    status_ = "Тест: боты играют на карте (F5 — стоп)";
-}
-
-void Editor::stopPlay() {
-    mode_ = Mode::Edit;
-    sim_.reset();
-    bots_.clear();
-    status_ = "Редактирование";
-}
-
-void Editor::runBuild(const std::string& target) {
-    if (building_) return;
-    if (buildThread_.joinable()) buildThread_.join();
-    if (doc_.dirty && !doc_.path.empty()) saveMap(doc_.path);
-    buildWindow_ = true;
-    building_ = true;
-    { std::lock_guard<std::mutex> lk(logMutex_); buildLog_ = "$ rtsbuild --target " + target + "\n"; }
-    std::string cmd = shellQuote(opt_.buildTool) + " --project " + shellQuote(opt_.projectDir) + " --engine " + shellQuote(opt_.engineDir) +
-                      " --target " + target + (buildConfig_ == 0 ? " --config Debug" : " --config Release") + " 2>&1";
-    buildThread_ = std::thread([this, cmd] {
-        FILE* p = popen(cmd.c_str(), "r");
-        if (!p) { std::lock_guard<std::mutex> lk(logMutex_); buildLog_ += "Не удалось запустить rtsbuild\n"; }
-        else {
-            char buf[512];
-            while (std::fgets(buf, sizeof buf, p)) { std::lock_guard<std::mutex> lk(logMutex_); buildLog_ += buf; buildScrollToEnd_ = true; }
-            int rc = pclose(p);
-            std::lock_guard<std::mutex> lk(logMutex_);
-            buildLog_ += rc == 0 ? "\n=== Готово ===\n" : "\n=== Ошибка сборки ===\n";
-            buildScrollToEnd_ = true;
-        }
-        building_ = false;
-    });
-}
-
-// ============================ UI ============================
-
-void Editor::drawMenuBar() {
-    if (!ImGui::BeginMainMenuBar()) return;
-    if (ImGui::BeginMenu("Файл")) {
-        if (ImGui::MenuItem("Новая карта…", "Ctrl+N")) newDialogOpen_ = true;
-        if (ImGui::MenuItem("Открыть…", "Ctrl+O")) { fileDialogOpen_ = true; fileDialogSave_ = false; }
-        if (ImGui::MenuItem("Сохранить", "Ctrl+S")) { if (doc_.path.empty()) { fileDialogOpen_ = true; fileDialogSave_ = true; } else saveMap(doc_.path); }
-        if (ImGui::MenuItem("Сохранить как…")) { fileDialogOpen_ = true; fileDialogSave_ = true; }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Перечитать правила (rules.json)")) { loadProject(); view_.shutdown(*dev_); view_.init(*dev_, rules_); syncGrid(); }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Выход")) quit_ = true;
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Правка")) {
-        bool edit = mode_ == Mode::Edit;
-        if (ImGui::MenuItem("Отменить", "Ctrl+Z", false, doc_.canUndo() && edit)) { doc_.undo(); selected_ = -1; syncGrid(); }
-        if (ImGui::MenuItem("Повторить", "Ctrl+Y", false, doc_.canRedo() && edit)) { doc_.redo(); selected_ = -1; syncGrid(); }
-        ImGui::Separator();
-        if (ImGui::MenuItem("Удалить выбранное", "Del", false, selected_ >= 0 && edit)) { doc_.removeEntity(selected_); selected_ = -1; }
-        if (ImGui::MenuItem("Зеркально: левая половина -> правая", nullptr, false, edit)) { doc_.mirrorHorizontal(); syncGrid(); status_ = "Отражено, игроки 1 и 2 поменяны в копии"; }
-        if (ImGui::MenuItem("Центральная симметрия левой половины", nullptr, false, edit)) { doc_.mirrorPoint(); syncGrid(); status_ = "Отражено (поворот на 180°)"; }
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Вид")) {
-        ImGui::MenuItem("Привязка к сетке", nullptr, &snap_);
-        if (ImGui::MenuItem("Показать всю карту", "F")) fitCamera();
-        static const char* q[] = {"Тени: выкл", "Тени: низкие", "Тени: средние", "Тени: высокие"};
-        int qi = int(r3d_.shadowQuality());
-        if (ImGui::Combo("##sq", &qi, q, 4)) r3d_.setShadowQuality(ShadowQuality(qi));
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Игра")) {
-        if (mode_ == Mode::Edit) { if (ImGui::MenuItem("Тест карты (боты)", "F5")) startPlay(); }
-        else if (ImGui::MenuItem("Остановить тест", "F5")) stopPlay();
-        if (ImGui::MenuItem("Добавить карту в game.json")) addCurrentMapToGame();
-        ImGui::EndMenu();
-    }
-    if (ImGui::BeginMenu("Сборка")) {
-        ImGui::BeginDisabled(building_);
-        if (ImGui::MenuItem("macOS (.app)")) runBuild("macos");
-        if (ImGui::MenuItem("iOS (проект Xcode)")) runBuild("ios");
-        if (ImGui::MenuItem("Android (проект Gradle + APK)")) runBuild("android");
-        if (ImGui::MenuItem("Web (HTML5)")) runBuild("web");
-        if (ImGui::MenuItem("Windows (.exe)")) runBuild("windows");
-        ImGui::Separator();
-        if (ImGui::MenuItem("Все платформы")) runBuild("all");
-        ImGui::EndDisabled();
-        ImGui::Separator();
-        ImGui::RadioButton("Debug", &buildConfig_, 0); ImGui::SameLine(); ImGui::RadioButton("Release", &buildConfig_, 1);
-        if (ImGui::MenuItem("Журнал сборки")) buildWindow_ = true;
-        ImGui::EndMenu();
-    }
-    ImGui::EndMainMenuBar();
-}
-
-void Editor::drawToolsPanel() {
-    const float top = ImGui::GetFrameHeight();
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(8, top + 8), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(260, io.DisplaySize.y - top - 50), ImGuiCond_Always);
-    ImGui::Begin("Инструменты", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-    if (mode_ == Mode::Play) { ImGui::TextUnformatted("Идёт тест карты"); ImGui::End(); return; }
-    for (int i = 0; i < 6; ++i)
-        if (ImGui::RadioButton(kToolNames[i], tool_ == Tool(i))) { tool_ = Tool(i); roadStart_ = -1; }
-    ImGui::Separator();
-    if (tool_ == Tool::Place) {
-        std::string cur = placeOwner_ == 0 ? "Нейтральный" : placeOwner_ <= int(doc_.data.players.size()) ? doc_.data.players[size_t(placeOwner_ - 1)].name : "?";
-        if (ImGui::BeginCombo("Владелец", cur.c_str())) {
-            if (ImGui::Selectable("Нейтральный", placeOwner_ == 0)) placeOwner_ = 0;
-            for (size_t p = 0; p < doc_.data.players.size(); ++p)
-                if (ImGui::Selectable(doc_.data.players[p].name.c_str(), placeOwner_ == int(p + 1))) placeOwner_ = int(p + 1);
-            ImGui::EndCombo();
-        }
-        ImGui::TextDisabled("Shift+клик — ставить поверх");
-        ImGui::BeginChild("##palette", ImVec2(0, 0), ImGuiChildFlags_Borders);
-        static const char* groups[] = {"Юниты", "Здания", "Ресурсы и декор"};
-        for (int group = 0; group < 3; ++group) {
-            ImGui::SeparatorText(groups[group]);
-            for (size_t i = 0; i < rules_.types.size(); ++i) {
-                const auto& t = rules_.types[i];
-                int g = t.resourceNode >= 0 || (t.invulnerable && t.garrisonMax == 0) ? 2 : t.structure ? 1 : 0;
-                if (g != group) continue;
-                if (ImGui::Selectable(t.name.c_str(), placeType_ == int(i))) placeType_ = int(i);
-            }
-        }
-        ImGui::EndChild();
-    } else if (tool_ == Tool::Terrain) {
-        for (auto& k : kCells) if (ImGui::RadioButton(k.name, paintCell_ == k.c)) paintCell_ = k.c;
-        ImGui::SliderInt("Кисть", &brush_, 1, 12);
-        ImGui::TextDisabled("[ и ] — размер кисти");
-    } else if (tool_ == Tool::Height) {
-        ImGui::SliderInt("Кисть", &brush_, 1, 12);
-        ImGui::TextWrapped("Клик/перетаскивание поднимает, с Shift — опускает.");
-    } else if (tool_ == Tool::Road) {
-        ImGui::TextWrapped("Клик по объекту A, затем по B — добавить или убрать дорогу. Shift — продолжить цепочку. Для карт в стиле Mushroom Wars включите «Только по дорогам» в свойствах карты.");
-    } else if (tool_ == Tool::Select) {
-        ImGui::TextWrapped("Перетаскивание двигает объект, Alt+перетаскивание копирует. ПКМ — сдвиг камеры, Alt+ПКМ — поворот, колесо — масштаб.");
-    } else ImGui::TextWrapped("Клик по объекту или дороге удаляет их.");
-    ImGui::Separator();
-    ImGui::Checkbox("Привязка к сетке", &snap_);
-    ImGui::End();
-}
-
-void Editor::drawPropertiesPanel() {
-    ImGuiIO& io = ImGui::GetIO();
-    const float top = ImGui::GetFrameHeight(), w = 310;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - w - 8, top + 8), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(w, io.DisplaySize.y - top - 50), ImGuiCond_Always);
-    ImGui::Begin("Свойства", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-    if (!projectError_.empty()) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", projectError_.c_str());
-
-    if (mode_ == Mode::Play && sim_) {
-        ImGui::SliderFloat("Скорость", &playSpeed_, 0.25f, 16.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
-        ImGui::Checkbox("Пауза", &playPaused_);
-        ImGui::Text("Время: %u:%02u", sim_->tick() / sim_->tickRate() / 60, sim_->tick() / sim_->tickRate() % 60);
-        auto* m = dynamic_cast<game::RtsModule*>(&sim_->module());
-        auto& gs = m->state(*sim_);
-        for (auto& p : sim_->players()) {
-            float4 c = game::RtsView::playerColor(p.slot);
-            ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%s%s", p.name.c_str(), p.alive ? "" : " (выбыл)");
-            int units = 0, structs = 0;
-            sim_->world().each<game::Unit, Owner>([&](Entity, game::Unit& u, Owner& o) { if (o.player == p.slot) (rules_.types[u.type].structure ? structs : units)++; });
-            std::string line = "   юниты " + std::to_string(units) + ", здания " + std::to_string(structs);
-            for (size_t r = 0; r < rules_.resources.size(); ++r) line += ", " + rules_.resources[r].name + " " + std::to_string(gs.players[p.slot].stock[r].toInt());
-            ImGui::TextUnformatted(line.c_str());
-        }
-        if (int res = sim_->result(); res != 0) {
-            ImGui::Separator();
-            if (res < 0) ImGui::TextUnformatted("Ничья");
-            else for (auto& p : sim_->players()) if (p.team == res && p.alive) { ImGui::Text("Победил: %s", p.name.c_str()); break; }
-            if (ImGui::Button("Перезапустить")) startPlay();
-        }
-        ImGui::Separator();
-        if (ImGui::Button("Остановить тест (F5)", ImVec2(-1, 0))) stopPlay();
-        ImGui::End();
-        return;
-    }
-
-    auto& d = doc_.data;
-    if (selected_ >= 0 && selected_ < int(d.entities.size())) {
-        auto& e = d.entities[size_t(selected_)];
-        int ti = rules_.findType(e.type);
-        ImGui::SeparatorText("Объект");
-        if (ImGui::BeginCombo("Тип", ti >= 0 ? rules_.types[size_t(ti)].name.c_str() : e.type.c_str())) {
-            for (auto& t : rules_.types) if (ImGui::Selectable(t.name.c_str(), t.id == e.type)) { doc_.beginEdit(); d.entities[size_t(selected_)].type = t.id; }
-            ImGui::EndCombo();
-        }
-        std::string cur = e.owner == 0 ? "Нейтральный" : e.owner <= int(d.players.size()) ? d.players[size_t(e.owner - 1)].name : "?";
-        if (ImGui::BeginCombo("Владелец", cur.c_str())) {
-            if (ImGui::Selectable("Нейтральный", e.owner == 0)) { doc_.beginEdit(); d.entities[size_t(selected_)].owner = 0; }
-            for (size_t p = 0; p < d.players.size(); ++p)
-                if (ImGui::Selectable(d.players[p].name.c_str(), e.owner == int(p + 1))) { doc_.beginEdit(); d.entities[size_t(selected_)].owner = int(p + 1); }
-            ImGui::EndCombo();
-        }
-        float pos[2] = {e.x, e.z};
-        bool posChanged = ImGui::DragFloat2("Позиция", pos, 0.1f);
-        if (ImGui::IsItemActivated()) doc_.beginEdit();
-        if (posChanged) { d.entities[size_t(selected_)].x = pos[0]; d.entities[size_t(selected_)].z = pos[1]; doc_.dirty = true; }
-        if (ti >= 0 && rules_.types[size_t(ti)].garrisonMax > 0) {
-            int g = std::max(0, d.entities[size_t(selected_)].garrison);
-            bool ch = ImGui::SliderInt("Гарнизон", &g, 0, rules_.types[size_t(ti)].garrisonMax * 2);
-            if (ImGui::IsItemActivated()) doc_.beginEdit();
-            if (ch) { d.entities[size_t(selected_)].garrison = g; doc_.dirty = true; }
-        }
-        if (ti >= 0 && rules_.types[size_t(ti)].resourceNode >= 0) {
-            float a = d.entities[size_t(selected_)].amount >= 0 ? d.entities[size_t(selected_)].amount : float(rules_.types[size_t(ti)].resourceAmount.toDouble());
-            bool ch = ImGui::DragFloat("Запас", &a, 10.0f, 0.0f, 1e7f, "%.0f");
-            if (ImGui::IsItemActivated()) doc_.beginEdit();
-            if (ch) { d.entities[size_t(selected_)].amount = a; doc_.dirty = true; }
-        }
-        char idb[64];
-        std::snprintf(idb, sizeof idb, "%s", d.entities[size_t(selected_)].id.c_str());
-        if (ImGui::InputText("id", idb, sizeof idb, ImGuiInputTextFlags_EnterReturnsTrue)) { doc_.beginEdit(); d.entities[size_t(selected_)].id = idb; }
-        if (ImGui::Button("Удалить объект", ImVec2(-1, 0))) { doc_.removeEntity(selected_); selected_ = -1; }
-    } else {
-        ImGui::SeparatorText("Карта");
-        char name[128];
-        std::snprintf(name, sizeof name, "%s", d.name.c_str());
-        if (ImGui::InputText("Название", name, sizeof name)) { d.name = name; doc_.dirty = true; }
-        ImGui::Text("Размер %d x %d, объектов %zu", d.w, d.h, d.entities.size());
-        if (resize_[0] == 0) { resize_[0] = d.w; resize_[1] = d.h; }
-        ImGui::SetNextItemWidth(150);
-        ImGui::InputInt2("##size", resize_);
-        ImGui::SameLine();
-        if (ImGui::Button("Изменить размер")) { doc_.resize(resize_[0], resize_[1]); syncGrid(); }
-        bool ro = d.roadsOnly;
-        if (ImGui::Checkbox("Только по дорогам (Mushroom Wars)", &ro)) { doc_.beginEdit(); d.roadsOnly = ro; }
-        ImGui::SeparatorText("Игроки");
-        for (size_t p = 0; p < d.players.size(); ++p) {
-            ImGui::PushID(int(p));
-            float4 c = game::RtsView::playerColor(int(p + 1));
-            ImGui::ColorButton("##c", ImVec4(c.x, c.y, c.z, 1), ImGuiColorEditFlags_NoTooltip, ImVec2(18, 18));
-            ImGui::SameLine();
-            char pn[64];
-            std::snprintf(pn, sizeof pn, "%s", d.players[p].name.c_str());
-            ImGui::SetNextItemWidth(120);
-            if (ImGui::InputText("##name", pn, sizeof pn)) { d.players[p].name = pn; doc_.dirty = true; }
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(70);
-            if (ImGui::InputInt("##team", &d.players[p].team)) doc_.dirty = true;
-            ImGui::SameLine();
-            bool removed = d.players.size() > 2 && ImGui::SmallButton("x");
-            for (auto& rd : rules_.resources) {
-                float v = float(rd.start.toDouble());
-                for (auto& [rid, val] : d.players[p].resources) if (rid == rd.id) v = val;
-                ImGui::Indent(26);
-                ImGui::SetNextItemWidth(100);
-                if (ImGui::DragFloat(rd.name.c_str(), &v, 5.0f, 0.0f, 1e6f, "%.0f")) {
-                    bool found = false;
-                    for (auto& [rid, val] : d.players[p].resources) if (rid == rd.id) { val = v; found = true; }
-                    if (!found) d.players[p].resources.push_back({rd.id, v});
-                    doc_.dirty = true;
-                }
-                ImGui::Unindent(26);
-            }
-            ImGui::PopID();
-            if (removed) {
-                doc_.beginEdit();
-                for (auto& e : d.entities) { if (e.owner == int(p + 1)) e.owner = 0; else if (e.owner > int(p + 1)) --e.owner; }
-                d.players.erase(d.players.begin() + long(p));
-                break;
-            }
-        }
-        ImGui::TextDisabled("Число справа от имени — команда (союзники)");
-        if (d.players.size() < 8 && ImGui::Button("+ Игрок")) {
-            doc_.beginEdit();
-            static const char* names[] = {"Blue", "Red", "Green", "Yellow", "Purple", "Teal", "Orange", "Pink"};
-            d.players.push_back({names[d.players.size()], int(d.players.size() + 1), {}});
-        }
-    }
-    ImGui::SeparatorText("Проверка");
-    if (ImGui::Button("Проверить карту", ImVec2(-1, 0))) issues_ = doc_.validate(rules_);
-    for (size_t i = 0; i < issues_.size(); ++i) {
-        const auto& is = issues_[i];
-        ImGui::PushID(int(i) + 1000);
-        ImGui::PushStyleColor(ImGuiCol_Text, is.error ? ImVec4(1, 0.45f, 0.4f, 1) : ImVec4(1, 0.85f, 0.4f, 1));
-        if (ImGui::Selectable(is.text.c_str(), false) && is.entity >= 0 && is.entity < int(d.entities.size())) {
-            selected_ = is.entity;
-            cam_.target = {d.entities[size_t(is.entity)].x, 0, d.entities[size_t(is.entity)].z};
-        }
-        ImGui::PopStyleColor();
-        ImGui::PopID();
-    }
-    if (!issues_.empty() && std::none_of(issues_.begin(), issues_.end(), [](const Issue& i) { return i.error; }))
-        ImGui::TextColored(ImVec4(0.5f, 1, 0.5f, 1), "Ошибок нет");
-    ImGui::End();
-}
-
-void Editor::drawStatusBar() {
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y), ImGuiCond_Always, ImVec2(0, 1));
-    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, 0));
-    ImGui::Begin("##status", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    std::string file = doc_.path.empty() ? "(не сохранено)" : relativeToProject(doc_.path);
-    ImGui::Text("%s%s  |  %s", file.c_str(), doc_.dirty ? " *" : "", status_.c_str());
-    float x = 0, z = 0;
-    if (groundAt(lastX_, lastY_, x, z)) { ImGui::SameLine(io.DisplaySize.x - 300); ImGui::TextDisabled("x %.1f  z %.1f", x, z); }
-    if (building_) { ImGui::SameLine(io.DisplaySize.x - 140); ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Идёт сборка…"); }
-    ImGui::End();
-}
-
-void Editor::drawNewMapDialog() {
-    if (newDialogOpen_) { ImGui::OpenPopup("Новая карта"); newDialogOpen_ = false; }
-    if (!ImGui::BeginPopupModal("Новая карта", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) return;
-    ImGui::InputInt2("Размер", newSize_);
-    newSize_[0] = std::clamp(newSize_[0], 8, 512); newSize_[1] = std::clamp(newSize_[1], 8, 512);
-    if (ImGui::Button("Создать", ImVec2(120, 0))) { newMap(newSize_[0], newSize_[1]); ImGui::CloseCurrentPopup(); }
-    ImGui::SameLine();
-    if (ImGui::Button("Отмена", ImVec2(120, 0))) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-}
-
-void Editor::drawFileDialog() {
-    if (fileDialogOpen_) {
-        ImGui::OpenPopup("##file");
-        std::string def = doc_.path.empty() ? "new_map.json" : fs::path(doc_.path).filename().string();
-        std::snprintf(fileName_, sizeof fileName_, "%s", def.c_str());
-        fileDialogOpen_ = false;
-    }
-    ImGui::SetNextWindowSize(ImVec2(520, 420), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("##file", nullptr, ImGuiWindowFlags_NoTitleBar)) return;
-    ImGui::TextUnformatted(fileDialogSave_ ? "Сохранить карту" : "Открыть карту");
-    ImGui::TextDisabled("%s", mapsDir().c_str());
-    ImGui::Separator();
-    ImGui::BeginChild("##list", ImVec2(0, -70), ImGuiChildFlags_Borders);
-    std::error_code ec;
-    std::vector<std::string> files;
-    for (auto& e : fs::directory_iterator(mapsDir(), ec)) if (e.path().extension() == ".json") files.push_back(e.path().filename().string());
-    std::sort(files.begin(), files.end());
-    for (auto& f : files)
-        if (ImGui::Selectable(f.c_str(), f == fileName_, ImGuiSelectableFlags_AllowDoubleClick)) {
-            std::snprintf(fileName_, sizeof fileName_, "%s", f.c_str());
-            if (ImGui::IsMouseDoubleClicked(0) && !fileDialogSave_) { openMap(mapsDir() + "/" + f); ImGui::CloseCurrentPopup(); }
-        }
-    ImGui::EndChild();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputText("##fn", fileName_, sizeof fileName_);
-    if (ImGui::Button(fileDialogSave_ ? "Сохранить" : "Открыть", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-        std::string fn = fileName_;
-        if (fs::path(fn).extension() != ".json") fn += ".json";
-        std::string full = fs::path(fn).is_absolute() ? fn : mapsDir() + "/" + fn;
-        if (fileDialogSave_) saveMap(full); else openMap(full);
-        ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Отмена", ImVec2(120, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-}
-
-void Editor::drawBuildWindow() {
-    if (!buildWindow_) return;
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowSize(ImVec2(std::min(820.f, io.DisplaySize.x - 40), 380), ImGuiCond_Appearing);
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y - 60), ImGuiCond_Appearing, ImVec2(0.5f, 1));
-    if (ImGui::Begin("Сборка", &buildWindow_)) {
-        if (ImGui::Button("Копировать журнал")) { std::lock_guard<std::mutex> lk(logMutex_); ImGui::SetClipboardText(buildLog_.c_str()); }
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s", opt_.buildTool.c_str());
-        ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
-        {
-            std::lock_guard<std::mutex> lk(logMutex_);
-            ImGui::TextUnformatted(buildLog_.c_str());
-            if (buildScrollToEnd_) { ImGui::SetScrollHereY(1.0f); buildScrollToEnd_ = false; }
-        }
-        ImGui::EndChild();
-    }
+    ImGui::DockSpace(dock, ImVec2(0, 0), ImGuiDockNodeFlags_None);
     ImGui::End();
 }
 
 void Editor::frame(gfx::Device& dev, double dt) {
+    auto t0 = std::chrono::steady_clock::now();
     time_ += dt;
-    if (mode_ == Mode::Play && sim_ && !playPaused_ && sim_->result() == 0) {
-        for (auto& b : bots_) b.update(*sim_);
-        sim_->advance(dt * double(playSpeed_), 200);
+    pollAgentLink();
+    applyChanges();
+    if (!playing() && gridRevision_ != doc().revision && time_ >= gridRebuildAt_) { syncGrid(); gridRebuildAt_ = time_ + 0.05; }
+    if (sceneFlying_) {
+        float k = float(std::min(1.0, dt * 4.0));
+        sceneCam.target += (sceneGoal_ - sceneCam.target) * k;
+        if (length(sceneGoal_ - sceneCam.target) < 0.05f) sceneFlying_ = false;
     }
-    buildScene();
+    if (sim_ && !playPaused && sim_->result() == 0) {
+        auto s0 = std::chrono::steady_clock::now();
+        for (auto& b : bots_) b.update(*sim_);
+        sim_->advance(dt * double(playSpeed), 200);
+        lastSimMs_ = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - s0).count();
+        samplePlayStats();
+    }
+    flashes_.erase(std::remove_if(flashes_.begin(), flashes_.end(), [&](const Flash& f) { return f.until < time_; }), flashes_.end());
+    for (auto& w : windows_) w->update(*this, dt);
+
     ui_.newFrame(dt);
     handleShortcuts();
-
-    gfx::PassDesc pass;
-    pass.clearColor[0] = 0.13f; pass.clearColor[1] = 0.15f; pass.clearColor[2] = 0.17f;
-    r3d_.beginScene(cam_, dev.framebufferWidth(), dev.framebufferHeight());
-    const game::MapGrid& g = mode_ == Mode::Play && sim_ ? dynamic_cast<game::RtsModule*>(&sim_->module())->state(*sim_).grid : grid_;
-    view_.draw(r3d_, scene_, time_, nullptr, g);
-    const float W = float(doc_.data.w), H = float(doc_.data.h);
-    uint32_t border = rgba(255, 255, 255, 120);
-    r3d_.line({0, 0.05f, 0}, {W, 0.05f, 0}, border); r3d_.line({W, 0.05f, 0}, {W, 0.05f, H}, border);
-    r3d_.line({W, 0.05f, H}, {0, 0.05f, H}, border); r3d_.line({0, 0.05f, H}, {0, 0.05f, 0}, border);
-    if (mode_ == Mode::Edit) {
-        float x, z;
-        bool ground = groundAt(lastX_, lastY_, x, z) && !ui_.wantsMouse();
-        if (ground && (tool_ == Tool::Terrain || tool_ == Tool::Height))
-            r3d_.circleXZ({std::floor(x) + 0.5f, 0, std::floor(z) + 0.5f}, float(tool_ == Tool::Terrain ? brush_ - 1 : brush_) + 0.5f, rgba(255, 255, 255, 180), 40, 0.4f);
-        if (ground && tool_ == Tool::Place && hover_ < 0) {
-            const auto& t = rules_.types[size_t(placeType_)];
-            float cx = snap(x, placeType_), cz = snap(z, placeType_);
-            if (t.structure) {
-                float x0 = cx - t.footprintW * 0.5f, z0 = cz - t.footprintH * 0.5f;
-                uint32_t col = rgba(255, 255, 255, 70);
-                r3d_.triangle({x0, 0.1f, z0}, {x0, 0.1f, z0 + t.footprintH}, {x0 + t.footprintW, 0.1f, z0 + t.footprintH}, col);
-                r3d_.triangle({x0, 0.1f, z0}, {x0 + t.footprintW, 0.1f, z0 + t.footprintH}, {x0 + t.footprintW, 0.1f, z0}, col);
-            } else r3d_.circleXZ({cx, 0, cz}, float(t.radius.toDouble()) + 0.1f, rgba(255, 255, 255, 160), 20, 0.1f);
+    if (showPicker_) {
+        drawGamePicker();
+    } else {
+        drawMenuBar();
+        drawDockspace();
+        for (auto& w : windows_) {
+            if (!w->open) continue;
+            if (w->zeroPadding()) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+            bool visible = ImGui::Begin(w->title(), &w->open, w->flags());
+            if (w->zeroPadding()) ImGui::PopStyleVar();
+            if (visible) w->draw(*this);
+            ImGui::End();
         }
-        if (tool_ == Tool::Road && roadStart_ >= 0 && roadStart_ < int(doc_.data.entities.size()) && ground) {
-            const auto& e = doc_.data.entities[size_t(roadStart_)];
-            r3d_.quadXZ({e.x, 0, e.z}, {x, 0, z}, 0.2f, rgba(255, 255, 255, 170), 0.08f);
-        }
-        if (tool_ == Tool::Erase && hover_ < 0) {
-            int r = pickRoad(lastX_, lastY_);
-            if (r >= 0) {
-                auto [a, b] = doc_.data.roads[size_t(r)];
-                r3d_.quadXZ({doc_.data.entities[size_t(a)].x, 0, doc_.data.entities[size_t(a)].z}, {doc_.data.entities[size_t(b)].x, 0, doc_.data.entities[size_t(b)].z}, 0.7f, rgba(255, 80, 60, 170), 0.06f);
-            }
-        }
+        drawStatusBar();
+        drawActivityToasts();
     }
-    r3d_.render(pass);
-    view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
-
-    drawMenuBar();
-    drawToolsPanel();
-    drawPropertiesPanel();
-    drawStatusBar();
-    drawFileDialog();
-    drawNewMapDialog();
-    drawBuildWindow();
-
-    std::string title = "RTS Editor — " + gameName_ + " — " + (doc_.path.empty() ? std::string("без имени") : fs::path(doc_.path).filename().string()) + (doc_.dirty ? " *" : "");
+    // the screen: only the UI (3D views were rendered offscreen by their windows)
+    gfx::PassDesc pass;
+    pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.11f; pass.clearColor[2] = 0.13f;
+    dev.beginPass(pass);
+    dev.setViewport({0, 0, dev.framebufferWidth(), dev.framebufferHeight()});
+    std::string title = "RTS Editor — " + ws_.project.manifest.getStr("name", "без игры") + " — " +
+                        (doc().path.empty() ? std::string("без имени") : fs::path(doc().path).filename().string()) + (doc().dirty ? " *" : "");
     static std::string lastTitle;
     if (title != lastTitle) { platform::setTitle(title); lastTitle = title; }
     ui_.render();
     dev.endPass();
+    deliverShots(dev);
+    FrameStats fs_{float(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()), lastSimMs_, r3d_.drawCalls()};
+    frameHistory.push_back(fs_);
+    if (frameHistory.size() > 240) frameHistory.pop_front();
     if (quit_) platform::requestQuit();
 }
 
