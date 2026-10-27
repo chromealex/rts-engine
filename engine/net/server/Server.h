@@ -19,7 +19,7 @@ namespace rts { class Json; }
 namespace rts::net {
 
 struct QueueConfig {
-    std::string id = "1v1", title = "1 на 1";
+    std::string id = "1v1", title = "@net.queue.default";   // shown to players: "@key" or literal text
     uint8_t teams = 2, teamSize = 1;
     RoomSettings settings;
     uint32_t botFillSec = 0;           // fill missing players with bots after this wait (0 = never)

@@ -1,5 +1,6 @@
 // Tests for networking: rollback snapshots, protocol, transports, lockstep/rollback sessions,
 // server rooms and matchmaking. Run: ./rts_net_tests (from the repo root or with RTS_SOURCE_DIR).
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <functional>
@@ -8,11 +9,16 @@
 #include <vector>
 
 #include "engine/net/Conn.h"
+#include "engine/i18n/GameLanguage.h"
 #include "engine/net/NetClient.h"
+#include "engine/net/NetLocalize.h"
 #include "engine/net/server/Server.h"
 #include "engine/sim/Replay.h"
 #include <filesystem>
 #include <map>
+#include <set>
+#include <fstream>
+#include <sstream>
 #include "engine/net/Udp.h"
 #include "engine/net/WebSocket.h"
 #include "engine/sim/Simulation.h"
@@ -180,14 +186,17 @@ static void connectPlayer(net::Server& srv, NetPlayer& p, net::LoopbackOptions l
     p.net = std::make_unique<net::NetClient>(std::move(c), net::ClientIdentity{p.name, gameIdOf(p.gameDir), key}, token);
 }
 
+static std::set<std::string> g_seenKeys;   // every NetText key that reached a client in these tests
+
 static void pump(NetPlayer& p, uint64_t now, double dt) {
     if (!p.net || p.paused) return;
     p.net->update(now);
     for (auto& e : p.net->takeEvents()) {
-        p.log.push_back(e.text);
+        p.log.push_back(e.text.key);
+        if (!e.text.empty()) g_seenKeys.insert(e.text.key);
         if (e.kind == net::NetEvent::Kind::MatchEnded && !p.ended) { p.ended = true; p.endResult = e.value; }
         if (e.kind == net::NetEvent::Kind::Desync) p.desync = true;
-        if (e.kind == net::NetEvent::Kind::Error) std::printf("    [%s] error: %s\n", p.name.c_str(), e.text.c_str());
+        if (e.kind == net::NetEvent::Kind::Error) std::printf("    [%s] error: %s\n", p.name.c_str(), e.text.key.c_str());
     }
     if (p.net->matchReady()) {
         auto& m = p.net->match();
@@ -312,12 +321,14 @@ TEST(net_room_match_with_rollback_and_spectator) {
     b.net->joinRoom(b.net->rooms()[0].id, 12345);         // wrong data hash: refused
     step(300);
     CHECK(!b.net->room());
+    CHECK(std::count(b.log.begin(), b.log.end(), "net.error.data_mismatch") == 1);
     b.net->joinRoom(b.net->rooms()[0].id, maps[0].dataHash);
     step(300);
     CHECK(b.net->room() && b.net->room()->slots.size() == 2);
     a.net->startMatch();                                  // Bob not ready yet
     step(300);
     CHECK(!a.net->inMatch());
+    CHECK(std::count(a.log.begin(), a.log.end(), "net.error.not_ready") == 1);
     b.net->setReady(true);
     step(300);
     a.net->startMatch();
@@ -454,6 +465,57 @@ TEST(net_real_sockets_udp_and_websocket) {
     CHECK(!a.desync && !b.desync);
     CHECK(std::abs(int(sa->tick()) - int(sb->tick())) < 10);
     (void)probe;
+}
+
+// ---------------- localization of network texts ----------------
+TEST(net_texts_are_localization_keys) {
+    auto readTable = [](const std::string& lang) {
+        std::ifstream f(std::string(RTS_SOURCE_DIR) + "/engine/assets/lang/" + lang + ".json");
+        std::stringstream ss; ss << f.rdbuf();
+        return Json::parse(ss.str());
+    };
+    i18n::Localization en, ru;
+    en.addTable("en", readTable("en")); en.setLanguage("en");
+    ru.addTable("en", readTable("en")); ru.addTable("ru", readTable("ru")); ru.setLanguage("ru");
+    const auto& keys = net::netTextKeys();
+    for (auto& k : keys) {
+        CHECK(en.catalog("en")->find(k) != nullptr);
+        CHECK(ru.catalog("ru")->find(k) != nullptr);
+        if (!ru.catalog("ru")->find(k)) std::printf("    missing in ru: %s\n", k.c_str());
+    }
+    for (auto& k : g_seenKeys) {   // the code emits nothing outside the list
+        CHECK(std::find(keys.begin(), keys.end(), k) != keys.end());
+        if (std::find(keys.begin(), keys.end(), k) == keys.end()) std::printf("    unlisted key: %s\n", k.c_str());
+    }
+    CHECK(g_seenKeys.count("net.connected") && g_seenKeys.count("net.error.not_ready"));
+    CHECK(net::translate(ru, net::NetText("net.player.left").str("name", "Bob").num("slot", 2)) == "Bob покинул игру");
+    CHECK(net::translate(en, net::NetText("net.error.no_maps_for_queue").str("queue", "Custom")) == "No suitable maps for “Custom”");
+    CHECK(net::translate(ru, net::NetText("net.error.no_maps_for_queue").str("queue", "@net.queue.2v2")) == "Нет подходящих карт для режима «2 на 2»");
+    CHECK(net::translate(ru, net::NetText("net.player.dropped").str("name", "@net.player.unnamed").num("slot", 2)) == "Игрок 2 потерял соединение");
+    CHECK(net::translate(en, net::NetText("net.player.left").str("name", "@@root").num("slot", 1)) == "@root left the game");
+    CHECK(net::translate(ru, net::NetText("net.rating_down").num("delta", 18)) == "Рейтинг −18");
+    CHECK(net::displayName(ru, "@net.bot", 2) == "Бот 2");
+    CHECK(net::displayName(en, "", 3) == "Player 3");
+    CHECK(net::displayName(ru, "@net.queue.2v2", 0) == "2 на 2");     // titles from server.json
+    CHECK(net::displayName(en, "@@admin", 1) == "@admin");            // a player's own "@" is escaped by the server
+    // NetText survives the wire.
+    net::ErrorMsg e; e.code = net::ErrorCode::RoomFull; e.text = net::NetText("net.error.no_maps_for_queue").str("queue", "x").num("n", -5);
+    net::Bytes b = net::encode(e);
+    ByteReader r(b.data() + 1, b.size() - 1);
+    net::ErrorMsg d;
+    CHECK(net::decode(r, d) && d.code == e.code && d.text == e.text);
+    // Nothing user-facing in the network code is a hard-coded sentence any more.
+    for (const char* f : {"/engine/net/NetClient.cpp", "/engine/net/server/Server.cpp", "/engine/net/server/ServerMatch.cpp", "/engine/net/server/Matchmaker.cpp"}) {
+        std::ifstream in(std::string(RTS_SOURCE_DIR) + f);
+        std::string line; int n = 0, bad = 0;
+        while (std::getline(in, line)) {
+            ++n;
+            const size_t comment = line.find("//");
+            for (size_t i = 0; i + 1 < line.size() && i < comment; ++i)
+                if ((uint8_t(line[i]) == 0xD0 || uint8_t(line[i]) == 0xD1) && uint8_t(line[i + 1]) >= 0x80) { ++bad; std::printf("    Cyrillic in code: %s:%d\n", f, n); break; }
+        }
+        CHECK(bad == 0);
+    }
 }
 
 int main(int argc, char** argv) {
