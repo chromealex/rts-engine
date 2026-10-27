@@ -1,0 +1,30 @@
+<rml>
+<head>
+    <title>menu</title>
+    <link type="text/rcss" href="theme.rcss"/>
+</head>
+<body>
+<!-- the model is bound on a div: <body> is the document element itself and binds too late -->
+<div class="root" data-model="game" data-class-touch="touch">
+    <div id="menu" class="panel" data-if="screen == 'menu'">
+        <h1>{{gameName}}</h1>
+        <p class="error" data-if="error != ''">{{error}}</p>
+
+        <h2>Сложность</h2>
+        <div class="choice">
+            <button data-class-active="difficulty == 0" data-event-click="difficulty = 0">Лёгкая</button>
+            <button data-class-active="difficulty == 1" data-event-click="difficulty = 1">Обычная</button>
+            <button data-class-active="difficulty == 2" data-event-click="difficulty = 2">Сложная</button>
+        </div>
+        <button class="small" data-class-active="spectator" data-event-click="spectator = !spectator">
+            Только наблюдать (боты против ботов)
+        </button>
+
+        <h2>Карта</h2>
+        <button class="map" data-for="m, i : maps" data-event-click="start(i)">{{m}}</button>
+
+        <p class="dim footer">{{platformInfo}}</p>
+    </div>
+</div>
+</body>
+</rml>

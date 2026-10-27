@@ -8,6 +8,7 @@
 //         Ctrl+1..9 = set control group, 1..9 = recall; WASD/arrows or screen edge = scroll, wheel = zoom
 //         Garrison buildings: drag from your building to a target to send troops (percent in the HUD)
 // Touch:  tap = select / command, drag = scroll (or send from your garrison building), pinch = zoom
+// F8:     RmlUi debugger. The UI itself is data: engine/assets/ui/*.rml (see ClientUi.cpp).
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -19,102 +20,14 @@
 #include <string>
 #include <vector>
 
-#include "engine/gfx/Gfx.h"
-#include "engine/platform/Platform.h"
-#include "engine/render/ImGuiLayer.h"
-#include "engine/render/Renderer3D.h"
-#include "engine/sim/Simulation.h"
-#include "imgui.h"
-#include "modules/rts/RtsAI.h"
-#include "modules/rts/RtsModule.h"
-#include "modules/rts/view/RtsView.h"
+#include "GameClient.h"
 
 using namespace rts;
-using namespace rts::render;
-using namespace rts::game;
 using platform::Event;
 using platform::EventType;
 using platform::Key;
 
-namespace {
-
-struct MapEntry { std::string file, title; };
-struct Notice { std::string text; double until; };
-
-class GameClient {
-public:
-    void init(gfx::Device& dev);
-    void frame(gfx::Device& dev, double dt);
-    void event(const Event& e);
-    void shutdown();
-    void autostart(size_t i) { startMatch(i); }
-    void spectate() { spectator_ = true; }
-
-private:
-    enum class Screen { Menu, Playing, Paused, Over };
-    enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim };
-
-    void startMatch(size_t idx);
-    void fitCamera();
-    RtsModule& mod() { return *dynamic_cast<RtsModule*>(&sim_->module()); }
-    bool groundAt(float sx, float sy, float3& out) const;
-    Entity pick(float sx, float sy) const;
-    void selectBox(float x0, float y0, float x1, float y1, bool add);
-    void selectSameType(Entity e);
-    void command(uint16_t type, float sx, float sy, bool queue);
-    void issue(Command c) { c.player = human_; sim_->submit(c); }
-    void processEvents();
-    void notice(const std::string& t) { notices_.push_back({t, time_ + 2.5}); if (notices_.size() > 4) notices_.erase(notices_.begin()); }
-    void cleanSelection();
-    bool selectionHasGarrison() const;
-    Vec3 placeCentre(float sx, float sy, bool& ok);
-
-    void drawMenu();
-    void drawHud();
-    void drawCommandCard();
-    void drawMinimap();
-    void drawPause();
-
-    gfx::Device* dev_ = nullptr;
-    ImGuiLayer ui_;
-    Renderer3D r3d_;
-    RtsView view_;
-    RTSCamera cam_;
-    Json manifest_, rulesJson_;
-    std::vector<MapEntry> maps_;
-    std::string gameName_ = "RTSEngine";
-    Rules rules_;
-
-    Screen screen_ = Screen::Menu;
-    std::unique_ptr<Simulation> sim_;
-    std::vector<RtsAI> bots_;
-    RtsScene scene_;
-    uint8_t human_ = 1;
-    bool spectator_ = false;
-    int difficulty_ = 1;
-    size_t mapIndex_ = 0;
-    double time_ = 0;
-    std::string error_;
-    std::vector<Notice> notices_;
-
-    // input
-    std::vector<Entity> selection_;
-    std::array<std::vector<Entity>, 10> groups_;
-    Mode mode_ = Mode::Normal;
-    Entity placeProducer_;   // sidebar placement: structure comes from this producer
-    int abilityIndex_ = -1;
-    int placeType_ = -1;
-    int sendPercent_ = 50;
-    bool boxing_ = false, panning_ = false, sendDrag_ = false;
-    float downX_ = 0, downY_ = 0, mouseX_ = -1, mouseY_ = -1;
-    double lastClickTime_ = 0;
-    Entity hover_;
-    bool keys_[int(Key::Count)] = {};
-    std::map<int64_t, std::pair<float, float>> touches_;
-    float pinchDist_ = 0;
-    bool touchMoved_ = false;
-    std::vector<std::pair<float3, double>> markers_;
-};
+namespace rts::client {
 
 GameClient* g_client = nullptr;
 
@@ -135,16 +48,19 @@ void GameClient::init(gfx::Device& dev) {
         error_ = e.what();
     }
     platform::setTitle(gameName_);
-    ui_.init(dev, "fonts/ui.ttf", 17.0f);
+    overlay_.init(dev, "fonts/ui.ttf", 17.0f);
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
+    initUi();
 }
 
 void GameClient::shutdown() {
     view_.shutdown(*dev_);
     r3d_.shutdown();
-    ui_.shutdown();
+    shutdownUi();
+    minimap_.release(*dev_);
+    overlay_.shutdown();
 }
 
 void GameClient::startMatch(size_t idx) {
@@ -174,8 +90,10 @@ void GameClient::startMatch(size_t idx) {
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();
+    minimap_.build(*dev_, mod().state(*sim_), rules_);
+    ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
     mode_ = Mode::Normal;
-    screen_ = Screen::Playing;
+    setScreen(Screen::Playing);
 }
 
 void GameClient::fitCamera() {
@@ -294,8 +212,16 @@ Vec3 GameClient::placeCentre(float sx, float sy, bool& ok) {
 
 void GameClient::event(const Event& e) {
     bool uiWants = ui_.handleEvent(e);
+    if (e.type == EventType::KeyDown && e.key == Key::F8 && !e.repeat) ui_.toggleDebugger();
+    // a press that started on the UI keeps the pointer until release (dragging out of a panel
+    // must not start a selection box); a press that started in the world ignores the UI
+    if (e.type == EventType::MouseDown || e.type == EventType::TouchBegin) uiOwnsPointer_ = uiWants;
+    if (e.type == EventType::MouseMove || e.type == EventType::TouchMove) uiWants = uiWants && !boxing_ && !sendDrag_ && !panning_;
+    if (e.type == EventType::MouseUp || e.type == EventType::TouchEnd || e.type == EventType::TouchCancel) uiWants = uiOwnsPointer_;
+    if (!uiWants) overlay_.handleEvent(e);
     if (e.type == EventType::KeyDown || e.type == EventType::KeyUp) keys_[int(e.key)] = e.type == EventType::KeyDown;
     if (e.type == EventType::MouseMove || e.type == EventType::MouseDown) { mouseX_ = e.x; mouseY_ = e.y; }
+    if (screen_ == Screen::Paused && e.type == EventType::KeyDown && e.key == Key::Escape && !uiWants) { setScreen(Screen::Playing); return; }
     if (screen_ != Screen::Playing || !sim_) return;
     World& w = sim_->world();
     switch (e.type) {
@@ -478,7 +404,7 @@ void GameClient::event(const Event& e) {
     case EventType::KeyDown: {
         if (uiWants) return;
         const bool ctrl = e.mods & (platform::kModCtrl | platform::kModSuper);
-        if (e.key == Key::Escape) { if (mode_ != Mode::Normal) mode_ = Mode::Normal; else screen_ = Screen::Paused; }
+        if (e.key == Key::Escape) { if (mode_ != Mode::Normal) mode_ = Mode::Normal; else setScreen(Screen::Paused); }
         if (e.key >= Key::Num1 && e.key <= Key::Num9) {
             int gi = int(e.key) - int(Key::Num0);
             if (ctrl) groups_[size_t(gi)] = selection_;
@@ -516,380 +442,6 @@ void GameClient::processEvents() {
     }
 }
 
-// ------------------------------------------------------------------ UI
-
-void GameClient::drawMenu() {
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(std::min(440.f, io.DisplaySize.x - 32), 0));
-    ImGui::Begin("##menu", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-    ImGui::SetWindowFontScale(1.6f);
-    ImGui::TextUnformatted(gameName_.c_str());
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::Separator();
-    if (!error_.empty()) { ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", error_.c_str()); ImGui::Separator(); }
-    ImGui::TextUnformatted("Сложность");
-    ImGui::RadioButton("Лёгкая", &difficulty_, 0); ImGui::SameLine();
-    ImGui::RadioButton("Обычная", &difficulty_, 1); ImGui::SameLine();
-    ImGui::RadioButton("Сложная", &difficulty_, 2);
-    ImGui::Checkbox("Только наблюдать (боты против ботов)", &spectator_);
-    ImGui::Spacing();
-    ImGui::TextUnformatted("Карта");
-    for (size_t i = 0; i < maps_.size(); ++i)
-        if (ImGui::Button(maps_[i].title.c_str(), ImVec2(-1, 0))) startMatch(i);
-    ImGui::Spacing();
-    ImGui::TextDisabled("%s · %s", platform::name(), dev_->info().name.c_str());
-    ImGui::End();
-}
-
-void GameClient::drawHud() {
-    ImGuiIO& io = ImGui::GetIO();
-    auto& gs = mod().state(*sim_);
-    const auto& eco = gs.players[spectator_ ? 1 : human_];
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, 6), ImGuiCond_Always, ImVec2(0.5f, 0));
-    ImGui::Begin("##res", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoFocusOnAppearing);
-    bool firstItem = true;
-    auto sep = [&] { if (!firstItem) ImGui::SameLine(0, 18); firstItem = false; };
-    for (size_t r = 0; r < rules_.resources.size(); ++r) {
-        sep();
-        const auto& rd = rules_.resources[r];
-        if (rd.kind == ResourceKind::Capacity) {
-            bool low = eco.capUsed[r] > eco.capProvided[r];
-            ImGui::TextColored(low ? ImVec4(1, 0.45f, 0.35f, 1) : ImVec4(1, 1, 1, 1), "%s: %lld/%lld", rd.name.c_str(),
-                               (long long)eco.capUsed[r].toInt(), (long long)eco.capProvided[r].toInt());
-            continue;
-        }
-        ImGui::Text("%s: %lld", rd.name.c_str(), (long long)eco.stock[r].toInt());
-        if ((rd.kind == ResourceKind::Flow || rd.capped) && eco.cap[r].raw > 0) { ImGui::SameLine(0, 2); ImGui::TextDisabled("/%lld", (long long)eco.cap[r].toInt()); }
-        if (rd.kind == ResourceKind::Flow) { ImGui::SameLine(0, 4); ImGui::TextDisabled("(%+.1f/с)", eco.income[r].toDouble()); }
-    }
-    if (eco.supplyCap.raw > 0 || eco.supplyUsed.raw > 0) {
-        sep();
-        bool full = eco.supplyUsed >= eco.supplyCap;
-        ImGui::TextColored(full ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(1, 1, 1, 1), "Лимит: %lld/%lld", (long long)eco.supplyUsed.toInt(), (long long)eco.supplyCap.toInt());
-    }
-    if (rules_.resources.empty()) {
-        for (auto& p : sim_->players()) {
-            int g = 0;
-            sim_->world().each<Garrison, Owner>([&](Entity, Garrison& gg, Owner& o) { if (o.player == p.slot) g += gg.count; });
-            sim_->world().each<Unit, Owner>([&](Entity en, Unit&, Owner& o) { if (o.player == p.slot && sim_->world().has<Mobile>(en)) ++g; });
-            float4 c = RtsView::playerColor(p.slot);
-            sep();
-            ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%s %d%s", p.name.c_str(), g, p.alive ? "" : " (выбыл)");
-        }
-    }
-    // mode-specific counters
-    const auto& vic = gs.victory;
-    if (vic.mode == VictoryMode::Tickets)
-        for (size_t t = 1; t < gs.tickets.size(); ++t) { sep(); ImGui::Text("Команда %zu: %lld", t, (long long)gs.tickets[t].toInt()); }
-    if (vic.mode == VictoryMode::Score)
-        for (size_t t = 1; t < gs.score.size(); ++t) { sep(); float4 c = RtsView::playerColor(uint8_t(t)); ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%lld", (long long)gs.score[t].toInt()); }
-    if (vic.mode == VictoryMode::Survive || vic.mode == VictoryMode::Score) {
-        int64_t left = std::max<int64_t>(0, (vic.surviveSeconds * int64_t(sim_->tickRate())).toInt() - int64_t(sim_->tick())) / sim_->tickRate();
-        sep(); ImGui::Text("Осталось %lld:%02lld", (long long)(left / 60), (long long)(left % 60));
-    }
-    if (uint32_t wt = mod().ticksUntilWave(*sim_)) { sep(); ImGui::Text("Волна через %u", wt / sim_->tickRate() + 1); }
-    if (gs.regionCount > 0 && !spectator_) {
-        int owned = 0;
-        for (auto o : gs.regionOwner) if (o == human_) ++owned;
-        sep(); ImGui::Text("Регионы: %d", owned);
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Занять")) mode_ = Mode::Claim;
-    }
-    if (!rules_.autoBuildPool.empty() && !spectator_) {
-        sep();
-        auto cost = mod().autoBuildCost(*sim_, human_, rules_.autoBuildPool[0]);
-        std::string label = "СТРОИТЬ";
-        for (auto& c : cost) label += " " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
-        if (ImGui::Button(label.c_str())) { Command c; c.type = kCmdAutoBuild; c.param = -1; issue(c); }
-    }
-    sep();
-    ImGui::Text("%u:%02u", sim_->tick() / sim_->tickRate() / 60, sim_->tick() / sim_->tickRate() % 60);
-    ImGui::SameLine(0, 18);
-    if (ImGui::SmallButton("Меню")) screen_ = Screen::Paused;
-    ImGui::End();
-
-    float y = 48;
-    for (auto& n : notices_) {
-        if (n.until < time_) continue;
-        ImVec2 ts = ImGui::CalcTextSize(n.text.c_str());
-        ImGui::GetForegroundDrawList()->AddText(ImVec2(io.DisplaySize.x * 0.5f - ts.x * 0.5f, y), IM_COL32(255, 230, 140, 255), n.text.c_str());
-        y += ts.y + 4;
-    }
-
-    ImDrawList* fg = ImGui::GetForegroundDrawList();
-    if (boxing_ && std::hypot(mouseX_ - downX_, mouseY_ - downY_) > 6) {
-        ImVec2 a(std::min(downX_, mouseX_), std::min(downY_, mouseY_)), b(std::max(downX_, mouseX_), std::max(downY_, mouseY_));
-        fg->AddRectFilled(a, b, IM_COL32(120, 255, 120, 30));
-        fg->AddRect(a, b, IM_COL32(120, 255, 120, 200));
-    }
-    if (sendDrag_) {
-        for (Entity s : selection_) {
-            auto* t = sim_->world().tryGet<Transform>(s);
-            float2 a;
-            if (t && cam_.worldToScreen({float(t->pos.x.toDouble()), 0.5f, float(t->pos.z.toDouble())}, platform::windowWidth(), platform::windowHeight(), a))
-                fg->AddLine(ImVec2(a.x, a.y), ImVec2(mouseX_, mouseY_), IM_COL32(255, 255, 255, 200), 4);
-        }
-    }
-    if (mode_ != Mode::Normal) {
-        const char* m = mode_ == Mode::AttackMove ? "Атака: выберите цель" : mode_ == Mode::Patrol ? "Патруль: выберите точку"
-                      : mode_ == Mode::Rally ? "Точка сбора" : mode_ == Mode::Ability ? "Способность: выберите цель"
-                      : mode_ == Mode::Claim ? "Выберите соседний регион" : "Постройка: выберите место (Esc — отмена)";
-        fg->AddText(ImVec2(mouseX_ + 16, mouseY_ + 8), IM_COL32(255, 255, 255, 230), m);
-    }
-}
-
-void GameClient::drawCommandCard() {
-    ImGuiIO& io = ImGui::GetIO();
-    cleanSelection();
-    World& w = sim_->world();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x - 8, io.DisplaySize.y - 8), ImGuiCond_Always, ImVec2(1, 1));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(260, 0), ImVec2(380, io.DisplaySize.y * 0.6f));
-    ImGui::Begin("##card", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-    if (selection_.empty()) {
-        ImGui::TextDisabled(platform::isTouchDevice() ? "Нажмите на свой объект" : "Выделите юнитов рамкой");
-        if (ImGui::Button("Все войска", ImVec2(-1, 0))) {
-            for (auto& o : scene_.objects)
-                if (o.owner == human_ && !o.isProjectile && !rules_.types[o.type].structure && !rules_.types[o.type].worker && !rules_.types[o.type].weapons.empty())
-                    selection_.push_back(o.entity);
-        }
-        ImGui::End();
-        return;
-    }
-    std::map<uint16_t, int> counts;
-    for (Entity e : selection_) counts[w.get<Unit>(e).type]++;
-    bool first = true;
-    for (auto& [t, n] : counts) {
-        if (!first) ImGui::SameLine();
-        first = false;
-        if (n > 1) ImGui::Text("%s x%d", rules_.types[t].name.c_str(), n); else ImGui::Text("%s", rules_.types[t].name.c_str());
-    }
-    Entity e0 = selection_[0];
-    const UnitType& t0 = rules_.types[w.get<Unit>(e0).type];
-    if (selection_.size() == 1) {
-        const Unit& u = w.get<Unit>(e0);
-        if (!t0.invulnerable) ImGui::TextDisabled("Здоровье %lld / %lld", (long long)u.hp.toInt(), (long long)t0.maxHp.toInt());
-        if (auto* rs = w.tryGet<ResourceStock>(e0)) ImGui::TextDisabled("Запас: %lld", (long long)rs->amount.toInt());
-        if (auto* g = w.tryGet<Garrison>(e0)) ImGui::TextDisabled("Гарнизон: %d / %d", g->count, t0.garrisonMax);
-    }
-    if (w.get<Owner>(e0).player != human_) { ImGui::End(); return; }
-
-    auto costText = [&](uint16_t type) {
-        std::string s;
-        for (auto& c : rules_.types[type].cost) s += "  " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
-        if (rules_.types[type].supplyUsed.raw > 0) s += "  " + std::to_string(rules_.types[type].supplyUsed.toInt()) + " лим.";
-        return s;
-    };
-    if (selectionHasGarrison()) {
-        ImGui::Separator();
-        ImGui::TextUnformatted("Отправить:");
-        for (int p : {25, 50, 75, 100}) {
-            ImGui::SameLine();
-            char b[8]; std::snprintf(b, sizeof b, "%d%%", p);
-            if (ImGui::Selectable(b, sendPercent_ == p, 0, ImVec2(40, 0))) sendPercent_ = p;
-        }
-        ImGui::TextDisabled("Перетащите от здания к цели");
-    }
-    bool anyMobile = false, anyWeapon = false;
-    std::vector<uint16_t> buildable;
-    for (Entity e : selection_) {
-        const UnitType& t = rules_.types[w.get<Unit>(e).type];
-        if (t.speed.raw > 0) anyMobile = true;
-        if (!t.weapons.empty()) anyWeapon = true;
-        for (uint16_t b : t.builds) if (std::find(buildable.begin(), buildable.end(), b) == buildable.end()) buildable.push_back(b);
-    }
-    if (anyMobile) {
-        ImGui::Separator();
-        if (anyWeapon) { if (ImGui::Button("Атака (A)")) mode_ = Mode::AttackMove; ImGui::SameLine(); }
-        if (ImGui::Button("Стоп (S)")) { Command c; c.type = kCmdStop; c.units = selection_; issue(c); }
-        ImGui::SameLine();
-        if (ImGui::Button("Держать (H)")) { Command c; c.type = kCmdHold; c.units = selection_; issue(c); }
-        ImGui::SameLine();
-        if (ImGui::Button("Патруль (P)")) mode_ = Mode::Patrol;
-    }
-    if (!buildable.empty()) {
-        ImGui::Separator();
-        ImGui::TextUnformatted("Строить:");
-        for (uint16_t b : buildable) {
-            bool ok = mod().canTrain(*sim_, human_, b);
-            ImGui::BeginDisabled(!ok);
-            std::string label = rules_.types[b].name + costText(b);
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { mode_ = Mode::Place; placeType_ = b; placeProducer_ = kNullEntity; }
-            ImGui::EndDisabled();
-        }
-    }
-    auto reqTooltip = [&](const std::vector<Requirement>& req) {
-        std::string r;
-        for (auto& q : req) r += (q.tech ? rules_.techs[q.index].name : rules_.types[q.index].name) + " ";
-        ImGui::SetTooltip("Требуется: %s", r.c_str());
-    };
-    // abilities of the selection (by index of the first unit's type)
-    if (!t0.abilities.empty()) {
-        ImGui::Separator();
-        for (size_t i = 0; i < t0.abilities.size(); ++i) {
-            const AbilityDef& a = t0.abilities[i];
-            if (a.aura) { ImGui::TextDisabled("Аура: %s", a.name.c_str()); continue; }
-            bool ok = mod().canCast(*sim_, e0, int(i));
-            ImGui::BeginDisabled(!ok);
-            std::string label = a.name;
-            if (a.energyCost.raw > 0) label += "  (" + std::to_string(a.energyCost.toInt()) + " эн.)";
-            ImGui::PushID(int(i) + 1000);
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) {
-                if (a.target == TargetKind::None || a.target == TargetKind::Self) { Command c; c.type = kCmdAbility; c.param = int64_t(i); c.units = selection_; issue(c); }
-                else { mode_ = Mode::Ability; abilityIndex_ = int(i); }
-            }
-            ImGui::PopID();
-            ImGui::EndDisabled();
-        }
-    }
-    if (auto* prod = w.tryGet<Production>(e0); prod && !(w.get<Unit>(e0).flags & kUnitUnderConstruction)) {
-        ImGui::Separator();
-        if (prod->ready != kNoType) {
-            std::string label = "Установить: " + rules_.types[prod->ready].name;
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { mode_ = Mode::Place; placeType_ = prod->ready; placeProducer_ = e0; }
-        }
-        if (t0.chargesMax > 0) ImGui::TextDisabled("Заряды: %d / %d", prod->charges, t0.chargesMax);
-        for (uint16_t p : t0.produces) {
-            bool ok = mod().canTrain(*sim_, human_, p);
-            ImGui::BeginDisabled(!ok);
-            std::string label = rules_.types[p].name + costText(p);
-            ImGui::PushID(p);
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) {
-                Command c; c.type = kCmdTrain; c.param = p;
-                Entity best = e0; size_t bestQ = SIZE_MAX;
-                for (Entity e : selection_)
-                    if (w.get<Unit>(e).type == w.get<Unit>(e0).type)
-                        if (auto* pp = w.tryGet<Production>(e); pp && pp->queue.size() < bestQ) { bestQ = pp->queue.size(); best = e; }
-                c.units = {best};
-                issue(c);
-            }
-            ImGui::PopID();
-            ImGui::EndDisabled();
-            if (!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) reqTooltip(rules_.types[p].requires_);
-        }
-        const auto& eco = mod().state(*sim_).players[human_];
-        for (uint16_t k : t0.researches) {
-            const TechDef& tech = rules_.techs[k];
-            if (eco.researched[k]) continue;
-            bool ok = !eco.researching[k] && mod().requirementsMet(*sim_, human_, tech.requires_);
-            std::string label = "Исследовать: " + tech.name;
-            for (auto& c : tech.cost) label += "  " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
-            ImGui::BeginDisabled(!ok);
-            ImGui::PushID(int(k) + 5000);
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { Command c; c.type = kCmdResearch; c.param = k; c.units = {e0}; issue(c); }
-            ImGui::PopID();
-            ImGui::EndDisabled();
-            if (!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) reqTooltip(tech.requires_);
-        }
-        for (uint16_t up : t0.upgrades) {
-            std::string label = "Улучшить: " + rules_.types[up].name + costText(up);
-            ImGui::PushID(int(up) + 9000);
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { Command c; c.type = kCmdUpgrade; c.param = up; c.units = {e0}; issue(c); }
-            ImGui::PopID();
-        }
-        for (size_t i = 0; i < prod->queue.size(); ++i) {
-            const ProdItem& it = prod->queue[i];
-            std::string name = it.item >= 0 ? rules_.types[size_t(it.item)].name : rules_.techs[size_t(~it.item)].name;
-            if (i == 0 || t0.chargesMax > 0) ImGui::ProgressBar(float(std::min(1.0, it.progress.toDouble())), ImVec2(-1, 0), name.c_str());
-        }
-        for (size_t i = 0; i < prod->queue.size(); ++i) {
-            const ProdItem& it = prod->queue[i];
-            std::string name = it.item >= 0 ? rules_.types[size_t(it.item)].name : rules_.techs[size_t(~it.item)].name;
-            if (i) ImGui::SameLine();
-            ImGui::PushID(int(i));
-            if (ImGui::SmallButton((name.substr(0, 6) + " x").c_str())) {
-                Command c; c.type = kCmdCancelTrain; c.units = {e0}; c.param = int64_t(i); issue(c);
-            }
-            ImGui::PopID();
-        }
-        if (!t0.produces.empty() && ImGui::Button("Точка сбора")) mode_ = Mode::Rally;
-    }
-    {
-        // structure / unit specials
-        bool row = false;
-        auto rowItem = [&] { if (row) ImGui::SameLine(); row = true; };
-        if (t0.structure && t0.sellable && !w.has<Construction>(e0)) { rowItem(); if (ImGui::Button("Продать")) { Command c; c.type = kCmdSell; c.units = {e0}; issue(c); } }
-        if (t0.deploysTo != kNoType) { rowItem(); if (ImGui::Button("Развернуть")) { Command c; c.type = kCmdDeploy; c.units = {e0}; issue(c); } }
-        if (t0.members > 1) {
-            rowItem();
-            ImGui::Text("Бойцов: %d/%d", mod().membersAlive(*sim_, e0), t0.members);
-            ImGui::SameLine();
-            if (ImGui::Button("Пополнить")) { Command c; c.type = kCmdReinforce; c.units = selection_; issue(c); }
-        }
-        if (auto* h = w.tryGet<Hero>(e0)) { rowItem(); ImGui::Text("Уровень %d  (опыт %lld)", h->level, (long long)h->xp.toInt()); }
-        if (t0.maxEnergy.raw > 0) { rowItem(); ImGui::Text("Энергия %lld/%lld", (long long)w.get<Unit>(e0).energy.toInt(), (long long)t0.maxEnergy.toInt()); }
-    }
-    if (w.has<Construction>(e0) && ImGui::Button("Отменить постройку")) { Command c; c.type = kCmdCancelTrain; c.units = {e0}; issue(c); }
-    ImGui::End();
-}
-
-void GameClient::drawMinimap() {
-    ImGuiIO& io = ImGui::GetIO();
-    auto& gs = mod().state(*sim_);
-    const float size = platform::isTouchDevice() ? 150.0f : 190.0f;
-    float sx = size / float(std::max(gs.grid.w, gs.grid.h));
-    float mw = gs.grid.w * sx, mh = gs.grid.h * sx;
-    ImGui::SetNextWindowPos(ImVec2(8, io.DisplaySize.y - 8), ImGuiCond_Always, ImVec2(0, 1));
-    ImGui::Begin("##minimap", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-    ImVec2 o = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##mm", ImVec2(mw, mh));
-    if (ImGui::IsItemActive()) cam_.target = {(io.MousePos.x - o.x) / sx, 0, (io.MousePos.y - o.y) / sx};
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(o, ImVec2(o.x + mw, o.y + mh), IM_COL32(60, 92, 50, 255));
-    const auto* vis = spectator_ ? nullptr : &gs.vision[human_];
-    int step = std::max(1, std::max(gs.grid.w, gs.grid.h) / 96);
-    for (int y = 0; y < gs.grid.h; y += step)
-        for (int x = 0; x < gs.grid.w; x += step) {
-            uint8_t f = gs.grid.flags[size_t(gs.grid.index(x, y))];
-            ImU32 c = 0;
-            if (!(f & kCellGround) && (f & kCellWater)) c = IM_COL32(50, 100, 150, 255);
-            else if (!(f & kCellGround)) c = IM_COL32(110, 106, 100, 255);
-            uint8_t v = vis ? (*vis)[size_t(gs.grid.index(x, y))] : 2;
-            if (v == 0) c = IM_COL32(12, 14, 18, 255);
-            else if (v == 1) c = c ? ((c & 0x00ffffffu) | 0x99000000u) : IM_COL32(40, 60, 34, 255);
-            if (c) dl->AddRectFilled(ImVec2(o.x + x * sx, o.y + y * sx), ImVec2(o.x + (x + step) * sx, o.y + (y + step) * sx), c);
-        }
-    for (auto& ob : scene_.objects) {
-        if (!ob.visible || ob.isProjectile) continue;
-        const UnitType& t = rules_.types[ob.type];
-        if (ob.owner == 0 && t.resourceNode >= 0 && t.footprintW <= 1) continue; // trees: too many dots
-        float4 c = ob.owner == 0 && t.resourceNode >= 0 ? float4{1, 0.85f, 0.2f, 1} : RtsView::playerColor(ob.owner);
-        float r = t.structure ? 2.5f : 1.5f;
-        dl->AddRectFilled(ImVec2(o.x + ob.pos.x * sx - r, o.y + ob.pos.z * sx - r), ImVec2(o.x + ob.pos.x * sx + r, o.y + ob.pos.z * sx + r),
-                          ImGui::ColorConvertFloat4ToU32(ImVec4(c.x, c.y, c.z, 1)));
-    }
-    float W = platform::windowWidth(), H = platform::windowHeight();
-    float3 c[4];
-    if (groundAt(0, 0, c[0]) && groundAt(W, 0, c[1]) && groundAt(W, H, c[2]) && groundAt(0, H, c[3]))
-        for (int i = 0; i < 4; ++i) dl->AddLine(ImVec2(o.x + c[i].x * sx, o.y + c[i].z * sx), ImVec2(o.x + c[(i + 1) % 4].x * sx, o.y + c[(i + 1) % 4].z * sx), IM_COL32(255, 255, 255, 200));
-    ImGui::End();
-}
-
-void GameClient::drawPause() {
-    ImGuiIO& io = ImGui::GetIO();
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::Begin("##pause", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
-    if (screen_ == Screen::Over) {
-        int res = sim_->result();
-        auto* me = sim_->player(human_);
-        bool won = !spectator_ && res > 0 && me && me->team == res;
-        ImGui::SetWindowFontScale(1.6f);
-        ImGui::TextUnformatted(spectator_ ? "Матч окончен" : won ? "Победа!" : "Поражение");
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::Text("Время: %u:%02u", sim_->tick() / sim_->tickRate() / 60, sim_->tick() / sim_->tickRate() % 60);
-    } else {
-        ImGui::TextUnformatted("Пауза");
-        if (ImGui::Button("Продолжить", ImVec2(220, 0))) screen_ = Screen::Playing;
-    }
-    static const char* q[] = {"Тени: выкл", "Тени: низкие", "Тени: средние", "Тени: высокие"};
-    int qi = int(r3d_.shadowQuality());
-    ImGui::SetNextItemWidth(220);
-    if (ImGui::Combo("##shadows", &qi, q, 4)) r3d_.setShadowQuality(ShadowQuality(qi));
-    if (ImGui::Button("Заново", ImVec2(220, 0))) startMatch(mapIndex_);
-    if (ImGui::Button("В меню", ImVec2(220, 0))) { screen_ = Screen::Menu; sim_.reset(); }
-    ImGui::End();
-}
-
 void GameClient::frame(gfx::Device& dev, double dt) {
     time_ += dt;
     float alpha = 0;
@@ -903,7 +455,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         // edge scrolling only while the cursor is inside the window (macOS reports moves outside it too)
         bool edges = !platform::isTouchDevice() && std::string(platform::name()) != "web" && mouseX_ >= 0 && mouseY_ >= 0 && mouseX_ <= W && mouseY_ <= H;
         bool noSel = selection_.empty();
-        if (!ui_.wantsKeyboard()) {
+        if (!ui_.textInputFocused()) {
             if (key(Key::Up) || (noSel && key(Key::W)) || (edges && mouseY_ < 3)) cam_.target += fwd * speed;
             if (key(Key::Down) || (noSel && key(Key::S)) || (edges && mouseY_ > H - 3)) cam_.target += fwd * -speed;
             if (key(Key::Right) || (noSel && key(Key::D)) || (edges && mouseX_ > W - 3)) cam_.target += right * speed;
@@ -917,7 +469,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         sim_->advance(dt);
         alpha = float(sim_->alpha());
         processEvents();
-        if (sim_->result() != 0) screen_ = Screen::Over;
+        if (sim_->result() != 0) setScreen(Screen::Over);
     }
     if (sim_) {
         sceneFromSim(*sim_, scene_, alpha, spectator_ ? 0 : human_);
@@ -931,7 +483,8 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         markers_.erase(std::remove_if(markers_.begin(), markers_.end(), [&](auto& m) { return m.second < time_; }), markers_.end());
     }
 
-    ui_.newFrame(dt);
+    overlay_.newFrame(dt);
+    updateUi();
     gfx::PassDesc pass;
     pass.clearColor[0] = 0.55f; pass.clearColor[1] = 0.66f; pass.clearColor[2] = 0.78f;
     if (sim_) {
@@ -952,22 +505,19 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         }
         r3d_.render(pass);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
-        drawHud();
-        if (!spectator_) drawCommandCard();
-        drawMinimap();
-        if (screen_ == Screen::Paused || screen_ == Screen::Over) drawPause();
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;
         dev.beginPass(pass);
     }
-    if (screen_ == Screen::Menu) drawMenu();
+    overlay_.render();
     ui_.render();
     dev.endPass();
 }
 
-} // namespace
+} // namespace rts::client
 
 int rtsMain(int argc, char** argv) {
+    using namespace rts::client;
     static GameClient client;
     g_client = &client;
     platform::AppConfig cfg;

@@ -1,0 +1,120 @@
+/* RTSEngine default UI theme. A game overrides it with games/<id>/ui/theme.rcss
+   (or overrides single documents: ui/hud.rml, ui/menu.rml).
+   Units are dp (density-independent pixels); the font family "ui" is the game's fonts/ui.ttf
+   or the engine font (Latin + Cyrillic). */
+
+div, p, h1, h2, section { display: block; }
+
+body {
+    position: absolute; left: 0; top: 0; right: 0; bottom: 0;
+    font-family: ui;
+    font-size: 15dp;
+    color: #e9edf2;
+    /* the document covers the screen; only panels and buttons take the pointer */
+    pointer-events: none;
+}
+.touch { font-size: 17dp; }
+
+h1 { font-size: 26dp; font-weight: bold; color: #f2d48a; margin-bottom: 8dp; }
+h2 { font-size: 13dp; color: #9aa6b5; margin: 12dp 0 6dp 0; text-transform: uppercase; letter-spacing: 1dp; }
+.dim { color: #8d98a6; font-size: 13dp; }
+.error { color: #ff7a6b; margin-bottom: 8dp; }
+
+.panel {
+    pointer-events: auto;
+    background-color: #12171ee0;
+    border: 1dp #ffffff22;
+    border-radius: 7dp;
+    padding: 8dp 10dp;
+}
+
+/* ---------------------------------------------------------------- buttons */
+button {
+    display: inline-block;
+    pointer-events: auto;
+    padding: 5dp 10dp;
+    margin: 2dp 2dp;
+    border: 1dp #ffffff1c;
+    border-radius: 5dp;
+    decorator: vertical-gradient(#323d4bff #262f3aff);
+    color: #eef2f6;
+    tab-index: none;
+}
+button:hover { decorator: vertical-gradient(#3e4b5cff #2f3a47ff); border-color: #ffffff40; }
+button:active { decorator: vertical-gradient(#222a33ff #2b3541ff); }
+button.active { border-color: #e8c26a; color: #ffe6a6; }
+button.disabled { opacity: 0.45; }
+button.disabled:hover { decorator: vertical-gradient(#323d4bff #262f3aff); border-color: #ffffff1c; }
+button.wide { display: block; text-align: center; }
+button.small { padding: 2dp 8dp; font-size: 13dp; }
+.touch button { padding: 9dp 14dp; margin: 3dp; }
+.touch button.small { padding: 6dp 12dp; }
+
+button .cost { font-size: 12dp; color: #c9b27a; margin-left: 8dp; }
+button .hotkey { font-size: 11dp; color: #7f8b99; margin-left: 6dp; }
+button .tip { display: block; font-size: 11dp; color: #ff9a8a; }
+.touch button .hotkey { display: none; }
+
+progress {
+    display: block;
+    width: 100%;
+    height: 4dp;
+    margin-top: 3dp;
+    background-color: #00000080;
+    border-radius: 2dp;
+}
+progress fill { background-color: #e8c26a; border-radius: 2dp; }
+
+/* ---------------------------------------------------------------- menu */
+#menu {
+    position: absolute; top: 12%; left: 0; right: 0;
+    width: 440dp; margin: 0 auto;
+    padding: 18dp 20dp;
+}
+#menu .choice button { margin-right: 4dp; }
+#menu button.map { display: block; padding: 8dp 12dp; margin: 4dp 0; }
+#menu .footer { margin-top: 14dp; }
+
+/* ---------------------------------------------------------------- HUD */
+#topwrap { position: absolute; top: 6dp; left: 0; right: 0; text-align: center; }
+#topbar { display: inline-block; padding: 5dp 12dp; }
+#topbar .item { display: inline-block; margin: 0 9dp; }
+#topbar .item.warn { color: #ff7a6b; }
+#topbar .sub { color: #8d98a6; font-size: 13dp; margin-left: 2dp; }
+#topbar button { margin: 0 4dp; }
+
+#notices { position: absolute; top: 48dp; left: 0; right: 0; text-align: center; }
+.notice { display: block; color: #ffe68c; font-size: 15dp; margin-bottom: 3dp; }
+
+#minimap { position: absolute; left: 8dp; bottom: 8dp; padding: 6dp; }
+#minimap-img { display: block; width: 100%; height: 100%; drag: drag; cursor: crosshair; }
+
+#card {
+    position: absolute; right: 8dp; bottom: 8dp;
+    width: 300dp; max-height: 62%;
+    overflow-y: auto;
+}
+.touch #card { width: 340dp; }
+#card .title { font-weight: bold; color: #f2d48a; margin-bottom: 3dp; }
+#card .info { color: #9aa6b5; font-size: 13dp; }
+#card .header { display: block; margin-top: 6dp; padding-top: 4dp; border-top: 1dp #ffffff14; }
+#card .section-title { font-size: 12dp; color: #8d98a6; margin-bottom: 1dp; }
+#card .cell { display: block; }
+#card .cell button { display: block; margin: 3dp 0; }
+#card .cell.row, #card .cell.queue { display: inline-block; }
+#card .cell.row button { display: inline-block; margin: 2dp 4dp 2dp 0; }
+#card .cell.queue button { width: 82dp; font-size: 12dp; padding: 3dp 6dp; margin: 2dp 4dp 2dp 0; }
+
+#selbox { position: absolute; border: 1dp #78ff78c8; background-color: #78ff781e; }
+.sendline {
+    position: absolute; height: 4dp; margin-top: -2dp;
+    background-color: #ffffffc8; border-radius: 2dp;
+    transform-origin: 0 50%;
+}
+#modehint { position: absolute; font-size: 14dp; color: #ffffff; background-color: #00000090; padding: 2dp 6dp; border-radius: 4dp; }
+
+#modal-bg { position: absolute; left: 0; top: 0; right: 0; bottom: 0; background-color: #00000070; pointer-events: auto; }
+#modal { position: absolute; top: 24%; left: 0; right: 0; width: 280dp; margin: 0 auto; padding: 16dp 18dp; text-align: center; }
+#modal button.wide { margin: 5dp 0; }
+#modal .choice { margin: 8dp 0; }
+#modal .choice button { padding: 4dp 7dp; font-size: 13dp; }
