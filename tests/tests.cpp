@@ -1,4 +1,5 @@
 // Dependency-free unit tests. Run: ctest  (or ./rts_tests)
+#include <filesystem>
 #include <cstdio>
 #include <functional>
 #include <string>
@@ -280,7 +281,9 @@ TEST(replay_file_roundtrip) {
     Command c; c.tick = 3; c.player = 1; c.type = 1; c.units = {Entity{1, 0}}; c.param = 50;
     r.commands = {c, c};
     r.checksums = {{20, 1}, {40, 2}};
-    const char* path = "test_roundtrip.rpl";
+    // temp dir: the working directory may be read-only (macOS app launch has cwd "/")
+    const std::string pathStr = (std::filesystem::temp_directory_path() / "test_roundtrip.rpl").string();
+    const char* path = pathStr.c_str();
     CHECK(r.save(path));
     Replay l;
     CHECK(l.load(path));
