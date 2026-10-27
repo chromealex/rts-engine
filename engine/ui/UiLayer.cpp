@@ -185,6 +185,10 @@ void UiLayer::setTranslator(std::function<std::string(const std::string&)> fn) {
     if (impl_) impl_->system.translate = std::move(fn);
 }
 
+void UiLayer::setImageSource(ImageSource source) {
+    if (impl_) impl_->renderer.setImageSource(std::move(source));
+}
+
 float UiLayer::dpRatio() const { return context() ? impl_->context->GetDensityIndependentPixelRatio() : 1.0f; }
 
 bool UiLayer::textInputFocused() const {

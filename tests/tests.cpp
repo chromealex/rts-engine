@@ -1915,6 +1915,8 @@ TEST(tiles2d_sample_games_deterministic) {
         uint64_t a = run(), b = run();
         CHECK(a == b);
     }
+}
+
 // ------------------------------------------------------------------ texture atlases
 #include <cstring>
 #include <map>
