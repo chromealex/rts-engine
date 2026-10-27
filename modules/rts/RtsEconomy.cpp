@@ -65,6 +65,7 @@ void RtsModule::sysEconomy(Simulation& sim) {
         for (auto& a : t.consumes) p.capUsed[a.res] += a.value;
         if (!off) for (auto& a : t.income) p.income[a.res] += a.value;
     });
+    if (rules_.dungeon) roomEconomy(sim); // painted rooms add supply, storage, capacity and income per cell
     for (size_t pi = 1; pi < gs.players.size(); ++pi) {
         auto& p = gs.players[pi];
         p.supplyCap = fxMin(p.supplyCap, rules_.supplyCap);
@@ -176,8 +177,8 @@ void RtsModule::sysProduction(Simulation& sim) {
             const bool isTech = it.item < 0;
             if (!isTech && !it.upgrade && rules_.types[size_t(it.item)].structure && p.ready != kNoType) continue; // place first
             Fixed time = isTech ? rules_.techs[size_t(~it.item)].time : rules_.types[size_t(it.item)].buildTime;
-            const std::vector<Amount>& cost = isTech ? rules_.techs[size_t(~it.item)].cost : rules_.types[size_t(it.item)].cost;
-            Fixed step = dt * eco.productionMult / fxMax(time, Fixed::fromRatio(1, 10));
+            const std::vector<Amount> cost = isTech ? techCost(sim, o.player, uint16_t(~it.item)) : rules_.types[size_t(it.item)].cost;
+            Fixed step = dt * eco.productionMult * stat(sim, e, Stat::ProductionSpeed) / fxMax(time, Fixed::fromRatio(1, 10));
             if (rules_.costModel == CostModel::Progressive) {
                 step = fxMin(step, kOne - it.paid);
                 step = payProgressive(rules_, eco, cost, step);
@@ -196,7 +197,7 @@ void RtsModule::sysProduction(Simulation& sim) {
         auto& eco = gs.players[d.owner];
         if (d.item < 0) {
             uint16_t k = uint16_t(~d.item);
-            eco.researched[k] = 1;
+            if (eco.researched[k] < 255) eco.researched[k]++;
             eco.researching[k] = 0;
             recomputeMods(sim, d.owner);
             sim.emit({kEvResearched, d.owner, d.producer, kNullEntity, k, w.get<Transform>(d.producer).pos});

@@ -26,7 +26,7 @@ void RtsModule::sysVision(Simulation& sim) {
     for (size_t p = 1; p < np; ++p) for (size_t q = 1; q < np; ++q) if (sim.allied(uint8_t(p), uint8_t(q))) sharers[p].push_back(uint8_t(q));
     const bool cliffs = rules_.heights.blockVision;
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
-        if (o.player == 0 || o.player >= np) return;
+        if (o.player == 0 || o.player >= np || (u.flags & kUnitInHand)) return;
         const UnitType& t = rules_.types[u.type];
         int r = int(stat(sim, e, Stat::Sight).toInt());
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
@@ -285,10 +285,12 @@ void RtsModule::sysVictory(Simulation& sim) {
             case VictoryMode::NoUnits: has = !t.structure; break;
             case VictoryMode::KeyUnits: has = anyKeyType ? t.key : (t.structure && !building); break;
             case VictoryMode::Score: has = v.keyLoses ? (anyKeyType ? t.key : t.structure) : true; break;
+            case VictoryMode::Territory: has = true; break;
             default: has = true; break; // NoEntities, Tickets, Survive
             }
         });
         if (v.mode == VictoryMode::Tickets && p.team < gs.tickets.size() && gs.tickets[p.team].raw <= 0) has = false;
+        if (v.mode == VictoryMode::Territory && rules_.territory.enabled && territoryOf(sim, p.slot) <= 0) has = false; // no ground left
         if (!has) {
             p.alive = false;
             sim.emit({kEvPlayerDefeated, p.slot, kNullEntity, kNullEntity, 0, {}});
@@ -310,6 +312,12 @@ void RtsModule::sysVictory(Simulation& sim) {
         } else if (sim.tick() >= limit) {
             gs.winnerTeam = teams.size() == 1 ? teams[0] : 0;
         }
+    } else if (v.mode == VictoryMode::Territory && gs.territoryTotal > 0) {
+        // a team holding the required share of all claimable cells wins
+        std::vector<int> cells(256, 0);
+        for (auto& p : sim.players()) if (p.alive && !isWavePlayer(gs, p.slot)) cells[p.team] += territoryOf(sim, p.slot);
+        for (uint8_t t : aliveTeams())
+            if (Fixed::fromInt(cells[t]) >= v.share * gs.territoryTotal) { gs.winnerTeam = t; break; }
     } else if (v.mode == VictoryMode::Score && sim.tick() >= limit) {
         auto teams = aliveTeams();
         int best = -1;

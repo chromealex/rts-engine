@@ -32,6 +32,12 @@ struct MapGrid {
     std::vector<int16_t> fieldRes;  // resource id of the field in this cell, -1 none
     std::vector<Fixed> fieldAmt;
     std::vector<int16_t> region;    // region index, -1 none
+    // dungeon / territory layers
+    std::vector<uint8_t> dig;       // diggable kind + 1 (0: not diggable); such cells are solid until dug
+    std::vector<Fixed> digHp;       // remaining hardness
+    std::vector<uint8_t> digMark;   // bit (slot-1): marked for digging by that player
+    std::vector<uint8_t> territory; // owner slot of the cell (0: nobody) - DK floor, territory-war front
+    std::vector<int16_t> room;      // painted room type on the cell, -1 none (owner = territory)
 
     void init(int width, int height_);
     bool inside(int x, int y) const { return x >= 0 && y >= 0 && x < w && y < h; }

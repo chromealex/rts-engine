@@ -26,6 +26,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("garrison", [this](Simulation& s) { sysGarrison(s); });
     sim.addSystem("waves", [this](Simulation& s) { sysWaves(s); });
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
+    if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
@@ -54,7 +55,12 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     const Json& rows = terrain["rows"];
     for (size_t y = 0; y < rows.size() && int(y) < mh; ++y) {
         std::string row = rows[y].str();
-        for (size_t x = 0; x < row.size() && int(x) < mw; ++x) g.flags[size_t(g.index(int(x), int(y)))] = cellFlagsFromChar(row[x]);
+        for (size_t x = 0; x < row.size() && int(x) < mw; ++x) {
+            size_t i = size_t(g.index(int(x), int(y)));
+            int dk = rules_.findDiggable(row[x]);
+            if (dk >= 0) { g.flags[i] = 0; g.dig[i] = uint8_t(dk + 1); g.digHp[i] = rules_.diggables[size_t(dk)].hardness; }
+            else g.flags[i] = cellFlagsFromChar(row[x]);
+        }
     }
     for (auto& r : terrain["rects"].items()) {
         int x0 = int(r["rect"][0].integer()), y0 = int(r["rect"][1].integer());
@@ -259,6 +265,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         gs.waves.push_back(wd);
         if (std::find(gs.wavePlayers.begin(), gs.wavePlayers.end(), wd.player) == gs.wavePlayers.end()) gs.wavePlayers.push_back(wd.player);
     }
+    setupDungeon(sim, map);
 }
 
 void RtsModule::footprintAt(const UnitType& t, Vec3 c, int& x0, int& y0) {
@@ -307,6 +314,10 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (t.members > 1) w.add<Squad>(e);
     if (!t.abilities.empty()) w.add<AbilityState>(e);
     if (t.captureTime.raw > 0) w.add<Capture>(e);
+    if (t.hasNeeds) { Needs n; n.happiness = t.needs.happyStart; w.add<Needs>(e, n); }
+    if (t.portalInterval.raw > 0) w.add<PortalState>(e);
+    if (t.autoTrainUnit != kNoType) w.add<AutoTrainState>(e);
+    if (t.claimRate.raw > 0) w.add<ClaimState>(e);
     w.add<Buffs>(e);
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
@@ -394,13 +405,13 @@ void RtsModule::recomputeMods(Simulation& sim, uint8_t player) {
     eco.mods.assign(rules_.types.size(), {});
     for (auto& m : eco.mods) for (size_t s = 0; s < size_t(Stat::Count); ++s) { m.add[s] = Fixed{}; m.mul[s] = kOne; }
     for (size_t k = 0; k < rules_.techs.size(); ++k) {
-        if (!eco.researched[k]) continue;
-        for (auto& [target, mod] : rules_.techs[k].effects)
-            for (size_t ti = 0; ti < rules_.types.size(); ++ti)
-                if (rules_.matches(target, uint16_t(ti))) {
-                    eco.mods[ti].add[size_t(mod.stat)] += mod.add;
-                    eco.mods[ti].mul[size_t(mod.stat)] *= mod.mul;
-                }
+        for (int lv = 0; lv < int(eco.researched[k]); ++lv) // repeatable techs apply once per level
+            for (auto& [target, mod] : rules_.techs[k].effects)
+                for (size_t ti = 0; ti < rules_.types.size(); ++ti)
+                    if (rules_.matches(target, uint16_t(ti))) {
+                        eco.mods[ti].add[size_t(mod.stat)] += mod.add;
+                        eco.mods[ti].mul[size_t(mod.stat)] *= mod.mul;
+                    }
     }
 }
 
@@ -425,6 +436,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
         case Stat::Sight: base = t.sight; break;
         case Stat::GatherRate: base = kOne; break;
         case Stat::AttackSpeed: base = kOne; break;
+        case Stat::ProductionSpeed: base = kOne; break;
         default: break;
     }
     uint8_t owner = w.get<Owner>(e).player;
@@ -527,10 +539,14 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
             int ri = regionAt(sim, centre);
             if (ri < 0 || gs.regionOwner[size_t(ri)] != player) return fail("region not owned");
         }
+        if (rules_.territory.enabled && rules_.territory.buildOnlyOwned)
+            for (int y = y0; y < y0 + t.footprintH; ++y)
+                for (int x = x0; x < x0 + t.footprintW; ++x)
+                    if (g.territory[size_t(g.index(x, y))] != player) return fail("territory not owned");
     }
     bool clear = true;
     w.each<Unit, Transform, Mobile>([&](Entity e, Unit& u, Transform& tr, Mobile&) {
-        if (e == ignore || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
+        if (e == ignore || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
         if (cx >= x0 && cx < x0 + t.footprintW && cy >= y0 && cy < y0 + t.footprintH) {
             // own units step aside (they will be pushed); enemies block
@@ -655,6 +671,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
+    if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
 
     if (cmd.type == kCmdSurrender) {
         pi->alive = false; // hashed with the player table; result() then reports the remaining team
@@ -695,6 +712,8 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         auto* o = w.tryGet<Owner>(e);
         auto* u = w.tryGet<Unit>(e);
         if (!o || !u || o->player != cmd.player || u->hp.raw <= 0) continue;
+        if (u->flags & (kUnitInHand | kUnitPossessed)) continue; // off the map / directly controlled
+        if (auto* nd = w.tryGet<Needs>(e); nd && nd->leaving) continue;
         if ((u->flags & kUnitUnderConstruction) && cmd.type != kCmdCancelTrain) continue;
         if (std::find(sel.begin(), sel.end(), e) != sel.end()) continue;
         sel.push_back(e);
@@ -768,9 +787,9 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             uint16_t k = uint16_t(cmd.param);
             if (std::find(t.researches.begin(), t.researches.end(), k) == t.researches.end()) break;
             auto& eco = gs.players[cmd.player];
-            if (eco.researched[k] || eco.researching[k] || !requirementsMet(sim, cmd.player, rules_.techs[k].requires_)) break;
+            if (int(eco.researched[k]) >= rules_.techs[k].levels || eco.researching[k] || !requirementsMet(sim, cmd.player, rules_.techs[k].requires_)) break;
             if (int(prod->queue.size()) >= rules_.maxQueue) break;
-            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, rules_.techs[k].cost, {})) break;
+            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, techCost(sim, cmd.player, k), {})) break;
             eco.researching[k] = 1;
             prod->queue.push_back({~int32_t(k), Fixed{}, Fixed{}});
             break;
@@ -786,7 +805,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!prod || prod->queue.empty()) break;
             size_t slot = cmd.param < 0 || size_t(cmd.param) >= prod->queue.size() ? prod->queue.size() - 1 : size_t(cmd.param);
             ProdItem it = prod->queue[slot];
-            const std::vector<Amount>& cost = it.item >= 0 ? rules_.types[size_t(it.item)].cost : rules_.techs[size_t(~it.item)].cost;
+            const std::vector<Amount> cost = it.item >= 0 ? rules_.types[size_t(it.item)].cost : techCost(sim, cmd.player, uint16_t(~it.item));
             refund(sim, cmd.player, cost, rules_.costModel == CostModel::Upfront ? kOne : it.paid);
             if (it.item >= 0) gs.players[cmd.player].typeCountAll[size_t(it.item)]--;
             else gs.players[cmd.player].researching[size_t(~it.item)] = 0;
@@ -1006,6 +1025,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     for (auto t : gs.tickets) h.fx(t);
     for (auto t : gs.score) h.fx(t);
     for (auto& [k, v] : gs.trig.vars) { h.str(k); h.fx(v); }
+    if (rules_.dungeon) hashDungeon(sim, h);
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
     for (size_t i = 0; i < gs.grid.fieldAmt.size(); i += 7) h.fx(gs.grid.fieldAmt[i]);

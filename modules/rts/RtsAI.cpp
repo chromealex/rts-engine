@@ -7,6 +7,16 @@ namespace rts::game {
 namespace {
 Fixed dist(Vec3 a, Vec3 b) { return (a - b).xz().length(); }
 bool isCombat(const UnitType& t) { return !t.structure && (!t.weapons.empty() || !t.abilities.empty()) && !t.worker; }
+// Units the player controls by hand (possessed, picked up) or that are leaving are not the AI's.
+bool controllable(World& w, Entity e, const Unit& u) {
+    if (u.flags & (kUnitInHand | kUnitPossessed)) return false;
+    auto* n = w.tryGet<Needs>(e);
+    return !n || !n->leaving;
+}
+// Idle for the AI: no orders, or only interruptible creature work.
+bool idleOrders(const Orders& ord) {
+    return ord.queue.empty() || (ord.queue.front().type == OrderType::Need && (ord.queue.front().param & 0xFF) == kNeedWork);
+}
 bool positiveIncome(const UnitType& t) {
     for (auto& a : t.income) if (a.value.raw > 0) return true;
     return false;
@@ -185,7 +195,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         if (t.worker) {
             ++workers;
             auto* ord = w.tryGet<Orders>(e);
-            if (ord && ord->queue.empty()) idleWorkers.push_back(e);
+            if (ord && ord->queue.empty() && controllable(w, e, u)) idleWorkers.push_back(e);
         }
     });
 
@@ -304,10 +314,10 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
         if (o.player != player_) return;
         const UnitType& t = R.types[u.type];
         if (t.structure && (!hasHome || t.key)) { home = tr.pos; hasHome = true; }
-        if (isCombat(t)) {
+        if (isCombat(t) && controllable(w, e, u)) {
             army.push_back(e);
             auto* ord = w.tryGet<Orders>(e);
-            if (ord && ord->queue.empty()) idleArmy.push_back(e);
+            if (ord && idleOrders(*ord)) idleArmy.push_back(e);
         }
         if (auto* prod = w.tryGet<Production>(e); prod && prod->queue.size() < 2 && !(u.flags & kUnitUnderConstruction)) {
             std::vector<uint16_t> opts;
