@@ -2,6 +2,7 @@
 //   main.cpp      match flow, camera, picking, input -> Commands
 //   ClientUi.cpp  RmlUi documents (menu, HUD, command card, pause) and their data model
 //   Minimap.cpp   minimap image (CPU raster -> dynamic UI texture)
+//   Lobby.cpp     online play: NetClient, lobby / room screens, network matches
 #pragma once
 #include <array>
 #include <functional>
@@ -14,6 +15,8 @@
 #include <RmlUi/Core/EventListener.h>
 
 #include "engine/gfx/Gfx.h"
+#include "engine/i18n/GameLanguage.h"
+#include "engine/net/NetClient.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
 #include "engine/render/Renderer3D.h"
@@ -47,6 +50,8 @@ struct UiAction {        // command card button; `id` indexes GameClient::action
     bool enabled = true, active = false;
     float progress = -1;  // >= 0: shows a progress bar (production queue)
     int id = 0;
+    int alt = -1;             // optional second button of the row (e.g. "watch" next to "join")
+    std::string altLabel;
     bool operator==(const UiAction&) const = default;
 };
 struct UiSection {             // built per section, flattened into UiState::card for the document
@@ -54,9 +59,16 @@ struct UiSection {             // built per section, flattened into UiState::car
     std::vector<UiAction> actions;
 };
 struct UiState {
-    std::string screen = "menu";   // menu | playing | paused | over
+    std::string screen = "menu";   // menu | lobby | playing | paused | over
     std::string gameName, error, platformInfo;
     std::vector<std::string> maps;
+    std::vector<UiAction> languages;
+    // lobby (Lobby.cpp)
+    std::string lobby;             // connect | connecting | browse | room
+    std::string netStatus, netError, roomTitle, roomInfo, spectators, waitHint;
+    std::vector<UiAction> queues, rooms, createMaps, slots;
+    std::vector<std::string> chat;
+    bool isHost = false, myReady = false, canStart = false, netMatch = false, searching = false;
     std::vector<UiItem> top;
     std::vector<UiAction> topActions;
     std::string clock;
@@ -96,13 +108,14 @@ public:
     void event(const platform::Event& e);
     void shutdown();
     void autostart(size_t i) { startMatch(i); }
+    void forceLanguage(std::string tag) { forcedLanguage_ = std::move(tag); }
     void spectate() { spectator_ = true; }
 
     // called from UI event listeners
     void minimapPointer(float u, float v);   // u, v in [0, 1] of the minimap image
 
 private:
-    enum class Screen { Menu, Playing, Paused, Over };
+    enum class Screen { Menu, Lobby, Playing, Paused, Over };
     enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim };
 
     void startMatch(size_t idx);
@@ -128,6 +141,20 @@ private:
     void buildTopBar(UiState& s);
     void buildCommandCard(UiState& s);
     void buildOverlays(UiState& s);
+    void loadDocuments();
+    // localization (presentation only: rules_ is the display copy, the sim loads its own rules)
+    void applyLanguage(const std::string& tag, bool save);
+    std::string tr(std::string_view key, const i18n::Args& a = {}) const { return loc_.tr(key, a); }
+
+    // Lobby.cpp
+    void netAction(const std::string& what, int arg);
+    void updateNet(double dt, bool& advanced);
+    void startNetMatch();
+    void leaveNetMatch();
+    void buildLobby(UiState& s);
+    void describeNetMaps();
+    void loadNetSettings();
+    void saveNetSettings() const;
     // disabled buttons get an empty callback: clicks on them do nothing
     int addAction(std::function<void()> fn, bool enabled = true) { nextActions_.push_back(enabled ? std::move(fn) : nullptr); return int(nextActions_.size()) - 1; }
 
@@ -137,6 +164,8 @@ private:
     Rml::DataModelHandle model_;
     Rml::ElementDocument* menuDoc_ = nullptr;
     Rml::ElementDocument* hudDoc_ = nullptr;
+    Rml::ElementDocument* lobbyDoc_ = nullptr;
+    bool reloadDocs_ = false;
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;
@@ -152,9 +181,21 @@ private:
     std::vector<MapEntry> maps_;
     std::string gameName_ = "RTSEngine";
     Rules rules_;
+    i18n::Localization loc_;
+    i18n::GameLanguages langs_;
+    std::vector<std::string> langNames_;
+    std::string forcedLanguage_;
+
+    // online play
+    std::vector<net::MapInfo> netMaps_;
+    std::string netAddress_ = "127.0.0.1", netName_, netError_, chatInput_, roomName_;
+    std::vector<std::string> chat_;
+    uint64_t netKey_ = 0;
+    bool netMatch_ = false, prevSpectator_ = false;
 
     Screen screen_ = Screen::Menu;
     std::unique_ptr<Simulation> sim_;
+    std::unique_ptr<net::NetClient> net_;     // after sim_: destroyed first, so it never outlives the sim it drives
     std::vector<RtsAI> bots_;
     RtsScene scene_;
     uint8_t human_ = 1;
