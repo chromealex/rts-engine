@@ -1,0 +1,140 @@
+// Sound for "Iron and Gold". Every sound here is procedural ("synth"), so the example ships no
+// audio files; a real game replaces them with "file"/"files" (WAV, OGG, MP3, FLAC) one by one.
+// Music playlists the client uses: "menu", "match", "battle", "victory", "defeat" (all optional).
+{
+  "volume": { "sfx": 0.9, "ui": 0.7, "voice": 1.0, "music": 0.6 },
+
+  "sounds": {
+    // ---- weapons
+    "swing":       { "synth": { "wave": "noise", "freq": [9000, 2500], "duration": 0.11, "attack": 0.02, "release": 0.08, "lowpass": 5000, "volume": 0.35 },
+                     "pitch": [0.85, 1.15], "maxInstances": 4, "cooldown": 0.05 },
+    "clang":       { "synth": [ { "wave": "triangle", "freq": [1250, 1180], "duration": 0.22, "release": 0.2, "volume": 0.45 },
+                                { "wave": "sine", "freq": 2710, "duration": 0.14, "release": 0.13, "volume": 0.25 },
+                                { "wave": "noise", "freq": 12000, "duration": 0.025, "lowpass": 6000, "volume": 0.5 } ],
+                     "pitch": [0.9, 1.12], "maxInstances": 4, "cooldown": 0.04 },
+    "pick":        { "synth": [ { "wave": "noise", "freq": 7000, "duration": 0.035, "lowpass": 3500, "volume": 0.5 },
+                                { "wave": "triangle", "freq": [900, 600], "duration": 0.06, "volume": 0.25 } ],
+                     "pitch": [0.9, 1.1], "maxInstances": 2, "cooldown": 0.08 },
+    "bow":         { "synth": [ { "wave": "triangle", "freq": [240, 170], "duration": 0.16, "release": 0.14, "volume": 0.5 },
+                                { "wave": "noise", "freq": [5000, 1500], "duration": 0.08, "lowpass": 3000, "volume": 0.25 } ],
+                     "pitch": [0.92, 1.08], "maxInstances": 4, "cooldown": 0.05 },
+    "arrowHit":    { "synth": { "wave": "noise", "freq": [4000, 900], "duration": 0.07, "lowpass": 2500, "volume": 0.45 },
+                     "pitch": [0.85, 1.15], "maxInstances": 4, "cooldown": 0.04 },
+    "catapult":    { "synth": [ { "wave": "noise", "freq": [700, 150], "duration": 0.35, "attack": 0.03, "lowpass": 900, "volume": 0.6 },
+                                { "wave": "sine", "freq": [110, 55], "duration": 0.3, "volume": 0.5 } ],
+                     "maxInstances": 2, "cooldown": 0.2 },
+    "boom":        { "synth": [ { "wave": "noise", "freq": [1400, 90], "duration": 0.7, "release": 0.6, "lowpass": 1300, "volume": 0.9 },
+                                { "wave": "sine", "freq": [80, 32], "duration": 0.6, "release": 0.5, "volume": 0.8 } ],
+                     "pitch": [0.9, 1.1], "maxInstances": 3, "cooldown": 0.1, "priority": 2 },
+    "hammer":      { "synth": [ { "wave": "square", "freq": [180, 90], "duration": 0.12, "lowpass": 1200, "duty": 0.3, "volume": 0.45 },
+                                { "wave": "noise", "freq": 3000, "duration": 0.05, "lowpass": 2000, "volume": 0.4 } ],
+                     "maxInstances": 2, "cooldown": 0.1 },
+
+    // ---- deaths
+    "death":       { "synth": [ { "wave": "saw", "freq": [320, 95], "duration": 0.38, "release": 0.3, "lowpass": 1400, "vibrato": [9, 0.04], "volume": 0.4 },
+                                { "wave": "noise", "freq": 2500, "duration": 0.08, "lowpass": 1500, "volume": 0.2 } ],
+                     "pitch": [0.85, 1.2], "maxInstances": 3, "cooldown": 0.12, "priority": 1 },
+    "collapse":    { "synth": [ { "wave": "noise", "freq": [900, 50], "duration": 1.3, "attack": 0.02, "release": 1.0, "lowpass": 900, "volume": 0.9 },
+                                { "wave": "sine", "freq": [70, 30], "duration": 1.0, "release": 0.8, "volume": 0.6 },
+                                { "wave": "noise", "freq": 600, "duration": 0.5, "delay": 0.35, "lowpass": 500, "volume": 0.5 } ],
+                     "maxInstances": 2, "priority": 3 },
+    "timber":      { "synth": [ { "wave": "noise", "freq": [2500, 400], "duration": 0.5, "attack": 0.1, "lowpass": 1800, "volume": 0.3 },
+                                { "wave": "sine", "freq": [90, 50], "duration": 0.25, "delay": 0.45, "volume": 0.4 } ],
+                     "maxInstances": 1, "cooldown": 0.5 },
+
+    // ---- economy and construction (positional)
+    "coin":        { "synth": [ { "wave": "sine", "freq": 2093, "duration": 0.12, "release": 0.1, "volume": 0.25 },
+                                { "wave": "sine", "freq": 3136, "duration": 0.09, "delay": 0.04, "release": 0.08, "volume": 0.18 } ],
+                     "pitch": [0.97, 1.03], "maxInstances": 2, "cooldown": 0.25 },
+    "thud":        { "synth": [ { "wave": "sine", "freq": [140, 60], "duration": 0.2, "volume": 0.6 },
+                                { "wave": "noise", "freq": 1500, "duration": 0.06, "lowpass": 900, "volume": 0.4 } ],
+                     "maxInstances": 2, "cooldown": 0.1 },
+
+    // ---- announcements (voice bus: not positional, never culled by distance)
+    "ready":       { "synth": [ { "wave": "square", "freq": 523, "duration": 0.09, "duty": 0.25, "lowpass": 3000, "volume": 0.3 },
+                                { "wave": "square", "freq": 659, "duration": 0.09, "delay": 0.08, "duty": 0.25, "lowpass": 3000, "volume": 0.3 },
+                                { "wave": "square", "freq": 784, "duration": 0.16, "delay": 0.16, "duty": 0.25, "lowpass": 3000, "volume": 0.3 } ],
+                     "bus": "voice", "cooldown": 0.4 },
+    "built":       { "synth": [ { "wave": "triangle", "freq": 392, "duration": 0.14, "volume": 0.45 },
+                                { "wave": "triangle", "freq": 523, "duration": 0.14, "delay": 0.12, "volume": 0.45 },
+                                { "wave": "triangle", "freq": 659, "duration": 0.14, "delay": 0.24, "volume": 0.45 },
+                                { "wave": "triangle", "freq": 784, "duration": 0.35, "delay": 0.36, "release": 0.3, "volume": 0.5 } ],
+                     "bus": "voice", "cooldown": 0.5 },
+    "alarm":       { "synth": [ { "wave": "square", "freq": 880, "duration": 0.18, "duty": 0.5, "lowpass": 2500, "volume": 0.35 },
+                                { "wave": "square", "freq": 659, "duration": 0.18, "delay": 0.2, "duty": 0.5, "lowpass": 2500, "volume": 0.35 },
+                                { "wave": "square", "freq": 880, "duration": 0.18, "delay": 0.4, "duty": 0.5, "lowpass": 2500, "volume": 0.35 },
+                                { "wave": "square", "freq": 659, "duration": 0.18, "delay": 0.6, "duty": 0.5, "lowpass": 2500, "volume": 0.35 } ],
+                     "bus": "voice", "priority": 10 },
+    "needMore":    { "synth": { "wave": "square", "freq": [150, 130], "duration": 0.28, "duty": 0.4, "lowpass": 900, "volume": 0.5 },
+                     "bus": "voice", "cooldown": 0.6 },
+    "noRoom":      { "synth": [ { "wave": "square", "freq": 196, "duration": 0.1, "duty": 0.4, "lowpass": 1000, "volume": 0.45 },
+                                { "wave": "square", "freq": 147, "duration": 0.16, "delay": 0.12, "duty": 0.4, "lowpass": 1000, "volume": 0.45 } ],
+                     "bus": "voice", "cooldown": 0.6 },
+    "victory":     { "synth": [ { "wave": "triangle", "freq": 523, "duration": 0.2, "volume": 0.5 },
+                                { "wave": "triangle", "freq": 659, "duration": 0.2, "delay": 0.18, "volume": 0.5 },
+                                { "wave": "triangle", "freq": 784, "duration": 0.2, "delay": 0.36, "volume": 0.5 },
+                                { "wave": "triangle", "freq": 1047, "duration": 0.9, "delay": 0.54, "release": 0.7, "volume": 0.55 },
+                                { "wave": "sine", "freq": 523, "duration": 0.9, "delay": 0.54, "release": 0.7, "volume": 0.3 } ],
+                     "bus": "voice", "priority": 20 },
+    "defeat":      { "synth": [ { "wave": "saw", "freq": 392, "duration": 0.3, "lowpass": 1200, "volume": 0.35 },
+                                { "wave": "saw", "freq": 349, "duration": 0.3, "delay": 0.3, "lowpass": 1100, "volume": 0.35 },
+                                { "wave": "saw", "freq": [311, 290], "duration": 1.1, "delay": 0.6, "release": 0.9, "lowpass": 900, "volume": 0.4 } ],
+                     "bus": "voice", "priority": 20 },
+
+    // ---- acknowledgements and interface
+    "select":      { "synth": { "wave": "square", "freq": 660, "duration": 0.05, "duty": 0.25, "lowpass": 2500, "volume": 0.25 },
+                     "bus": "ui", "cooldown": 0.08 },
+    "selectBuilding": { "synth": { "wave": "triangle", "freq": [330, 300], "duration": 0.09, "volume": 0.35 }, "bus": "ui", "cooldown": 0.08 },
+    "ack":         { "synth": [ { "wave": "square", "freq": 520, "duration": 0.05, "duty": 0.25, "lowpass": 2500, "volume": 0.25 },
+                                { "wave": "square", "freq": 780, "duration": 0.06, "delay": 0.05, "duty": 0.25, "lowpass": 2500, "volume": 0.25 } ],
+                     "bus": "ui", "cooldown": 0.1 },
+    "attackAck":   { "synth": [ { "wave": "saw", "freq": [330, 220], "duration": 0.12, "lowpass": 1800, "volume": 0.3 },
+                                { "wave": "noise", "freq": 4000, "duration": 0.04, "lowpass": 2500, "volume": 0.15 } ],
+                     "bus": "ui", "cooldown": 0.1 },
+    "click":       { "synth": { "wave": "sine", "freq": [1800, 1200], "duration": 0.025, "volume": 0.3 }, "bus": "ui" }
+  },
+
+  "events": {
+    "hit": "arrowHit",
+    "ready": "ready",
+    "buildPlaced": "thud",
+    "buildDone": "built",
+    "upgraded": "built",
+    "researched": "built",
+    "gathered": "coin",
+    "underAttack": "alarm",
+    "notEnough": "needMore",
+    "noRoom": "noRoom",
+    "error": "noRoom",
+    "victory": "victory",
+    "defeat": "defeat",
+    "select": "select",
+    "move": "ack",
+    "attackOrder": "attackAck",
+    "buildOrder": "ack",
+    "click": "click"
+  },
+
+  "weapons": {
+    "pick":    { "attack": "pick" },
+    "sword":   { "attack": "swing", "hit": "clang" },
+    "bow":     { "attack": "bow", "hit": "arrowHit" },
+    "arrows":  { "attack": "bow", "hit": "arrowHit" },
+    "boulder": { "attack": "catapult", "hit": "boom" },
+    "hammer":  { "attack": "hammer", "hit": "clang" }
+  },
+
+  "types": {
+    "peasant":  { "died": "death" },
+    "footman":  { "died": "death" },
+    "archer":   { "died": "death" },
+    "gryphon":  { "died": "death" },
+    "catapult": { "died": "collapse" },
+    "townhall": { "died": "collapse", "select": "selectBuilding" },
+    "farm":     { "died": "collapse", "select": "selectBuilding" },
+    "barracks": { "died": "collapse", "select": "selectBuilding" },
+    "workshop": { "died": "collapse", "select": "selectBuilding" },
+    "tower":    { "died": "collapse", "select": "selectBuilding" },
+    "tree":     { "died": "timber" }
+  }
+}

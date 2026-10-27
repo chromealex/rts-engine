@@ -141,6 +141,43 @@ add_library(rts_net_server STATIC
 target_link_libraries(rts_net_server PUBLIC rts_net)
 
 # ---------------------------------------------------------------------------
+# Audio (presentation only): software mixer, sound banks from data, procedural synth, music
+# streaming; the output device comes from miniaudio (CoreAudio, AAudio/OpenSL ES, Web Audio,
+# WASAPI, ALSA/PulseAudio). Without a device it runs silently.
+# ---------------------------------------------------------------------------
+if(APPLE)
+    enable_language(OBJC)   # miniaudio's AVAudioSession / CoreAudio code is Objective-C
+    set(RTS_MINIAUDIO_IMPL engine/audio/MiniaudioImpl.m)
+else()
+    set(RTS_MINIAUDIO_IMPL engine/audio/MiniaudioImpl.c)
+endif()
+add_library(rts_audio STATIC
+    engine/audio/AudioEngine.cpp
+    engine/audio/AudioMixer.cpp
+    engine/audio/AudioDecode.cpp
+    engine/audio/Synth.cpp
+    ${RTS_MINIAUDIO_IMPL})
+target_link_libraries(rts_audio PUBLIC rts_engine)
+set_source_files_properties(${RTS_MINIAUDIO_IMPL} PROPERTIES COMPILE_OPTIONS "$<IF:$<BOOL:${MSVC}>,/w,-w>")
+if(APPLE)
+    target_link_libraries(rts_audio PUBLIC "-framework CoreFoundation" "-framework AudioToolbox")
+    if(RTS_PLATFORM STREQUAL "ios")
+        target_link_libraries(rts_audio PUBLIC "-framework AVFoundation")
+    else()
+        target_link_libraries(rts_audio PUBLIC "-framework CoreAudio")
+    endif()
+elseif(RTS_PLATFORM STREQUAL "linux" OR RTS_PLATFORM STREQUAL "android")
+    target_link_libraries(rts_audio PUBLIC ${CMAKE_DL_LIBS})
+    if(RTS_PLATFORM STREQUAL "linux")
+        find_package(Threads REQUIRED)
+        target_link_libraries(rts_audio PUBLIC Threads::Threads m)
+    endif()
+endif()
+
+add_library(rts_game_audio STATIC modules/rts/audio/RtsAudio.cpp)
+target_link_libraries(rts_game_audio PUBLIC rts_game rts_audio)
+
+# ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
 # ---------------------------------------------------------------------------
 add_library(rts_imgui STATIC
@@ -278,11 +315,13 @@ if(RTS_BUILD_CLIENT)
     if(RTS_PLATFORM STREQUAL "android")
         add_library(main SHARED apps/client/main.cpp $<TARGET_OBJECTS:rts_runtime>)
         target_link_libraries(main PRIVATE rts_runtime rts_game_view rts_i18n)
+        target_link_libraries(main PRIVATE rts_runtime rts_game_view rts_game_audio)
         # Keep ANativeActivity_onCreate from the glue library.
         set_target_properties(main PROPERTIES LINK_FLAGS "-u ANativeActivity_onCreate")
     else()
         add_executable(rts_client apps/client/main.cpp $<TARGET_OBJECTS:rts_runtime>)
         target_link_libraries(rts_client PRIVATE rts_runtime rts_game_view rts_i18n)
+        target_link_libraries(rts_client PRIVATE rts_runtime rts_game_view rts_game_audio)
         rts_package_app(rts_client)
     endif()
 endif()
@@ -355,6 +394,7 @@ if(RTS_BUILD_TESTS)
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
