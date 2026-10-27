@@ -105,6 +105,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | Models, PBR materials, skinning, procedural animation | `engine/render`, `engine/gfx`, `modules/rts/view` | models agent |
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
 | Resource packs `.rpak`, build size/compression | `engine/assets/Pack*`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
+| Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
 | Other areas | as assigned by the user | the agent the user assigned |
 
 If your task is not in this table, the user's first message to you defines your area: write it
@@ -126,7 +127,8 @@ Shared touch points and how to use them:
   readable messages), no RTTI-heavy designs, no global singletons beyond platform state.
 - Concise code; comments explain *why*, not what. Keep files focused (< ~1000 lines).
 - Names: `camelCase` functions/variables, `PascalCase` types, `kConstant`, members `name_`.
-- User-facing strings are Russian (until localization exists); code, comments, logs in English.
+- User-facing strings go through `i18n::Localization::tr()` with keys in `engine/assets/lang/en.json`
+  and `ru.json` (see `engine/i18n/README.md`); never concatenate sentences. Code, comments, logs in English.
 
 ## 7. Commits
 

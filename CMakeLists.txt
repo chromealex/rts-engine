@@ -79,6 +79,18 @@ add_library(rts_game STATIC
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 
+# Localization: string tables, plurals, language choice (presentation only, no sim dependency).
+# RtsLocalize maps RTS data (types, resources, maps...) to string keys.
+add_library(rts_i18n STATIC
+    engine/i18n/Localization.cpp
+    engine/i18n/GameLanguage.cpp
+    engine/i18n/SystemLanguage.cpp
+    modules/rts/RtsLocalize.cpp)
+target_link_libraries(rts_i18n PUBLIC rts_game)
+if(APPLE)
+    target_link_libraries(rts_i18n PUBLIC "-framework CoreFoundation")
+endif()
+
 # ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
 # ---------------------------------------------------------------------------
@@ -198,12 +210,12 @@ endfunction()
 if(RTS_BUILD_CLIENT)
     if(RTS_PLATFORM STREQUAL "android")
         add_library(main SHARED apps/client/main.cpp $<TARGET_OBJECTS:rts_runtime>)
-        target_link_libraries(main PRIVATE rts_runtime rts_game_view)
+        target_link_libraries(main PRIVATE rts_runtime rts_game_view rts_i18n)
         # Keep ANativeActivity_onCreate from the glue library.
         set_target_properties(main PROPERTIES LINK_FLAGS "-u ANativeActivity_onCreate")
     else()
         add_executable(rts_client apps/client/main.cpp $<TARGET_OBJECTS:rts_runtime>)
-        target_link_libraries(rts_client PRIVATE rts_runtime rts_game_view)
+        target_link_libraries(rts_client PRIVATE rts_runtime rts_game_view rts_i18n)
         rts_package_app(rts_client)
     endif()
 endif()
@@ -247,6 +259,13 @@ if(RTS_BUILD_TOOLS)
     target_compile_definitions(rtsmcp PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
+if(RTS_BUILD_TOOLS)
+    add_executable(rts_i18n_tool tools/i18n/main.cpp)
+    set_target_properties(rts_i18n_tool PROPERTIES OUTPUT_NAME rts_i18n)
+    target_link_libraries(rts_i18n_tool PRIVATE rts_i18n)
+    target_compile_definitions(rts_i18n_tool PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+
 if(RTS_BUILD_HEADLESS)
     add_executable(rts_headless apps/headless/main.cpp)
     target_link_libraries(rts_headless PRIVATE rts_game)
@@ -255,7 +274,7 @@ endif()
 if(RTS_BUILD_TESTS)
     enable_testing()
     add_executable(rts_tests tests/tests.cpp)
-    target_link_libraries(rts_tests PRIVATE rts_game)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_i18n)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
