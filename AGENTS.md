@@ -34,7 +34,7 @@ the *engine* add mechanics generically — never a special case for one game.
 | `apps/headless` | bot matches, replays, CI | |
 | `tools/rtsbuild` | packager: macOS .app, iOS Xcode project, Android Gradle project, web, Windows | ships content as `content.rpak` |
 | `tools/assetpipe` | build / list / verify / extract / diff `.rpak`, import foreign archives (`--json` for MCP) | |
-| `tools/unpackers` | unpacker plugins for foreign archive formats (zip, tar, dmg, Warcraft WAR, Z PAC/RSC) | protocol: `tools/unpackers/PROTOCOL.md`; host tools only |
+| `tools/unpackers` | unpacker plugins for foreign archive formats (zip, tar, dmg, Warcraft WAR, Westwood PAK, Z PAC/RSC) | protocol: `tools/unpackers/PROTOCOL.md`; host tools only |
 | `games/*` | sample games | data only |
 | `tests/tests.cpp` | unit + mechanics + determinism tests | must stay green |
 | `third_party/` | vendored libraries with licenses | MIT/BSD/zlib/OFL/CC0/CC-BY only |

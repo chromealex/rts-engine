@@ -1303,6 +1303,34 @@ elif m == 'extract':
 }
 #endif
 
+TEST(unpacker_westwood_pak) {
+    using namespace rts::pack;
+    if (!havePython()) return;
+    tfs::path d = testDir("wwpak");
+    // Dune II layout: (offset, name\0)... 0 terminator, then data.
+    std::string a = "AAAA", b = "Creative Voice File";
+    uint32_t hdr = 4 + 6 + 4 + 6 + 4;            // "A.CPS\0" and "B.VOC\0"
+    std::string pak = le32(hdr) + std::string("A.CPS\0", 6) + le32(hdr + 4) + std::string("B.VOC\0", 6) + le32(0) + a + b;
+    writeFile(d / "T.PAK", pak);
+    writeFile(d / "Q.PAK", "PACK" + std::string(12, '\0'));  // Quake pak must not be taken for Westwood
+    UnpackerRegistry reg;
+    reg.addDefaultDirs(RTS_SOURCE_DIR);
+    std::string why;
+    const UnpackerInfo* u = reg.detect((d / "T.PAK").string(), &why);
+    CHECK(u && u->name == "wwpak");
+    CHECK(!reg.detect((d / "Q.PAK").string(), &why));
+    PackWriter w;
+    ImportResult r;
+    std::string err;
+    CHECK(importArchive(reg, (d / "T.PAK").string(), ImportOptions{}, w, &r, &err) && r.files == 2);
+    std::string bytes, out;
+    CHECK(w.writeToString(bytes, WriteOptions{}));
+    auto p = Pack::open(memorySource(bytes));
+    CHECK(p && p->read("A.CPS", out) && out == a && p->read("B.VOC", out) && out == b);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

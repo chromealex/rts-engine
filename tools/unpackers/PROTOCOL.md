@@ -175,4 +175,5 @@ The game reads imported files like any other content:
 | `dmg` | `.dmg` | macOS: `hdiutil attach -readonly`. Elsewhere: 7-Zip (`7zz`/`7z`). With 7-Zip, HFS+ hard links come out empty. |
 | `war` | Warcraft I/II `.WAR`, `.SUD`, `.INS` | Stored and LZ entries. 1-byte placeholder entries are skipped. |
 | `zpac` | Z (Bitmap Brothers) `.PAC` | Single LZSS stream. Checked against the demo: `DMAIN.PAC` starts with `PHRASES.BIN` byte for byte. |
+| `wwpak` | Westwood `.PAK` (Dune II, Lands of Lore, Kyrandia 1–2) | Header of (offset, 8.3 name) records. Checked on all 15 Dune II PAKs (665 files): `.CPS` sizes match their own headers, and `DUNEMAP.CPS` decodes into the Arrakis map. |
 | `zrsc` | Z `.RSC` | Offset table of sprite records, written as raw records. |
