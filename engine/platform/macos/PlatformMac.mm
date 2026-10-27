@@ -16,6 +16,9 @@ using rts::platform::detail::state;
 
 static std::unique_ptr<gfx::Device> g_device;
 static NSWindow* g_window = nil;
+// Strong owner of the app delegate: NSApp.delegate is weak, and once the timer is invalidated
+// nothing else retains it (a freed delegate crashed in -tick when the window closed).
+static id g_delegate = nil;
 static std::chrono::steady_clock::time_point g_last;
 
 static uint8_t modsFrom(NSEventModifierFlags f) {
@@ -269,6 +272,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
         appItem.submenu = appMenu;
         NSApp.mainMenu = bar;
         RTSAppDelegate* del = [RTSAppDelegate new];
+        g_delegate = del;
         NSApp.delegate = del;
         [NSApp run];
     }
