@@ -555,6 +555,288 @@ TEST(mech_survive_waves) {
     CHECK(sim->result() == 1);                                   // survived to 30 s
 }
 
+// ---------------- Audio (engine/audio, modules/rts/audio) ----------------
+#include <cmath>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <set>
+#include <sstream>
+#include <tuple>
+#include "engine/audio/Audio.h"
+#include "engine/audio/Synth.h"
+#include "modules/rts/audio/RtsAudio.h"
+
+namespace {
+
+// 16-bit PCM WAV in memory: a sine of `hz` (0 = silence).
+std::string makeWav(int rate, int channels, float seconds, float hz) {
+    const uint32_t frames = uint32_t(float(rate) * seconds), bytes = frames * uint32_t(channels) * 2;
+    std::string s;
+    auto u32 = [&](uint32_t v) { for (int i = 0; i < 4; ++i) s += char((v >> (8 * i)) & 0xFF); };
+    auto u16 = [&](uint32_t v) { s += char(v & 0xFF); s += char((v >> 8) & 0xFF); };
+    s += "RIFF"; u32(36 + bytes); s += "WAVEfmt "; u32(16); u16(1); u16(uint32_t(channels)); u32(uint32_t(rate));
+    u32(uint32_t(rate * channels * 2)); u16(uint32_t(channels * 2)); u16(16); s += "data"; u32(bytes);
+    for (uint32_t i = 0; i < frames; ++i)
+        for (int c = 0; c < channels; ++c) u16(uint32_t(uint16_t(int16_t(std::lrint(std::sin(6.2831853 * hz * i / rate) * 16000)))));
+    return s;
+}
+
+std::unique_ptr<audio::AudioEngine> offlineAudio(int maxVoices = 32) {
+    auto a = std::make_unique<audio::AudioEngine>();
+    audio::AudioConfig c;
+    c.openDevice = false;
+    c.sampleRate = 48000;
+    c.maxVoices = maxVoices;
+    a->init(c);
+    return a;
+}
+
+// Renders `seconds` and returns RMS of the left and right channels.
+std::pair<double, double> renderRms(audio::AudioEngine& a, float seconds) {
+    std::vector<float> buf(size_t(48000 * seconds) * 2);
+    a.render(buf.data(), int(buf.size() / 2));
+    double l = 0, r = 0;
+    for (size_t i = 0; i < buf.size(); i += 2) { l += buf[i] * buf[i]; r += buf[i + 1] * buf[i + 1]; }
+    return {std::sqrt(l / double(buf.size() / 2)), std::sqrt(r / double(buf.size() / 2))};
+}
+
+bool loadBank(audio::AudioEngine& a, const std::string& json, std::string* err = nullptr,
+              const std::map<std::string, std::string>& files = {}) {
+    return a.loadBank(Json::parse(json), [&](const std::string& p, std::string& out) {
+        auto it = files.find(p);
+        if (it == files.end()) return false;
+        out = it->second;
+        return true;
+    }, err);
+}
+
+std::string readSource(const std::string& rel) {
+    std::ifstream f(std::string(RTS_SOURCE_DIR) + "/" + rel, std::ios::binary);
+    std::stringstream s;
+    s << f.rdbuf();
+    return s.str();
+}
+
+} // namespace
+
+TEST(audio_synth_render) {
+    std::vector<audio::SynthLayer> layers;
+    std::string err;
+    CHECK(audio::parseSynth(Json::parse(R"([{"wave":"square","freq":[880,220],"duration":0.2},{"wave":"noise","duration":0.1,"delay":0.15}])"), layers, err));
+    CHECK(layers.size() == 2);
+    auto pcm = audio::renderSynth(layers, 44100, 7);
+    CHECK(pcm.size() == size_t(std::ceil(0.25 * 44100)));        // delay + duration of the longest layer
+    CHECK(pcm == audio::renderSynth(layers, 44100, 7));            // reproducible
+    int peak = 0;
+    for (auto s : pcm) peak = std::max(peak, std::abs(int(s)));
+    CHECK(peak > 8000 && peak <= 32767);
+    CHECK(std::abs(int(pcm.back())) < 2000);                       // release fades out: no click at the end
+    CHECK(!audio::parseSynth(Json::parse(R"({"wave":"banjo"})"), layers, err) && err.find("banjo") != std::string::npos);
+    CHECK(audio::parseSynth(Json::parse(R"({"wave":"saw","crush":4})"), layers, err));
+    auto crushed = audio::renderSynth(layers, 44100, 1);
+    std::set<int16_t> levels(crushed.begin(), crushed.end());
+    CHECK(levels.size() <= 16);                                    // 4 bits
+}
+
+TEST(audio_decode_wav) {
+    audio::Clip clip;
+    std::string err;
+    CHECK(audio::decodeClip(makeWav(22050, 1, 0.5f, 440), clip, err));
+    CHECK(clip.channels == 1 && clip.sampleRate == 22050 && clip.frames() == 11025);
+    CHECK(audio::decodeClip(makeWav(44100, 2, 0.25f, 220), clip, err));
+    CHECK(clip.channels == 2 && clip.frames() == 11025);
+    CHECK(!audio::decodeClip("not audio at all", clip, err) && !err.empty());
+    CHECK(!audio::decodeClip("", clip, err));
+}
+
+TEST(audio_bank_errors_are_readable) {
+    auto a = offlineAudio();
+    std::string err;
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"bus":"drums"}}})", &err) && err.find("sound 'x': unknown bus 'drums'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"volume":1}}})", &err) && err.find("exactly one of") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"volume":{"loud":1}})", &err) && err.find("unknown bus 'loud'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"pitch":[2,1]}}})", &err));
+    // a missing file is only a warning: the game still starts, that sound is silent
+    CHECK(loadBank(*a, R"({"sounds":{"boom":{"file":"sfx/boom.ogg"},"beep":{"synth":{},"volum":2}}})", &err));
+    CHECK(a->soundCount() == 2 && a->sound(a->find("boom"))->clips.empty());
+    CHECK(a->warnings().size() == 2);                               // missing file + unknown key 'volum'
+    CHECK(a->play("boom") == audio::kNoVoice && a->play("beep") != audio::kNoVoice);
+    // a failed load keeps the previous bank
+    CHECK(!loadBank(*a, R"({"sounds":{"y":{}}})", &err) && a->find("beep") != audio::kNoSound);
+}
+
+TEST(audio_voice_limits_and_cooldown) {
+    auto a = offlineAudio(4);
+    CHECK(loadBank(*a, R"({"sounds":{
+        "hit":  {"synth":{"wave":"sine","duration":1}, "maxInstances":2},
+        "shot": {"synth":{"wave":"sine","duration":1}, "cooldown":0.1, "maxInstances":0},
+        "any":  {"synth":{"wave":"sine","duration":1}, "maxInstances":0},
+        "vip":  {"synth":{"wave":"sine","duration":1}, "maxInstances":0, "priority":5}}})"));
+    for (int i = 0; i < 5; ++i) a->play("hit");
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 2);                                  // oldest instances were stolen
+    CHECK(a->play("shot") != audio::kNoVoice);
+    CHECK(a->play("shot") == audio::kNoVoice);                      // cooldown
+    a->update(0.15);
+    CHECK(a->play("shot") != audio::kNoVoice);
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 4);                                  // global limit (2 hit + 2 shot)
+    a->play("any");                                                 // steals the oldest low-priority voice
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 4);
+    for (int i = 0; i < 4; ++i) a->play("vip");
+    renderRms(*a, 0.05f);
+    a->play("any");                                                 // lower than everything playing: dropped
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 4);
+    a->stopAll(0.01f);
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 0);
+}
+
+TEST(audio_spatial_and_volumes) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
+    a->setListener(0, 0, 0, 10);
+    CHECK(a->audibility(5, 0) == 1.0f && a->audibility(25, 0) == 0.0f);
+    CHECK(a->audibility(15, 0) > 0.0f && a->audibility(15, 0) < 1.0f);
+    audio::PlayParams far;
+    far.positional = true; far.x = 100;
+    CHECK(loadBank(*a, R"({"sounds":{"blip":{"synth":{"duration":0.1}}}})"));
+    CHECK(a->play("blip", far) == audio::kNoVoice);                 // inaudible one-shots are not even started
+    CHECK(loadBank(*a, R"({"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
+    audio::PlayParams right;
+    right.positional = true; right.x = 9;
+    audio::VoiceId v = a->play("tone", right);
+    auto [l, r] = renderRms(*a, 0.2f);
+    CHECK(r > l * 1.5 && l > 0.0);                                  // panned right, both channels audible
+    a->setListener(0, 0, 3.14159265f, 10);                          // camera turned around: now on the left
+    renderRms(*a, 0.05f);
+    std::tie(l, r) = renderRms(*a, 0.2f);
+    CHECK(l > r * 1.5);
+    a->setMuted(true);
+    renderRms(*a, 0.1f);                                            // master fades out (no click)
+    std::tie(l, r) = renderRms(*a, 0.1f);
+    CHECK(l < 1e-4 && r < 1e-4);
+    a->setMuted(false);
+    a->setMasterVolume(0.5f);
+    a->setVolume(audio::Bus::Music, 0.25f);
+    auto saved = a->saveSettings();
+    auto b = offlineAudio();
+    b->loadSettings(saved + "garbage\nnan nan\n");
+    CHECK(b->masterVolume() == 0.5f && b->volume(audio::Bus::Music) == 0.25f && !b->muted());
+    a->stop(v, 0.01f);
+}
+
+TEST(audio_music_playlists) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"m/a.wav", makeWav(44100, 2, 0.3f, 220)}, {"m/b.wav", makeWav(22050, 1, 0.3f, 330)}};
+    CHECK(loadBank(*a, R"({"music":{"match":{"files":["m/a.wav","m/b.wav"],"shuffle":true},"menu":"m/a.wav","broken":"m/none.ogg"}})", nullptr, files));
+    CHECK(a->warnings().size() == 1);                               // missing track
+    CHECK(a->hasMusic("match") && !a->playMusic("nope"));
+    CHECK(a->playMusic("match", 0.05f));
+    renderRms(*a, 0.1f);
+    auto [l, r] = renderRms(*a, 1.2f);                              // 4x longer than a track: the playlist loops
+    CHECK(l > 0.1 && r > 0.1);
+    a->stopMusic(0.1f);
+    renderRms(*a, 0.3f);
+    std::tie(l, r) = renderRms(*a, 0.2f);
+    CHECK(l < 1e-4 && a->currentMusic().empty());
+    CHECK(a->playMusic("broken"));                                  // no playable track: silent, no hang
+    std::tie(l, r) = renderRms(*a, 0.2f);
+    CHECK(l < 1e-4);
+}
+
+TEST(audio_sample_games_banks_load_cleanly) {
+    for (const char* g : {"skirmish", "mushrooms"}) {
+        const std::string dir = std::string("games/") + g + "/";
+        Json bank = Json::parse(readSource(dir + "audio.json"));
+        game::Rules rules = game::loadRules(Json::parse(readSource(dir + "rules.json")));
+        auto a = offlineAudio();
+        std::string err;
+        CHECK(a->loadBank(bank, [&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); }, &err));
+        CHECK(a->warnings().empty());
+        game::RtsAudio s;
+        CHECK(s.init(*a, rules, bank, &err));
+        CHECK(s.warnings().empty());
+        for (auto& w : s.warnings()) std::printf("    %s: %s\n", g, w.c_str());
+    }
+}
+
+TEST(audio_rts_mapping_warnings) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"sounds":{"s":{"synth":{}}}})"));
+    game::Rules rules = game::loadRules(Json::parse(R"({"resources":{"gold":{"kind":"stock"}},"types":{"guy":{"weapons":[{"id":"axe"}]}}})"));
+    game::RtsAudio s;
+    std::string err;
+    CHECK(s.init(*a, rules, Json::parse(R"({"events":{"died":"s","explode":"s","notEnough.gold":"s","notEnough.oil":"s"},
+        "types":{"guy":{"select":"nope","weapons":{"axe":{"hit":"s"},"bow":{"hit":"s"}}},"ghost":{"died":"s"}}})"), &err));
+    CHECK(s.warnings().size() == 5); // explode, oil, nope, bow, ghost
+    CHECK(!s.init(*a, rules, Json::parse(R"({"types":[1,2]})"), &err) && err.find("\"types\" must be an object") != std::string::npos);
+}
+
+TEST(audio_rts_events_keep_sim_deterministic) {
+    // The same bot match with and without sound attached must produce identical checksums, and the
+    // attached run must actually produce sounds (combat, deaths, the viewer's notifications).
+    const std::string dir = "games/skirmish/";
+    Json rulesJson = Json::parse(readSource(dir + "rules.json"));
+    Json map = Json::parse(readSource(dir + "maps/valley.json"));
+    Json bank = Json::parse(readSource(dir + "audio.json"));
+    game::Rules rules = game::loadRules(rulesJson);
+    auto play = [&](bool withAudio, int& played) {
+        auto a = offlineAudio();
+        game::RtsAudio sound;
+        if (withAudio) {
+            a->loadBank(bank, [&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); });
+            sound.init(*a, rules, bank);
+        }
+        SimConfig cfg;
+        cfg.seed = 11;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rulesJson, map);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim.players()) bots.emplace_back(p.slot, 11);
+        if (withAudio) sound.attach(sim, 1);
+        std::vector<float> buf(2400 * 2);
+        for (int t = 0; t < 20 * 240 && sim.result() == 0; ++t) {
+            for (auto& b : bots) b.update(sim);
+            sim.step();
+            if (t % 2) continue;  // two ticks per "frame": the collector must not lose the first tick's events
+            a->setListener(32, 24, 0, 1000);
+            sound.update(sim, 0.1);
+            a->update(0.1);
+            a->render(buf.data(), 2400);
+        }
+        played = sound.played();
+        return sim.checksum();
+    };
+    int silent = 0, loud = 0;
+    const uint64_t without = play(false, silent), with = play(true, loud);
+    CHECK(without == with);
+    CHECK(silent == 0 && loud > 50);
+}
+
+TEST(audio_decode_and_stream_ogg_vorbis) {
+    const std::string ogg = readSource("tests/data/audio/tone.ogg");
+    CHECK(!ogg.empty());
+    audio::Clip clip;
+    std::string err;
+    CHECK(audio::decodeClip(ogg, clip, err));
+    CHECK(clip.channels == 2 && clip.sampleRate == 22050);
+    CHECK(clip.frames() > 10500 && clip.frames() < 11600);
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"sounds":{"tone":{"file":"t.ogg","spatial":false}},"music":{"match":"t.ogg"}})", &err, {{"t.ogg", ogg}}));
+    CHECK(a->warnings().empty());
+    a->play("tone");
+    auto [l, r] = renderRms(*a, 0.3f);
+    CHECK(l > 0.05 && r > 0.05);
+    renderRms(*a, 0.4f);
+    CHECK(a->playMusic("match", 0.01f));                             // streamed (decoded in the mixer)
+    std::tie(l, r) = renderRms(*a, 0.3f);
+    CHECK(l > 0.05 && r > 0.05);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
