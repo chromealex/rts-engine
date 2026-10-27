@@ -275,6 +275,27 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
     }
 
     const bool canBuildNow = sim.tick() > lastBuildTick_ + 60;
+    // abandoned construction sites (builder killed or re-tasked): send a worker back
+    if (sim.tick() % 100 == 0) {
+        std::vector<Entity> sites, busy;
+        w.each<Construction, Owner>([&](Entity e, Construction& c, Owner& o) { if (o.player == player_ && !c.selfBuild) sites.push_back(e); });
+        w.each<Orders, Owner>([&](Entity, Orders& ord, Owner& o) {
+            if (o.player == player_ && !ord.queue.empty() && ord.queue.front().type == OrderType::Build && ord.queue.front().target.valid()) busy.push_back(ord.queue.front().target);
+        });
+        for (Entity s : sites) {
+            if (std::find(busy.begin(), busy.end(), s) != busy.end()) continue;
+            Entity best; Fixed bestD{};
+            Vec3 sp = w.get<Transform>(s).pos;
+            w.each<Unit, Owner, Orders, Transform>([&](Entity e, Unit& u, Owner& o, Orders& ord, Transform& tr) {
+                if (o.player != player_ || R.types[u.type].builds.empty() || !controllable(w, e, u)) return;
+                if (!ord.queue.empty() && ord.queue.front().type == OrderType::Build) return;
+                Fixed d = dist(tr.pos, sp);
+                if (!best.valid() || d < bestD) { best = e; bestD = d; }
+            });
+            if (!best.valid()) break;
+            Command c; c.type = kCmdSmart; c.units = {best}; c.target = s; send(sim, c);
+        }
+    }
     // 2) supply (structures like farms/depots, or supply units like overlords)
     Fixed freeSupply = eco.supplyCap - eco.supplyUsed;
     if (eco.supplyCap < R.supplyCap && freeSupply < Fixed::fromInt(4) && canBuildNow) {
@@ -396,7 +417,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             const UnitType& t = R.types[ti];
             if (!t.structure) continue;
             bool makesArmy = false;
-            for (uint16_t u : t.produces) if (isCombat(R.types[u])) makesArmy = true;
+            for (uint16_t u : t.produces) if (isCombat(R.types[u]) && !R.types[u].unique) makesArmy = true; // hero altars don't count
             if (t.waveUnit != kNoType) makesArmy = true;
             if (makesArmy) { milProducers += count[ti]; candidates.push_back(uint16_t(ti)); }
         }
@@ -456,7 +477,7 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
         }
     }
     const bool defend = gs.victory.mode == VictoryMode::Survive;
-    int needed = defend ? 1 : cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth;
+    int needed = defend ? 1 : std::min(cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth, cfg_.maxAttackArmy);
     if (int(idleArmy.size()) < needed) return;
     Vec3 c{};
     for (Entity e : idleArmy) c += w.get<Transform>(e).pos;

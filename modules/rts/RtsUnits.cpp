@@ -41,7 +41,9 @@ void RtsModule::stopMoving(Simulation& sim, Entity e) {
     if (auto* m = sim.world().tryGet<Mobile>(e)) { m->moving = false; m->path.clear(); m->pathPos = 0; m->stuck = Fixed{}; }
 }
 
-void RtsModule::moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius) {
+void RtsModule::moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius) { moveToVia(sim, e, goal, radius, false); }
+
+void RtsModule::moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies) {
     World& w = sim.world();
     auto* m = w.tryGet<Mobile>(e);
     if (!m) return;
@@ -50,8 +52,59 @@ void RtsModule::moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius) {
     m->goalRadius = radius;
     m->stuck = Fixed{};
     m->pathPos = 0;
-    state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.layer, m->path);
+    state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.layer, m->path, 40000, MapGrid::clearanceFor(t.radius), aroundAllies);
     m->moving = !m->path.empty();
+}
+
+// ================================================================= melee surround
+
+namespace {
+// 32 unit directions (cos, sin) in 16.16 fixed point, k * 11.25 degrees.
+constexpr int32_t kDir32[32][2] = {{65536, 0}, {64277, 12785}, {60547, 25080}, {54491, 36410}, {46341, 46341}, {36410, 54491}, {25080, 60547}, {12785, 64277},
+    {0, 65536}, {-12785, 64277}, {-25080, 60547}, {-36410, 54491}, {-46341, 46341}, {-54491, 36410}, {-60547, 25080}, {-64277, 12785},
+    {-65536, 0}, {-64277, -12785}, {-60547, -25080}, {-54491, -36410}, {-46341, -46341}, {-36410, -54491}, {-25080, -60547}, {-12785, -64277},
+    {0, -65536}, {12785, -64277}, {25080, -60547}, {36410, -54491}, {46341, -46341}, {54491, -36410}, {60547, -25080}, {64277, -12785}};
+Vec3 dir32(int k) { return {Fixed::fromRaw(kDir32[k & 31][0]), Fixed{}, Fixed::fromRaw(kDir32[k & 31][1])}; }
+} // namespace
+
+// A free slot on a ring around the target where this melee unit can hit it; slots are spread by angle,
+// claimed per target (deterministic: units are processed in entity order) and kept for a second.
+bool RtsModule::attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out) {
+    World& w = sim.world();
+    MapGrid& g = state(sim).grid;
+    auto* c = w.tryGet<Combat>(e);
+    if (!c || !w.alive(target)) return false;
+    const UnitType& t = rules_.types[w.get<Unit>(e).type];
+    const UnitType& tt = rules_.types[w.get<Unit>(target).type];
+    const Vec3 tp = w.get<Transform>(target).pos, me = w.get<Transform>(e).pos;
+    Fixed rT = tt.structure ? Fixed::fromInt(std::max(tt.footprintW, tt.footprintH)) / 2 : tt.radius;
+    Fixed ring = rT + t.radius + range / 2 + Fixed::fromRatio(1, 20);
+    if (c->slotTarget == target && c->slot >= 0 && sim.tick() < c->slotTick + 20) { out = tp + dir32(c->slot) * ring; return true; }
+    // drop the old claim
+    for (auto& cl : slotClaims_) if (cl.claimer == e.packed()) cl.target = 0;
+    int n = int((ring * 6283 / 1000 / (t.radius * 2 + Fixed::fromRatio(1, 10))).toInt());
+    n = std::clamp(n, 4, 32);
+    const int stride = 32 / n;
+    n = 32 / stride;
+    Vec3 d = flat(me - tp);
+    if (d.length().raw == 0) d = {kOne, Fixed{}, Fixed{}};
+    int k0 = 0;
+    Fixed best{};
+    for (int k = 0; k < n; ++k) { Fixed dot = d.dot(dir32(k * stride)); if (k == 0 || dot > best) { best = dot; k0 = k; } }
+    for (int step = 0; step < n; ++step) {
+        int k = ((k0 + ((step + 1) / 2) * ((step & 1) ? 1 : -1)) % n + n) % n;
+        int dirIdx = k * stride;
+        Vec3 p = tp + dir32(dirIdx) * ring;
+        if (!g.passable(g.cellX(p.x), g.cellY(p.z), t.layer)) continue;
+        bool taken = false;
+        for (auto& cl : slotClaims_) if (cl.target == target.packed() && cl.slot == dirIdx && cl.claimer != e.packed()) taken = true;
+        if (taken) continue;
+        slotClaims_.push_back({target.packed(), dirIdx, e.packed()});
+        c->slotTarget = target; c->slot = int8_t(dirIdx); c->slotTick = sim.tick(); c->slotPos = p;
+        out = p;
+        return true;
+    }
+    return false; // ring full: queue behind as before
 }
 
 // ================================================================= orders
@@ -249,6 +302,13 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         }
         if (!m || (u.flags & kUnitHold)) return true;
         Vec3 tp = w.get<Transform>(target).pos;
+        // melee: head for a free slot around the target, walking around allies already fighting
+        Vec3 slot;
+        if (range < Fixed::fromInt(2) && (t.layer & kLayerGround) && !(rules_.types[w.get<Unit>(target).type].layer & kLayerAir) &&
+            attackSlot(sim, e, target, range, slot)) {
+            if (!m->moving || dist2D(m->goal, slot) > kHalf || (sim.tick() + e.index) % 20 == 0) moveToVia(sim, e, slot, Fixed::fromRatio(1, 5), true);
+            return true;
+        }
         if (!m->moving || dist2D(m->goal, tp) > kOne || (sim.tick() + e.index) % 20 == 0) moveTo(sim, e, tp, range);
         return true;
     };
@@ -430,6 +490,19 @@ void RtsModule::sysOrders(Simulation& sim) {
     w.each<Orders, Unit>([&](Entity e, Orders& ord, Unit& u) {
         if (!ord.queue.empty() && u.hp.raw > 0 && !(u.flags & (kUnitInHand | kUnitPossessed))) ents.push_back(e);
     });
+    // soft obstacles (standing ground units) and the melee slot claims of this tick
+    MapGrid& g = state(sim).grid;
+    std::fill(g.soft.begin(), g.soft.end(), 0);
+    slotClaims_.clear();
+    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+        if (m.moving || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & kLayerGround)) return;
+        int x = g.cellX(tr.pos.x), y = g.cellY(tr.pos.z);
+        if (g.inside(x, y)) g.soft[size_t(g.index(x, y))] = 1;
+        (void)e;
+    });
+    w.each<Combat>([&](Entity e, Combat& c) {
+        if (c.slot >= 0 && w.alive(c.slotTarget) && sim.tick() < c.slotTick + 20) slotClaims_.push_back({c.slotTarget.packed(), c.slot, e.packed()});
+    });
     // Orders may spawn entities (construction), so they run outside the iteration.
     for (Entity e : ents) {
         if (!w.alive(e)) continue;
@@ -462,7 +535,8 @@ void RtsModule::sysMovement(Simulation& sim) {
     w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitInHand)) gs.hash.insert(e, t.pos); });
 
     // 1) desired movement along paths
-    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+    if (rules_.movement.rvo) moveAgents(sim);
+    else w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (!m.moving || (u.flags & (kUnitInHand | kUnitPossessed))) return;
         auto* b = w.tryGet<Buffs>(e);
         if (b && b->stunUntil > sim.tick()) return;
@@ -496,15 +570,35 @@ void RtsModule::sysMovement(Simulation& sim) {
 
     if (rules_.dungeon) movePossessed(sim);
 
-    // 2) separation between overlapping mobile units on the same layer
+    // 2) separation between overlapping mobile units on the same layer. Bodies are move.radius; who yields
+    //    depends on mass and activity: fighting / holding / working units are anchored (barely pushed),
+    //    moving units push idle ones aside. A small dead zone and a per-tick cap prevent jitter.
     struct Push { Entity e; Vec3 d; };
     std::vector<Push> pushes;
+    std::vector<Fixed> weight;
+    std::vector<uint8_t> anchored;
+    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform&) {
+        if (weight.size() <= e.index) { weight.resize(e.index + 1, kOne); anchored.resize(e.index + 1, 0); }
+        bool anchor = (u.flags & kUnitHold) != 0;
+        if (auto* ord = w.tryGet<Orders>(e); ord && !ord->queue.empty()) {
+            const Order& o = ord->queue.front();
+            if (o.state == 2 && (o.type == OrderType::Gather || o.type == OrderType::Build || o.type == OrderType::Dig ||
+                                 o.type == OrderType::ClaimCell || o.type == OrderType::Need)) anchor = true;
+        }
+        if (auto* c = w.tryGet<Combat>(e); c && !m.moving && w.alive(c->target)) anchor = true; // standing and fighting
+        if (rules_.lanes.enabled && w.has<LaneWalker>(e)) anchor = true;
+        const UnitType& t = rules_.types[u.type];
+        weight[e.index] = t.mass * (anchor ? 8 : m.moving ? 2 : 1);
+        anchored[e.index] = anchor;
+    });
+    const Fixed deadZone = Fixed::fromRatio(3, 100);
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (u.flags & kUnitInHand) return;
         if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];
         Vec3 acc{};
         bool any = false;
+        (void)m;
         gs.hash.query(tr.pos, t.radius * 2 + kOne, [&](Entity o) {
             if (o == e) return;
             auto* ou = w.tryGet<Unit>(o);
@@ -513,18 +607,21 @@ void RtsModule::sysMovement(Simulation& sim) {
             if (!(ot.layer & t.layer) && !((ot.layer | t.layer) == (kLayerGround | kLayerSandOnly))) return;
             Vec3 d = flat(tr.pos - w.get<Transform>(o).pos);
             Fixed len = d.length();
-            Fixed overlap = t.radius + ot.radius - len;
+            if (w.get<Unit>(o).flags & kUnitInHand) return;
+            Fixed overlap = t.radius + ot.radius - len - deadZone;
             if (overlap.raw <= 0) return;
             if (len.raw == 0) { // exact overlap: deterministic direction from entity indices
                 d = (e.index < o.index) ? Vec3{kOne, Fixed{}, Fixed{}} : Vec3{-kOne, Fixed{}, Fixed{}};
                 len = kOne;
             }
-            Fixed share = m.moving ? kHalf : (w.get<Mobile>(o).moving ? Fixed::fromRatio(3, 4) : kHalf);
+            Fixed wo = o.index < weight.size() ? weight[o.index] : kOne, we = weight[e.index];
+            Fixed share = wo / fxMax(we + wo, Fixed::fromRatio(1, 100));   // the lighter / less busy one yields
             acc += d * (overlap * share / len);
             any = true;
         });
         if (any) {
-            Fixed len = acc.length(), maxPush = t.speed * dt + Fixed::fromRatio(1, 20);
+            Fixed len = acc.length();
+            Fixed maxPush = anchored[e.index] ? Fixed::fromRatio(1, 100) : t.speed * dt / 2 + Fixed::fromRatio(1, 50);
             if (len > maxPush) acc = acc * (maxPush / len);
             pushes.push_back({e, acc});
         }

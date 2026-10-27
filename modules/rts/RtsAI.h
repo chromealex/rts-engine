@@ -14,6 +14,7 @@ struct AIConfig {
     int workersPerBase = 14;
     int firstAttackArmy = 8;
     int armyGrowth = 4;           // each wave needs this many more units
+    int maxAttackArmy = 16;       // ...up to this many (supply caps would otherwise stall the attacks)
     Fixed aggression = Fixed::fromInt(1);
 };
 

@@ -152,8 +152,9 @@ def frostcrown():
         m.ent("peon", 1, [14 + (i % 3) * 0.8, 21 + i])
     m.ent("burrow", 1, [10, 30])
     m.ent("gold_mine", 0, [10.5, 17.5])
-    for (x, y) in [(4, 30), (5, 31), (4, 32), (5, 33), (4, 34), (6, 35), (5, 36), (4, 37), (6, 38), (5, 39)]:
-        m.ent("pine", 0, [x + 0.5, y + 0.5])
+    for y in range(30, 44):
+        for x in range(2, 6):
+            m.ent("pine", 0, [x + 0.5, y + 0.5])
     # creep camps guarding expansions and the middle
     m.ent("gold_mine", 0, [22.5, 38.5])
     m.ent("troll", -1, [24, 35])

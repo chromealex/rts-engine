@@ -308,6 +308,8 @@ Rules loadRules(const Json& j) {
             t.speed = m.getFx("speed", Fixed::fromInt(2));
             t.layer = parseLayers(m["layer"], kLayerGround);
             t.radius = m.getFx("radius", t.radius);
+            t.mass = m.getFx("mass", t.radius * t.radius * 4);
+            if (t.radius.raw <= 0 || t.mass.raw <= 0) fail(where + " move", "radius and mass must be positive");
         }
         if (const Json& s = tj["structure"]; s.isObject()) {
             t.structure = true;
@@ -630,6 +632,13 @@ Rules loadRules(const Json& j) {
         r.lanes.left = std::clamp<int>(int(ln.getInt("left", 0)), 0, 8);
         r.lanes.right = std::clamp<int>(int(ln.getInt("right", 0)), 0, 8);
         r.lanes.spacing = ln.getFx("spacing", r.lanes.spacing);
+    }
+    if (const Json& mv = j["movement"]; mv.isObject()) {
+        std::string av = mv.getStr("avoidance", "rvo");
+        if (av != "rvo" && av != "simple") fail("movement.avoidance", "expected 'rvo' or 'simple', got '" + av + "'");
+        r.movement.rvo = av == "rvo";
+        r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
+        r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
     }
     bool anySettlers = r.buildingStorage || r.roadNetwork.enabled;
     for (auto& t : r.types) if (t.storeCapacity.raw > 0 || t.recipe.enabled || t.carrierCapacity.raw > 0 || t.trainFrom != kNoType) anySettlers = true;

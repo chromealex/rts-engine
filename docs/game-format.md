@@ -48,6 +48,7 @@ is optional — the blocks present on a type decide what it can do.
 | `playerAbilities` | see "Player abilities" |
 | `storage` | `"player"` (default: one stock per player) or `"buildings"`: goods live in building inventories, see "Settlers economy" |
 | `roadNetwork` | `{"cost": {"stone": 1}, "speed": 1.5, "required": true}` — player-built road cells (map char `+`), faster movement, deliveries only between buildings on one network |
+| `movement` | `{"avoidance": "rvo", "neighbors": 8, "timeHorizon": 1.5}` — local avoidance between moving units: `rvo` (default, ORCA velocity obstacles in fixed point, idle allies step aside) or `simple` (separation only); `neighbors` = agents considered per unit (quality/cost knob), `timeHorizon` in seconds. See "Movement and bodies" |
 | `lanes` | `{"left": 4, "right": 2, "spacing": 0.35}` — Mushroom Wars 2 lanes between garrison buildings (replaces map `roads` for sends) |
 
 ## resources
@@ -66,6 +67,24 @@ Kinds: `stock` (default: gathered/earned, spent), `flow` (per-second income from
 building in progressive mode; at 0 with negative income production slows by `deficitProduction`),
 `capacity` (sum of `provides` minus `consumes`; a deficit slows production and disables types with
 any tag in `deficitDisables`).
+
+## Movement and bodies
+
+`"move": {"speed": 2.8, "radius": 0.4, "mass": 0.64, "layer": "ground"}`
+
+- `radius` is the real body size (cells): units keep `r1 + r2` apart, weapon and ability ranges are measured
+  edge to edge (`range` + both radii, structures by their footprint), and paths keep clearance from walls and
+  buildings for bodies larger than half a cell (tight gaps cost more; nothing becomes unreachable).
+- `mass` (default `4 * radius²`) decides who yields when bodies overlap. Units that are fighting, holding
+  position or working (gathering, building, digging) are anchored (x8) and are barely pushed; moving units (x2)
+  push idle ones (x1) aside. A 0.03-cell dead zone and a per-tick push cap remove jitter.
+- With `movement.avoidance: "rvo"` moving units steer around each other with reciprocal velocity obstacles
+  (nearest `neighbors`, deterministic order). Idle allies in the way are asked to yield: they step to a free side
+  cell and walk back once the way is clear, so a unit can pass a gap of standing units; units blocked by anchored
+  ones re-path around them.
+- Melee units (range < 2) attacking a target pick a free slot on a ring around it (slots by angle, claimed
+  per target, ties by entity index) and path around allies already fighting instead of pushing into the front
+  rank; ranged units stop and shoot. A group given an attack-move spreads into an arc whose flanks run ahead.
 
 ## types — blocks
 
