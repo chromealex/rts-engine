@@ -2,6 +2,7 @@
 #include "../PlatformCommon.h"
 #include "../../gfx/Gfx.h"
 
+#include <cstring>
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
@@ -180,10 +181,29 @@ static void updateSizes(NSView* view) {
     if (S.quit || !g_window) { [self.timer invalidate]; [NSApp terminate:nil]; return; }
     if (S.fbW <= 0 || S.fbH <= 0 || g_window.isMiniaturized || !g_window.visible) return;
     @autoreleasepool {
+        // RTS_SCREENSHOT / RTS_EXIT_AFTER_FRAMES (same hooks as Linux/Win32): fixed 1/60 s steps,
+        // capture frame N through the device, write it and quit once the GPU delivered it.
+        static const detail::CaptureRequest capture = detail::captureRequestFromEnv();
+        static long frameNo = 0;
+        static bool armed = false;
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - g_last).count();
         if (dt > rts::platform::detail::FrameClock::kMaxDt) dt = rts::platform::detail::FrameClock::kMaxDt; // after sleep/background
+        if (capture.active()) dt = 1.0 / 60.0;
         g_last = now;
+        if (capture.active() && !armed && ++frameNo >= capture.frames) {
+            armed = true;
+            std::string path = capture.path;
+            g_device->captureNextFrame([path](int w, int h, std::vector<uint8_t> px) {
+                if (!path.empty() && w > 0 && !px.empty()) {
+                    std::vector<uint8_t> flipped(px.size()); // capture is top-down, writePPM wants bottom-up
+                    size_t row = size_t(w) * 4;
+                    for (int y = 0; y < h; ++y) std::memcpy(&flipped[size_t(h - 1 - y) * row], &px[size_t(y) * row], row);
+                    detail::writePPM(path, w, h, flipped.data());
+                }
+                state().quit = true;
+            });
+        }
         g_device->beginFrame(S.fbW, S.fbH);
         if (S.cb.frame) S.cb.frame(*g_device, dt);
         g_device->endFrame();

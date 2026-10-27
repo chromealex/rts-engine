@@ -12,7 +12,6 @@ namespace rts::game {
 using namespace render;
 
 namespace {
-constexpr float kHeightUnit = 1.0f / 16.0f;
 float3 toF(const Vec3& v) { return {float(v.x.toDouble()), float(v.y.toDouble()), float(v.z.toDouble())}; }
 } // namespace
 
