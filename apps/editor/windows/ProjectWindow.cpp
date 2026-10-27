@@ -12,6 +12,7 @@ class ProjectWindow : public EditorWindow {
 public:
     const char* id() const override { return "project"; }
     const char* title() const override { return "Project"; }
+    int order() const override { return 0; }
     const char* dockArea() const override { return "bottom"; }
 
     void draw(Editor& ed) override {

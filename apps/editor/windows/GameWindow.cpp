@@ -14,6 +14,7 @@ class GameWindow : public EditorWindow {
 public:
     const char* id() const override { return "game"; }
     const char* title() const override { return "Game"; }
+    int order() const override { return 1; }
     const char* dockArea() const override { return "center"; }
     bool zeroPadding() const override { return true; }
     ImGuiWindowFlags flags() const override { return ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse; }
@@ -158,9 +159,9 @@ private:
             float speed = cam.distance * io.DeltaTime;
             float3 fwd{-std::sin(cam.yaw), 0, -std::cos(cam.yaw)}, right{std::cos(cam.yaw), 0, -std::sin(cam.yaw)};
             if (ImGui::IsKeyDown(ImGuiKey_W) || ImGui::IsKeyDown(ImGuiKey_UpArrow)) cam.target += fwd * speed;
-            if (ImGui::IsKeyDown(ImGuiKey_S) || ImGui::IsKeyDown(ImGuiKey_DownArrow)) cam.target -= fwd * speed;
+            if (ImGui::IsKeyDown(ImGuiKey_S) || ImGui::IsKeyDown(ImGuiKey_DownArrow)) cam.target += fwd * -speed;
             if (ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow)) cam.target += right * speed;
-            if (ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow)) cam.target -= right * speed;
+            if (ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow)) cam.target += right * -speed;
         }
         if (ed.humanSlot() <= 0) return;
         World& w = ed.sim()->world();
@@ -204,7 +205,7 @@ private:
                 c.units = ed.gameSelection;
                 c.point = {Fixed::fromRatio(int64_t(x * 256), 256), Fixed{}, Fixed::fromRatio(int64_t(z * 256), 256)};
                 c.target = pickSim(io.MousePos.x, io.MousePos.y);
-                if (io.KeyShift) c.flags = game::kCmdQueue;
+                if (io.KeyShift) c.flags = rts::kCmdQueue;
                 ed.issueCommand(c);
             }
         }

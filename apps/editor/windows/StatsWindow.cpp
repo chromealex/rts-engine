@@ -9,6 +9,7 @@ class StatsWindow : public EditorWindow {
 public:
     const char* id() const override { return "stats"; }
     const char* title() const override { return "Statistics"; }
+    int order() const override { return 2; }
     const char* dockArea() const override { return "bottom"; }
 
     void draw(Editor& ed) override {
@@ -29,7 +30,7 @@ public:
             const auto& hist = ed.playHistory;
             if (hist.size() >= 2) {
                 for (size_t p = 0; p < hist.back().units.size(); ++p) {
-                    float4 c = game::RtsView::playerColor(int(p + 1));
+                    render::float4 c = game::RtsView::playerColor(int(p + 1));
                     ImGui::PushStyleColor(ImGuiCol_PlotLines, ImVec4(c.x, c.y, c.z, 1));
                     std::vector<float> units, structs;
                     for (auto& h : hist) { units.push_back(float(p < h.units.size() ? h.units[p] : 0)); structs.push_back(float(p < h.structures.size() ? h.structures[p] : 0)); }

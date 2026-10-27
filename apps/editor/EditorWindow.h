@@ -19,6 +19,7 @@ public:
     virtual const char* title() const = 0;           // shown in the tab: "Scene", "Инспектор"
     virtual const char* dockArea() const { return "right"; } // default place: left, right, center, bottom
     virtual bool openByDefault() const { return true; }
+    virtual int order() const { return 100; }                // tab order inside a dock area (lower = first, the first is shown)
     virtual ImGuiWindowFlags flags() const { return 0; }
     virtual bool zeroPadding() const { return false; } // viewports want edge-to-edge content
     virtual void draw(Editor& ed) = 0;               // inside ImGui::Begin/End of the window

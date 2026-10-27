@@ -73,6 +73,8 @@ void Editor::init(gfx::Device& dev) {
         windows_.push_back(f());
         windows_.back()->open = windows_.back()->openByDefault();
     }
+    // registration order depends on the linker; tabs follow order()
+    std::stable_sort(windows_.begin(), windows_.end(), [](auto& a, auto& b) { return a->order() < b->order(); });
     registerGuiOps();
     if (!opt_.projectDir.empty()) {
         std::string err;
@@ -492,6 +494,7 @@ void Editor::drawDockspace() {
             ImGui::DockBuilderDockWindow(w->title(), node);
         }
         ImGui::DockBuilderFinish(dock);
+        focusFirst_ = 2; // select the first tab of every area once the windows exist
     }
     ImGui::DockSpace(dock, ImVec2(0, 0), ImGuiDockNodeFlags_None);
     ImGui::End();
@@ -528,6 +531,7 @@ void Editor::frame(gfx::Device& dev, double dt) {
         for (auto& w : windows_) {
             if (!w->open) continue;
             if (w->zeroPadding()) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+            if (focusFirst_ == 1 && w->order() == 0) ImGui::SetNextWindowFocus();
             bool visible = ImGui::Begin(w->title(), &w->open, w->flags());
             if (w->zeroPadding()) ImGui::PopStyleVar();
             if (visible) w->draw(*this);
@@ -535,6 +539,7 @@ void Editor::frame(gfx::Device& dev, double dt) {
         }
         drawStatusBar();
         drawActivityToasts();
+        if (focusFirst_ > 0) --focusFirst_;
     }
     // the screen: only the UI (3D views were rendered offscreen by their windows)
     gfx::PassDesc pass;

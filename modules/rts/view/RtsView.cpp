@@ -14,7 +14,6 @@ using namespace render;
 namespace {
 constexpr float kHeightUnit = 1.0f / 16.0f;
 float3 toF(const Vec3& v) { return {float(v.x.toDouble()), float(v.y.toDouble()), float(v.z.toDouble())}; }
-uint32_t hashCell(int x, int y) { uint32_t h = uint32_t(x) * 73856093u ^ uint32_t(y) * 19349663u; h ^= h >> 13; h *= 0x5bd1e995u; return h ^ (h >> 15); }
 } // namespace
 
 float4 RtsView::playerColor(int p) {
@@ -131,74 +130,8 @@ float RtsView::selectionRadius(uint16_t type) const {
     return float(t.radius.toDouble()) + 0.15f;
 }
 
-float RtsView::heightAt(const MapGrid& g, float x, float z) const {
-    if (g.w == 0) return 0;
-    int cx = std::clamp(int(std::floor(x)), 0, g.w - 1), cz = std::clamp(int(std::floor(z)), 0, g.h - 1);
-    return float(g.height[size_t(g.index(cx, cz))]) * kHeightUnit;
-}
+// heightAt / buildTerrain: RtsTerrain.cpp
 
-void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
-    if (hasTerrain_) {
-        dev.destroyBuffer(terrain_.vb); dev.destroyBuffer(terrain_.ib);
-        dev.destroyBuffer(water_.vb); dev.destroyBuffer(water_.ib);
-    }
-    MeshBuilder b;
-    const int W = g.w, H = g.h;
-    auto cellH = [&](int x, int y) -> float {
-        x = std::clamp(x, 0, W - 1); y = std::clamp(y, 0, H - 1);
-        size_t i = size_t(g.index(x, y));
-        float h = float(g.height[i]) * kHeightUnit;
-        if (!(g.flags[i] & kCellGround)) h += (g.flags[i] & kCellWater) ? -0.45f : 0.9f; // water dips, rock rises
-        return h;
-    };
-    auto cellColor = [&](int x, int y) -> float3 {
-        x = std::clamp(x, 0, W - 1); y = std::clamp(y, 0, H - 1);
-        size_t i = size_t(g.index(x, y));
-        float n = float(hashCell(x, y) & 255) / 255.0f;
-        uint8_t f = g.flags[i];
-        if (!(f & kCellGround) && (f & kCellWater)) return {0.32f, 0.40f, 0.30f};       // lake bed
-        if (!(f & kCellGround)) return {0.47f + n * 0.05f, 0.45f + n * 0.05f, 0.42f};    // rock
-        if (f & kCellNoBuild) return {0.60f + n * 0.04f, 0.52f, 0.38f};                // path / sand
-        return {0.33f + n * 0.05f, 0.52f + n * 0.06f, 0.24f + n * 0.03f};               // grass
-    };
-    // vertices at cell corners, averaged from the 4 surrounding cells
-    std::vector<float> vh(size_t((W + 1) * (H + 1)));
-    std::vector<float3> vc(vh.size());
-    for (int y = 0; y <= H; ++y)
-        for (int x = 0; x <= W; ++x) {
-            float h = 0; float3 c{};
-            for (int dy = -1; dy <= 0; ++dy) for (int dx = -1; dx <= 0; ++dx) { h += cellH(x + dx, y + dy); c += cellColor(x + dx, y + dy); }
-            vh[size_t(y * (W + 1) + x)] = h * 0.25f;
-            vc[size_t(y * (W + 1) + x)] = c * 0.25f;
-        }
-    auto hv = [&](int x, int y) { x = std::clamp(x, 0, W); y = std::clamp(y, 0, H); return vh[size_t(y * (W + 1) + x)]; };
-    // apron around the map so the edge does not look cut off
-    const int apron = 12;
-    for (int y = -apron; y <= H + apron; ++y)
-        for (int x = -apron; x <= W + apron; ++x) {
-            bool inside = x >= 0 && y >= 0 && x <= W && y <= H;
-            float h = inside ? hv(x, y) : hv(x, y) - 0.05f;
-            float3 n = normalize({hv(x - 1, y) - hv(x + 1, y), 2.0f, hv(x, y - 1) - hv(x, y + 1)});
-            float3 c = inside ? vc[size_t(y * (W + 1) + x)] : float3{0.30f, 0.44f, 0.24f};
-            float nn = float(hashCell(x + 999, y) & 255) / 255.0f;
-            if (!inside) c = c * (0.9f + nn * 0.1f);
-            b.addVertex({float(x), h, float(y)}, n, rgbaf({c.x, c.y, c.z, 1}));
-        }
-    const int stride = W + 2 * apron + 1;
-    for (int y = 0; y < H + 2 * apron; ++y)
-        for (int x = 0; x < W + 2 * apron; ++x) {
-            uint32_t i0 = uint32_t(y * stride + x), i1 = i0 + 1, i2 = i0 + uint32_t(stride), i3 = i2 + 1;
-            b.addTriangle(i0, i2, i1); // CCW seen from +Y
-            b.addTriangle(i1, i2, i3);
-        }
-    terrain_ = b.upload(dev);
-    // water: one translucent sheet slightly below ground level (visible only where the terrain dips)
-    MeshBuilder wb;
-    wb.color(rgba(255, 255, 255));
-    wb.quad({-float(apron), -0.12f, -float(apron)}, {-float(apron), -0.12f, float(H + apron)}, {float(W + apron), -0.12f, float(H + apron)}, {float(W + apron), -0.12f, -float(apron)});
-    water_ = wb.upload(dev);
-    hasTerrain_ = true;
-}
 
 void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid) {
     if (hasTerrain_) {

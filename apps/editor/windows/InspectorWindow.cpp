@@ -52,6 +52,7 @@ class InspectorWindow : public EditorWindow {
 public:
     const char* id() const override { return "inspector"; }
     const char* title() const override { return "Inspector"; }
+    int order() const override { return 0; }
     const char* dockArea() const override { return "right"; }
 
     void draw(Editor& ed) override {

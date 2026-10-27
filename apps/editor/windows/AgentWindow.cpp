@@ -10,6 +10,7 @@ class AgentWindow : public EditorWindow {
 public:
     const char* id() const override { return "agent"; }
     const char* title() const override { return "Agent"; }
+    int order() const override { return 1; }
     const char* dockArea() const override { return "bottom"; }
 
     void draw(Editor& ed) override {
