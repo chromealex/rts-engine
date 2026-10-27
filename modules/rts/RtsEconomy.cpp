@@ -82,6 +82,7 @@ void RtsModule::sysEconomy(Simulation& sim) {
                 if (p.capUsed[r] > p.capProvided[r]) { mult = fxMin(mult, rd.deficitProductionMult); disabled |= rd.deficitDisableTags; }
                 continue;
             }
+            if (isGood(uint16_t(r))) continue; // goods: income goes through the storehouses (syncStorehouses)
             p.stock[r] = fxMax(Fixed{}, p.stock[r] + p.income[r] * dt);
             // a drained flow resource (TA energy stall) also slows everything down
             if (rd.kind == ResourceKind::Flow && p.stock[r].raw == 0 && p.income[r].raw < 0) {
@@ -101,6 +102,7 @@ void RtsModule::sysEconomy(Simulation& sim) {
         p.productionMult = mult;
         p.disabledTags = disabled;
     }
+    if (rules_.buildingStorage) syncStorehouses(sim);
 }
 
 // ================================================================= resource fields
@@ -282,6 +284,13 @@ void RtsModule::sysConstruction(Simulation& sim) {
         Fixed mult = o.player < gs.players.size() ? gs.players[o.player].productionMult : kOne;
         Fixed step = dt * pw * mult / fxMax(t.buildTime, Fixed::fromRatio(1, 10));
         step = fxMin(step, kOne - c.progress);
+        if (auto* inv = w.tryGet<Inventory>(e); inv && rules_.buildingStorage) {
+            // settlers: progress can't outrun the delivered materials
+            Fixed frac = kOne;
+            for (auto& a : t.cost) if (isGood(a.res) && a.value.raw > 0) frac = fxMin(frac, inv->have[a.res] / a.value);
+            step = fxMin(step, frac - c.progress);
+            if (step.raw <= 0) return;
+        }
         if (rules_.costModel == CostModel::Progressive && o.player != 0 && o.player < gs.players.size()) {
             Fixed want = fxMin(step, kOne - c.paid);
             Fixed got = payProgressive(rules_, gs.players[o.player], t.cost, want);
@@ -297,6 +306,11 @@ void RtsModule::sysConstruction(Simulation& sim) {
         Unit& u = w.get<Unit>(e);
         u.flags &= uint8_t(~kUnitUnderConstruction);
         w.remove<Construction>(e);
+        if (auto* inv = w.tryGet<Inventory>(e)) { // materials are used up
+            const UnitType& t = rules_.types[u.type];
+            if (t.storeCapacity.raw > 0 || t.recipe.enabled) for (auto& x : inv->have) x = Fixed{};
+            else w.remove<Inventory>(e);
+        }
         sim.emit({kEvBuildDone, w.get<Owner>(e).player, e, kNullEntity, u.type, w.get<Transform>(e).pos});
     }
 }
@@ -333,6 +347,35 @@ void RtsModule::sysGarrison(Simulation& sim) {
     GameState& gs = state(sim);
     for (auto& r : releases) {
         Vec3 from = w.get<Transform>(r.from).pos, to = w.get<Transform>(r.target).pos;
+        if (rules_.lanes.enabled) {
+            // Mushroom Wars 2: spread over the generated lanes round-robin, follow the lane strictly
+            std::vector<int> lanes = lanesBetween(sim, r.from, r.target);
+            if (!lanes.empty()) {
+                if (gs.laneRoundRobin.size() <= r.from.index) gs.laneRoundRobin.resize(r.from.index + 1, 0);
+                uint32_t& rr = gs.laneRoundRobin[r.from.index];
+                // order: main, then alternating outwards (0, -1, +1, -2, +2 ...) is the sorted list
+                int lane = lanes[rr++ % lanes.size()];
+                const Lane& L = gs.lanes[size_t(lane)];
+                bool reverse = L.a != r.from;
+                // start at the first lane point outside the source footprint
+                uint16_t pos = 0;
+                auto& f = w.get<Footprint>(r.from);
+                while (pos + 1u < L.points.size()) {
+                    Vec3 p = L.points[reverse ? L.points.size() - 1 - pos : pos];
+                    int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+                    if (cx < f.x || cy < f.y || cx >= f.x + f.w || cy >= f.y + f.h) break;
+                    ++pos;
+                }
+                Vec3 start = L.points[reverse ? L.points.size() - 1 - pos : pos];
+                Entity n = spawn(sim, r.unit, r.owner, start);
+                if (!w.has<Orders>(n)) continue;
+                w.add<LaneWalker>(n, LaneWalker{lane, pos, reverse});
+                Order ord;
+                ord.type = OrderType::Enter; ord.target = r.target; ord.point = flat(to); ord.state = 3; // 3 = lane walk
+                issue(sim, n, ord, false);
+                continue;
+            }
+        }
         Vec3 d = flat(to - from);
         Fixed len = d.length();
         Vec3 start = len.raw > 0 ? from + d * ((r.radius + Fixed::fromRatio(3, 10)) / len) : from;

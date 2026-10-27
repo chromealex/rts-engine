@@ -15,11 +15,12 @@ enum CellFlags : uint8_t {
     kCellNoBuild = 4,  // no construction
     kCellRamp = 8,     // connects two cliff levels
     kCellRock = 16,    // rock (Dune: buildable; sand-only units can't enter)
+    kCellRoad = 32,    // player road network (settlers economy): faster movement, connects buildings
 };
 
 // Terrain characters in maps:
 //   '.' ground   '~' water   '#' blocked   ',' ground, no build   '=' shallow (ground+water)
-//   '/' ramp     'R' rock (ground, buildable when rules require rock)
+//   '/' ramp     'R' rock (ground, buildable when rules require rock)   '+' road (ground)
 uint8_t cellFlagsFromChar(char c);
 
 struct MapGrid {

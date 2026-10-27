@@ -14,6 +14,7 @@ uint8_t cellFlagsFromChar(char c) {
         case '=': return uint8_t(kCellGround | kCellWater | kCellNoBuild);
         case '/': return uint8_t(kCellGround | kCellRamp | kCellNoBuild);
         case 'R': return uint8_t(kCellGround | kCellRock);
+        case '+': return uint8_t(kCellGround | kCellRoad);
         default: return kCellGround;
     }
 }

@@ -317,14 +317,26 @@ bool RtsModule::runNeed(Simulation& sim, Entity e, Order& o) {
     if (!nd || !t.hasNeeds) return true;
     const uint8_t owner = w.get<Owner>(e).player;
     const int kind = o.param & 0xFF, room = o.param >> 8;
-    int cx = g.cellX(o.point.x), cy = g.cellY(o.point.z);
-    if (!g.inside(cx, cy)) return true;
-    size_t ci = size_t(g.index(cx, cy));
-    if (g.room[ci] != room || g.territory[ci] != owner) return true; // room gone
+    const bool atStructure = o.target.valid();
+    if (atStructure) {
+        // structure-based need (inn): the building must still be ours
+        if (!w.alive(o.target) || w.get<Owner>(o.target).player != owner) return true;
+    } else {
+        int cx = g.cellX(o.point.x), cy = g.cellY(o.point.z);
+        if (!g.inside(cx, cy)) return true;
+        size_t ci = size_t(g.index(cx, cy));
+        if (g.room[ci] != room || g.territory[ci] != owner) return true; // room gone
+    }
     Transform& tr = w.get<Transform>(e);
-    if (o.state == 0) { moveTo(sim, e, o.point, Fixed::fromRatio(3, 10)); o.state = 1; return false; }
+    if (o.state == 0) {
+        if (atStructure) moveTo(sim, e, w.get<Transform>(o.target).pos, rules_.types[w.get<Unit>(o.target).type].radius + t.radius + Fixed::fromRatio(4, 10));
+        else moveTo(sim, e, o.point, Fixed::fromRatio(3, 10));
+        o.state = 1;
+        return false;
+    }
     if (o.state == 1) {
-        if (dist2D(tr.pos, o.point) <= Fixed::fromRatio(7, 10)) {
+        bool arrived = atStructure ? contactDistance(sim, e, o.target) <= Fixed::fromRatio(8, 10) : dist2D(tr.pos, o.point) <= Fixed::fromRatio(7, 10);
+        if (arrived) {
             stopMoving(sim, e);
             o.state = 2;
             o.timer = kind == kNeedHunger ? t.needs.hunger.time : kind == kNeedSleep ? t.needs.sleep.time : t.needs.workTime;
@@ -756,7 +768,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
     // ---- creature needs, wages and morale
     if (tick % 10 == 0) {
         const Fixed step = dt * 10;
-        struct Act { Entity e; int kind; int room; int cell; bool leave; bool remove; };
+        struct Act { Entity e; int kind; int room; int cell; bool leave; bool remove; Entity at = kNullEntity; };
         std::vector<Act> acts;
         std::vector<Entity> portals;
         w.each<PortalState, Owner>([&](Entity e, PortalState&, Owner&) { portals.push_back(e); });
@@ -775,6 +787,8 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 }
             }
             int unmet = (nd.hunger.enabled && n.hunger >= kOne) + (nd.sleep.enabled && n.sleep >= kOne);
+            if (nd.hunger.enabled && n.hunger >= kOne && nd.hunger.starve.raw > 0) u.hp -= nd.hunger.starve * step; // starving
+            if (nd.sleep.enabled && n.sleep >= kOne && nd.sleep.starve.raw > 0) u.hp -= nd.sleep.starve * step;
             Fixed top = fxMax(kOne, nd.happyStart);
             if (unmet) n.happiness -= nd.unmetRate * unmet * step;
             else n.happiness = fxMin(top, n.happiness + nd.recovery * step);
@@ -808,7 +822,18 @@ void RtsModule::sysDungeon(Simulation& sim) {
             const NeedDef* needs[2] = {&nd.hunger, &nd.sleep};
             Fixed level[2] = {n.hunger, n.sleep};
             for (int k = 0; k < 2; ++k) {
-                if (!needs[k]->enabled || level[k] < kOne || needs[k]->room < 0) continue;
+                if (!needs[k]->enabled || level[k] < kOne) continue;
+                if (needs[k]->structure != kNoType) {
+                    Entity best; Fixed bestD{};
+                    w.each<Unit, Owner, Transform>([&](Entity s, Unit& su, Owner& so, Transform& st) {
+                        if (so.player != o.player || su.type != needs[k]->structure || (su.flags & kUnitUnderConstruction)) return;
+                        Fixed d = dist2D(st.pos, tr.pos);
+                        if (!best.valid() || d < bestD) { best = s; bestD = d; }
+                    });
+                    if (best.valid()) { acts.push_back({e, k, 0, 0, false, false, best}); return; }
+                    continue;
+                }
+                if (needs[k]->room < 0) continue;
                 int cell = nearestRoomCell(gs, o.player, needs[k]->room, tr.pos);
                 if (cell >= 0) { acts.push_back({e, k, needs[k]->room, cell, false, false}); return; }
             }
@@ -835,6 +860,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
             }
             Order o;
             o.point = g.cellCenter(a.cell % g.w, a.cell / g.w);
+            if (a.at.valid()) { o.target = a.at; o.point = w.get<Transform>(a.at).pos; }
             if (a.leave) { o.type = OrderType::Move; o.param = 1; }
             else { o.type = OrderType::Need; o.param = int32_t(a.kind | (a.room << 8)); }
             issue(sim, a.e, o, false);

@@ -46,6 +46,9 @@ is optional — the blocks present on a type decide what it can do.
 | `triggers` | see "Triggers" (also allowed in maps) |
 | `diggable`, `rooms`, `territory`, `hand`, `possession` | see "Dungeon management and territory" |
 | `playerAbilities` | see "Player abilities" |
+| `storage` | `"player"` (default: one stock per player) or `"buildings"`: goods live in building inventories, see "Settlers economy" |
+| `roadNetwork` | `{"cost": {"stone": 1}, "speed": 1.5, "required": true}` — player-built road cells (map char `+`), faster movement, deliveries only between buildings on one network |
+| `lanes` | `{"left": 4, "right": 2, "spacing": 0.35}` — Mushroom Wars 2 lanes between garrison buildings (replaces map `roads` for sends) |
 
 ## resources
 
@@ -55,7 +58,8 @@ is optional — the blocks present on a type decide what it can do.
   "ore":    {"name": "Руда", "field": true, "regrow": 0.5, "cellMax": 100},              // Red Alert / Dune: harvested from map fields
   "metal":  {"kind": "flow", "start": 500, "storage": 1000},                               // Total Annihilation: income/expense per second, capped by storage
   "power":  {"kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense"]},// Red Alert power: provided vs consumed
-  "spice":  {"capped": true, "storage": 1000}                                              // Dune silos: stock limited by storage
+  "spice":  {"capped": true, "storage": 1000},                                             // Dune silos: stock limited by storage
+  "coins":  {"global": true, "start": 100}                                                 // with "storage": "buildings": not a good, stays player-wide
 }
 ```
 Kinds: `stock` (default: gathered/earned, spent), `flow` (per-second income from `income`, spent while
@@ -246,6 +250,50 @@ Map players choose a faction and a `start` point; start objects spawn there.
 - **Possession**: one unit per player is steered directly (direction vector per tick, fire button); the AI
   ignores it; `cost` once, `drain` per second (released when unaffordable).
 
+## Settlers economy (Knights and Merchants)
+
+```json
+"storage": "buildings",
+"roadNetwork": {"cost": {"stone": 1}, "speed": 1.5},
+"types": {
+  "storehouse": {"structure": {"footprint": [3, 3]}, "storehouse": {"capacity": 2000}},
+  "woodcutter": {"structure": {"footprint": [2, 2]}, "recipe": {"out": {"wood": 1}, "time": 10, "from": "wood", "radius": 8}, "cost": {"planks": 3, "stone": 2}},
+  "sawmill":    {"structure": {"footprint": [2, 2]}, "recipe": {"in": {"wood": 1}, "out": {"planks": 2}, "time": 8, "buffer": 2}},
+  "farm":       {"structure": {"footprint": [3, 3]}, "recipe": {"out": {"grain": 1}, "time": 12}},
+  "serf":       {"move": {"speed": 3}, "carrier": {"capacity": 1}},
+  "soldier":    {"trainFrom": "recruit", "cost": {"sword": 1, "armor": 1, "time": 6},
+                 "needs": {"hunger": {"interval": 120, "at": "inn", "time": 3, "cost": {"food": 1}, "starve": 1}}}
+}
+```
+
+- With `"storage": "buildings"` every `stock` resource that is not `global` is a **good**: it lives in building
+  inventories. The player's stock of a good is the sum of its **storehouses** (`storehouse.capacity` = total
+  goods); paying takes goods out of storehouses, income and bounties are put into them. Starting goods (resource
+  `start`, map player `resources`) go into the first storehouses; map entities can carry `"inventory": {"wood": 5}`.
+- **Recipes**: a workplace consumes `in` from its own inventory and produces `out` into it every `time` seconds
+  (`productionSpeed` stat and power apply); it keeps `buffer` cycles of inputs and stops when `buffer` cycles of
+  output are waiting. Raw producers have no `in`; `from` + `radius` deplete the nearest resource node or field
+  cell of that resource (wood from trees, stone from a quarry, fish from water fields).
+- **Carriers** (`carrier.capacity` per trip) haul on request, deterministically (every 0.5 s, buildings in
+  entity order): construction sites and workplace inputs first (source: workplace output, else nearest
+  storehouse), then workplace outputs to the nearest storehouse with room. With `roadNetwork.required` the
+  source and destination must touch the same road network.
+- **Construction**: goods in a structure's `cost` are not paid at once; carriers deliver them to the site and
+  building progress can't exceed the delivered share (builders still build). Other resources are paid up front.
+- **Roads**: map char `+`, the road command (rect), or the connect command (the sim paves the shortest path from
+  a structure to the road network of an own storehouse). Movement on road cells is `speed` times faster.
+- **Recruits**: `trainFrom` consumes an idle own unit of that type within 15 cells of the producer.
+- **Food**: needs with `"at": "<structure type>"` are satisfied at the nearest own structure of that type (cost
+  taken from the stock); `starve` hp per second is lost while the need is active.
+
+## Lanes (Mushroom Wars 2)
+
+`"lanes": {"left": 4, "right": 2, "spacing": 0.35}`: for every pair of garrison buildings the sim finds an A* path
+around obstacles and other buildings, smooths it into a fixed-point Catmull-Rom spline (about two samples per
+cell) and adds `left` + `right` parallel lanes `spacing` cells apart (pulled back towards the main lane where they
+would hit an obstacle). Sent units are spread over the lanes round-robin and follow their lane exactly. Lanes are
+rebuilt when garrison buildings or obstacles change (`GameState::lanes`, `lanesDirty`, event `kEvLanesChanged`).
+
 ## Player abilities
 
 ```json
@@ -265,7 +313,8 @@ Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player i
 `kCmdDig` / `kCmdPaintRoom` (point = first cell, `param = rectParam(w, h, extra)`: dig `extra` 0 mark / 1 unmark;
 room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
-optional target), `kCmdPlayerAbility` (`param` = index, point).
+optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
+`kCmdConnectRoad` (units = own structures).
 
 ## Triggers
 
@@ -315,4 +364,6 @@ Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"e
 - **Mushroom Wars**: `garrison` structures, `roads` + `roadsOnly`, `entersGarrison` units, Send command.
 - **Lane battlers**: `autoBuild`, `waveClock` + `waveSpawn`, `upgrades`, `victory: score`.
 - **Dungeon Keeper**: `diggable` rock and gold veins, imps with `digs` + `claimer`, `territory.buildOnlyOwned`, painted `rooms` (lair `supply`, hatchery food `income`, library `work`), neutral `portal` with `claimedByTerritory`, creatures with `attractedBy` + `needs`, `hand`, `possession`, `victory: keyUnits` (dungeon heart).
+- **Knights and Merchants / Settlers**: `"storage": "buildings"`, storehouses, `recipe` chains (woodcutter → sawmill, farm → mill → bakery), `carrier` serfs, `roadNetwork`, materials delivered to sites, `trainFrom` recruits, inn food `needs` with `starve`.
+- **Mushroom Wars 2**: `garrison` villages + `lanes` instead of hand-made `roads`.
 - **Territory war (State.io)**: `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `capturable` towns, barracks with `autoTrain`, `playerAbilities`, repeatable `levels` techs, `victory: territory`.

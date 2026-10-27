@@ -50,6 +50,8 @@ enum CommandType : uint16_t {
     kCmdPossess,      // units[0] = unit to possess; empty units = release
     kCmdDirect,       // possessed unit: point = direction (x, z), param bit 0 = fire, target = optional attack target
     kCmdPlayerAbility,// no units; param = index into rules.playerAbilities, point
+    kCmdBuildRoad,    // no units; rect (extra 0 build, 1 remove), cost per cell from rules.roadNetwork
+    kCmdConnectRoad,  // units: own structures; the sim lays the shortest road from each to the own road network
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -79,6 +81,10 @@ enum GameEvent : uint16_t {
     kEvPossessed,     // a = unit (kNullEntity: released)
     kEvPayday,        // value = 1 paid, 0 unpaid
     kEvPlayerAbility, // value = ability index
+    kEvProduced,      // a = workplace, value = resource of the first output
+    kEvDelivered,     // a = carrier, b = destination, value = resource
+    kEvRoadBuilt,     // value = cell index (removed: player 0)
+    kEvLanesChanged,  // lane geometry regenerated (GameState::lanes)
 };
 
 // ---------------------------------------------------------------- components
@@ -97,7 +103,8 @@ struct Unit {
 enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Return, Build, Repair, Enter, Cast,
                                  Dig,        // point2 = cell to dig, point = cell to stand on
                                  ClaimCell,  // point = cell to claim (claimers)
-                                 Need };     // param = NeedKind, point = room cell
+                                 Need,       // param = NeedKind | room << 8, point = room cell (or target = structure)
+                                 Haul };     // carrier job, see Carrier
 
 struct Order {
     OrderType type = OrderType::Move;
@@ -186,6 +193,15 @@ struct AutoTrainState { Fixed timer{}; };
 struct ClaimState { Fixed acc{}; };
 struct Advancer { uint8_t unused = 0; };     // keeps pushing to the nearest front when idle (autoTrain units)
 
+// Settlers economy
+struct Inventory { std::vector<Fixed> have, incoming, reserved; };   // per resource
+struct Workshop { Fixed progress{}; bool running = false; };
+struct Carrier { Entity from = kNullEntity, to = kNullEntity; int16_t res = -1; Fixed amount{}, loaded{}; };
+
+// Mushroom Wars 2 lanes
+struct Lane { Entity a = kNullEntity, b = kNullEntity; int offset = 0; std::vector<Vec3> points; }; // offset: <0 left, >0 right
+struct LaneWalker { int lane = -1; uint16_t pos = 0; bool reverse = false; };
+
 // ---------------------------------------------------------------- per-player state
 struct TypeMods { Fixed add[size_t(Stat::Count)]; Fixed mul[size_t(Stat::Count)]; };
 
@@ -255,6 +271,14 @@ struct GameState {
     std::vector<std::vector<Entity>> hand;   // per player: units picked up (order = pick order)
     std::vector<Entity> possessed;           // per player
     std::vector<std::vector<PlayerAbilityState>> playerAbilities; // [player][ability]
+    // settlers economy
+    std::vector<int32_t> roadComp;           // per cell: road network component (-1 none)
+    bool roadsDirty = true;
+    // lanes (Mushroom Wars 2): every lane from a to b (offset lanes around the main spline), for the view
+    std::vector<Lane> lanes;
+    bool lanesDirty = true;
+    uint32_t laneSignature = 0;              // garrisons/obstacles the lanes were built for
+    std::vector<uint32_t> laneRoundRobin;    // per garrison entity index: next lane slot
 };
 
 // ---------------------------------------------------------------- module
@@ -316,6 +340,12 @@ public:
     int roomCellsOf(Simulation& sim, uint8_t player, int room) const;
     void applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint16_t sourceType, const std::vector<EffectDef>& effects, Entity target, Vec3 point);
     void addHeroXp(Simulation& sim, Entity hero, Fixed xp, uint8_t player);
+    // ---- settlers economy
+    bool isGood(uint16_t res) const;       // stored in buildings (rules.storage == "buildings")
+    bool roadConnected(Simulation& sim, Entity a, Entity b);
+    std::vector<Amount> upfrontCost(const std::vector<Amount>& cost) const; // the part paid at once (goods are delivered)
+    // lanes between garrison buildings a -> b (main lane first), empty when none
+    std::vector<int> lanesBetween(Simulation& sim, Entity a, Entity b) const;
 
 private:
     void setupMap(Simulation& sim, const Json& map);
@@ -349,6 +379,17 @@ private:
     void recomputeRooms(Simulation& sim);
     void roomEconomy(Simulation& sim);
     void hashDungeon(Simulation& sim, Hasher& h);
+    void sysSettlers(Simulation& sim);    // RtsSettlers.cpp: workshops, carriers, storehouse stock, roads
+    void applySettlersCommand(Simulation& sim, const Command& cmd);
+    bool runHaul(Simulation& sim, Entity e, Order& o);
+    void recomputeRoads(Simulation& sim);
+    void depositGoods(Simulation& sim, uint8_t player, uint16_t res, Fixed amount);
+    void withdrawGoods(Simulation& sim, uint8_t player, uint16_t res, Fixed amount);
+    void syncStorehouses(Simulation& sim);
+    void hashSettlers(Simulation& sim, Hasher& h);
+    void sysLanes(Simulation& sim);       // RtsLanes.cpp
+    void rebuildLanes(Simulation& sim);
+    bool runLaneWalk(Simulation& sim, Entity e, Order& o);
     void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
     bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 

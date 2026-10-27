@@ -130,6 +130,7 @@ Rules loadRules(const Json& j) {
         d.field = rj.getBool("field", false);
         d.fieldRegrow = rj.getFx("regrow");
         d.fieldCellMax = rj.getFx("cellMax", d.fieldCellMax);
+        d.global = rj.getBool("global", false);
         r.resources.push_back(d);
     }
     if (r.resources.size() > 32) fail("resources", "at most 32 resources are supported");
@@ -450,6 +451,8 @@ Rules loadRules(const Json& j) {
                 out.enabled = true;
                 out.interval = q.getFx("interval", out.interval);
                 if (q.has("room")) out.room = roomRef(where + " needs." + key, q.getStr("room"));
+                if (q.has("at")) out.structure = typeRef(where + " needs." + key + ".at", q.getStr("at"));
+                out.starve = q.getFx("starve");
                 out.time = q.getFx("time", out.time);
                 amounts(where + " needs." + key + ".cost", q["cost"], out.cost, {});
                 if (out.interval.raw <= 0) fail(where + " needs." + key, "interval must be positive");
@@ -483,6 +486,20 @@ Rules loadRules(const Json& j) {
             for (auto& u : p["pool"].items()) t.portalPool.push_back(typeRef(where + " portal.pool", u.str()));
             if (t.portalInterval.raw <= 0) fail(where + " portal", "interval must be positive");
         }
+        if (const Json& sh = tj["storehouse"]; sh.isObject()) t.storeCapacity = sh.getFx("capacity", Fixed::fromInt(1000));
+        if (const Json& rc = tj["recipe"]; rc.isObject()) {
+            t.recipe.enabled = true;
+            amounts(where + " recipe.in", rc["in"], t.recipe.in, {});
+            amounts(where + " recipe.out", rc["out"], t.recipe.out, {});
+            t.recipe.time = rc.getFx("time", t.recipe.time);
+            if (rc.has("from")) t.recipe.fromRes = int16_t(resRef(where + " recipe.from", rc.getStr("from")));
+            t.recipe.radius = rc.getFx("radius", t.recipe.radius);
+            t.recipe.buffer = std::max<int>(1, int(rc.getInt("buffer", 2)));
+            if (t.recipe.out.empty()) fail(where + " recipe", "needs 'out'");
+            if (t.recipe.time.raw <= 0) fail(where + " recipe", "time must be positive");
+        }
+        if (const Json& cr = tj["carrier"]; cr.isObject()) t.carrierCapacity = cr.getFx("capacity", kFxOne);
+        if (tj.has("trainFrom")) t.trainFrom = typeRef(where + " trainFrom", tj.getStr("trainFrom"));
         if (const Json& at = tj["autoTrain"]; at.isObject()) {
             t.autoTrainUnit = typeRef(where + " autoTrain.unit", at.getStr("unit"));
             t.autoTrainInterval = at.getFx("interval", t.autoTrainInterval);
@@ -588,10 +605,29 @@ Rules loadRules(const Json& j) {
         r.playerAbilities.push_back(a);
     }
     if (r.playerAbilities.size() > 16) fail("playerAbilities", "at most 16");
+    std::string storage = j.getStr("storage", "player");
+    if (storage != "player" && storage != "buildings") fail("storage", "expected 'player' or 'buildings', got '" + storage + "'");
+    r.buildingStorage = storage == "buildings";
+    if (const Json& rn = j["roadNetwork"]; rn.isObject()) {
+        r.roadNetwork.enabled = true;
+        amounts("roadNetwork.cost", rn["cost"], r.roadNetwork.cost, {});
+        r.roadNetwork.speed = rn.getFx("speed", r.roadNetwork.speed);
+        r.roadNetwork.required = rn.getBool("required", true);
+    }
+    if (const Json& ln = j["lanes"]; ln.isObject()) {
+        r.lanes.enabled = true;
+        r.lanes.left = std::clamp<int>(int(ln.getInt("left", 0)), 0, 8);
+        r.lanes.right = std::clamp<int>(int(ln.getInt("right", 0)), 0, 8);
+        r.lanes.spacing = ln.getFx("spacing", r.lanes.spacing);
+    }
+    bool anySettlers = r.buildingStorage || r.roadNetwork.enabled;
+    for (auto& t : r.types) if (t.storeCapacity.raw > 0 || t.recipe.enabled || t.carrierCapacity.raw > 0 || t.trainFrom != kNoType) anySettlers = true;
+    r.settlers = anySettlers;
     bool anyDungeonType = false;
     for (auto& t : r.types)
         if (t.digRate.raw > 0 || t.claimerTime.raw > 0 || t.claimRate.raw > 0 || t.hasNeeds || t.portalInterval.raw > 0 ||
             t.autoTrainUnit != kNoType || t.claimedByTerritory) anyDungeonType = true;
+    for (auto& t : r.types) if (t.hasNeeds) anyDungeonType = true;
     if (anyDungeonType && !r.territory.enabled) {
         // claimers / portals imply a territory layer
         for (auto& t : r.types) if (t.claimerTime.raw > 0 || t.claimRate.raw > 0 || t.claimedByTerritory) r.territory.enabled = true;
