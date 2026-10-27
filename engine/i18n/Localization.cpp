@@ -401,6 +401,35 @@ std::string Localization::meta(std::string_view key, std::string_view def) const
     return std::string(def);
 }
 
+// ------------------------------------------------------------------ markup
+
+std::vector<std::string> markupKeys(std::string_view m) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < m.size(); ++i) {
+        if (m.compare(i, 4, "<!--") == 0) {   // examples in comments are not keys
+            size_t e = m.find("-->", i);
+            if (e == std::string_view::npos) break;
+            i = e + 2;
+            continue;
+        }
+        char q = m[i];
+        if (q != '\'' && q != '"') continue;
+        size_t end = m.find(q, i + 1);
+        if (end == std::string_view::npos) break;
+        size_t j = end + 1;
+        while (j < m.size() && m[j] == ' ') ++j;
+        bool isTr = j + 1 < m.size() && m[j] == '|';
+        if (isTr) {
+            ++j;
+            while (j < m.size() && m[j] == ' ') ++j;
+            isTr = m.substr(j, 2) == "tr" && (j + 2 >= m.size() || !(std::isalnum(static_cast<unsigned char>(m[j + 2])) || m[j + 2] == '_'));
+        }
+        if (isTr) out.emplace_back(m.substr(i + 1, end - i - 1));
+        i = isTr ? end : i;   // a non-key quote may open an attribute value: keep scanning inside it
+    }
+    return out;
+}
+
 // ------------------------------------------------------------------ validation
 
 std::vector<Issue> check(const Catalog& base, const std::string& baseLang, const Catalog& lang, const std::string& language) {

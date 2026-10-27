@@ -576,6 +576,7 @@ TEST(json_edit_and_dump_roundtrip) {
 // ---------------- Localization (engine/i18n) ----------------
 #include "engine/i18n/GameLanguage.h"
 #include "modules/rts/RtsLocalize.h"
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -2148,6 +2149,22 @@ TEST(models_sample_assets_load) {
     CHECK(crystal->findMaterial("Crystal") >= 0 && crystal->images.size() == 1);
     for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
     CHECK(warn.empty());
+}
+
+TEST(i18n_ui_markup_keys) {
+    CHECK((i18n::markupKeys(R"(<h2>{{ 'menu.map' | tr(lang) }}</h2><b data-if="screen == 'menu'">{{"a.b"|tr}}</b>{{ 'x' | trim }}<!-- {{ 'c' | tr(lang) }} -->)")
+           == std::vector<std::string>{"menu.map", "a.b"}));
+}
+
+TEST(i18n_saved_language_roundtrip) {
+    // The user data dir does not exist on first run; saving must create it.
+    const auto root = std::filesystem::temp_directory_path() / "rts-test-i18n-userdir";
+    const std::string dir = (root / "nested").string();
+    std::filesystem::remove_all(root);
+    CHECK(i18n::readSavedLanguage(dir).empty());
+    CHECK(i18n::saveLanguage(dir, "ru_RU"));
+    CHECK(i18n::readSavedLanguage(dir) == "ru-RU");
+    std::filesystem::remove_all(root);
 }
 
 int main() {
