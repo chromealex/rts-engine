@@ -105,7 +105,8 @@ the commit message; prefer adding a new file over editing a shared one.
 | Audio | `engine/audio` (new) | free |
 | Networking / multiplayer transport, lobby | `engine/net` (new) | free |
 | Platforms, device testing, CI | `platform/`, `engine/platform`, `.github/` | free |
-| Localization, campaigns, save/load | `engine/i18n` (new), `games/*/campaign` | free |
+| Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
+| Campaigns, save/load | `games/*/campaign` | free |
 
 Shared touch points and how to use them:
 - `CMakeLists.txt`: add your sources in your own `add_library` block; don't reorder others.
@@ -120,7 +121,8 @@ Shared touch points and how to use them:
   readable messages), no RTTI-heavy designs, no global singletons beyond platform state.
 - Concise code; comments explain *why*, not what. Keep files focused (< ~1000 lines).
 - Names: `camelCase` functions/variables, `PascalCase` types, `kConstant`, members `name_`.
-- User-facing strings are Russian (until localization exists); code, comments, logs in English.
+- User-facing strings go through `i18n::Localization::tr()` with keys in `engine/assets/lang/en.json`
+  and `ru.json` (see `engine/i18n/README.md`); never concatenate sentences. Code, comments, logs in English.
 
 ## 7. Commits
 
