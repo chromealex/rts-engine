@@ -381,7 +381,13 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         ++drawCalls_;
     };
     for (auto& it : items_) if (it.color.w >= 0.99f) drawItem(it);
-    // overlays: flat triangles then lines, then translucent meshes
+    // translucent meshes (water, ghosts) before overlays so that overlays (fog of war, markers) stay on top
+    bool any = false;
+    for (auto& it : items_) {
+        if (it.color.w >= 0.99f) continue;
+        if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); any = true; }
+        drawItem(it);
+    }
     if (!tris_.empty()) {
         dev_->updateBuffer(triVB_, tris_.data(), tris_.size() * sizeof(ColorVertex));
         dev_->setPipeline(triPipe_);
@@ -397,12 +403,6 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         dev_->setVertexBuffer(lineVB_);
         dev_->draw(uint32_t(lines_.size()));
         ++drawCalls_;
-    }
-    bool any = false;
-    for (auto& it : items_) {
-        if (it.color.w >= 0.99f) continue;
-        if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); any = true; }
-        drawItem(it);
     }
 }
 
