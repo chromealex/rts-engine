@@ -12,13 +12,16 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "engine/audio/Audio.h"
 #include "engine/gfx/Gfx.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
@@ -27,6 +30,7 @@
 #include "imgui.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
 
 using namespace rts;
@@ -62,7 +66,11 @@ private:
     void selectBox(float x0, float y0, float x1, float y1, bool add);
     void selectSameType(Entity e);
     void command(uint16_t type, float sx, float sy, bool queue);
-    void issue(Command c) { c.player = human_; sim_->submit(c); }
+    void issue(Command c) {
+        c.player = human_;
+        if (!c.units.empty()) sound_.onCommand(*sim_, c.units[0], c.type);
+        sim_->submit(c);
+    }
     void processEvents();
     void notice(const std::string& t) { notices_.push_back({t, time_ + 2.5}); if (notices_.size() > 4) notices_.erase(notices_.begin()); }
     void cleanSelection();
@@ -74,11 +82,17 @@ private:
     void drawCommandCard();
     void drawMinimap();
     void drawPause();
+    void initAudio();
+    void menuMusic() { if (!audio_.playMusic("menu")) audio_.stopMusic(); }
+    void saveAudioSettings();
 
     gfx::Device* dev_ = nullptr;
     ImGuiLayer ui_;
     Renderer3D r3d_;
     RtsView view_;
+    audio::AudioEngine audio_;
+    RtsAudio sound_;
+    std::vector<Entity> heardSelection_;  // selection when the last select sound played
     RTSCamera cam_;
     Json manifest_, rulesJson_;
     std::vector<MapEntry> maps_;
@@ -139,9 +153,42 @@ void GameClient::init(gfx::Device& dev) {
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
+    initAudio();
+}
+
+void GameClient::initAudio() {
+    audio::AudioConfig ac;
+    ac.maxVoices = platform::isTouchDevice() ? 24 : 32;
+    if (const char* mode = std::getenv("RTS_AUDIO")) { // off | null (audio thread without hardware, CI)
+        ac.openDevice = std::string(mode) != "off";
+        ac.nullBackend = std::string(mode) == "null";
+    }
+    if (const char* wav = std::getenv("RTS_AUDIO_CAPTURE")) ac.capturePath = wav;
+    audio_.init(ac);
+    std::ifstream settings(platform::userDataDir() + "/audio.cfg");
+    if (settings) audio_.loadSettings(std::string(std::istreambuf_iterator<char>(settings), {}));
+    std::string text;
+    if (platform::readContentFile(manifest_.getStr("audio", "audio.json"), text)) { // a game without audio.json is silent
+        try {
+            Json bank = Json::parse(text);
+            std::string err;
+            if (!audio_.loadBank(bank, platform::readContentFile, &err) || !sound_.init(audio_, rules_, bank, &err)) error_ = err;
+            for (auto& w : sound_.warnings()) std::fprintf(stderr, "audio: %s\n", w.c_str());
+        } catch (const std::exception& e) {
+            error_ = std::string("audio.json: ") + e.what();
+        }
+    }
+    menuMusic();
+}
+
+void GameClient::saveAudioSettings() {
+    std::ofstream f(platform::userDataDir() + "/audio.cfg");
+    if (f) f << audio_.saveSettings();
 }
 
 void GameClient::shutdown() {
+    sound_.detach();
+    audio_.shutdown();
     view_.shutdown(*dev_);
     r3d_.shutdown();
     ui_.shutdown();
@@ -176,6 +223,9 @@ void GameClient::startMatch(size_t idx) {
     fitCamera();
     mode_ = Mode::Normal;
     screen_ = Screen::Playing;
+    audio_.stopAll(0.1f);
+    sound_.attach(*sim_, spectator_ ? 0 : human_);
+    heardSelection_.clear();
 }
 
 void GameClient::fitCamera() {
@@ -296,6 +346,9 @@ void GameClient::event(const Event& e) {
     bool uiWants = ui_.handleEvent(e);
     if (e.type == EventType::KeyDown || e.type == EventType::KeyUp) keys_[int(e.key)] = e.type == EventType::KeyDown;
     if (e.type == EventType::MouseMove || e.type == EventType::MouseDown) { mouseX_ = e.x; mouseY_ = e.y; }
+    // mobile apps go quiet in the background; desktop keeps playing when the window loses focus
+    if (e.type == EventType::FocusLost && platform::isTouchDevice()) audio_.setPaused(true);
+    if (e.type == EventType::FocusGained) audio_.setPaused(false);
     if (screen_ != Screen::Playing || !sim_) return;
     World& w = sim_->world();
     switch (e.type) {
@@ -885,8 +938,15 @@ void GameClient::drawPause() {
     int qi = int(r3d_.shadowQuality());
     ImGui::SetNextItemWidth(220);
     if (ImGui::Combo("##shadows", &qi, q, 4)) r3d_.setShadowQuality(ShadowQuality(qi));
+    int volume = int(std::lround(audio_.masterVolume() * 100)), music = int(std::lround(audio_.volume(audio::Bus::Music) * 100));
+    ImGui::SetNextItemWidth(220);
+    if (ImGui::SliderInt("##volume", &volume, 0, 100, "Звук: %d%%")) audio_.setMasterVolume(float(volume) / 100);
+    if (ImGui::IsItemDeactivatedAfterEdit()) saveAudioSettings();
+    ImGui::SetNextItemWidth(220);
+    if (ImGui::SliderInt("##music", &music, 0, 100, "Музыка: %d%%")) audio_.setVolume(audio::Bus::Music, float(music) / 100);
+    if (ImGui::IsItemDeactivatedAfterEdit()) saveAudioSettings();
     if (ImGui::Button("Заново", ImVec2(220, 0))) startMatch(mapIndex_);
-    if (ImGui::Button("В меню", ImVec2(220, 0))) { screen_ = Screen::Menu; sim_.reset(); }
+    if (ImGui::Button("В меню", ImVec2(220, 0))) { screen_ = Screen::Menu; sound_.detach(); audio_.stopAll(0.2f); sim_.reset(); menuMusic(); }
     ImGui::End();
 }
 
@@ -917,11 +977,24 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         sim_->advance(dt);
         alpha = float(sim_->alpha());
         processEvents();
-        if (sim_->result() != 0) screen_ = Screen::Over;
+        sound_.update(*sim_, dt);
+        if (sim_->result() != 0) {
+            screen_ = Screen::Over;
+            auto* me = sim_->player(human_);
+            if (!spectator_) sound_.onMatchEnd(me && me->team == sim_->result());
+        }
     }
     if (sim_) {
         sceneFromSim(*sim_, scene_, alpha, spectator_ ? 0 : human_);
         cleanSelection();
+        if (selection_ != heardSelection_) { // a newly selected own unit answers
+            Entity first = selection_.empty() ? Entity{} : selection_[0];
+            auto* own = first.valid() ? sim_->world().tryGet<Owner>(first) : nullptr;
+            if (own && own->player == human_ && std::find(heardSelection_.begin(), heardSelection_.end(), first) == heardSelection_.end())
+                sound_.onSelect(*sim_, first);
+            heardSelection_ = selection_;
+        }
+        audio_.setListener(cam_.target.x, cam_.target.z, cam_.yaw, std::max(8.0f, cam_.distance * 0.75f));
         for (auto& o : scene_.objects) {
             o.selected = std::find(selection_.begin(), selection_.end(), o.entity) != selection_.end();
             o.hovered = o.entity == hover_;
@@ -962,6 +1035,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
     }
     if (screen_ == Screen::Menu) drawMenu();
     ui_.render();
+    audio_.update(dt);
     dev.endPass();
 }
 
