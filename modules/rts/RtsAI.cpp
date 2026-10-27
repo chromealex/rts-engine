@@ -297,6 +297,24 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         if (t.placeOn != kNoType && workers < 8 && R.types[t.placeOn].resourceNode >= 0) continue; // geysers later
         if (build(sim, m, uint16_t(ti))) return;
     }
+    // 4b) a dropoff for every resource our workers gather (refinery for harvesters, lumber camp...)
+    if (canBuildNow) {
+        uint32_t gathered = 0, dropped = 0;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            if (!count[ti]) continue;
+            for (auto& g : R.types[ti].gathers) if (R.resources[g.res].kind != ResourceKind::Flow) gathered |= 1u << g.res;
+            if (R.types[ti].structure) dropped |= R.types[ti].dropoffMask;
+        }
+        // also the resources of worker types we could train but have none of yet (harvesters)
+        for (size_t ti = 0; ti < R.types.size(); ++ti)
+            if (R.types[ti].worker && !R.types[ti].structure && count[ti] == 0 && workers == 0)
+                for (auto& g : R.types[ti].gathers) if (R.resources[g.res].kind != ResourceKind::Flow) gathered |= 1u << g.res;
+        uint32_t missingDrop = gathered & ~dropped;
+        for (size_t ti = 0; ti < R.types.size() && missingDrop; ++ti) {
+            const UnitType& t = R.types[ti];
+            if (t.structure && (t.dropoffMask & missingDrop) && t.produces.size() <= 1 && build(sim, m, uint16_t(ti))) return;
+        }
+    }
     // 5) dropoffs near far resources are skipped for simplicity; storage when capped
     for (size_t r = 0; r < R.resources.size(); ++r) {
         const ResourceDef& rd = R.resources[r];
@@ -310,9 +328,33 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
     }
     // 6) workers
+    saveForWorkers_ = false;
+    if (workers < 3)
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            if (!R.types[ti].worker || R.types[ti].structure || R.types[ti].deploysTo != kNoType || !m.canTrain(sim, player_, uint16_t(ti))) continue;
+            for (size_t pi = 0; pi < R.types.size(); ++pi)
+                if (count[pi] && std::find(R.types[pi].produces.begin(), R.types[pi].produces.end(), uint16_t(ti)) != R.types[pi].produces.end()) saveForWorkers_ = true;
+        }
     if (workers < cfg_.workersPerBase) {
         for (size_t ti = 0; ti < R.types.size(); ++ti)
             if (R.types[ti].worker && !R.types[ti].structure && R.types[ti].deploysTo == kNoType && train(sim, m, uint16_t(ti))) break;
+    }
+    // 6b) unlock the army: own producers make combat units whose structure requirements are missing
+    if (canBuildNow && building == 0) {
+        bool anyTrainable = false;
+        std::vector<uint16_t> missing;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            const UnitType& t = R.types[ti];
+            if (!t.structure || count[ti] == 0) continue;
+            for (uint16_t u : t.produces) {
+                if (!isCombat(R.types[u])) continue;
+                if (m.canTrain(sim, player_, u)) { anyTrainable = true; continue; }
+                for (auto& rq : R.types[u].requires_)
+                    if (!rq.tech && count[rq.index] == 0 && std::find(missing.begin(), missing.end(), rq.index) == missing.end()) missing.push_back(rq.index);
+            }
+        }
+        if (!anyTrainable)
+            for (uint16_t rq : missing) if (build(sim, m, rq)) return;
     }
     // 7) military production buildings (and the tech they require)
     if (sim.tick() > lastBuildTick_ + 100 && building == 0) {
@@ -353,7 +395,7 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
             auto* ord = w.tryGet<Orders>(e);
             if (ord && idleOrders(*ord)) idleArmy.push_back(e);
         }
-        if (auto* prod = w.tryGet<Production>(e); prod && prod->queue.size() < 2 && !(u.flags & kUnitUnderConstruction)) {
+        if (auto* prod = w.tryGet<Production>(e); prod && !saveForWorkers_ && prod->queue.size() < 2 && !(u.flags & kUnitUnderConstruction)) {
             std::vector<uint16_t> opts;
             for (uint16_t ut : t.produces) {
                 const UnitType& cand = R.types[ut];

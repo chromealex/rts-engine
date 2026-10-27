@@ -38,6 +38,8 @@ struct ResourceDef {
     Fixed deficitProductionMult = Fixed::fromRatio(1, 2);
     uint64_t deficitDisableTags = 0; // objects with any of these tags stop working
     bool global = false;      // with rules.storage == "buildings": stays a player-wide stock (coins), not a good
+    int16_t convertTo = -1;   // credited as another resource when delivered (ore -> credits)
+    Fixed convertRate = Fixed::fromInt(1);
 };
 
 // ------------------------------------------------------------------ stats / modifiers
