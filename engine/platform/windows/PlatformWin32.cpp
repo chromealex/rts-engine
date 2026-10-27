@@ -221,10 +221,9 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 
     auto device = gfx::createGLDevice(gfx::Backend::GL33);
     if (S.cb.init) S.cb.init(*device);
-    auto last = std::chrono::steady_clock::now();
     // CI hooks (same as Linux): RTS_SCREENSHOT=out.ppm RTS_EXIT_AFTER_FRAMES=N
-    std::string shot = getenvW(L"RTS_SCREENSHOT");
-    long maxFrames = std::atol(getenvW(L"RTS_EXIT_AFTER_FRAMES").c_str());
+    const detail::CaptureRequest capture = detail::captureRequestFromEnv();
+    detail::FrameClock clock(capture.active());
     long frameNo = 0;
     while (!S.quit) {
         MSG m;
@@ -233,23 +232,16 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
             TranslateMessage(&m); DispatchMessageW(&m);
         }
         if (S.quit) break;
-        if (IsIconic(g_hwnd) || S.fbW <= 0 || S.fbH <= 0) { Sleep(16); continue; }
-        auto now = std::chrono::steady_clock::now();
-        double dt = std::chrono::duration<double>(now - last).count();
-        last = now;
+        if (IsIconic(g_hwnd) || S.fbW <= 0 || S.fbH <= 0) { Sleep(16); clock.reset(); continue; }
+        double dt = clock.tick(std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());
         device->beginFrame(S.fbW, S.fbH);
         if (S.cb.frame) S.cb.frame(*device, dt);
         device->endFrame();
-        if (maxFrames > 0 && ++frameNo >= maxFrames) {
-            if (!shot.empty()) {
-                std::vector<unsigned char> px(size_t(S.fbW) * S.fbH * 4);
+        if (capture.active() && ++frameNo >= capture.frames) {
+            if (!capture.path.empty()) {
+                std::vector<unsigned char> px(size_t(S.fbW) * size_t(S.fbH) * 4);
                 glReadPixels(0, 0, S.fbW, S.fbH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-                if (FILE* f = std::fopen(shot.c_str(), "wb")) {
-                    std::fprintf(f, "P6\n%d %d\n255\n", S.fbW, S.fbH);
-                    for (int y = S.fbH - 1; y >= 0; --y)
-                        for (int x = 0; x < S.fbW; ++x) std::fwrite(&px[(size_t(y) * S.fbW + x) * 4], 1, 3, f);
-                    std::fclose(f);
-                }
+                detail::writePPM(capture.path, S.fbW, S.fbH, px.data());
             }
             S.quit = true;
         }

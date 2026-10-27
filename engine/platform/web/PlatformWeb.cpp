@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <sys/stat.h>
 
 namespace rts::platform {
 using detail::state;
@@ -16,7 +17,7 @@ using detail::state;
 namespace {
 std::unique_ptr<gfx::Device> g_device;
 EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_ctx = 0;
-double g_lastTime = 0;
+detail::FrameClock g_clock; // rAF stops in hidden tabs; the clamp keeps the first frame back sane
 const char* kCanvas = "#canvas";
 
 uint8_t modsOf(bool shift, bool ctrl, bool alt, bool meta) {
@@ -110,9 +111,7 @@ EM_BOOL onResize(int, const EmscriptenUiEvent*, void*) {
 
 void frame(void*) {
     auto& S = state();
-    double now = emscripten_get_now();
-    double dt = g_lastTime > 0 ? (now - g_lastTime) / 1000.0 : 1.0 / 60.0;
-    g_lastTime = now;
+    double dt = g_clock.tick(emscripten_get_now() / 1000.0);
     double cssW = 0, cssH = 0;
     emscripten_get_element_css_size(kCanvas, &cssW, &cssH);
     if (int(cssW) != int(S.winW) || int(cssH) != int(S.winH)) onResize(0, nullptr, nullptr);
@@ -130,6 +129,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     S.cfg = cfg; S.cb = std::move(cb);
     S.contentRoot = "/content";
     S.userDir = "/user";
+    mkdir(S.userDir.c_str(), 0777); // in-memory MEMFS: writes work, but don't survive a reload yet
     updateSize();
 
     EmscriptenWebGLContextAttributes a;
