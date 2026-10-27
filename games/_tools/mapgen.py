@@ -226,8 +226,12 @@ def fourages():
         m.ent("villager", 1, [14, 21 + i])
     m.ent("gold_pile", 0, [8.5, 16.5]); m.ent("stone_pile", 0, [16.5, 31.5])
     m.ent("berry_bush", 0, [16.5, 18.5]); m.ent("berry_bush", 0, [17.5, 19.5])
-    for y in range(28, 40):
-        m.ent("oak", 0, [3.5 + (y % 2), y + 0.5])
+    for y in range(28, 44):
+        for x in range(2, 6):
+            m.ent("oak", 0, [x + 0.5, y + 0.5])
+    for x in range(14, 26):
+        for y in range(3, 5):
+            m.ent("oak", 0, [x + 0.5, y + 0.5])
     write("fourages", m, "highland")
 
 
@@ -262,7 +266,7 @@ def lastcolony():
     for y in range(8, 40, 2):
         m.ent("tree", 0, [3.5, y + 0.5], sym=False)
     m.extra["waves"] = [
-        {"time": 90, "player": 2, "at": [60, 24], "spread": 3, "spawn": [{"type": "walker", "count": 4}], "every": 45, "growth": 1.25, "repeats": 12},
+        {"time": 90, "player": 2, "at": [60, 24], "spread": 3, "spawn": [{"type": "walker", "count": 5}], "every": 45, "growth": 1.25, "repeats": 14},
         {"time": 240, "player": 2, "at": [60, 6], "spread": 2, "spawn": [{"type": "runner", "count": 3}], "every": 60, "growth": 1.2, "repeats": 8},
     ]
     write("lastcolony", m, "last_valley")

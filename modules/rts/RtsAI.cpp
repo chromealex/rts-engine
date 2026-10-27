@@ -68,10 +68,17 @@ bool RtsAI::train(Simulation& sim, RtsModule& m, uint16_t type) {
     return true;
 }
 
-bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type) {
+bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type, int depth) {
     World& w = sim.world();
     const Rules& R = m.rules();
     const UnitType& bt = R.types[type];
+    if (!m.requirementsMet(sim, player_, bt.requires_) && depth < 2) {
+        // build a missing structure requirement first (mill before farms)
+        auto& eco = m.state(sim).players[player_];
+        for (auto& rq : bt.requires_)
+            if (!rq.tech && rq.index != type && eco.typeCountAll[rq.index] == 0 && R.types[rq.index].structure) return build(sim, m, rq.index, depth + 1);
+        return false;
+    }
     if (!m.canTrain(sim, player_, type)) return false;
     if (R.costModel == CostModel::Upfront && !m.canAfford(sim, player_, bt.cost)) return false;
     // sidebar games: structures come out of a producer
@@ -271,11 +278,13 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
     // 2) supply (structures like farms/depots, or supply units like overlords)
     Fixed freeSupply = eco.supplyCap - eco.supplyUsed;
     if (eco.supplyCap < R.supplyCap && freeSupply < Fixed::fromInt(4) && canBuildNow) {
-        for (size_t ti = 0; ti < R.types.size(); ++ti) {
-            const UnitType& t = R.types[ti];
-            if (t.supplyProvided.raw <= 0 || !t.produces.empty() || t.key) continue;
-            if (t.structure ? build(sim, m, uint16_t(ti)) : train(sim, m, uint16_t(ti))) return;
-        }
+        // plain supply first (farms, depots, overlords); producers that also give supply when there is nothing else
+        for (int pass = 0; pass < 2; ++pass)
+            for (size_t ti = 0; ti < R.types.size(); ++ti) {
+                const UnitType& t = R.types[ti];
+                if (t.supplyProvided.raw <= 0 || (pass == 0 && !t.produces.empty()) || (pass == 1 && (t.produces.empty() || !t.structure)) || t.key) continue;
+                if (t.structure ? build(sim, m, uint16_t(ti)) : train(sim, m, uint16_t(ti))) return;
+            }
     }
     // 3) capacity (power): keep provided above consumed
     for (size_t r = 0; r < R.resources.size(); ++r) {
@@ -286,6 +295,19 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             bool gives = false;
             for (auto& a : t.provides) if (a.res == r) gives = true;
             if (gives && t.structure && build(sim, m, uint16_t(ti))) return;
+        }
+    }
+    // 3b) a flow resource running dry (TA energy stall): build something that produces it
+    for (size_t r = 0; r < R.resources.size(); ++r) {
+        if (R.resources[r].kind != ResourceKind::Flow || !canBuildNow) continue;
+        Fixed cap = eco.cap[r].raw > 0 ? eco.cap[r] : R.resources[r].storage;
+        if (eco.income[r].raw > 0 && eco.stock[r] > cap / 5) continue;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            const UnitType& t = R.types[ti];
+            bool gives = false, costsIt = false;
+            for (auto& a : t.income) if (a.res == r && a.value.raw > 0) gives = true;
+            for (auto& a : t.cost) if (a.res == r && a.value.raw > 0) costsIt = true;
+            if (gives && !costsIt && t.structure && build(sim, m, uint16_t(ti))) return;
         }
     }
     // 4) income structures (TA metal extractors / energy, refineries on geysers, farms)
@@ -336,8 +358,18 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
                 if (count[pi] && std::find(R.types[pi].produces.begin(), R.types[pi].produces.end(), uint16_t(ti)) != R.types[pi].produces.end()) saveForWorkers_ = true;
         }
     if (workers < cfg_.workersPerBase) {
-        for (size_t ti = 0; ti < R.types.size(); ++ti)
-            if (R.types[ti].worker && !R.types[ti].structure && R.types[ti].deploysTo == kNoType && train(sim, m, uint16_t(ti))) break;
+        // the worker type we have fewest of; builders that gather nothing are capped at 2
+        int bestType = -1, bestCount = 1 << 30;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            const UnitType& t = R.types[ti];
+            if (!t.worker || t.structure || t.deploysTo != kNoType || !m.canTrain(sim, player_, uint16_t(ti))) continue;
+            if (t.gathers.empty() && t.carrierCapacity.raw <= 0 && count[ti] >= 2) continue;
+            bool producible = false;
+            for (size_t pi = 0; pi < R.types.size(); ++pi)
+                if (count[pi] && std::find(R.types[pi].produces.begin(), R.types[pi].produces.end(), uint16_t(ti)) != R.types[pi].produces.end()) producible = true;
+            if (producible && count[ti] < bestCount) { bestCount = count[ti]; bestType = int(ti); }
+        }
+        if (bestType >= 0) train(sim, m, uint16_t(bestType));
     }
     // 6b) unlock the army: own producers make combat units whose structure requirements are missing
     if (canBuildNow && building == 0) {
