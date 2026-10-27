@@ -77,7 +77,12 @@ std::string Editor::relativeToProject(const std::string& file) const {
 void Editor::init(gfx::Device& dev) {
     dev_ = &dev;
     loadProject();
-    ui_.init(dev, (opt_.projectDir + "/fonts/ui.ttf").c_str(), 16.0f);
+    // Font with Cyrillic: the game's own font if it has one, otherwise the engine's (Noto Sans).
+    std::string font = opt_.projectDir + "/fonts/ui.ttf";
+    std::error_code fec;
+    if (!fs::exists(font, fec)) font = opt_.engineDir + "/engine/assets/fonts/ui.ttf";
+    if (!fs::exists(font, fec)) font = "engine/fonts/ui.ttf"; // bundled copy (content root)
+    ui_.init(dev, font.c_str(), 16.0f);
     r3d_.init(dev);
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, false));
     view_.init(dev, rules_);
