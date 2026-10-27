@@ -7,7 +7,11 @@
 #include <string>
 #include <vector>
 
+#include "engine/net/Conn.h"
+#include "engine/net/Udp.h"
+#include "engine/net/WebSocket.h"
 #include "engine/sim/Simulation.h"
+#include <thread>
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 
@@ -82,6 +86,72 @@ TEST(command_sink_intercepts_submit) {
     CHECK(got.size() == 1 && got[0].player == 1);
     sim->step();
     CHECK(sim->executedCommands().empty());
+}
+
+// ---------------- transport ----------------
+static net::Bytes pattern(size_t n, uint8_t salt) { net::Bytes b(n); for (size_t i = 0; i < n; ++i) b[i] = uint8_t(i * 31 + salt); return b; }
+
+// Client sends `count` messages (one of them large); server echoes; client must get all back in order.
+template <class Listener>
+static bool echoRoundTrip(Listener& lis, std::unique_ptr<net::Conn> client, int count, size_t bigSize) {
+    std::vector<std::unique_ptr<net::Conn>> serverSide;
+    std::vector<net::Bytes> sent;
+    for (int i = 0; i < count; ++i) sent.push_back(pattern(i == count / 2 ? bigSize : size_t(1 + i * 7 % 300), uint8_t(i)));
+    for (auto& m : sent) client->send(m);
+    size_t got = 0;
+    bool inOrder = true;
+    const uint64_t t0 = net::nowMs();
+    while (got < sent.size() && net::nowMs() - t0 < 20000) {
+        uint64_t now = net::nowMs();
+        for (auto& c : lis.poll(now)) serverSide.push_back(std::move(c));
+        for (auto& c : serverSide) {
+            c->update(now);
+            net::Bytes m;
+            while (c->recv(m)) c->send(m);
+            c->update(now);
+        }
+        client->update(now);
+        net::Bytes m;
+        while (client->recv(m)) { inOrder &= got < sent.size() && m == sent[got]; ++got; }
+        if (client->state() == net::ConnState::Closed) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    std::printf("  %s: %zu/%zu echoed in %llu ms, rtt %u ms\n", client->describe().c_str(), got, sent.size(),
+                (unsigned long long)(net::nowMs() - t0), client->rttMs());
+    return got == sent.size() && inOrder;
+}
+
+TEST(transport_loopback_latency_preserves_order) {
+    auto [a, b] = net::makeLoopbackPair({40, 30, 7});
+    for (int i = 0; i < 100; ++i) a->send(pattern(10, uint8_t(i)));
+    int got = 0; bool ok = true;
+    for (uint64_t t = 0; t < 200; ++t) {
+        a->update(t); b->update(t);
+        net::Bytes m;
+        while (b->recv(m)) { ok &= m == pattern(10, uint8_t(got)); ++got; CHECK(t >= 40); }
+    }
+    CHECK(got == 100 && ok);
+}
+
+TEST(transport_udp_survives_packet_loss) {
+    net::UdpListener lis;
+    CHECK(lis.open(0));
+    net::setUdpTestFaults({25, 11});
+    auto c = net::connectUdp("127.0.0.1", lis.port());
+    CHECK(c != nullptr);
+    if (c) CHECK(echoRoundTrip(lis, std::move(c), 300, 200000));
+    net::setUdpTestFaults({});
+    auto c6 = net::connectTo("udp://[::1]:" + std::to_string(lis.port()));
+    if (c6) CHECK(echoRoundTrip(lis, std::move(c6), 50, 5000));   // IPv6 when the host has it
+}
+
+TEST(transport_websocket_echo) {
+    CHECK(net::websocketAccept("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="); // RFC 6455 example
+    net::WsListener lis;
+    CHECK(lis.open(0));
+    auto c = net::connectTo("ws://127.0.0.1:" + std::to_string(lis.port()) + "/rts");
+    CHECK(c != nullptr);
+    if (c) CHECK(echoRoundTrip(lis, std::move(c), 200, 300000));
 }
 
 int main() {
