@@ -208,7 +208,16 @@ static void pump(NetPlayer& p, uint64_t now, double dt) {
     }
 }
 
-static const std::string kReplayDir = "/tmp/rts_net_test_replays";
+// Per-run folder under the system temp dir: a fixed /tmp path collides with leftovers of other
+// users/runs, and the app bundle's cwd is read-only on macOS.
+static const std::string kReplayDir = [] {
+    std::error_code ec;
+    auto base = std::filesystem::temp_directory_path(ec);
+    if (ec) base = ".";
+    auto dir = base / ("rts_net_test_replays-" + std::to_string(net::nowMs()));
+    std::filesystem::create_directories(dir, ec);
+    return dir.string();
+}();
 
 static net::ServerConfig testServerConfig() {
     net::ServerConfig cfg;
@@ -240,7 +249,8 @@ static uint64_t runUntilEnd(net::Server& srv, std::vector<NetPlayer*> ps, uint64
 // Re-simulate the server's replay offline: it must reproduce the players' final state exactly.
 static bool verifyLatestReplay(uint64_t expectHash, std::string* name = nullptr, const std::vector<Command>* truth = nullptr) {
     std::filesystem::path latest;
-    for (auto& e : std::filesystem::directory_iterator(kReplayDir))
+    std::error_code ec;
+    for (auto& e : std::filesystem::directory_iterator(kReplayDir, ec))
         if (latest.empty() || e.last_write_time() > std::filesystem::last_write_time(latest)) latest = e.path();
     Replay rep;
     if (latest.empty() || !rep.load(latest.string())) return false;
@@ -280,7 +290,7 @@ static void printSession(NetPlayer& p) {
 }
 
 TEST(net_room_match_with_rollback_and_spectator) {
-    std::filesystem::remove_all(kReplayDir);
+    { std::error_code ec; std::filesystem::remove_all(kReplayDir, ec); }
     net::Server srv(testServerConfig());
     NetPlayer a{"Alice", kMushrooms}, b{"Bob", kMushrooms}, spec{"Watcher", kMushrooms};
     connectPlayer(srv, a, {35, 50, 1}, 101);   // high jitter: predictions miss, rollbacks happen
