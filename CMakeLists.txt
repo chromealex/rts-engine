@@ -71,6 +71,10 @@ add_library(rts_game STATIC
     modules/rts/RtsData.cpp
     modules/rts/RtsMap.cpp
     modules/rts/RtsModule.cpp
+    modules/rts/RtsEconomy.cpp
+    modules/rts/RtsUnits.cpp
+    modules/rts/RtsCombat.cpp
+    modules/rts/RtsWorld.cpp
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 

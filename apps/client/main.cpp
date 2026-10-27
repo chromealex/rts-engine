@@ -52,7 +52,7 @@ public:
 
 private:
     enum class Screen { Menu, Playing, Paused, Over };
-    enum class Mode { Normal, AttackMove, Patrol, Place, Rally };
+    enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim };
 
     void startMatch(size_t idx);
     void fitCamera();
@@ -101,6 +101,8 @@ private:
     std::vector<Entity> selection_;
     std::array<std::vector<Entity>, 10> groups_;
     Mode mode_ = Mode::Normal;
+    Entity placeProducer_;   // sidebar placement: structure comes from this producer
+    int abilityIndex_ = -1;
     int placeType_ = -1;
     int sendPercent_ = 50;
     bool boxing_ = false, panning_ = false, sendDrag_ = false;
@@ -304,6 +306,13 @@ void GameClient::event(const Event& e) {
             if (mode_ == Mode::Place) {
                 bool ok;
                 Vec3 c = placeCentre(e.x, e.y, ok);
+                if (ok && placeProducer_.valid()) {
+                    Command cmd; cmd.type = kCmdPlace; cmd.units = {placeProducer_}; cmd.point = c;
+                    issue(cmd);
+                    placeProducer_ = kNullEntity;
+                    mode_ = Mode::Normal;
+                    return;
+                }
                 if (ok) {
                     Command cmd; cmd.type = kCmdBuild; cmd.param = placeType_; cmd.flags = (e.mods & platform::kModShift) ? kCmdQueue : 0;
                     for (Entity s : selection_)
@@ -312,6 +321,25 @@ void GameClient::event(const Event& e) {
                     if (!cmd.units.empty()) issue(cmd);
                 }
                 if (!(e.mods & platform::kModShift)) mode_ = Mode::Normal;
+                return;
+            }
+            if (mode_ == Mode::Ability || mode_ == Mode::Claim) {
+                float3 g;
+                if (groundAt(e.x, e.y, g)) {
+                    Command c;
+                    c.type = mode_ == Mode::Claim ? kCmdClaim : kCmdAbility;
+                    c.point = {Fixed::fromRatio(int64_t(g.x * 256), 256), Fixed{}, Fixed::fromRatio(int64_t(g.z * 256), 256)};
+                    if (mode_ == Mode::Ability) {
+                        c.param = abilityIndex_;
+                        c.target = pick(e.x, e.y);
+                        for (Entity s2 : selection_) {
+                            auto& st = rules_.types[w.get<Unit>(s2).type];
+                            if (size_t(abilityIndex_) < st.abilities.size()) c.units.push_back(s2);
+                        }
+                    }
+                    issue(c);
+                }
+                mode_ = Mode::Normal;
                 return;
             }
             if (mode_ == Mode::AttackMove || mode_ == Mode::Patrol || mode_ == Mode::Rally) {
@@ -430,7 +458,7 @@ void GameClient::event(const Event& e) {
                 if (touchMoved_) command(kCmdSmart, e.x, e.y, false);
             } else if (!touchMoved_ && !uiWants) {
                 Entity t = pick(e.x, e.y);
-                if (mode_ == Mode::Place) {
+                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim) {
                     Event fake = e; fake.type = EventType::MouseDown; fake.button = 0; fake.mods = 0;
                     event(fake);
                 } else if (t.valid() && w.get<Owner>(t).player == human_ && !selectionHasGarrison()) {
@@ -475,8 +503,15 @@ void GameClient::processEvents() {
         if (ev.player != human_ || spectator_) continue;
         if (ev.type == kEvNotEnough) {
             if (ev.value == 255) notice("Нужно больше лимита (дома / склады)");
+            else if (ev.value == 254) notice("Нет места для постройки");
             else if (ev.value >= 0 && size_t(ev.value) < rules_.resources.size()) notice("Не хватает: " + rules_.resources[size_t(ev.value)].name);
         } else if (ev.type == kEvBuildDone) notice("Построено: " + rules_.types[size_t(ev.value)].name);
+        else if (ev.type == kEvReadyToPlace) notice("Готово к установке: " + rules_.types[size_t(ev.value)].name);
+        else if (ev.type == kEvResearched) notice("Исследовано: " + rules_.techs[size_t(ev.value)].name);
+        else if (ev.type == kEvLevelUp) notice("Герой достиг уровня " + std::to_string(ev.value));
+        else if (ev.type == kEvLowPower) notice("Не хватает энергии!");
+        else if (ev.type == kEvUpgraded) notice("Улучшено: " + rules_.types[size_t(ev.value)].name);
+        else if (ev.type == kEvRegionClaimed) notice("Регион присоединён");
         else if (ev.type == kEvPlayerDefeated) notice("Вы проиграли");
     }
 }
@@ -518,7 +553,14 @@ void GameClient::drawHud() {
     for (size_t r = 0; r < rules_.resources.size(); ++r) {
         sep();
         const auto& rd = rules_.resources[r];
+        if (rd.kind == ResourceKind::Capacity) {
+            bool low = eco.capUsed[r] > eco.capProvided[r];
+            ImGui::TextColored(low ? ImVec4(1, 0.45f, 0.35f, 1) : ImVec4(1, 1, 1, 1), "%s: %lld/%lld", rd.name.c_str(),
+                               (long long)eco.capUsed[r].toInt(), (long long)eco.capProvided[r].toInt());
+            continue;
+        }
         ImGui::Text("%s: %lld", rd.name.c_str(), (long long)eco.stock[r].toInt());
+        if ((rd.kind == ResourceKind::Flow || rd.capped) && eco.cap[r].raw > 0) { ImGui::SameLine(0, 2); ImGui::TextDisabled("/%lld", (long long)eco.cap[r].toInt()); }
         if (rd.kind == ResourceKind::Flow) { ImGui::SameLine(0, 4); ImGui::TextDisabled("(%+.1f/с)", eco.income[r].toDouble()); }
     }
     if (eco.supplyCap.raw > 0 || eco.supplyUsed.raw > 0) {
@@ -535,6 +577,31 @@ void GameClient::drawHud() {
             sep();
             ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%s %d%s", p.name.c_str(), g, p.alive ? "" : " (выбыл)");
         }
+    }
+    // mode-specific counters
+    const auto& vic = gs.victory;
+    if (vic.mode == VictoryMode::Tickets)
+        for (size_t t = 1; t < gs.tickets.size(); ++t) { sep(); ImGui::Text("Команда %zu: %lld", t, (long long)gs.tickets[t].toInt()); }
+    if (vic.mode == VictoryMode::Score)
+        for (size_t t = 1; t < gs.score.size(); ++t) { sep(); float4 c = RtsView::playerColor(uint8_t(t)); ImGui::TextColored(ImVec4(c.x, c.y, c.z, 1), "%lld", (long long)gs.score[t].toInt()); }
+    if (vic.mode == VictoryMode::Survive || vic.mode == VictoryMode::Score) {
+        int64_t left = std::max<int64_t>(0, (vic.surviveSeconds * int64_t(sim_->tickRate())).toInt() - int64_t(sim_->tick())) / sim_->tickRate();
+        sep(); ImGui::Text("Осталось %lld:%02lld", (long long)(left / 60), (long long)(left % 60));
+    }
+    if (uint32_t wt = mod().ticksUntilWave(*sim_)) { sep(); ImGui::Text("Волна через %u", wt / sim_->tickRate() + 1); }
+    if (gs.regionCount > 0 && !spectator_) {
+        int owned = 0;
+        for (auto o : gs.regionOwner) if (o == human_) ++owned;
+        sep(); ImGui::Text("Регионы: %d", owned);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Занять")) mode_ = Mode::Claim;
+    }
+    if (!rules_.autoBuildPool.empty() && !spectator_) {
+        sep();
+        auto cost = mod().autoBuildCost(*sim_, human_, rules_.autoBuildPool[0]);
+        std::string label = "СТРОИТЬ";
+        for (auto& c : cost) label += " " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
+        if (ImGui::Button(label.c_str())) { Command c; c.type = kCmdAutoBuild; c.param = -1; issue(c); }
     }
     sep();
     ImGui::Text("%u:%02u", sim_->tick() / sim_->tickRate() / 60, sim_->tick() / sim_->tickRate() % 60);
@@ -566,7 +633,8 @@ void GameClient::drawHud() {
     }
     if (mode_ != Mode::Normal) {
         const char* m = mode_ == Mode::AttackMove ? "Атака: выберите цель" : mode_ == Mode::Patrol ? "Патруль: выберите точку"
-                      : mode_ == Mode::Rally ? "Точка сбора" : "Постройка: выберите место (Esc — отмена)";
+                      : mode_ == Mode::Rally ? "Точка сбора" : mode_ == Mode::Ability ? "Способность: выберите цель"
+                      : mode_ == Mode::Claim ? "Выберите соседний регион" : "Постройка: выберите место (Esc — отмена)";
         fg->AddText(ImVec2(mouseX_ + 16, mouseY_ + 8), IM_COL32(255, 255, 255, 230), m);
     }
 }
@@ -643,19 +711,49 @@ void GameClient::drawCommandCard() {
         ImGui::Separator();
         ImGui::TextUnformatted("Строить:");
         for (uint16_t b : buildable) {
-            bool ok = mod().requirementsMet(*sim_, human_, b);
+            bool ok = mod().canTrain(*sim_, human_, b);
             ImGui::BeginDisabled(!ok);
             std::string label = rules_.types[b].name + costText(b);
-            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { mode_ = Mode::Place; placeType_ = b; }
+            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { mode_ = Mode::Place; placeType_ = b; placeProducer_ = kNullEntity; }
+            ImGui::EndDisabled();
+        }
+    }
+    auto reqTooltip = [&](const std::vector<Requirement>& req) {
+        std::string r;
+        for (auto& q : req) r += (q.tech ? rules_.techs[q.index].name : rules_.types[q.index].name) + " ";
+        ImGui::SetTooltip("Требуется: %s", r.c_str());
+    };
+    // abilities of the selection (by index of the first unit's type)
+    if (!t0.abilities.empty()) {
+        ImGui::Separator();
+        for (size_t i = 0; i < t0.abilities.size(); ++i) {
+            const AbilityDef& a = t0.abilities[i];
+            if (a.aura) { ImGui::TextDisabled("Аура: %s", a.name.c_str()); continue; }
+            bool ok = mod().canCast(*sim_, e0, int(i));
+            ImGui::BeginDisabled(!ok);
+            std::string label = a.name;
+            if (a.energyCost.raw > 0) label += "  (" + std::to_string(a.energyCost.toInt()) + " эн.)";
+            ImGui::PushID(int(i) + 1000);
+            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) {
+                if (a.target == TargetKind::None || a.target == TargetKind::Self) { Command c; c.type = kCmdAbility; c.param = int64_t(i); c.units = selection_; issue(c); }
+                else { mode_ = Mode::Ability; abilityIndex_ = int(i); }
+            }
+            ImGui::PopID();
             ImGui::EndDisabled();
         }
     }
     if (auto* prod = w.tryGet<Production>(e0); prod && !(w.get<Unit>(e0).flags & kUnitUnderConstruction)) {
         ImGui::Separator();
+        if (prod->ready != kNoType) {
+            std::string label = "Установить: " + rules_.types[prod->ready].name;
+            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { mode_ = Mode::Place; placeType_ = prod->ready; placeProducer_ = e0; }
+        }
+        if (t0.chargesMax > 0) ImGui::TextDisabled("Заряды: %d / %d", prod->charges, t0.chargesMax);
         for (uint16_t p : t0.produces) {
-            bool ok = mod().requirementsMet(*sim_, human_, p);
+            bool ok = mod().canTrain(*sim_, human_, p);
             ImGui::BeginDisabled(!ok);
             std::string label = rules_.types[p].name + costText(p);
+            ImGui::PushID(p);
             if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) {
                 Command c; c.type = kCmdTrain; c.param = p;
                 Entity best = e0; size_t bestQ = SIZE_MAX;
@@ -665,26 +763,61 @@ void GameClient::drawCommandCard() {
                 c.units = {best};
                 issue(c);
             }
+            ImGui::PopID();
             ImGui::EndDisabled();
-            if (!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                std::string req;
-                for (uint16_t r : rules_.types[p].requires_) req += rules_.types[r].name + " ";
-                ImGui::SetTooltip("Требуется: %s", req.c_str());
-            }
+            if (!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) reqTooltip(rules_.types[p].requires_);
         }
-        if (!prod->queue.empty()) {
-            const UnitType& cur = rules_.types[prod->queue.front()];
-            ImGui::ProgressBar(float((prod->progress / cur.buildTime).toDouble()), ImVec2(-1, 0), cur.name.c_str());
-            for (size_t i = 0; i < prod->queue.size(); ++i) {
-                if (i) ImGui::SameLine();
-                ImGui::PushID(int(i));
-                if (ImGui::SmallButton((rules_.types[prod->queue[i]].name.substr(0, 4) + " x").c_str())) {
-                    Command c; c.type = kCmdCancelTrain; c.units = {e0}; c.param = int64_t(i); issue(c);
-                }
-                ImGui::PopID();
-            }
+        const auto& eco = mod().state(*sim_).players[human_];
+        for (uint16_t k : t0.researches) {
+            const TechDef& tech = rules_.techs[k];
+            if (eco.researched[k]) continue;
+            bool ok = !eco.researching[k] && mod().requirementsMet(*sim_, human_, tech.requires_);
+            std::string label = "Исследовать: " + tech.name;
+            for (auto& c : tech.cost) label += "  " + std::to_string(c.value.toInt()) + " " + rules_.resources[c.res].name;
+            ImGui::BeginDisabled(!ok);
+            ImGui::PushID(int(k) + 5000);
+            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { Command c; c.type = kCmdResearch; c.param = k; c.units = {e0}; issue(c); }
+            ImGui::PopID();
+            ImGui::EndDisabled();
+            if (!ok && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) reqTooltip(tech.requires_);
         }
-        if (ImGui::Button("Точка сбора")) mode_ = Mode::Rally;
+        for (uint16_t up : t0.upgrades) {
+            std::string label = "Улучшить: " + rules_.types[up].name + costText(up);
+            ImGui::PushID(int(up) + 9000);
+            if (ImGui::Button(label.c_str(), ImVec2(-1, 0))) { Command c; c.type = kCmdUpgrade; c.param = up; c.units = {e0}; issue(c); }
+            ImGui::PopID();
+        }
+        for (size_t i = 0; i < prod->queue.size(); ++i) {
+            const ProdItem& it = prod->queue[i];
+            std::string name = it.item >= 0 ? rules_.types[size_t(it.item)].name : rules_.techs[size_t(~it.item)].name;
+            if (i == 0 || t0.chargesMax > 0) ImGui::ProgressBar(float(std::min(1.0, it.progress.toDouble())), ImVec2(-1, 0), name.c_str());
+        }
+        for (size_t i = 0; i < prod->queue.size(); ++i) {
+            const ProdItem& it = prod->queue[i];
+            std::string name = it.item >= 0 ? rules_.types[size_t(it.item)].name : rules_.techs[size_t(~it.item)].name;
+            if (i) ImGui::SameLine();
+            ImGui::PushID(int(i));
+            if (ImGui::SmallButton((name.substr(0, 6) + " x").c_str())) {
+                Command c; c.type = kCmdCancelTrain; c.units = {e0}; c.param = int64_t(i); issue(c);
+            }
+            ImGui::PopID();
+        }
+        if (!t0.produces.empty() && ImGui::Button("Точка сбора")) mode_ = Mode::Rally;
+    }
+    {
+        // structure / unit specials
+        bool row = false;
+        auto rowItem = [&] { if (row) ImGui::SameLine(); row = true; };
+        if (t0.structure && t0.sellable && !w.has<Construction>(e0)) { rowItem(); if (ImGui::Button("Продать")) { Command c; c.type = kCmdSell; c.units = {e0}; issue(c); } }
+        if (t0.deploysTo != kNoType) { rowItem(); if (ImGui::Button("Развернуть")) { Command c; c.type = kCmdDeploy; c.units = {e0}; issue(c); } }
+        if (t0.members > 1) {
+            rowItem();
+            ImGui::Text("Бойцов: %d/%d", mod().membersAlive(*sim_, e0), t0.members);
+            ImGui::SameLine();
+            if (ImGui::Button("Пополнить")) { Command c; c.type = kCmdReinforce; c.units = selection_; issue(c); }
+        }
+        if (auto* h = w.tryGet<Hero>(e0)) { rowItem(); ImGui::Text("Уровень %d  (опыт %lld)", h->level, (long long)h->xp.toInt()); }
+        if (t0.maxEnergy.raw > 0) { rowItem(); ImGui::Text("Энергия %lld/%lld", (long long)w.get<Unit>(e0).energy.toInt(), (long long)t0.maxEnergy.toInt()); }
     }
     if (w.has<Construction>(e0) && ImGui::Button("Отменить постройку")) { Command c; c.type = kCmdCancelTrain; c.units = {e0}; issue(c); }
     ImGui::End();
@@ -810,7 +943,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
             if (ok) {
                 const UnitType& t = rules_.types[size_t(placeType_)];
-                bool can = mod().canPlace(*sim_, uint16_t(placeType_), c);
+                bool can = mod().canPlace(*sim_, human_, uint16_t(placeType_), c);
                 uint32_t col = can ? rgba(80, 255, 120, 110) : rgba(255, 70, 60, 110);
                 float x0 = float(c.x.toDouble()) - t.footprintW * 0.5f, z0 = float(c.z.toDouble()) - t.footprintH * 0.5f;
                 r3d_.triangle({x0, 0.08f, z0}, {x0, 0.08f, z0 + t.footprintH}, {x0 + t.footprintW, 0.08f, z0 + t.footprintH}, col);

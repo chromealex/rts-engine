@@ -285,6 +285,8 @@ void Renderer3D::computeShadowMatrix(const RTSCamera& cam, float aspect) {
     // texel snapping keeps shadow edges stable while the camera pans
     float size = std::max(maxX - minX, maxY - minY) + 2.0f;
     float texel = size / float(std::max(shadowSize_, 16));
+    shadowTexelWorld_ = texel;
+    shadowExtent_ = size;
     float cx = std::floor((minX + maxX) * 0.5f / texel) * texel, cy = std::floor((minY + maxY) * 0.5f / texel) * texel;
     mat4 proj = mat4::ortho(cx - size * 0.5f, cx + size * 0.5f, cy - size * 0.5f, cy + size * 0.5f,
                             -maxZ - 40.0f, -minZ + 10.0f, dev_->info().clipDepthZeroToOne);
@@ -330,7 +332,17 @@ void Renderer3D::uploadFrameUniforms(bool forShadow) {
     f.shadow[1] = zeroToOne ? 1.0f : 0.5f;
     f.shadow[2] = zeroToOne ? 0.0f : 0.5f;
     f.shadow[3] = 1.0f / float(std::max(shadowSize_, 16));
-    f.quality[0] = quality_ == ShadowQuality::High ? 9.0f : quality_ == ShadowQuality::Medium ? 4.0f : 1.0f;
+    // taps: High 16 rotated Poisson, Medium 8 rotated Poisson, Low 4 fixed (each tap is a 2x2 hardware PCF)
+    f.quality[0] = quality_ == ShadowQuality::High ? 16.0f : quality_ == ShadowQuality::Medium ? 8.0f : 4.0f;
+    {
+        // never filter narrower than ~1.5 texels, otherwise the map resolution shows as stair steps
+        float radiusWorld = std::max(lighting.shadowSoftness, shadowTexelWorld_ * 1.5f);
+        // Low (4 fixed taps): a wide radius would show 4 offset copies, keep it around two texels
+        if (quality_ == ShadowQuality::Low) radiusWorld = std::min(radiusWorld, shadowTexelWorld_ * 2.0f);
+        f.quality[2] = radiusWorld / std::max(shadowExtent_, 1.0f);
+        // normal offset grows with the kernel: wide filters otherwise compare against the receiver itself (acne)
+        f.quality[3] = std::max(shadowTexelWorld_ * 1.5f, radiusWorld * 0.9f);
+    }
     f.quality[1] = quality_ == ShadowQuality::Off || forShadow ? 0.0f : 1.0f;
     dev_->setUniforms(1, &f, sizeof f);
 }
