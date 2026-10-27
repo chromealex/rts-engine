@@ -139,6 +139,17 @@ Rules loadRules(const Json& j) {
         if (ri < 0) fail(where, "unknown resource '" + id + "'");
         return uint16_t(ri);
     };
+    for (auto& rd : r.resources) {
+        const Json& cv = j["resources"][rd.id]["convertsTo"];
+        if (!cv.isObject()) continue;
+        for (auto& [to, rate] : cv.members()) {
+            int ti = r.findResource(to);
+            if (ti < 0) fail("resource '" + rd.id + "' convertsTo", "unknown resource '" + to + "'");
+            if (r.resources[size_t(ti)].convertTo >= 0) fail("resource '" + rd.id + "' convertsTo", "'" + to + "' converts itself");
+            rd.convertTo = int16_t(ti);
+            rd.convertRate = rate.fx();
+        }
+    }
     auto amounts = [&](const std::string& where, const Json& obj, std::vector<Amount>& out, std::initializer_list<const char*> skip) {
         for (auto& [k, v] : obj.members()) {
             bool skipped = false;

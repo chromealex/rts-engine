@@ -39,6 +39,7 @@ private:
     int wave_ = 0;
     uint32_t lastBuildTick_ = 0;
     uint32_t lastTechTick_ = 0;
+    bool saveForWorkers_ = false;   // few workers left and one can be trained: don't spend on the army
 };
 
 } // namespace rts::game

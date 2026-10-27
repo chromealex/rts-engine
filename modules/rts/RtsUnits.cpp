@@ -103,7 +103,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         if (!gs.grid.inside(cx, cy)) return true;
         size_t ci = size_t(gs.grid.index(cx, cy));
         if (cargo->res != res) { cargo->amount = Fixed{}; cargo->res = int16_t(res); }
-        if (gs.grid.fieldRes[ci] != res || gs.grid.fieldAmt[ci].raw <= 0) {
+        if (gs.grid.fieldRes[ci] != res || gs.grid.fieldAmt[ci].raw <= 0 || (gs.grid.fieldAmt[ci] < kOne && cargo->amount < gd->carry / 2)) {
             o.point = o.point2; o.state = 0; // next cell around here
             return false;
         }

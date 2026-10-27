@@ -281,7 +281,7 @@ void RtsModule::sysVictory(Simulation& sim) {
             if (!t.countsForVictory) return;
             const bool building = u.flags & kUnitUnderConstruction;
             switch (v.mode) {
-            case VictoryMode::NoStructures: has = t.structure && !building; break;
+            case VictoryMode::NoStructures: has = (t.structure && !building) || t.deploysTo != kNoType; break; // an MCV is a base
             case VictoryMode::NoUnits: has = !t.structure; break;
             case VictoryMode::KeyUnits: has = anyKeyType ? t.key : (t.structure && !building); break;
             case VictoryMode::Score: has = v.keyLoses ? (anyKeyType ? t.key : t.structure) : true; break;

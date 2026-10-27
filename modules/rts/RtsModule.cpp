@@ -428,6 +428,7 @@ void RtsModule::refund(Simulation& sim, uint8_t player, const std::vector<Amount
 void RtsModule::addResource(Simulation& sim, uint8_t player, uint16_t res, Fixed amount) {
     auto& gs = state(sim);
     if (player == 0 || player >= gs.players.size()) return;
+    if (rules_.resources[res].convertTo >= 0) { addResource(sim, player, uint16_t(rules_.resources[res].convertTo), amount * rules_.resources[res].convertRate); return; }
     auto& eco = gs.players[player];
     if (isGood(res)) {
         // goods go into storehouses; the stock is their sum
@@ -620,7 +621,7 @@ Entity RtsModule::findNearestFieldCell(Simulation& sim, Vec3 p, int res, Vec3& o
                 int x = cx + dx, y = cy + dy;
                 if (!g.inside(x, y)) continue;
                 size_t i = size_t(g.index(x, y));
-                if (g.fieldAmt[i].raw > 0 && (res < 0 || g.fieldRes[i] == res) && !g.blocked[i]) {
+                if (g.fieldAmt[i] >= kOne && (res < 0 || g.fieldRes[i] == res) && !g.blocked[i]) { // skip regrowth crumbs
                     out = g.cellCenter(x, y);
                     return Entity{uint32_t(i), 0}; // marker: valid() == true
                 }
