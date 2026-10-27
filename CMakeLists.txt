@@ -80,6 +80,28 @@ add_library(rts_game STATIC
 target_link_libraries(rts_game PUBLIC rts_engine)
 
 # ---------------------------------------------------------------------------
+# Resource packs (.rpak). The runtime links only the zstd decoder; host tools that write packs
+# link rts_pack_writer, which carries the full zstd library instead (never link both).
+# ---------------------------------------------------------------------------
+set(RTS_CONTENT_PACK "" CACHE FILEPATH "Prebuilt content.rpak to ship instead of loose content (set by rtsbuild)")
+add_library(rts_zstd_dec STATIC third_party/zstd/zstddeclib.c)
+add_library(rts_pack STATIC engine/pack/Pack.cpp)
+target_include_directories(rts_pack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(NOT MSVC)
+    target_compile_options(rts_zstd_dec PRIVATE -w)
+endif()
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    find_package(Threads REQUIRED)
+    add_library(rts_zstd STATIC third_party/zstd/zstd.c)
+    target_link_libraries(rts_zstd PUBLIC Threads::Threads)
+    if(NOT MSVC)
+        target_compile_options(rts_zstd PRIVATE -w)
+    endif()
+    add_library(rts_pack_writer STATIC engine/pack/PackWriter.cpp)
+    target_link_libraries(rts_pack_writer PUBLIC rts_pack rts_engine rts_zstd)
+endif()
+
+# ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
 # ---------------------------------------------------------------------------
 add_library(rts_imgui STATIC
@@ -113,7 +135,7 @@ endif()
 # The platform files define main(); they are compiled into each executable through an OBJECT
 # library so that the entry point lands in the final binary on every toolchain.
 add_library(rts_runtime OBJECT ${RTS_RUNTIME_SRC})
-target_link_libraries(rts_runtime PUBLIC rts_engine rts_imgui)
+target_link_libraries(rts_runtime PUBLIC rts_engine rts_imgui rts_pack rts_zstd_dec)
 if(APPLE)
     set_source_files_properties(engine/platform/macos/PlatformMac.mm engine/platform/ios/PlatformIOS.mm
         engine/gfx/metal/GfxMetal.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
@@ -172,26 +194,44 @@ function(rts_package_app target)
                 MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/Info.plist.in")
             set(res_dir "$<TARGET_BUNDLE_CONTENT_DIR:${target}>/Resources")
         endif()
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${res_dir}"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_CONTENT_DIR}" "${res_dir}/content"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "${res_dir}/content/engine"
-            COMMENT "Bundling content")
+        if(RTS_CONTENT_PACK)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${res_dir}/content"
+                COMMAND ${CMAKE_COMMAND} -E copy "${RTS_CONTENT_PACK}" "${res_dir}/content/content.rpak"
+                COMMENT "Bundling content pack")
+        else()
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${res_dir}"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_CONTENT_DIR}" "${res_dir}/content"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "${res_dir}/content/engine"
+                COMMENT "Bundling content")
+        endif()
     elseif(RTS_PLATFORM STREQUAL "web")
         set_target_properties(${target} PROPERTIES OUTPUT_NAME "index" SUFFIX ".html")
-        target_link_options(${target} PRIVATE
-            "--preload-file=${RTS_CONTENT_DIR}@/content"
-            "--preload-file=${RTS_ENGINE_ASSETS}@/content/engine"
-            "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/platform/web/shell.html")
+        if(RTS_CONTENT_PACK)
+            target_link_options(${target} PRIVATE "--preload-file=${RTS_CONTENT_PACK}@/content/content.rpak")
+        else()
+            target_link_options(${target} PRIVATE
+                "--preload-file=${RTS_CONTENT_DIR}@/content"
+                "--preload-file=${RTS_ENGINE_ASSETS}@/content/engine")
+        endif()
+        target_link_options(${target} PRIVATE "--shell-file=${CMAKE_CURRENT_SOURCE_DIR}/platform/web/shell.html")
     elseif(RTS_PLATFORM STREQUAL "windows" OR RTS_PLATFORM STREQUAL "linux")
         set_target_properties(${target} PROPERTIES OUTPUT_NAME "${RTS_GAME_EXECUTABLE}")
         if(WIN32)
             set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE TRUE)
         endif()
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_CONTENT_DIR}" "$<TARGET_FILE_DIR:${target}>/content"
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_FILE_DIR:${target}>/content/engine"
-            COMMENT "Copying content next to the executable")
+        if(RTS_CONTENT_PACK)
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${target}>/content"
+                COMMAND ${CMAKE_COMMAND} -E copy "${RTS_CONTENT_PACK}" "$<TARGET_FILE_DIR:${target}>/content/content.rpak"
+                COMMENT "Copying content pack next to the executable")
+        else()
+            add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_CONTENT_DIR}" "$<TARGET_FILE_DIR:${target}>/content"
+                COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_FILE_DIR:${target}>/content/engine"
+                COMMENT "Copying content next to the executable")
+        endif()
     endif()
 endfunction()
 
@@ -226,7 +266,9 @@ endif()
 
 if(RTS_BUILD_TOOLS)
     add_executable(rtsbuild tools/rtsbuild/main.cpp)
-    target_link_libraries(rtsbuild PRIVATE rts_engine)
+    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer)
+    add_executable(assetpipe tools/assetpipe/main.cpp)
+    target_link_libraries(assetpipe PRIVATE rts_pack_writer)
     target_compile_definitions(rtsbuild PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
@@ -238,7 +280,7 @@ endif()
 if(RTS_BUILD_TESTS)
     enable_testing()
     add_executable(rts_tests tests/tests.cpp)
-    target_link_libraries(rts_tests PRIVATE rts_game)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_pack_writer)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()

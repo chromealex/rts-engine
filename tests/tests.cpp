@@ -555,6 +555,128 @@ TEST(mech_survive_waves) {
     CHECK(sim->result() == 1);                                   // survived to 30 s
 }
 
+// ------------------------------------------------------------------ resource packs (.rpak)
+
+#include <random>
+#include "engine/pack/PackWriter.h"
+
+static std::unique_ptr<rts::pack::Pack> openPackBytes(const std::string& bytes, std::string* err = nullptr) {
+    return rts::pack::Pack::open(rts::pack::memorySource(bytes), err);
+}
+
+TEST(pack_roundtrip_codecs_and_dedup) {
+    using namespace rts::pack;
+    std::string text;
+    for (int i = 0; i < 2000; ++i) text += "{\"unit\": \"peasant\", \"hp\": " + std::to_string(i % 37) + "},\n";
+    std::string noise(50000, '\0');
+    std::mt19937 rng(42); // test data only, not simulation
+    for (char& c : noise) c = char(rng());
+    PackWriter w;
+    CHECK(w.addData("rules.json", text));
+    CHECK(w.addData("maps\\copy.json", text));       // duplicate content, Windows separators
+    CHECK(w.addData("./noise.bin", noise));          // incompressible -> stored
+    CHECK(w.addData("ui/icon.png", text + "png"));   // already-compressed format -> stored
+    CHECK(w.addData("empty.txt", ""));
+    CHECK(w.addData("tiny.txt", "hi"));
+    CHECK(!w.addData("rules.json", "again"));        // duplicate path rejected
+    std::string bytes;
+    WriteStats st;
+    CHECK(w.writeToString(bytes, WriteOptions{}, &st));
+    CHECK(st.duplicates == 1 && st.items.size() == 6);
+    CHECK(bytes.size() < 2 * text.size() + noise.size()); // two of three text copies compressed/deduped
+    auto p = openPackBytes(bytes);
+    CHECK(p && p->size() == 6);
+    if (!p) return;
+    std::string out;
+    CHECK(p->read("rules.json", out, true) && out == text);
+    CHECK(p->read("maps/copy.json", out, true) && out == text);
+    CHECK(p->read("noise.bin", out, true) && out == noise);
+    CHECK(p->read("ui/icon.png", out, true) && out == text + "png");
+    CHECK(p->read("empty.txt", out, true) && out.empty());
+    CHECK(p->read("tiny.txt", out, true) && out == "hi");
+    CHECK(!p->read("missing.json", out));
+    const Entry* a = p->find("rules.json");
+    const Entry* b = p->find("maps/copy.json");
+    CHECK(a && b && a->offset == b->offset && a->codec == Codec::Zstd);
+    CHECK(p->find("noise.bin")->codec == Codec::Stored && p->find("ui/icon.png")->codec == Codec::Stored);
+    CHECK(p->contentHash() == st.contentHash && st.contentHash != 0);
+}
+
+TEST(pack_output_is_reproducible) {
+    using namespace rts::pack;
+    auto build = [](unsigned threads, bool reverse) {
+        PackWriter w;
+        std::vector<std::string> names = {"a.json", "b/c.json", "b/d.json", "z.txt"};
+        if (reverse) std::reverse(names.begin(), names.end());
+        for (auto& n : names) w.addData(n, std::string(3000, n[0]) + n);
+        std::string out;
+        WriteOptions o; o.threads = threads;
+        w.writeToString(out, o);
+        return out;
+    };
+    std::string a = build(1, false);
+    CHECK(!a.empty() && a == build(4, true));         // insertion order and thread count don't matter
+}
+
+TEST(pack_rejects_corruption) {
+    using namespace rts::pack;
+    PackWriter w;
+    std::string text(20000, 'x');
+    for (size_t i = 0; i < text.size(); i += 7) text[i] = char('a' + i % 13);
+    w.addData("data.json", text);
+    std::string good;
+    CHECK(w.writeToString(good, WriteOptions{}));
+    std::string err;
+    CHECK(!openPackBytes("RPAK", &err) && !err.empty());
+    CHECK(!openPackBytes("NOPE" + good.substr(4), &err) && err.find("magic") != std::string::npos);
+    CHECK(!openPackBytes(good.substr(0, good.size() - 3), &err));   // truncated TOC
+    std::string flip = good;
+    flip[kHeaderSize + 20] ^= 0x5a;                                 // inside the zstd frame
+    auto p = openPackBytes(flip);
+    std::string out;
+    CHECK(p && !p->read("data.json", out));                         // zstd checksum catches it
+}
+
+TEST(pack_paths_and_ignore_rules) {
+    using namespace rts::pack;
+    CHECK(normalizePath("./maps//a.json") == "maps/a.json");
+    CHECK(normalizePath("ui\\hud\\.\\x.rml") == "ui/hud/x.rml");
+    CHECK(normalizePath("/abs/") == "abs" && normalizePath(".") == "");
+    CHECK(globMatch("*.json", "rules.json") && !globMatch("*.json", "rules.jsonx") && globMatch("m?ps/*", "maps/a/b"));
+    IgnoreRules r;
+    r.add("drafts/");
+    r.add("maps/test_*.json");
+    CHECK(r.ignored(".DS_Store", false) && r.ignored("ui/.git", true));
+    CHECK(r.ignored("replay.rpl", false) && r.ignored("old.rpak", false));
+    CHECK(r.ignored("drafts", true) && !r.ignored("drafts", false));
+    CHECK(r.ignored("maps/test_1.json", false) && !r.ignored("maps/valley.json", false));
+}
+
+// A match loaded from a pack must be bit-identical to one loaded from the folder.
+TEST(pack_sample_games_match_folder) {
+    using namespace rts::pack;
+    for (auto [game, map] : {std::pair{kSkirmish, std::string("maps/valley.json")}, std::pair{kMushrooms, std::string("maps/duel.json")}}) {
+        PackWriter w;
+        CHECK(w.addDirectory(game, "", IgnoreRules{}) > 0);
+        CHECK(w.addDirectory(std::string(RTS_SOURCE_DIR) + "/engine/assets", "engine", IgnoreRules{}) > 0);
+        std::string bytes;
+        CHECK(w.writeToString(bytes, WriteOptions{}));
+        auto p = openPackBytes(bytes);
+        CHECK(p != nullptr);
+        if (!p) continue;
+        std::string rules, mapText;
+        CHECK(p->read("rules.json", rules, true) && p->read(map, mapText, true));
+        CHECK(p->contains("engine/fonts/ui.ttf") && p->contains("game.json"));
+        SimConfig cfg; cfg.seed = 9;
+        auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+        sim->setup(Json::parse(rules), Json::parse(mapText));
+        std::vector<game::RtsAI> bots;
+        for (auto& pl : sim->players()) bots.emplace_back(pl.slot, 9);
+        for (uint32_t t = 0; t < 20 * 120 && sim->result() == 0; ++t) { for (auto& b : bots) b.update(*sim); sim->step(); }
+        CHECK(sim->checksum() == botMatch(game, map, 9, 20 * 120));
+    }
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

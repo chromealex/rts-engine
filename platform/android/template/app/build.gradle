@@ -35,5 +35,5 @@ android {
         }
     }
     sourceSets { main { assets.srcDirs = ['src/main/assets'] } }
-    androidResources { noCompress += ['json', 'ttf'] }
+    androidResources { noCompress += ['json', 'ttf', 'rpak'] } // rpak: mapped straight from the APK
 }
