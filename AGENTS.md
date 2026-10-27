@@ -24,13 +24,15 @@ the *engine* add mechanics generically — never a special case for one game.
 | `engine/gfx` | RHI `Gfx.h`; backends `gl/` (GLES3, WebGL2, GL 3.3) and `metal/` | never call GL/Metal outside |
 | `engine/render` | Renderer3D (forward, shadows, PCF tiers), shaders (GLSL + MSL in `Shaders.h`), ImGui layer, camera math | float OK |
 | `engine/platform` | Cocoa, UIKit, Android NativeActivity, Emscripten, Win32, X11 | `Platform.h` is the only API |
-| `engine/assets` | fonts, default assets copied into every build | |
+| `engine/assets` | fonts, default assets copied into every build | data only (no code: it is bundled) |
+| `engine/pack` | resource packs `.rpak`: reader (`Pack`), writer (`PackWriter`, host tools only) | zstd, reproducible output |
 | `modules/rts` | generic RTS gameplay: data model (`RtsData`), map/pathfinding (`RtsMap`), module (`RtsModule*.cpp`, `RtsEconomy`, `RtsUnits`, `RtsCombat`, `RtsWorld`, `RtsTriggers`), AI (`RtsAI`) | deterministic |
 | `modules/rts/view` | presentation of the sim (shapes, terrain, fog, overlays) | float OK, read-only on sim |
 | `apps/client` | the game executable | |
 | `apps/editor` | map/game editor (Dear ImGui) | |
 | `apps/headless` | bot matches, replays, CI | |
-| `tools/rtsbuild` | packager: macOS .app, iOS Xcode project, Android Gradle project, web, Windows | |
+| `tools/rtsbuild` | packager: macOS .app, iOS Xcode project, Android Gradle project, web, Windows | ships content as `content.rpak` |
+| `tools/assetpipe` | build / list / verify / extract / diff `.rpak` | |
 | `games/*` | sample games | data only |
 | `tests/tests.cpp` | unit + mechanics + determinism tests | must stay green |
 | `third_party/` | vendored libraries with licenses | MIT/BSD/zlib/OFL/CC0/CC-BY only |
@@ -101,7 +103,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | Editor, MCP server, device simulator, sample games | `apps/editor`, `tools/mcp`, `games/*` | main agent |
 | Models, PBR materials, skinning, procedural animation | `engine/render`, `engine/gfx`, `modules/rts/view` | models agent |
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
-| Resource packs `.rpak`, build size/compression | `engine/assets/Pack*`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
+| Resource packs `.rpak`, build size/compression | `engine/pack`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
 | Audio | `engine/audio` (new) | free |
 | Networking / multiplayer transport, lobby | `engine/net` (new) | free |
 | Platforms, device testing, CI | `platform/`, `engine/platform`, `.github/` | free |
