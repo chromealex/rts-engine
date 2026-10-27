@@ -10,6 +10,7 @@ class ToolsWindow : public EditorWindow {
 public:
     const char* id() const override { return "tools"; }
     const char* title() const override { return "Tools"; }
+    int order() const override { return 0; }
     const char* dockArea() const override { return "left-bottom"; }
 
     void draw(Editor& ed) override {

@@ -28,7 +28,8 @@ the *engine* add mechanics generically — never a special case for one game.
 | `modules/rts` | generic RTS gameplay: data model (`RtsData`), map/pathfinding (`RtsMap`), module (`RtsModule*.cpp`, `RtsEconomy`, `RtsUnits`, `RtsCombat`, `RtsWorld`, `RtsTriggers`), AI (`RtsAI`) | deterministic |
 | `modules/rts/view` | presentation of the sim (shapes, terrain, fog, overlays) | float OK, read-only on sim |
 | `apps/client` | the game executable | |
-| `apps/editor` | map/game editor (Dear ImGui) | |
+| `apps/editor` | editor: dockable windows (Scene, Game + device simulator, Hierarchy, Inspector, Tools, Project, Rules, Statistics, Agent, Console); `core/` = Workspace/MapDoc shared with the MCP server | new windows: docs/editor-windows.md |
+| `tools/mcp` | `rtsmcp`: MCP server (stdio) for agents; forwards to the running editor | game data only, never engine code |
 | `apps/headless` | bot matches, replays, CI | |
 | `tools/rtsbuild` | packager: macOS .app, iOS Xcode project, Android Gradle project, web, Windows | |
 | `games/*` | sample games | data only |
@@ -52,6 +53,8 @@ the *engine* add mechanics generically — never a special case for one game.
 - Must run on weak Android GPUs: every expensive feature has a quality tier (`ShadowQuality`, etc.).
 - Content files are read via `platform::readContentFile` (works on Android assets, web preload, packs).
 - No threads in code that runs on the web build unless guarded.
+
+**Editor windows:** see `docs/editor-windows.md` (one class per file in `apps/editor/windows/`, `RTS_EDITOR_WINDOW`).
 
 **Data model:**
 - New mechanics = new optional JSON blocks on types/rules/maps, parsed in `RtsData.cpp`, with

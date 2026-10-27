@@ -136,7 +136,7 @@ else()
     target_link_libraries(rts_runtime PUBLIC X11 EGL GLESv2)
 endif()
 
-add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp)
+add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
@@ -219,7 +219,10 @@ if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
 endif()
 
 if(RTS_BUILD_EDITOR)
-    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp $<TARGET_OBJECTS:rts_runtime>)
+    # windows register themselves (RTS_EDITOR_WINDOW): any .cpp in apps/editor/windows is part of the editor
+    file(GLOB RTS_EDITOR_WINDOWS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/windows/*.cpp)
+    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp
+                   ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(APPLE)

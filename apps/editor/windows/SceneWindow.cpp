@@ -12,6 +12,7 @@ class SceneWindow : public EditorWindow {
 public:
     const char* id() const override { return "scene"; }
     const char* title() const override { return "Scene"; }
+    int order() const override { return 0; }
     const char* dockArea() const override { return "center"; }
     bool zeroPadding() const override { return true; }
     ImGuiWindowFlags flags() const override { return ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse; }
@@ -25,6 +26,7 @@ public:
         vp_.originX = p.x; vp_.originY = p.y; vp_.pointsW = avail.x; vp_.pointsH = avail.y;
         ed.renderScene(vp_, ed.sceneCam, !ed.playing());
         vp_.image(ed.device(), avail.x, avail.y);
+        ed.sceneViewport = &vp_;
         if (ImGui::IsWindowFocused() || vp_.hovered) input(ed);
         hud(ed);
     }
@@ -62,9 +64,9 @@ private:
             float speed = cam.distance * 0.9f * io.DeltaTime * (io.KeyShift ? 3.0f : 1.0f);
             float3 fwd{-std::sin(cam.yaw), 0, -std::cos(cam.yaw)}, right{std::cos(cam.yaw), 0, -std::sin(cam.yaw)};
             if (ImGui::IsKeyDown(ImGuiKey_W)) cam.target += fwd * speed;
-            if (ImGui::IsKeyDown(ImGuiKey_S)) cam.target -= fwd * speed;
+            if (ImGui::IsKeyDown(ImGuiKey_S)) cam.target += fwd * -speed;
             if (ImGui::IsKeyDown(ImGuiKey_D)) cam.target += right * speed;
-            if (ImGui::IsKeyDown(ImGuiKey_A)) cam.target -= right * speed;
+            if (ImGui::IsKeyDown(ImGuiKey_A)) cam.target += right * -speed;
             if (ImGui::IsKeyDown(ImGuiKey_E)) cam.distance = std::min(cam.maxDistance, cam.distance * (1 + io.DeltaTime));
             if (ImGui::IsKeyDown(ImGuiKey_Q)) cam.distance = std::max(cam.minDistance, cam.distance * (1 - io.DeltaTime));
         }

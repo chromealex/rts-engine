@@ -9,6 +9,7 @@ class RulesWindow : public EditorWindow {
 public:
     const char* id() const override { return "rules"; }
     const char* title() const override { return "Rules"; }
+    int order() const override { return 1; }
     const char* dockArea() const override { return "right"; }
 
     void draw(Editor& ed) override {

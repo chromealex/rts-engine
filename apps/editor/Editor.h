@@ -171,6 +171,7 @@ private:
     game::RtsView view_;
     bool showPicker_ = false;
     bool resetLayout_ = false;
+    int focusFirst_ = 0;
     std::vector<std::unique_ptr<EditorWindow>> windows_;
 
     game::MapGrid grid_;

@@ -7,6 +7,7 @@ class ConsoleWindow : public EditorWindow {
 public:
     const char* id() const override { return "console"; }
     const char* title() const override { return "Console"; }
+    int order() const override { return 3; }
     const char* dockArea() const override { return "bottom"; }
 
     void draw(Editor& ed) override {

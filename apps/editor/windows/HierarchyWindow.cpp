@@ -11,6 +11,7 @@ class HierarchyWindow : public EditorWindow {
 public:
     const char* id() const override { return "hierarchy"; }
     const char* title() const override { return "Hierarchy"; }
+    int order() const override { return 0; }
     const char* dockArea() const override { return "left"; }
 
     void draw(Editor& ed) override {
