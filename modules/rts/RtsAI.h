@@ -28,7 +28,7 @@ private:
     void military(Simulation& sim, RtsModule& m);
     void garrisonPlay(Simulation& sim, RtsModule& m);
     void special(Simulation& sim, RtsModule& m);   // deploy, sidebar placement, claims, auto-build, upgrades, research
-    bool build(Simulation& sim, RtsModule& m, uint16_t type);
+    bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
 
