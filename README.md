@@ -187,6 +187,46 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 ```
 
 Для `wss://` (страница игры по HTTPS) поставьте перед сервером TLS-прокси (nginx, Caddy).
+## Звук
+
+`engine/audio` — микшер, банки звуков из данных, процедурный синтез, музыка; вывод через
+[miniaudio](third_party/miniaudio) (CoreAudio, AAudio/OpenSL ES, Web Audio, WASAPI, ALSA/PulseAudio).
+`modules/rts/audio` превращает события симуляции в звуки; в симуляцию ничего не пишет.
+Нет устройства — игра идёт молча. Нет `audio.json` — игра просто без звука.
+
+Звук игры — файл `audio.json` рядом с `game.json` (другое имя: `"audio"` в game.json):
+
+```jsonc
+{
+  "volume": { "sfx": 0.9, "music": 0.6, "voice": 1, "ui": 0.7, "ambient": 0.7 },
+  "sounds": {
+    "sword": { "files": ["sfx/sword1.ogg", "sfx/sword2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 3, "cooldown": 0.06 },
+    "alarm": { "file": "voice/under_attack.ogg", "bus": "voice", "priority": 10 },
+    "blip":  { "synth": { "wave": "square", "freq": [880, 440], "duration": 0.08 }, "bus": "ui" }
+  },
+  "music":     { "menu": "music/menu.ogg", "match": { "files": ["music/a.ogg", "music/b.ogg"], "shuffle": true } },
+  "events":    { "died": "death", "underAttack": "alarm", "notEnough.gold": "need_gold" },
+  "weapons":   { "bow": { "attack": "bow_release", "hit": "arrow_hit" } },
+  "abilities": { "heal": "heal_cast" },
+  "types":     { "footman": { "select": "footman_what", "move": "footman_yes", "died": "death_human" } }
+}
+```
+
+| Что | Смысл |
+|---|---|
+| форматы | WAV, OGG Vorbis, MP3, FLAC; `"synth"` — звук из параметров (`sine/square/saw/triangle/noise`, свип частоты, огибающая, вибрато, фильтр, слои) |
+| шины | `sfx` и `ambient` — позиционные (затухание и панорама от камеры), `voice`, `ui`, `music` — нет |
+| `maxInstances`, `cooldown`, `priority` | прореживание в больших боях: 40 лучников не дают 40 одинаковых выстрелов |
+| события (cues) | `attack hit miss died spawned trainStarted ready buildPlaced buildDone gathered captured lost playerDefeated victory defeat notEnough notEnoughSupply noRoom researched levelUp ability readyToPlace sold regionClaimed wave lowPower upgraded message underAttack baseUnderAttack select move attackOrder buildOrder click error` |
+| поиск звука | тип → оружие/способность по id → `events` |
+| музыка | плейлисты `menu`, `match`, `battle` (включается при сильном бое у камеры), `victory`, `defeat`; кроссфейд |
+
+Звуки боя слышны только там, где нет тумана войны; «нас атакуют» — с паузой, и только если камера
+смотрит в другое место. Громкость (общая и музыка) — в меню паузы, хранится в `userDataDir/audio.cfg`.
+На телефоне при сворачивании звук ставится на паузу.
+
+Отладка без звуковой карты: `RTS_AUDIO=null` (настоящий аудиопоток без железа), `RTS_AUDIO=off`,
+`RTS_AUDIO_CAPTURE=/tmp/mix.wav` — записать всё, что прозвучало, в WAV.
 
 ## Проверено / не проверено
 
