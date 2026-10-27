@@ -154,7 +154,7 @@ bool LineClient::recv(std::string& line, int timeoutMs) {
         auto left = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
         if (left <= 0) return false;
         fd_set rset; FD_ZERO(&rset); FD_SET(fd_, &rset);
-        timeval tv{long(left / 1000), long((left % 1000) * 1000)};
+        timeval tv{}; tv.tv_sec = decltype(tv.tv_sec)(left / 1000); tv.tv_usec = decltype(tv.tv_usec)((left % 1000) * 1000);
         if (::select(int(fd_ + 1), &rset, nullptr, nullptr, &tv) <= 0) continue;
         auto n = ::recv(fd_, buf, sizeof buf, 0);
         if (n > 0) buf_.append(buf, size_t(n));
