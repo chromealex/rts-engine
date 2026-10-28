@@ -40,6 +40,9 @@ metaltide 3 93b1d9ab75ce04df
 mushrooms 1 bbfe332df695fcd2
 mushrooms 2 48b1f14b8a4f69f3
 mushrooms 3 e8eb203507071c8c
+planets 1 79c78462f5659a87
+planets 2 7c09f18b61f84f55
+planets 3 9f1625813ff3ad35
 scripted 1 31c2235e06bcf4ee
 scripted 2 881359ce35e97b4c
 scripted 3 4540ad57e7f0b57c
