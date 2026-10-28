@@ -98,7 +98,13 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             }
         }
     }
-    // ---- upkeep with resource masks and income multipliers
+    // ---- upkeep with resource masks and income multipliers; "upkeepResources" (agent-mech alias): the resources of
+    // every tier without its own "resources"
+    uint32_t upkeepDefault = 0xFFFFFFFFu;
+    if (j.has("upkeepResources")) {
+        upkeepDefault = 0;
+        for (auto& rs : j["upkeepResources"].items()) upkeepDefault |= 1u << resId(r, "upkeepResources", rs.str());
+    }
     if (j["upkeep"].isArray()) {
         r.upkeep.clear();
         for (auto& u : j["upkeep"].items()) {
@@ -106,6 +112,7 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             t.supply = u.getFx("supply");
             t.gatherMult = u.getFx("gatherMult", t.gatherMult);
             t.incomeMult = u.getFx("incomeMult", t.incomeMult);
+            t.resMask = upkeepDefault;
             if (u.has("resources")) {
                 t.resMask = 0;
                 for (auto& rs : u["resources"].items()) t.resMask |= 1u << resId(r, "upkeep.resources", rs.str());

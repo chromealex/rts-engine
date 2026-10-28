@@ -324,11 +324,6 @@ void loadMechRules(Rules& r, const Json& j) {
         if (m.vet.xp.empty()) fail("veterancy.xp", "needs at least one rank");
         m.any = m.veterancy = true;
     }
-    for (auto& rs : j["upkeepResources"].items()) {
-        int ri = r.findResource(rs.str());
-        if (ri < 0) fail("upkeepResources", "unknown resource '" + rs.str() + "'");
-        m.upkeepMask |= 1u << ri;
-    }
     size_t ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];

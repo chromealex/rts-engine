@@ -296,18 +296,12 @@ void RtsModule::applyLearn(Simulation& sim, Entity e, int index) {
 
 // ================================================================= economy
 
-// Gather multiplier (upkeep) of a player for a resource. Two models merged from parallel work:
-// originals: per-resource multipliers; agent-mech: upkeep applies only to rules mech.upkeep resources.
+// Gather multiplier (upkeep) of a player for a resource: per resource when tiers name resources (economyOriginals).
 Fixed RtsModule::gatherMultFor(Simulation& sim, uint8_t player, int res) const {
     auto* gs = sim.world().resource<GameState>();
     if (player >= gs->players.size()) return kOne;
     const auto& p = gs->players[player];
-    if (rules_.originals) {
-        if (res >= 0 && size_t(res) < p.gatherMultRes.size()) return p.gatherMultRes[size_t(res)];
-        return p.gatherMult;
-    }
-    const uint32_t mask = rules_.mech.upkeepMask;
-    if (mask && (res < 0 || !(mask & (1u << res)))) return kOne;
+    if (rules_.originals && res >= 0 && size_t(res) < p.gatherMultRes.size()) return p.gatherMultRes[size_t(res)];
     return p.gatherMult;
 }
 

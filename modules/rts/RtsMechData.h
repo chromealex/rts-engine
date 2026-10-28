@@ -117,7 +117,6 @@ struct MechRules {
     bool vetHeal = true;                   // rank up heals fully
     Fixed vetFromCost = Fixed::fromInt(1); // xp for a kill without "xp": victim cost x this
     bool shields = false;
-    uint32_t upkeepMask = 0;               // resources upkeep applies to (0 = all gathering)
     bool workerCaps = false;
     // stage 2
     bool walls = false, gates = false, bridges = false, tunnels = false, ammo = false, merge = false;

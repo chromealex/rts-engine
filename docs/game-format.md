@@ -888,7 +888,7 @@ These keys come from agent-mech; they are parsed into the single implementation 
 "armorModel": "percent",                                               // = "armor": {"model": "percent", "negative": "exponential"}; "factor" = perPoint
 "armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // = "armor": {"model": "subtract", "minShare": 0.2, "minDamage": 0}
 "armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // = "armor": {"model": "classes", "base": [...], "minDamage": 1}
-"upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
+"upkeepResources": ["gold"],                                            // = "resources" of every upkeep tier that names none (Warcraft III)
 "types": {
   "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
   "knight":   {"armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
@@ -1548,7 +1548,7 @@ uses none of them keeps its exact checksums.
 | weapon `bonus` | type | `{"cavalry": 15, "armored": 10}` extra damage vs types with the tag, added before armor (AoE / SC2 bonuses) |
 | `health.shields` | type | shields soak damage first (`shieldArmor`), recharge `shieldRegen` per second after `shieldDelay` seconds without hits (StarCraft) |
 | `heroes` | rules | `{"skills": true, "max": 3, "freeFirst": true, "tiers": ["hall", "keep", "castle"], "revive": {"costShare": 0.4, "perLevel": 0.1, "timeShare": 0.6, "maxTime": 110, "maxCost": {"gold": 700}}}` — skill points (one at start, one per level; command `kCmdLearn`), ability `"learnAt": [1, 3, 5]` (default) / `[6]` (ultimate); hero n needs a structure from `tiers[n-1..]`; a dead hero is trained again as a revive (its level and skills, cheaper) |
-| `upkeep[].resources`, `incomeMult` | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower) |
+| `upkeep[].resources`, `incomeMult` (alias `upkeepResources`) | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower); rules `"upkeepResources": ["gold"]` is the default `resources` of every tier without its own |
 | `resourceNode.maxGatherers` | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
 | `powerField` / `structure.needsField` | type | `{"id": 0, "radius": 6.5}` on pylons; structures with `needsField` are placed and work only inside an own field |
 | `queueSlots` | type | items produced at once (reactor) |
