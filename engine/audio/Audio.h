@@ -89,15 +89,9 @@ struct SoundDef {
     bool spatial = true;    // attenuated and panned around the listener when played at a position
     DistanceDef distance;   // from the bank's "spatial" defaults plus the sound's own keys
     SoundId far = kNoSound; // distant variant crossfaded in towards max distance ("far")
+    float duckMusic = 0;    // music is lowered by this fraction while the sound plays (voice: 0.4)
+    uint8_t sync = 0;       // stingers: 0 now, 1 next beat, 2 next bar of the playing music
     float farFrom = 0.3f;   // fraction of the distance range where the crossfade starts
-};
-
-struct MusicDef {
-    std::string name;
-    std::vector<std::string> files;
-    bool shuffle = false;
-    bool loop = true;       // loop the playlist
-    float volume = 1.0f;
 };
 
 struct PlayParams {
@@ -178,6 +172,10 @@ public:
     bool playMusic(std::string_view name, float fadeSeconds = 1.5f);
     void stopMusic(float fadeSeconds = 1.5f);
     const std::string& currentMusic() const;
+    bool musicHasLayers(std::string_view name) const;
+    // Adaptive music: 0..1 (smoothed over ~1.5 s). Layers fade in as it passes their "intensity".
+    void setMusicIntensity(float v);
+    float musicIntensity() const;
 
     // ---- volumes: user settings on top of the bank's mix (0..1)
     void setMasterVolume(float v);
@@ -206,5 +204,8 @@ private:
 
 // Decodes WAV/OGG/MP3/FLAC bytes into a Clip. Returns false with a reason.
 bool decodeClip(const std::string& bytes, Clip& out, std::string& error);
+// Same, converted on the way: `channels` 1 or 2 (0 = keep, surround is downmixed to stereo),
+// `sampleRate` (0 = keep). Used by the build tools to downmix and resample before encoding.
+bool decodeClipAs(const std::string& bytes, int channels, int sampleRate, Clip& out, std::string& error);
 
 } // namespace rts::audio

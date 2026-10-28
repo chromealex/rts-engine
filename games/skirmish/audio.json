@@ -13,6 +13,12 @@
     "reverb": { "size": 0.6, "damping": 0.45, "wet": 0.4, "near": 0.04, "far": 0.65 }
   },
 
+  // Build-time compression per platform (sound files only; the synth sounds here have none).
+  "build": {
+    "desktop": { "sounds": "keep", "music": "vorbis", "musicQuality": 0.6 },
+    "mobile":  { "sounds": "adpcm", "music": "vorbis", "musicQuality": 0.3, "maxRate": 32000 }
+  },
+
   "sounds": {
     // ---- weapons
     "swing":       { "synth": { "wave": "noise", "freq": [9000, 2500], "duration": 0.11, "attack": 0.02, "release": 0.08, "lowpass": 5000, "volume": 0.35 },

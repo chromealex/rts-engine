@@ -209,7 +209,7 @@ void GameClient::startMatch(size_t idx) {
     mode_ = Mode::Normal;
     setScreen(Screen::Playing);
     audio_.stopAll(0.1f);
-    sound_.attach(*sim_, spectator_ ? 0 : human_);
+    sound_.attach(*sim_, spectator_ ? 0 : human_, maps_[idx].file);
     heardSelection_.clear();
 }
 

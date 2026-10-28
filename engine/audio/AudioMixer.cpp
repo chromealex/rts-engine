@@ -94,6 +94,8 @@ void Mixer::configure(int sampleRate, int maxVoices, bool reverb) {
     work_.reserve(256);
     tmp_.assign(size_t(kBlock) * 2, 0.0f);
     send_.assign(size_t(kBlock), 0.0f);
+    track_.assign(size_t(kBlock) * 2, 0.0f);
+    pendingMusic_.reset();
     reverbAllowed_ = reverb;
     env_ = Environment{};
     if (reverbAllowed_) reverb_.configure(rate_, env_.reverbSize, env_.reverbDamping);
@@ -167,6 +169,9 @@ void Mixer::startVoice(MixCmd& c) {
     v.pairDistance = c.pairDistance;
     v.pairFrom = c.pairFrom;
     v.delay = c.delayFrames;
+    v.duck = c.duck;
+    if (c.sync != Quantize::Now && music_[0]->active) // stingers land on the music's beat / bar
+        v.delay += uint32_t(std::max<int64_t>(0, framesToNext(*music_[0], c.sync)));
     if (c.fade > 0) { v.fade = 0; v.fadeStep = 1.0f / (c.fade * float(rate_)); }
 }
 
@@ -193,33 +198,21 @@ void Mixer::apply(MixCmd& c) {
         master_ = c.master;
         break;
     case MixCmd::Music: {
-        Stream& cur = *music_[0];
-        if (cur.active && cur.list && c.playlist && cur.list->name == c.playlist->name && cur.target > 0) break;
-        const float frames = std::max(1.0f, c.fade * float(rate_));
-        if (cur.active) {
-            std::swap(music_[0], music_[1]);   // current starts fading out
-            Stream& old = *music_[1];
-            old.target = 0;
-            old.step = -std::max(old.gain, 0.0001f) / frames;
+        const Stream& cur = *music_[0];
+        if (cur.active && cur.list && c.playlist && cur.list->name == c.playlist->name && cur.target > 0) { pendingMusic_.reset(); break; }
+        // leaving a playlist with a beat grid waits for its next beat / bar, so the music cuts musically
+        if (cur.active && cur.list && cur.list->bpm > 0 && cur.list->transition != Quantize::Now) {
+            pendingDelay_ = framesToNext(cur, cur.list->transition);
+            pendingMusic_ = std::make_unique<MixCmd>(std::move(c));
+            break;
         }
-        Stream& s = *music_[0];
-        s.dec.close();
-        s.list = std::move(c.playlist);
-        s.active = false;
-        if (!s.list || s.list->tracks.empty()) break;
-        const size_t n = s.list->tracks.size();
-        s.order.resize(n);
-        for (size_t i = 0; i < n; ++i) s.order[i] = i;
-        if (s.list->shuffle) for (size_t i = n - 1; i > 0; --i) std::swap(s.order[i], s.order[nextRandom() % (i + 1)]);
-        s.index = 0;
-        if (!openTrack(s)) break;
-        s.active = true;
-        s.gain = 0;
-        s.target = s.list->volume;
-        s.step = s.target / frames;
+        pendingMusic_.reset();
+        startMusic(c);
         break;
     }
+    case MixCmd::SetIntensity: intensityTarget_ = std::clamp(c.intensity, 0.0f, 1.0f); break;
     case MixCmd::StopMusic: {
+        pendingMusic_.reset();
         const float frames = std::max(1.0f, c.fade * float(rate_));
         for (auto& m : music_) if (m->active) { m->target = 0; m->step = -std::max(m->gain, 0.0001f) / frames; }
         break;
@@ -230,6 +223,11 @@ void Mixer::apply(MixCmd& c) {
 void Mixer::mixVoices(float* buf, float* send, int n) {
     const float inv = 1.0f / 32768.0f;
     const bool reverbOn = reverbAllowed_ && env_.reverb;
+    // ducking: music goes down quickly under announcements and comes back slowly
+    float duckTarget = 0;
+    for (auto& v : voices_) if (v.active && !v.stopping && v.delay == 0) duckTarget = std::max(duckTarget, v.duck);
+    const float duckCoef = duckTarget > duck_ ? 1.0f - std::exp(-float(n) / (0.05f * float(rate_))) : 1.0f - std::exp(-float(n) / (0.6f * float(rate_)));
+    duck_ += (duckTarget - duck_) * duckCoef;
     for (auto& v : voices_) {
         if (!v.active) continue;
         const float base = v.volume * gains_[size_t(v.bus)] * masterCur_;
@@ -303,48 +301,143 @@ void Mixer::mixVoices(float* buf, float* send, int n) {
     }
 }
 
+void Mixer::startMusic(MixCmd& c) {
+    const float frames = std::max(1.0f, c.fade * float(rate_));
+    if (music_[0]->active) {
+        std::swap(music_[0], music_[1]);   // current starts fading out
+        Stream& old = *music_[1];
+        old.target = 0;
+        old.step = -std::max(old.gain, 0.0001f) / frames;
+    }
+    Stream& s = *music_[0];
+    s.layers.clear();
+    s.list = std::move(c.playlist);
+    s.active = false;
+    if (!s.list || (s.list->tracks.empty() && s.list->layers.empty())) return;
+    const size_t n = s.list->tracks.size();
+    s.order.resize(n);
+    for (size_t i = 0; i < n; ++i) s.order[i] = i;
+    if (s.list->shuffle && n > 1) for (size_t i = n - 1; i > 0; --i) std::swap(s.order[i], s.order[nextRandom() % (i + 1)]);
+    s.index = 0;
+    if (!openTrack(s)) return;
+    s.active = true;
+    s.gain = 0;
+    s.target = s.list->volume;
+    s.step = s.target / frames;
+}
+
+bool Mixer::openLayers(Stream& s, const std::vector<MusicTrack>& defs, float loopStart, float loopEnd) {
+    s.layers.clear();
+    for (auto& d : defs) {
+        auto l = std::make_unique<Layer>();
+        if (!d.bytes || !l->dec.open(d.bytes, rate_)) continue;
+        l->threshold = d.intensity;
+        l->gain = d.intensity <= 0 || intensity_ >= d.intensity ? 1.0f : 0.0f;
+        s.layers.push_back(std::move(l));
+    }
+    s.pos = 0;
+    s.loopStart = loopStart >= 0 ? int64_t(double(loopStart) * rate_) : -1;
+    s.loopEnd = loopEnd > 0 ? int64_t(double(loopEnd) * rate_) : 0;
+    if (s.loopEnd > 0 && s.loopStart >= s.loopEnd) s.loopStart = -1;
+    return !s.layers.empty();
+}
+
 bool Mixer::openTrack(Stream& s) {
-    const size_t n = s.list ? s.list->tracks.size() : 0;
+    const Playlist& list = *s.list;
+    if (!list.layers.empty()) return openLayers(s, list.layers, std::max(0.0f, list.layerLoopStart), list.layerLoopEnd);  // stems always loop
+    const size_t n = list.tracks.size();
     for (size_t attempt = 0; attempt < n; ++attempt) {
         if (s.index >= n) {
-            if (!s.list->loop) return false;
+            if (!list.loop) return false;
             s.index = 0;
-            if (s.list->shuffle && n > 1) { // reshuffle, avoiding an immediate repeat
-                size_t last = s.order.back();
+            if (list.shuffle && n > 1) { // reshuffle, avoiding an immediate repeat
+                const size_t last = s.order.back();
                 for (size_t i = n - 1; i > 0; --i) std::swap(s.order[i], s.order[nextRandom() % (i + 1)]);
                 if (s.order[0] == last) std::swap(s.order[0], s.order[n - 1]);
             }
         }
-        const auto& bytes = s.list->tracks[s.order[s.index++]];
-        if (bytes && s.dec.open(bytes, rate_)) return true;
+        const MusicTrack& t = list.tracks[s.order[s.index++]];
+        if (openLayers(s, {t}, t.loopStart, t.loopEnd)) return true;
     }
     return false;
 }
+
+bool Mixer::loopBack(Stream& s) {
+    const int64_t to = std::max<int64_t>(0, s.loopStart);
+    for (auto& l : s.layers) if (!l->dec.seek(to)) return false;
+    s.pos = to;
+    return true;
+}
+
+int64_t Mixer::framesToNext(const Stream& s, Quantize q) const {
+    if (!s.list || s.list->bpm <= 0 || q == Quantize::Now) return 0;
+    const double beat = double(rate_) * 60.0 / double(s.list->bpm);
+    const double unit = q == Quantize::Bar ? beat * std::max(1, s.list->beatsPerBar) : beat;
+    const double t = double(s.pos) - double(s.list->offset) * rate_;
+    if (t < 0) return int64_t(-t);
+    const double rem = unit - std::fmod(t, unit);
+    return rem >= unit - 0.5 ? 0 : int64_t(rem);
+}
+
+// Mixes the playing track's layers into `out` (stereo, n frames, added). Loops A-B; returns the
+// frames produced: fewer than n means the track ended.
+int Mixer::readTrack(Stream& s, float* out, int n) {
+    const bool loops = s.loopStart >= 0;
+    int done = 0, jumps = 0;
+    while (done < n && !s.layers.empty()) {
+        int want = n - done;
+        if (s.loopEnd > 0) want = int(std::min<int64_t>(want, s.loopEnd - s.pos));
+        if (want <= 0) { if (!loops || ++jumps > 4 || !loopBack(s)) break; continue; }
+        int got = want;
+        for (auto& l : s.layers) {
+            const float target = l->threshold <= 0 ? 1.0f : std::clamp((intensity_ - l->threshold) / 0.15f + 0.5f, 0.0f, 1.0f);
+            const float dg = (target - l->gain) / float(want);
+            float g = l->gain;
+            const int r = l->dec.read(tmp_.data(), want);
+            for (int k = 0; k < r; ++k) {
+                g += dg;
+                out[(done + k) * 2] += tmp_[size_t(k) * 2] * g;
+                out[(done + k) * 2 + 1] += tmp_[size_t(k) * 2 + 1] * g;
+            }
+            l->gain = target;
+            got = std::min(got, r);
+        }
+        s.pos += got;
+        done += got;
+        if (got < want) { // end of file: loop, or the track is over
+            if (!loops || ++jumps > 4 || !loopBack(s)) break;
+        }
+    }
+    return done;
+}
+
 void Mixer::mixStream(Stream& s, float* buf, int n) {
     if (!s.active) return;
-    const float bus = gains_[size_t(Bus::Music)] * masterCur_;
+    const float bus = gains_[size_t(Bus::Music)] * masterCur_ * (1.0f - duck_);
     int done = 0, reopened = 0;
     while (done < n && s.active) {
         const int want = n - done;
-        const int got = s.dec.isOpen() ? s.dec.read(tmp_.data(), want) : 0;
+        std::fill(track_.begin(), track_.begin() + size_t(want) * 2, 0.0f);
+        const int got = readTrack(s, track_.data(), want);
         for (int k = 0; k < got; ++k) {
             if (s.step != 0) {
                 s.gain += s.step;
                 if ((s.step > 0 && s.gain >= s.target) || (s.step < 0 && s.gain <= s.target)) { s.gain = s.target; s.step = 0; }
             }
             const float g = s.gain * bus;
-            buf[(done + k) * 2] += tmp_[size_t(k) * 2] * g;
-            buf[(done + k) * 2 + 1] += tmp_[size_t(k) * 2 + 1] * g;
+            buf[(done + k) * 2] += track_[size_t(k) * 2] * g;
+            buf[(done + k) * 2 + 1] += track_[size_t(k) * 2 + 1] * g;
         }
         done += got;
-        if (s.target <= 0 && s.step == 0 && s.gain <= 0) { s.dec.close(); s.active = false; break; }
+        if (s.target <= 0 && s.step == 0 && s.gain <= 0) { s.layers.clear(); s.active = false; break; }
         if (got < want) { // track ended inside this block: continue with the next one
-            s.dec.close();
+            s.layers.clear();
             // a playlist of empty/broken tracks must not spin forever inside the audio callback
-            if (++reopened > int(s.list->tracks.size()) || !openTrack(s)) { s.active = false; break; }
+            if (++reopened > int(s.list->tracks.size()) + 1 || !openTrack(s)) { s.active = false; break; }
         }
     }
 }
+
 // Big battles stack dozens of sounds: a peak limiter (instant attack per block, ~0.3 s release)
 // keeps the mix under the soft-clip knee instead of letting it saturate.
 void Mixer::limit(float* buf, int n) {
@@ -382,6 +475,11 @@ void Mixer::render(float* out, int frames) {
         // master follows its target over ~one block (mute/unmute without clicks)
         masterCur_ += (master_ - masterCur_) * 0.5f;
         if (std::fabs(master_ - masterCur_) < 1e-4f) masterCur_ = master_;
+        if (pendingMusic_) { // a quantized playlist switch
+            pendingDelay_ -= n;
+            if (pendingDelay_ <= 0) { startMusic(*pendingMusic_); pendingMusic_.reset(); }
+        }
+        intensity_ += (intensityTarget_ - intensity_) * (1.0f - std::exp(-float(n) / (1.5f * float(rate_))));
         mixVoices(buf, send_.data(), n);
         if (reverbAllowed_ && env_.reverb) reverb_.process(send_.data(), buf, n, env_.reverbWet * masterCur_);
         for (auto& m : music_) mixStream(*m, buf, n);
