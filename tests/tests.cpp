@@ -9370,6 +9370,7 @@ TEST(gen_planet_world_players) {
 
 // ---------------- Lua scripting (scripting agent) ----------------
 #include "modules/rts/RtsScript.h"
+#include "modules/rts/RtsScriptInternal.h"
 #include <fstream>
 #include <iterator>
 
@@ -9496,6 +9497,7 @@ TEST(script_state_hashed_and_rollback) {
     mod(*b).state(*b).trig.vars["step"] = Fixed::fromInt(2);
     mod(*a).state(*a).trig.vars["step"] = Fixed::fromInt(2);
     a->step(); b->step();
+    b->checksum();                  // state reaches the world lazily (when observed)
     CHECK(sb->state != before);
     // rollback: save, run ahead, load, re-run -> identical to a straight run
     SimSnapshot snap;
@@ -9757,6 +9759,89 @@ TEST(lua_lab_prototypes) {
         return s->checksum();
     };
     CHECK(run(3) == run(3));
+}
+
+// ---- G3: per-entity data (game.data) and lazily persisted state
+static const char* kDataScript = R"(
+    function on_start()
+      for _, h in ipairs(game.units{owner = 1}) do game.data(h).morale = 10 end
+      state.ticks = 0
+    end
+    on("tick", function(tick)
+      state.ticks = state.ticks + 1
+      for _, h in ipairs(game.units{has = "morale"}) do
+        local d = game.data(h)
+        d.morale = d.morale + (tick % 3 == 0 and 1 or 0)
+        if tick % 7 == 0 then d.hist = d.hist or {}; d.hist[#d.hist + 1] = fx(tick, 3) end
+      end
+      if tick == 40 then
+        local h = game.units{has = "morale"}[1]
+        game.data(h).marked = true
+      end
+    end)
+)";
+static int sumMorale(Simulation& sim) {
+    int total = 0, n = 0;
+    sim.world().each<game::ScriptData>([&](Entity, game::ScriptData& d) { if (game::script::blobHasKey(d.blob, "morale")) ++n; });
+    total = n;
+    return total;
+}
+TEST(script_g3_entity_data) {
+    auto a = scriptSim({{"scripts/d.lua", kDataScript}});
+    auto b = scriptSim({{"scripts/d.lua", kDataScript}});
+    for (int i = 0; i < 30; ++i) { a->step(); b->step(); }
+    CHECK(a->checksum() == b->checksum());
+    CHECK(sumMorale(*a) > 0);
+    CHECK(mod(*a).scripts()->errorCount() == 0);
+    // data is part of the hash
+    {
+        auto c = scriptSim({{"scripts/d.lua", kDataScript}});
+        for (int i = 0; i < 30; ++i) c->step();
+        const uint64_t c0 = c->checksum();
+        int nn = 0;
+        c->world().each<game::ScriptData>([&](Entity, game::ScriptData& d) { d.hash ^= 1; ++nn; });
+        CHECK(nn > 0 && c0 == a->checksum());   // flushed data, then a change only in the world
+        CHECK(c->checksum() != a->checksum());
+    }
+    // rollback: save, run ahead, load, run again == straight run
+    SimSnapshot snap;
+    b->saveState(snap);
+    for (int i = 0; i < 25; ++i) b->step();
+    const uint64_t ahead = b->checksum();
+    b->loadState(snap);
+    for (int i = 0; i < 25; ++i) { b->step(); a->step(); }
+    CHECK(b->checksum() == ahead && a->checksum() == ahead);
+    // save state bytes: load into a fresh simulation and continue identically
+    std::string bytes = a->serialize(), err;
+    auto c = scriptSim({{"scripts/d.lua", kDataScript}});
+    CHECK(c->deserialize(bytes, &err));
+    CHECK(c->checksum() == a->checksum());
+    for (int i = 0; i < 20; ++i) { a->step(); c->step(); }
+    CHECK(c->checksum() == a->checksum());
+    // data dies with its entity; the filter sees it
+    Entity some;
+    a->world().each<game::ScriptData>([&](Entity e, game::ScriptData&) { if (!some.valid()) some = e; });
+    CHECK(some.valid());
+    a->world().get<game::Unit>(some).hp = Fixed{};
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(!a->world().alive(some));
+    CHECK(mod(*a).scripts()->errorCount() == 0 && mod(*c).scripts()->errorCount() == 0);
+}
+
+TEST(script_g3_state_lazy_flush) {   // state is written into the world only when observed, still exact
+    auto a = scriptSim({{"scripts/d.lua", kDataScript}});
+    for (int i = 0; i < 50; ++i) a->step();
+    auto* st = a->world().resource<game::ScriptStore>();
+    const std::string before = st->state;          // last flush: setup
+    a->checksum();                                 // flushes
+    CHECK(st->state != before);
+    // a value that can't be stored is left out, logged, and the game goes on
+    auto b = scriptSim({{"scripts/e.lua", "on('tick', function(t) state.f = function() end; state.n = t end)"}});
+    for (int i = 0; i < 5; ++i) b->step();
+    b->checksum();
+    CHECK(scriptLogHas(*b, "can't be kept in state"));
+    CHECK(game::script::blobHasKey(b->world().resource<game::ScriptStore>()->state, "n"));
+    CHECK(!game::script::blobHasKey(b->world().resource<game::ScriptStore>()->state, "f"));
 }
 
 int main() {

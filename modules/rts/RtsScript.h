@@ -48,8 +48,11 @@ using ScriptReader = std::function<bool(const std::string& relativePath, std::st
 
 // Script state of a match (a World resource, present only in games with scripts).
 struct ScriptStore {
-    std::string state;                          // canonical serialization of the `state` table
-    uint64_t serial = 0;                        // write stamp: the VM restores `state` when it differs
+    std::string state;                          // canonical serialization of the `state` table (flushed lazily:
+                                                // before checksums, snapshots and saves - ScriptEngine::flush)
+    uint64_t serial = 0;                        // epoch stamp written by the VM when it enters a tick: a different
+                                                // value means the world was replaced (rollback / load), so the VM
+                                                // restores `state` and the per-entity data from the world
     bool started = false;                       // "start" handlers ran
     std::vector<uint8_t> disabled;              // per handler: switched off after an error
     std::vector<std::string> disabledFns;       // functions called from data that failed (sorted)
@@ -60,6 +63,14 @@ struct ScriptStore {
     bool userScripts = false;                   // the game has its own simulation scripts: hashed only then (the
                                                 // standard library keeps its state in the C++ GameState)
     void hash(Hasher& h) const;
+};
+
+// Per-entity Lua data (game.data(h)): canonical serialization of the entity's table, written when the
+// table changed (flush), hashed through `hash`, saved with the world, gone with the entity.
+struct ScriptData {
+    std::string blob;
+    uint64_t hash = 0;     // FNV-1a of blob (hashState feeds entity + hash)
+    uint64_t serial = 0;   // VM write stamp (not saved, not hashed): the VM's cached table is current when equal
 };
 
 struct ScriptLogEntry {
@@ -101,6 +112,9 @@ public:
     // Extra integer arguments follow the tick (entities as packed handles).
     void callStd(Simulation& sim, StdFn fn, std::initializer_list<int64_t> args = {});
     bool hasUserScripts() const { return userScripts_; }
+    // Writes the VM's `state` and changed entity data into the world (ScriptStore / ScriptData). Called
+    // before checksums, rollback snapshots and saves; cheap when nothing changed.
+    void flush(Simulation& sim);
 
     // Entry points for data: trigger condition / action {"type": "script", "fn": ...} and the ability
     // effect {"type": "script", "fn": ...} (queued, runs in this tick's scripts phase).

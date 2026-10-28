@@ -1374,7 +1374,9 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    if (script_) script_->flush(sim);                         // lazily persisted Lua state (RtsScriptEngine.cpp)
     if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
+    if (w.count<ScriptData>()) w.each<ScriptData>([&](Entity e, ScriptData& d) { h.u64(e.packed()); h.u64(d.hash); });   // game.data
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);

@@ -57,6 +57,9 @@ public:
     // Save states: write / read the module's dynamic state (World pools and resources). The reading side runs
     // on a simulation set up from the same rules and map. Default: not supported.
     virtual bool serializeState(Simulation&, Archive&) { return false; }
+    // Called before the world is copied or hashed (rollback snapshots, checksums): a module that keeps
+    // state outside the World lazily (scripting VM) writes it in now.
+    virtual void prepareSnapshot(Simulation&) {}
 };
 
 // Everything that changes while the simulation runs (rollback netcode saves one per tick).
@@ -108,7 +111,7 @@ public:
     uint64_t checksum();
 
     // Rollback support. loadState() also drops executed commands recorded after the snapshot.
-    void saveState(SimSnapshot& out) const;
+    void saveState(SimSnapshot& out);
     void loadState(const SimSnapshot& in);
     // Save states in bytes: identical on every platform, versioned, checked by the state checksum on load.
     // Load into a simulation set up from the same rules + map (and seed); false (state untouched on a bad header,

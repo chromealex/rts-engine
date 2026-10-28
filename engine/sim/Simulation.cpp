@@ -100,7 +100,8 @@ int Simulation::advance(double realSeconds, int maxTicks) {
     return n;
 }
 
-void Simulation::saveState(SimSnapshot& out) const {
+void Simulation::saveState(SimSnapshot& out) {
+    module_->prepareSnapshot(*this);
     out.world = world_;
     out.rng = rng_;
     out.tick = tick_;

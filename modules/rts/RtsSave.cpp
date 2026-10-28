@@ -106,6 +106,7 @@ void io(Archive& a, WaveDef& x) { a(x.tick, x.player, x.spawn, x.at, x.spread, x
 void io(Archive& a, RoomZone& x) { a(x.type, x.owner, x.cells, x.center); }
 void io(Archive& a, PlayerAbilityState& x) { a(x.readyAt, x.charges, x.rearm, x.owned, x.level, x.stolenUntil, x.pendingAt, x.pendingPoint, x.pendingTarget, x.nextAuto); }
 void io(Archive& a, VictoryRules& x) { a(x.mode, x.tickets, x.ticketDrain, x.surviveSeconds, x.keyLoses, x.share); }
+void io(Archive& a, ScriptData& x) { a(x.blob, x.hash); x.serial = 0; }   // scripting: game.data (serial: VM-side only)
 void io(Archive& a, ScriptStore::Timer& x) { a(x.tick, x.seq, x.fn, x.arg); }   // scripting (RtsScript.h)
 void io(Archive& a, ScriptStore& x) { a(x.state, x.started, x.disabled, x.disabledFns, x.inside, x.timers, x.timerSeq); }
 void io(Archive& a, TriggerState& x) { a(x.enabled, x.fired, x.inside, x.edge, x.vars, x.messages, x.started); }
@@ -195,13 +196,14 @@ using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, P
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
                         Stance, Retreating, Transport, Boarded, Veteran, RallyPath, MechShield, Shield, Eater, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
                         Suppression, Turret, Abandoned, GrowState, Morale,
-                        Weathering, TrapState, TeleportBack, Belt, Crafter, TurnBudget, Altitude>;
+                        Weathering, TrapState, TeleportBack, Belt, Crafter, TurnBudget, Altitude, ScriptData>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {
     World& w = sim.world();
     GameState& gs = state(sim);
     if (a.writing()) {
+        if (script_) script_->flush(sim);   // Lua state / entity data are written into the world lazily
         // every component type the world has must be in kPools (+1: the GameState resource is not a pool)
         kPools::touch(w);   // creates the listed pools that don't exist yet
     }

@@ -42,6 +42,9 @@ struct Vm {
     std::map<std::string, std::string> sources;   // path -> text (require)
     std::function<void(bool error, const std::string& text)> log;
     void* owner = nullptr;                  // ScriptEngine::Impl / view host
+    // per-entity data (game.data), provided by the simulation engine; view VMs read the stored copy
+    std::function<void(Entity)> pushData;
+    std::function<bool(Entity, const char*)> dataHas;
 
     ~Vm();
     bool open(Mode m, size_t memLimit);     // new state + sandbox
@@ -77,10 +80,13 @@ std::string fxText(Fixed v);            // integer-only decimal formatting ("1.2
 // ---- values
 void pushJson(lua_State* L, const Json& j);      // numbers: integer when whole, fx otherwise
 // Canonical serialization of the value at idx (bool, integer, fx, string, nested tables with
-// integer/string keys, sorted). False with `where` = path of the offending value.
-bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int depth = 0);
+// integer/string keys, sorted). False with `where` = path of the offending value. lenient: values that
+// can't be stored are left out (`where` = the first one) and the rest is written.
+bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int depth = 0, bool lenient = false);
 // Pushes the value; returns the read position (0 on malformed input, pushes nil).
 size_t deserialize(lua_State* L, const std::string& in, size_t pos = 0, int depth = 0);
+// Does a serialized table have this (string) key at its top level? (no Lua state needed)
+bool blobHasKey(const std::string& blob, const char* key);
 // Source scan for float literals (sim scripts): "" or "line N: ...".
 std::string findFloatLiteral(const std::string& text);
 // Load a chunk (text only) into the VM; pushes the function or returns false with message.

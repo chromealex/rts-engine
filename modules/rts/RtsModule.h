@@ -474,6 +474,7 @@ public:
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
     void hashState(Simulation& sim, Hasher& h) override;
+    void prepareSnapshot(Simulation& sim) override { if (script_) script_->flush(sim); }
     bool serializeState(Simulation& sim, Archive& a) override;   // RtsSave.cpp
     int result(Simulation& sim) override;
 

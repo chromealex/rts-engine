@@ -530,7 +530,7 @@ uint64_t getU64(const std::string& in, size_t pos) {
 struct Key { int kind; int64_t i; std::string s; };   // kind: 0 false/true (i), 1 integer, 2 string
 }
 
-bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int depth) {
+bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int depth, bool lenient) {
     idx = lua_absindex(L, idx);
     switch (lua_type(L, idx)) {
     case LUA_TBOOLEAN: out += lua_toboolean(L, idx) ? 't' : 'f'; return true;
@@ -558,31 +558,80 @@ bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int 
             if (kt == LUA_TBOOLEAN) keys.push_back({0, lua_toboolean(L, -1), {}});
             else if (kt == LUA_TNUMBER && lua_isinteger(L, -1)) keys.push_back({1, lua_tointeger(L, -1), {}});
             else if (kt == LUA_TSTRING) { size_t len = 0; const char* s = lua_tolstring(L, -1, &len); keys.push_back({2, 0, std::string(s, len)}); }
+            else if (lenient) { if (where.empty()) where = std::string("a key of type ") + lua_typename(L, kt); }
             else { lua_pop(L, 1); where = std::string("a key of type ") + lua_typename(L, kt); return false; }
         }
         std::sort(keys.begin(), keys.end(), [](const Key& a, const Key& b) {
             return a.kind != b.kind ? a.kind < b.kind : a.kind == 2 ? a.s < b.s : a.i < b.i;
         });
-        out += '{'; putU64(out, keys.size());
+        out += '{';
+        const size_t countAt = out.size();
+        putU64(out, 0);
+        uint64_t written = 0;
         for (const Key& k : keys) {
+            const size_t mark = out.size();
             if (k.kind == 0) { out += k.i ? 't' : 'f'; lua_pushboolean(L, int(k.i)); }
             else if (k.kind == 1) { out += 'i'; putU64(out, uint64_t(k.i)); lua_pushinteger(L, k.i); }
             else { out += 's'; putU64(out, k.s.size()); out += k.s; lua_pushlstring(L, k.s.data(), k.s.size()); }
             lua_rawget(L, idx);
-            bool ok = serialize(L, -1, out, where, depth + 1);
+            std::string sub;
+            bool ok = serialize(L, -1, out, lenient ? sub : where, depth + 1, lenient);
             lua_pop(L, 1);
-            if (!ok) {
-                where = "[" + (k.kind == 2 ? "\"" + k.s + "\"" : k.kind == 1 ? std::to_string(k.i) : std::string(k.i ? "true" : "false")) + "]" +
-                        (where.empty() || where[0] == '[' ? "" : ": ") + where;
-                return false;
+            std::string& w = lenient ? sub : where;
+            if (!ok || (lenient && !sub.empty() && where.empty())) {
+                std::string path = "[" + (k.kind == 2 ? "\"" + k.s + "\"" : k.kind == 1 ? std::to_string(k.i) : std::string(k.i ? "true" : "false")) + "]" +
+                                   (w.empty() || w[0] == '[' ? "" : ": ") + w;
+                if (!lenient) { where = path; return false; }
+                if (where.empty()) where = path;          // remember the first bad value
             }
+            if (!ok) { out.resize(mark); continue; }   // lenient: the value is left out
+            ++written;
         }
+        for (int i = 0; i < 8; ++i) out[countAt + size_t(i)] = char(uint8_t(written >> (8 * i)));
         return true;
     }
     default:
         where = lua_typename(L, lua_type(L, idx));
         return false;
     }
+}
+
+namespace {
+size_t skipValue(const std::string& in, size_t pos, int depth) {   // 0 on malformed input
+    if (pos >= in.size() || depth > 40) return 0;
+    const char t = in[pos++];
+    switch (t) {
+    case 't': case 'f': return pos;
+    case 'i': case 'x': return pos + 8 <= in.size() ? pos + 8 : 0;
+    case 's': {
+        if (pos + 8 > in.size()) return 0;
+        uint64_t n = getU64(in, pos);
+        pos += 8;
+        return n <= in.size() - pos ? pos + size_t(n) : 0;
+    }
+    case '{': {
+        if (pos + 8 > in.size()) return 0;
+        uint64_t n = getU64(in, pos);
+        pos += 8;
+        for (uint64_t i = 0; i < 2 * n; ++i) if (!(pos = skipValue(in, pos, depth + 1))) return 0;
+        return pos;
+    }
+    default: return 0;
+    }
+}
+} // namespace
+
+bool blobHasKey(const std::string& in, const char* key) {
+    if (in.size() < 9 || in[0] != '{') return false;
+    const uint64_t n = getU64(in, 1);
+    const size_t klen = std::strlen(key);
+    size_t pos = 9;
+    for (uint64_t i = 0; i < n; ++i) {
+        if (pos >= in.size()) return false;
+        if (in[pos] == 's' && pos + 9 <= in.size() && getU64(in, pos + 1) == klen && in.compare(pos + 9, klen, key) == 0) return true;
+        if (!(pos = skipValue(in, pos, 1)) || !(pos = skipValue(in, pos, 1))) return false;
+    }
+    return false;
 }
 
 size_t deserialize(lua_State* L, const std::string& in, size_t pos, int depth) {

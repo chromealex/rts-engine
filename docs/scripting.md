@@ -103,22 +103,35 @@ integers when they can't (ticks, counts, players, levels, handles). `math` keeps
 `math.random` (simulation RNG: `math.random(n)`, `math.random(a, b)` integers, `math.random()` an
 fx in [0, 1)). `tonumber("12")` works; `tonumber("1.5")` is an error (use `fx("1.5")`).
 
-### State: `state`, not upvalues
+### State: `state`, `game.data(h)`, not upvalues
 
-Everything a script remembers between ticks must be in the global table **`state`** (or in trigger
-variables, `game.set_var`). After every tick the engine serializes `state` canonically (sorted
-keys) into the simulation: it is hashed into the checksum (desync detection), copied by rollback
-snapshots and restored into the VM when the netcode rewinds.
+Everything a script remembers between ticks must be in the global table **`state`**, in an
+entity's own table **`game.data(h)`**, or in trigger variables (`game.set_var`). The engine writes
+them into the simulation canonically (sorted keys) **when the world is observed** — before a
+checksum, a rollback snapshot or a save — not after every tick: they are hashed into the checksum
+(desync detection), copied by rollback snapshots, saved, and read back into the VM when the
+netcode rewinds or a save is loaded. A tick that only changes Lua tables costs nothing until then.
 
-- Allowed in `state`: integers, `fx`, strings, booleans and nested tables whose keys are integers or
-  strings. Anything else (functions, floats, tables as keys, cycles) is an error — the tick's
-  changes to `state` are reverted and the error is logged.
+- **`game.data(h)`** returns the entity's own table (created on first use, gone when the entity
+  dies, kept by `transform`). Only tables handed out since the last write are serialized again, and
+  only changed ones are re-hashed, so per-unit records belong here, not in one big `state` table:
+  ```lua
+  local d = game.data(h)            -- {} the first time
+  d.morale = (d.morale or 10) - 1
+  for _, h in ipairs(game.units{has = "morale"}) do ... end   -- entities whose table has the key
+  game.has_data(h, "morale")  game.clear_data(h)
+  ```
+  View scripts get a read-only copy of the stored table.
+- Allowed in `state` and `game.data`: integers, `fx`, strings, booleans and nested tables whose keys
+  are integers or strings. A value that can't be stored (function, float, table key, cycle) is left
+  out of the saved state and logged; keep such values out of persistent tables.
 - **Globals are read-only after loading**: assigning a new global in a handler is an error, reading
   an undefined one too (typos show up immediately). Define functions and constants at the top level.
 - **Don't change file-level `local` variables from handlers** (`local count = 0` ... `count = count + 1`
   in a handler): such state isn't part of the snapshot, so a rollback can't restore it. Use `state`.
   Constants and helper functions as locals are fine.
-- Don't keep references to `state` sub-tables in locals across ticks (a rollback replaces them).
+- Don't keep references to `state` sub-tables or `game.data` tables in locals across ticks (a rollback
+  replaces them); call `game.data(h)` again.
 
 ### Order and randomness
 
@@ -187,9 +200,10 @@ Queries (simulation and view scripts):
 | `game.type_info("footman")`, `game.types()` | `{id, name, structure, max_hp, speed, armor, cost, tags}` |
 | `game.map_size()` → w, h, `game.passable(x, z [, "ground"\|"air"\|"naval"])`, `game.level(x, z)`, `game.height(x, z)`, `game.area(name)` | map |
 | `game.var(name)` | trigger variable (fx) |
+| `game.data(h)`, `game.has_data(h, key)` | the entity's own persistent table (view: read-only copy) / does it have the key |
 | `game.log(...)`, `print(...)` | script log |
 
-Filter: `{owner = 2, type = "footman", tag = "mechanical", kind = "unit" | "structure", area = "gate", x = 10, z = 12, radius = 6, limit = 5}` (all optional).
+Filter: `{owner = 2, type = "footman", tag = "mechanical", kind = "unit" | "structure", area = "gate", x = 10, z = 12, radius = 6, has = "morale", limit = 5}` (all optional; `has`: the entity's `game.data` table has that key).
 
 Actions (simulation scripts only):
 
@@ -205,6 +219,7 @@ Actions (simulation scripts only):
 | `game.set_var(name, v)`, `game.add_var(name, v)` | trigger variables, shared with rules triggers |
 | `game.message(p, text [, x, z])` | a notice (p = 0: everyone) |
 | `game.victory(p)`, `game.defeat(p)`, `game.draw()` | end conditions |
+| `game.clear_data(h)` | forget the entity's `game.data` table |
 | `game.research(p, tech)`, `game.enable_type(p, type, on)`, `game.add_score(p, n)`, `game.enable_trigger(id, on)` | |
 | `game.random(n)`, `game.random(a, b)` | simulation RNG |
 

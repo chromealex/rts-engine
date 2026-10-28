@@ -73,6 +73,7 @@ struct Filter {
     Vec3 center{};
     Fixed radius{};
     int limit = 0;
+    std::string has;               // entities whose game.data table has this key
 };
 // fields are read raw (no metamethods): {owner=, type=, tag=, kind=, area=, x=, z=, radius=, limit=}
 bool readFilter(lua_State* L, Vm& vm, int idx, Filter& f) {
@@ -114,6 +115,11 @@ bool readFilter(lua_State* L, Vm& vm, int idx, Filter& f) {
     lua_settop(L, top);
     if (ok && field("limit") != LUA_TNIL) { int64_t v = 0; ok = argInt(L, vm, -1, v, "filter.limit"); f.limit = int(v); }
     lua_settop(L, top);
+    if (ok && field("has") != LUA_TNIL) {
+        const char* k = lua_tostring(L, -1);
+        if (k) f.has = k; else { vm.err = "filter.has: data key (string) expected"; ok = false; }
+    }
+    lua_settop(L, top);
     return ok;
 }
 // Matching living units sorted by entity index (deterministic and independent of ECS history).
@@ -134,6 +140,12 @@ std::vector<Entity> query(Vm& vm, const Filter& f) {
         out.push_back(e);
     });
     std::sort(out.begin(), out.end(), [](Entity a, Entity b) { return a.index < b.index; });
+    if (!f.has.empty()) {
+        std::vector<Entity> keep;
+        for (Entity e : out)
+            if (vm.dataHas ? vm.dataHas(e, f.has.c_str()) : (w.has<ScriptData>(e) && blobHasKey(w.get<ScriptData>(e).blob, f.has.c_str()))) keep.push_back(e);
+        out.swap(keep);
+    }
     if (f.limit > 0 && out.size() > size_t(f.limit)) out.resize(size_t(f.limit));
     return out;
 }
@@ -373,6 +385,25 @@ int gVar(lua_State* L, Vm& vm) {
     auto& vars = vm.module->state(*vm.sim).trig.vars;
     auto it = vars.find(n);
     pushFx(L, it == vars.end() ? Fixed{} : it->second);
+    return 1;
+}
+// game.data(h): the entity's own Lua table (simulation: persistent, saved and hashed; view: a read-only copy)
+int gData(lua_State* L, Vm& vm) {
+    Entity e;
+    if (!unitArg(L, vm, 1, e)) { lua_pushnil(L); return 1; }
+    if (vm.pushData) { vm.pushData(e); return 1; }
+    auto* sd = vm.sim->world().tryGet<ScriptData>(e);
+    if (!sd || sd->blob.empty()) lua_newtable(L);
+    else deserialize(L, sd->blob);
+    return 1;
+}
+int gHasData(lua_State* L, Vm& vm) {
+    Entity e;
+    std::string k;
+    if (!nameArg(L, vm, 2, k, "key")) return -1;
+    World& w = vm.sim->world();
+    bool has = unitArg(L, vm, 1, e) && (vm.dataHas ? vm.dataHas(e, k.c_str()) : (w.has<ScriptData>(e) && blobHasKey(w.get<ScriptData>(e).blob, k.c_str())));
+    lua_pushboolean(L, has);
     return 1;
 }
 int gLog(lua_State* L, Vm& vm) {
@@ -715,6 +746,11 @@ int gAddScore(lua_State* L, Vm& vm) {
     if (t < gs.score.size()) gs.score[t] += a;
     return 0;
 }
+int gClearData(lua_State* L, Vm& vm) {
+    Entity e;
+    if (unitArg(L, vm, 1, e)) vm.sim->world().remove<ScriptData>(e);
+    return 0;
+}
 int gEnableTrigger(lua_State* L, Vm& vm) {
     CTX;
     std::string id;
@@ -738,14 +774,14 @@ void openGameApi(Vm& vm) {
         {"type_of", bind<gTypeOf>}, {"pos", bind<gPos>}, {"hp", bind<gHp>}, {"stat", bind<gStat>},
         {"has_status", bind<gHasStatus>}, {"type_info", bind<gTypeInfo>}, {"types", bind<gTypes>}, {"map_size", bind<gMapSize>},
         {"passable", bind<gPassable>}, {"level", bind<gLevel>}, {"height", bind<gHeight>}, {"area", bind<gArea>},
-        {"var", bind<gVar>}, {"log", bind<gLog>}, {nullptr, nullptr}};
+        {"var", bind<gVar>}, {"log", bind<gLog>}, {"data", bind<gData>}, {"has_data", bind<gHasData>}, {nullptr, nullptr}};
     static const luaL_Reg actions[] = {
         {"give", bind<gGive>}, {"take", bind<gTake>}, {"spawn", bind<gSpawn>}, {"kill", bind<gKill>}, {"damage", bind<gDamage>},
         {"heal", bind<gHeal>}, {"set_owner", bind<gSetOwner>}, {"add_status", bind<gAddStatus>}, {"buff", bind<gBuff>},
         {"command", bind<gCommand>}, {"order", bind<gOrder>}, {"cast", bind<gCast>}, {"player_ability", bind<gPlayerAbility>},
         {"set_var", bind<gSetVar>}, {"add_var", bind<gAddVar>}, {"message", bind<gMessage>}, {"victory", bind<gVictory>},
         {"draw", bind<gDraw>}, {"defeat", bind<gDefeat>}, {"research", bind<gResearch>}, {"enable_type", bind<gEnableType>},
-        {"add_score", bind<gAddScore>}, {"enable_trigger", bind<gEnableTrigger>}, {nullptr, nullptr}};
+        {"add_score", bind<gAddScore>}, {"enable_trigger", bind<gEnableTrigger>}, {"clear_data", bind<gClearData>}, {nullptr, nullptr}};
     luaL_newlib(L, queries);
     if (vm.mode == Mode::Sim) {
         luaL_setfuncs(L, actions, 0);
@@ -792,12 +828,13 @@ Json scriptApiReference() {
     q.push(fn("game.tick() / game.time() / game.tick_rate()", "tick number / seconds as fx / ticks per second"));
     q.push(fn("game.players() / game.player(p) / game.player_alive(p) / game.team(p) / game.hostile(a, b)", "player slots; player(p) = {slot, team, alive, name, faction, supply, supply_cap}"));
     q.push(fn("game.resource(p, res) / game.resources(p)", "stock as fx / {res = fx}"));
-    q.push(fn("game.units(filter) / game.count(filter) / game.nearest(x, z, filter)", "living units sorted by handle; filter = {owner, type, tag, kind=\"unit\"|\"structure\", area, x, z, radius, limit}"));
+    q.push(fn("game.units(filter) / game.count(filter) / game.nearest(x, z, filter)", "living units sorted by handle; filter = {owner, type, tag, kind=\"unit\"|\"structure\", area, x, z, radius, has (game.data key), limit}"));
     q.push(fn("game.unit(h)", "{id, type, name, owner, x, y, z, hp, max_hp, energy, structure, under_construction, level, garrison, tags, statuses} or nil"));
     q.push(fn("game.alive(h) / game.owner(h) / game.type_of(h) / game.pos(h) -> x, z / game.hp(h) -> hp, max / game.stat(h, stat) / game.has_status(h, id)", "unit fields (nil for dead handles)"));
     q.push(fn("game.type_info(id) / game.types()", "{id, name, structure, max_hp, speed, armor, cost, tags} / all type ids"));
     q.push(fn("game.map_size() -> w, h / game.passable(x, z [, \"ground\"|\"air\"|\"naval\"]) / game.level(x, z) / game.height(x, z) / game.area(name)", "map queries; area = {x, z, w, h}"));
     q.push(fn("game.var(name)", "trigger variable (fx)"));
+    q.push(fn("game.data(h) / game.has_data(h, key)", "the entity's own persistent Lua table (created on first use, saved, hashed, gone with the entity; view: read-only copy) / key test"));
     q.push(fn("game.log(...) / print(...)", "to the script log (editor Console)"));
     r.set("queries", q);
     Json a = Json::array();
@@ -811,6 +848,7 @@ Json scriptApiReference() {
     a.push(fn("game.set_var(name, v) / game.add_var(name, v)", "trigger variables (shared with rules triggers)"));
     a.push(fn("game.message(p, text [, x, z])", "notice for player p (0 = everyone)"));
     a.push(fn("game.victory(p) / game.defeat(p) / game.draw()", "end conditions"));
+    a.push(fn("game.clear_data(h)", "forget the entity's game.data table"));
     a.push(fn("game.research(p, tech) / game.enable_type(p, type, on) / game.add_score(p, amount) / game.enable_trigger(id, on)", "rules state"));
     a.push(fn("game.random(n) / game.random(a, b) / math.random()", "simulation RNG: integers, or fx in [0,1)"));
     r.set("actions", a);

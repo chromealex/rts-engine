@@ -5,6 +5,7 @@
 --   3 state  every tick: per-unit record {x, z, hp} written into `state` (serialized + hashed per tick)
 --   4 order  every second: every unit gets a move order to a random point (C++ pathing included)
 --   5 field  every tick: a 64x64 integer grid in `state` updated with a diffusion step (fire / fluid)
+--   6 data   every tick: the same per-unit record as `state`, kept in game.data(h) (per-entity, G3)
 local FIELD = 64
 
 on("start", function()
@@ -52,6 +53,12 @@ on("tick", function(tick)
       u[h] = {x = x, z = z, hp = game.hp(h)}
     end
     state.u = u
+  elseif mode == 6 then
+    for _, h in ipairs(game.units{kind = "unit"}) do
+      local x, z = game.pos(h)
+      local d = game.data(h)
+      d.x, d.z, d.hp = x, z, game.hp(h)
+    end
   elseif mode == 4 then
     if tick % 20 == 0 then
       local w, hh = game.map_size()

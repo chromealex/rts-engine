@@ -50,7 +50,11 @@ struct ScriptEngine::Impl {
     Vm vm;
     std::vector<Handler> handlers;
     uint32_t evMask = 0;
-    uint64_t serialCounter = 0, lastSerial = 0;
+    uint64_t epochCounter = 0, lastEpoch = 0;
+    bool stateDirty = false;
+    struct DataEntry { uint64_t serial = 0; bool valid = false, dirty = false; };
+    std::map<uint64_t, DataEntry> dataCache;   // entity (packed) -> its table in registry "rts.data"
+    std::vector<uint64_t> dataDirty;           // tables handed out since the last flush
     uint32_t budgetTick = UINT32_MAX;
     std::vector<PendingEffect> effects;
     int stdRefs[size_t(StdFn::Count)];
@@ -82,29 +86,119 @@ struct ScriptEngine::Impl {
         }
         lua_pop(L, 2);
     }
-    void commit(Simulation& sim) {
+    // Lazy, incremental persistence: scripts change `state` and entity data freely; flush() writes them into
+    // the world only when the world is observed (checksum, rollback snapshot, save). A world that was
+    // replaced in between (rollback / load) is detected by the epoch stamp and read back (enter()).
+    void flushState(Simulation& sim) {
+        if (!stateDirty) return;
+        stateDirty = false;
         lua_State* L = vm.L;
-        ScriptStore& st = store(sim);
         lua_getfield(L, LUA_REGISTRYINDEX, "rts.state");
         std::string blob, where;
-        bool ok = serialize(L, -1, blob, where);
+        serialize(L, -1, blob, where, 0, true);
         lua_pop(L, 1);
-        if (!ok) {
-            logLine(true, "state" + (!where.empty() && where[0] == '[' ? where : ": " + where) + " can't be kept in state (integers, fx, strings, booleans, "
-                          "tables with integer/string keys only); state reverted to the last tick");
-            restoreState(st.state);
-            return;
-        }
-        st.state.swap(blob);
-        st.serial = ++serialCounter;
-        lastSerial = st.serial;
+        if (!where.empty())
+            logLine(true, "state" + (where[0] == '[' ? where : ": " + where) + " can't be kept in state (integers, fx, strings, booleans, "
+                          "tables with integer/string keys only): left out of the saved state");
+        store(sim).state.swap(blob);
     }
-    // Before any script code runs in a tick: rollback check and the per-tick budget.
+    void dataTable(uint64_t packed) {   // pushes registry "rts.data"[packed] (or nil)
+        lua_getfield(vm.L, LUA_REGISTRYINDEX, "rts.data");
+        lua_rawgeti(vm.L, -1, lua_Integer(packed));
+        lua_remove(vm.L, -2);
+    }
+    void dropData(uint64_t packed) {
+        lua_getfield(vm.L, LUA_REGISTRYINDEX, "rts.data");
+        lua_pushnil(vm.L);
+        lua_rawseti(vm.L, -2, lua_Integer(packed));
+        lua_pop(vm.L, 1);
+    }
+    void flushData(Simulation& sim) {
+        World& w = sim.world();
+        for (uint64_t pk : dataDirty) {
+            auto it = dataCache.find(pk);
+            if (it == dataCache.end()) continue;
+            it->second.dirty = false;
+            Entity e = Entity::fromPacked(pk);
+            auto* sd = w.tryGet<ScriptData>(e);
+            if (!sd) continue;
+            dataTable(pk);
+            std::string blob, where;
+            if (lua_istable(vm.L, -1)) serialize(vm.L, -1, blob, where, 0, true);
+            lua_pop(vm.L, 1);
+            if (!where.empty()) logLine(true, "game.data" + (where[0] == '[' ? where : ": " + where) + " can't be stored (left out)");
+            if (blob != sd->blob) {
+                sd->blob.swap(blob);
+                Hasher h;
+                h.bytes(sd->blob.data(), sd->blob.size());
+                sd->hash = h.value();
+                sd->serial = ++epochCounter;
+                it->second.serial = sd->serial;
+            }
+        }
+        dataDirty.clear();
+        for (auto it = dataCache.begin(); it != dataCache.end();) {   // entities that died: forget their tables
+            if (w.has<ScriptData>(Entity::fromPacked(it->first))) { ++it; continue; }
+            dropData(it->first);
+            it = dataCache.erase(it);
+        }
+    }
+    void resetFromWorld(Simulation& sim) {
+        restoreState(store(sim).state);
+        stateDirty = false;
+        dataCache.clear();
+        dataDirty.clear();
+        lua_newtable(vm.L);
+        lua_setfield(vm.L, LUA_REGISTRYINDEX, "rts.data");
+    }
+    // Before any script code runs in a tick: world replaced? per-tick budget, epoch stamp.
     void enter(Simulation& sim) {
         vm.sim = &sim;
         ScriptStore& st = store(sim);
-        if (st.serial != lastSerial) { restoreState(st.state); lastSerial = st.serial; }
-        if (budgetTick != sim.tick()) { budgetTick = sim.tick(); vm.used = 0; vm.exceeded = false; }
+        if (st.serial != lastEpoch) resetFromWorld(sim);
+        if (budgetTick != sim.tick()) {
+            budgetTick = sim.tick(); vm.used = 0; vm.exceeded = false;
+            st.serial = lastEpoch = ++epochCounter;
+        }
+        stateDirty = true;
+    }
+    // game.data(h): the entity's table, created on first use; marked for the next flush
+    bool pushData(Simulation& sim, Entity e) {
+        World& w = sim.world();
+        auto* sd = w.tryGet<ScriptData>(e);
+        const bool created = !sd;
+        if (!sd) sd = &w.add<ScriptData>(e);
+        const uint64_t pk = e.packed();
+        DataEntry& c = dataCache[pk];
+        if (created) c.valid = false;   // a cleared / new component: never reuse an old table
+        if (!c.valid || c.serial != sd->serial) {
+            if (sd->blob.empty()) lua_newtable(vm.L);
+            else { deserialize(vm.L, sd->blob); if (!lua_istable(vm.L, -1)) { lua_pop(vm.L, 1); lua_newtable(vm.L); } }
+            lua_getfield(vm.L, LUA_REGISTRYINDEX, "rts.data");
+            lua_pushvalue(vm.L, -2);
+            lua_rawseti(vm.L, -2, lua_Integer(pk));
+            lua_pop(vm.L, 1);
+            c.valid = true;
+            c.serial = sd->serial;
+        } else dataTable(pk);
+        if (!c.dirty) { c.dirty = true; dataDirty.push_back(pk); }
+        return true;
+    }
+    // filter {has = key}: current table when cached, else the stored blob
+    bool dataHas(Simulation& sim, Entity e, const char* key) {
+        auto* sd = sim.world().tryGet<ScriptData>(e);
+        if (!sd) return false;
+        auto it = dataCache.find(e.packed());
+        if (it != dataCache.end() && it->second.valid && it->second.serial == sd->serial) {
+            lua_State* L = vm.L;
+            const int top = lua_gettop(L);
+            dataTable(e.packed());
+            bool has = false;
+            if (lua_istable(L, -1)) { lua_pushstring(L, key); has = lua_rawget(L, -2) != LUA_TNIL; }
+            lua_settop(L, top);
+            return has;
+        }
+        return blobHasKey(sd->blob, key);
     }
 
     // ---- calls
@@ -326,6 +420,8 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     for (auto& [path, text] : rules["$scriptSources"].members()) vm.sources[path] = text.str();
     vm.budget = std::max<int64_t>(10000, rules.getInt("scriptBudget", 1000000));
 
+    vm.pushData = [&im](Entity e) { im.pushData(*im.vm.sim, e); };
+    vm.dataHas = [&im](Entity e, const char* k) { return im.dataHas(*im.vm.sim, e, k); };
     openGameApi(vm);
     openStdApi(vm);
     lua_newtable(L);
@@ -338,6 +434,8 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     lua_pushcfunction(L, bind<lOn>); lua_setglobal(L, "on");
     lua_pushcfunction(L, bind<lEvery>); lua_setglobal(L, "every");
     lua_pushcfunction(L, bind<lOnArea>); lua_setglobal(L, "on_area");
+    lua_newtable(L);
+    lua_setfield(L, LUA_REGISTRYINDEX, "rts.data");
     lua_newtable(L);
     lua_pushvalue(L, -1); lua_setfield(L, LUA_REGISTRYINDEX, "rts.state");
     lua_setglobal(L, "state");
@@ -427,7 +525,15 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     st.userScripts = userScripts_;
     st.disabled.assign(im.handlers.size(), 0);
     st.inside.assign(im.handlers.size(), {});
-    im.commit(sim);
+    im.stateDirty = true;
+    im.flushState(sim);
+    st.serial = im.lastEpoch = ++im.epochCounter;
+}
+
+void ScriptEngine::flush(Simulation& sim) {
+    if (!impl_->vm.L || !userScripts_) return;
+    impl_->flushState(sim);
+    impl_->flushData(sim);
 }
 
 bool ScriptEngine::hasFunction(const std::string& name) const {
@@ -502,7 +608,6 @@ void ScriptEngine::tick(Simulation& sim) {
         if (p.args) { pushJson(L, *p.args); lua_setfield(L, -2, "args"); }
         im.callGlobal(sim, p.fn, 0);
     }
-    im.commit(sim);
 }
 
 void ScriptEngine::callStd(Simulation& sim, StdFn fn, std::initializer_list<int64_t> args) {
