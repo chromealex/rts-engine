@@ -99,8 +99,20 @@ public:
     int width() const { return w_; }
     int height() const { return h_; }
     float cellsPerPixel() const { return cellsPerPx_; }
+    // planet maps (MinimapPlanet.cpp): a globe around the camera focus, or the system seen from above
+    void buildPlanet(gfx::Device& dev, const RtsView& view);
+    void updatePlanet(gfx::Device& dev, const RtsView& view, const RtsScene& scene, const Rules& rules, bool fog);
+    // u, v in [0, 1] of the image -> new camera focus (globe) or focused body (system); false = outside
+    bool planetPointer(RtsView& view, float u, float v) const;
 
 private:
+    // planet minimap state
+    bool system_ = false;
+    std::vector<uint32_t> cellColor_;       // per cell of the shown body
+    std::vector<int> pixelCell_;            // per pixel: cell id, -1 = space
+    std::vector<float> pixelShade_;
+    render::float3 lastDir_, lastFwd_;
+    int body_ = -1;
     gfx::TextureHandle tex_;
     int w_ = 0, h_ = 0, gridW_ = 0, gridH_ = 0;
     float cellsPerPx_ = 1;
