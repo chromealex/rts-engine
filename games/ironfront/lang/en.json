@@ -1,0 +1,14 @@
+// ironfront — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Command & Conquer: Red Alert — MCV, ore, power and a build sidebar.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "Rocketeers kill tanks cheaply — keep a couple in every group.",
+  "howto.step1": "Deploy the MCV into a construction yard. The build sidebar is on the right: a building is built, then Place it near the base.",
+  "howto.step2": "A refinery arrives with a harvester that hauls ore from the fields into credits.",
+  "howto.step3": "Power plants power the base: without power production runs at half speed.",
+  "howto.step4": "Barracks: riflemen and rocketeers; war factory: light and heavy tanks. Turrets defend the base.",
+  "howto.step5": "Sell a building you no longer need — half of its price comes back."
+}

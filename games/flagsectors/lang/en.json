@@ -1,0 +1,13 @@
+// flagsectors — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Z (Bitmap Brothers): sectors with flags instead of resources, robots and vehicles.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "Take the free flags near your base first — production tempo decides the game.",
+  "howto.step1": "There are no resources: every sector you own speeds up production in all factories.",
+  "howto.step2": "Capture a sector by standing at its flag. You can only build in your own sectors.",
+  "howto.step3": "The fort turns out robots and snipers, the factory robots, jeeps and light tanks.",
+  "howto.step4": "Fast jeeps grab flags, tanks storm bases."
+}
