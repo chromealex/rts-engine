@@ -1207,6 +1207,8 @@ Flat maps are untouched (same checksums).
   only by weapons whose `targets` list `"orbit"`), `move.transitSpeed` (world units/s for transfers; default 10 x speed).
 - Command `kCmdTransit` (units = orbit units, `param` = target body index): timed transfer computed from the body
   positions at departure, arrival on the facing side of the target's shell; events `kEvTransitStart` / `kEvTransitEnd`.
+- Rules `movement.planetHpaCells` (default 65536): bodies with at least that many cells (6 x faceSize²) use hierarchical
+  pathfinding for long trips (0 = every body).
 - Structures stand inside one face (a footprint crossing a seam is not buildable). Units on different bodies only meet
   through the orbit layer. Sample: `templates/planets`.
 

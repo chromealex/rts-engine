@@ -71,7 +71,23 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
   (`findPath` → A* on the neighbour table, string pulling along chords), clearance, `nearestPassable`, field search,
   free spots, auto-build spots and melee slots go through them. `dist2D` is the 3D chord on planets (xz on flat maps).
   Spatial hash: coarse cube-sphere buckets (~4x4 cells) per body. Movement: tangent-plane steps re-projected onto the
-  surface / shell (`moveSphere`), slope speed from corner heights; separation in the tangent plane. HPA* is flat-only.
+  surface / shell (`moveSphere`), slope speed from corner heights; separation in the tangent plane.
+- **HPA\* on planets** (`RtsHpaSphere.cpp`, the counterpart of `RtsHpa.cpp`: same 10/14 costs, entrance rule, A\*
+  refinement). Bodies with >= `rules movement.planetHpaCells` cells (default 65,536 = the flat 256x256 threshold, i.e.
+  faceSize >= 105) route trips longer than 2 clusters through it; smaller bodies (templates/planets) keep plain A\*.
+  `RTS_PLANET_HPA=1|0` / headless `--planet-hpa on|off` force it (tests, benchmarks; all peers must agree).
+  - Clusters: 16x16 tiles of each face; the last row / column is partial when faceSize is not a multiple of 16.
+    A cluster is a rect of grid rows, so cluster costs are a Dijkstra on the neighbour table inside the rect.
+  - Borders: every orthogonal cell step between two clusters, taken from the surface neighbour table — inside a face
+    and across seams alike, whatever the relative orientation of the two faces. Pairs are ordered by (side, position
+    along the side of the lower cluster); entrances are the classic runs (middle of a short run, both ends of a run
+    of 6+). Cube corners: only the orthogonal steps exist between the three faces (the diagonal through the vertex
+    does not), so a corner cell has a seam pair with each of the two other faces; no special case.
+  - Bodies are separate cluster ranges with no shared border (paths never cross bodies; transit is separate).
+  - One graph per path layer (layer + slope class), built at match start for every moving type's `pathLayer`;
+    `MapGrid::block` / `cellChanged` mark the touched clusters dirty, the next query rebuilds their borders and the
+    clusters on both sides (pure function of the grid, never hashed). Goals inside obstacles are routed to the nearest
+    free cell (no node-budget exhaustion on "walk up to a building" queries).
 - **Vision.** `visionSphere`: cells within sight (offset walk across seams), 3D sight line sampled once per cell against
   the ground radius + blockers → hills and the horizon hide; air/orbit units see everything in range.
 - **Footprints** lie inside one face (`footprintAt(t, c, x0, y0, surface)` gives a plain grid rect or -1).
@@ -90,7 +106,7 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
 | surface point / normal | `Surface::facePoint(body, face, a, b)` / `faceNormal(...)` (body-local); `Surface::up(pos)`, `heightAt(pos)`, `project(pos, alt)` |
 | fog per body | `RtsModule::cellVision(sim, player, body, face, x, y)` (0/1/2), or `GameState::vision[player][surface->gridCell(body, face, x, y)]` |
 | place players / objects (generator, map JSON) | `"at": {"body", "face", "x", "y"}` on entities / players' `start` / waves (`RtsModule::mapPos`); fields per face |
-| sphere paths (fair starts) | `MapGrid::findPath(fromPos, toPos, layer, out, maxNodes)` with positions from `Surface::cellCenter(gridCell(...))` or `anchor(b) + facePoint(...)`; after `Simulation::setup`, the module's `state(sim).grid` |
+| sphere paths (fair starts) | `MapGrid::findPath(fromPos, toPos, layer, out, maxNodes)` (HPA\* on big bodies; raw cells: `sphereCellPath(s, g, layer, hpa, cells)`) with positions from `Surface::cellCenter(gridCell(...))` or `anchor(b) + facePoint(...)`; after `Simulation::setup`, the module's `state(sim).grid` |
 | cube-sphere maths | `CubeSphere` (`RtsSphere.h`): cells, dirs, seams, `offset`, corners |
 
 ## 4. Terrain generation (agent-terrain-gen)
