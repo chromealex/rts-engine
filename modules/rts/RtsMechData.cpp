@@ -439,4 +439,100 @@ void loadMechRules(Rules& r, const Json& j) {
         if (t.mech.transport.slots > 0 && !t.mech.transport.killOnDeathSet) t.mech.transport.killOnDeath = t.structure ? Fixed{} : Fixed::fromInt(1);
 }
 
+// ================================================================= UD: unit designs (chassis + parts)
+namespace {
+void deepMerge(Json& into, const Json& from) {
+    if (!into.isObject() || !from.isObject()) { into = from; return; }
+    for (auto& [k, v] : from.members()) {
+        if (Json* cur = into.find(k); cur && cur->isObject() && v.isObject()) deepMerge(*cur, v);
+        else into.set(k, v);
+    }
+}
+// "add": {"health.max": 50, "move.speed": -0.5}: adds to a number at a dotted path (missing = 0)
+void addAt(Json& t, const std::string& path, const Json& v, const std::string& where) {
+    if (!v.isNumber()) fail(where, "add values are numbers");
+    Json* cur = &t;
+    size_t s = 0;
+    for (;;) {
+        size_t d = path.find('.', s);
+        std::string k = path.substr(s, d == std::string::npos ? std::string::npos : d - s);
+        if (k.empty()) fail(where, "bad path '" + path + "'");
+        if (d == std::string::npos) {
+            Json* n = cur->find(k);
+            if (n && !n->isNumber() && !n->isNull()) fail(where, "'" + path + "' is not a number");
+            const Fixed base = n ? n->fx() : Fixed{};
+            cur->set(k, Json::number(base + v.fx()));
+            return;
+        }
+        Json& next = cur->member(k);
+        if (!next.isObject()) fail(where, "'" + path + "' crosses a non-object");
+        cur = &next;
+        s = d + 1;
+    }
+}
+void applyPart(Json& t, const Json& part, const std::string& where) {
+    for (auto& [k, v] : part.members()) {
+        if (k == "add") { for (auto& [path, n] : v.members()) addAt(t, path, n, where + ".add"); continue; }
+        if (k == "cost" || k == "upkeep") {   // summed per resource
+            Json& c = t.member(k);
+            for (auto& [res, n] : v.members()) addAt(c, res, n, where + "." + k);
+            continue;
+        }
+        if (k == "weapons" || k == "tags" || k == "abilities" || k == "upgrades") {   // appended
+            Json* arr = t.find(k);
+            if (!arr || !arr->isArray()) { t.set(k, Json::array()); arr = t.find(k); }
+            for (auto& x : v.items()) arr->push(x);
+            continue;
+        }
+        if (k == "slot" || k == "name") continue;
+        Json* cur = t.find(k);
+        if (cur && cur->isObject() && v.isObject()) deepMerge(*cur, v);
+        else t.set(k, v);
+    }
+}
+} // namespace
+
+Json expandDesigns(const Json& j) {
+    const Json& ds = j["designs"];
+    if (!ds.isObject()) fail("designs", "expected an object with chassis and parts");
+    const Json& chassis = ds["chassis"];
+    const Json& parts = ds["parts"];
+    Json out = j;
+    out.erase("designs");
+    Json* types = out.find("types");
+    if (!types || !types->isObject()) return out;
+    for (auto& [id, tj] : types->membersMut()) {
+        if (!tj.isObject() || !tj.has("design")) continue;
+        const std::string where = "type '" + id + "' design";
+        const Json& d = tj["design"];
+        const std::string cid = d.getStr("chassis");
+        if (!chassis.has(cid)) fail(where + ".chassis", "unknown chassis '" + cid + "'");
+        Json t = chassis[cid];
+        // slots: {"weapon": 2, "system": 1} or a plain count; parts may name their "slot" kind
+        const Json slots = t["slots"];
+        t.erase("slots");
+        std::vector<std::pair<std::string, int64_t>> used;
+        int64_t total = 0;
+        for (auto& pn : d["parts"].items()) {
+            const std::string pid = pn.str();
+            if (!parts.has(pid)) fail(where + ".parts", "unknown part '" + pid + "'");
+            const Json& part = parts[pid];
+            ++total;
+            if (slots.isObject()) {
+                const std::string kind = part.getStr("slot", "any");
+                int64_t n = 1;
+                for (auto& u : used) if (u.first == kind) n = ++u.second;
+                if (n == 1) used.push_back({kind, 1});
+                if (n > slots.getInt(kind, 0)) fail(where + ".parts", "chassis '" + cid + "' has " + std::to_string(slots.getInt(kind, 0)) + " '" + kind + "' slot(s)");
+            } else if (slots.isNumber() && total > slots.integer()) {
+                fail(where + ".parts", "chassis '" + cid + "' has " + std::to_string(slots.integer()) + " slot(s)");
+            }
+            applyPart(t, part, where + " part '" + pid + "'");
+        }
+        for (auto& [k, v] : tj.members()) if (k != "design") { Json* cur = t.find(k); if (cur && cur->isObject() && v.isObject()) deepMerge(*cur, v); else t.set(k, v); }
+        tj = std::move(t);
+    }
+    return out;
+}
+
 } // namespace rts::game
