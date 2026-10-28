@@ -20,6 +20,17 @@ uint8_t cellFlagsFromChar(char c) {
 }
 
 bool applyCornersFile(Json& map, const ContentReader& read, std::string* err) {
+    // planet maps: every body's terrain.cornersFile (6 faces x (N+1)^2 int16 LE)
+    if (Json* world = map.find("world"); world && world->isObject())
+        if (Json* bodies = world->find("bodies"); bodies && bodies->isArray())
+            for (size_t i = 0; i < bodies->size(); ++i) {
+                Json* t = bodies->at(i).find("terrain");
+                if (!t || !t->isObject() || !t->has("cornersFile") || t->has("cornersBlob")) continue;
+                const std::string file = t->getStr("cornersFile");
+                std::string bytes;
+                if (file.empty() || !read(file, bytes)) { if (err) *err = "map world body '" + bodies->at(i).getStr("id") + "' terrain.cornersFile: cannot read '" + file + "'"; return false; }
+                t->set("cornersBlob", Json::string(std::move(bytes)));
+            }
     Json* terrain = map.find("terrain");
     if (!terrain || !terrain->isObject() || !terrain->has("cornersFile") || terrain->has("cornersBlob")) return true;
     const std::string file = terrain->getStr("cornersFile");
@@ -150,6 +161,7 @@ int MapGrid::clearanceFor(Fixed radius) {
 }
 
 void MapGrid::updateClearance() {
+    if (surf) { updateClearanceSphere(); return; }
     clearanceDirty = false;
     const size_t n = size_t(w * h);
     clearance.assign(n, 3);
@@ -206,7 +218,8 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
     // clearance is capped at 3, so only cells within 3 of the footprint change: patch them (same values as a
     // full recompute) instead of a whole-map pass on the next path query
-    if (!clearanceDirty && clearance.size() == flags.size()) updateClearanceRect(x0 - 3, y0 - 3, x0 + fw + 2, y0 + fh + 2);
+    if (surf) clearanceDirty = true; // planet cells: rows are not geometric neighbours across seams
+    else if (!clearanceDirty && clearance.size() == flags.size()) updateClearanceRect(x0 - 3, y0 - 3, x0 + fw + 2, y0 + fh + 2);
     else clearanceDirty = true;
     for (auto& G : hpa_)
         for (int cy = std::max(0, y0) / HpaGraph::kC; cy <= std::min(h - 1, y0 + fh - 1) / HpaGraph::kC && cy < G.ch; ++cy)
@@ -255,6 +268,18 @@ bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
 
 bool MapGrid::nearestPassable(int& x, int& y, uint8_t layer, int radius) const {
     if (passable(x, y, layer)) return true;
+    if (surf) { // rings across face seams
+        if (!inside(x, y)) return false;
+        const int c0 = index(x, y);
+        for (int r = 1; r <= radius; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                    const int c = surf->offset(c0, dx, dy);
+                    if (c >= 0 && passable(c % w, c / w, layer)) { x = c % w; y = c / w; return true; }
+                }
+        return false;
+    }
     for (int r = 1; r <= radius; ++r)
         for (int dy = -r; dy <= r; ++dy)
             for (int dx = -r; dx <= r; ++dx) {
@@ -287,6 +312,7 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
 
 bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes, int clear, bool useSoft) {
     out.clear();
+    if (surf) return findPathSphere(from, to, layer, out, maxNodes, clear, useSoft);
     if (layer & 2) { out.push_back(to); return true; } // air: straight line
     int sx = cellX(from.x), sy = cellY(from.z), gx = cellX(to.x), gy = cellY(to.z);
     if (!inside(sx, sy) || w == 0) return false;
@@ -417,6 +443,13 @@ std::vector<uint16_t> RoadGraph::path(World& w, int from, int to) const {
 }
 
 void SpatialHash::reset(int worldW, int worldH, int cellSize) {
+    if (surf) {
+        const size_t n = size_t(surf->bucketCount());
+        if (buckets.size() != n) { buckets.assign(n, {}); used.clear(); }
+        for (int32_t i : used) buckets[size_t(i)].clear();
+        used.clear();
+        return;
+    }
     cell = cellSize;
     w = (worldW + cell - 1) / cell + 1;
     h = (worldH + cell - 1) / cell + 1;
@@ -426,6 +459,13 @@ void SpatialHash::reset(int worldW, int worldH, int cellSize) {
 }
 
 void SpatialHash::insert(Entity e, Vec3 p) {
+    if (surf) {
+        const int i = surf->bucketOf(p);
+        auto& b = buckets[size_t(i)];
+        if (b.empty()) used.push_back(i);
+        b.push_back(e);
+        return;
+    }
     int x = std::clamp(int(p.x.floorInt()) / cell, 0, w - 1), y = std::clamp(int(p.z.floorInt()) / cell, 0, h - 1);
     auto& b = buckets[size_t(y * w + x)];
     if (b.empty()) used.push_back(y * w + x);

@@ -9,6 +9,39 @@ static Vec3 at(int x, int z) { return {Fixed::fromInt(x), Fixed{}, Fixed::fromIn
 static Fixed hpOf(Simulation& sim, Entity e) { return sim.world().alive(e) ? sim.world().get<game::Unit>(e).hp : Fixed{}; }
 static Vec3 posOf(Simulation& sim, Entity e) { return sim.world().get<Transform>(e).pos; }
 
+// ---- agent-mech-tools: JsonAccessLog (rules_lint / rules_schema) and kEvTriggerFired (scenario_run trigger log)
+TEST(tools_json_access_log) {
+    Json j = Json::parse(R"({"types": {"a": {"health": {"max": 5}, "helth": 1}}, "extra": 2})");
+    JsonAccessLog log;
+    Json::setAccessLog(&log);
+    for (auto& [id, t] : j["types"].members()) { (void)id; t["health"].getFx("max"); t.has("move"); }
+    Json::setAccessLog(nullptr);
+    const Json* a = &j["types"]["a"];
+    auto asked = [&](const Json* o, const char* k) {
+        return std::any_of(log.keys.begin(), log.keys.end(), [&](auto& e) { return e.first == o && e.second == k; });
+    };
+    CHECK(asked(a, "health") && asked(a, "move") && !asked(a, "helth"));   // missing keys are recorded too (the loader asked)
+    CHECK(asked(&j, "types") && !asked(&j, "extra"));
+    CHECK(std::find(log.iterated.begin(), log.iterated.end(), &j["types"]) != log.iterated.end());
+    size_t n = log.keys.size();
+    j["extra"].integer();   // off again: nothing recorded
+    CHECK(log.keys.size() == n);
+}
+
+TEST(tools_trigger_fired_event) {
+    const char* rules = R"({"resources": {"gold": {"start": 0}}, "types": {"hq": {"structure": {"footprint": [2, 2]}}},
+      "triggers": [{"id": "salary", "event": {"type": "every", "seconds": 1}, "forEachPlayer": true, "actions": [{"type": "give", "resource": "gold", "amount": 1}]}]})";
+    auto sim = makeSimJson(rules, flatMap(16, 8, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[12,4]}])"));
+    int fired[3] = {0, 0, 0};
+    for (int i = 0; i < 20 * 3 + 1; ++i) {
+        sim->step();
+        for (auto& ev : sim->events())
+            if (ev.type == game::kEvTriggerFired && ev.value == 0 && ev.player <= 2) fired[ev.player]++;
+    }
+    CHECK(fired[1] == 3 && fired[2] == 3 && fired[0] == 0);
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(3));
+}
+
 // ---------------------------------------------------------------- ST: stances and retreat
 static Entity unitNear(Simulation& sim, int x, int z) {
     Entity best; Fixed bd{};
