@@ -11,6 +11,8 @@
 #include "../Editor.h"
 #include "../EditorUtil.h"
 #include "engine/fx/ParticleSystem.h"
+#include "FxModulesUi.h"
+#include "engine/fx/FxModelMesh.h"
 #include "engine/render/TextureCache.h"
 
 namespace rts::editor {
@@ -91,6 +93,9 @@ public:
             preview_.setQuality(fx::FxQuality::High);
             preview_.setFileReader([&ed](const std::string& path, std::string& out) { return readText(fs::path(ed.ws().project.dir) / path, out); });
             textures_.init(*dev_);
+            preview_.setMeshLoader([&ed](const std::string& name, fx::FxMesh& out) {
+                return fx::meshFromModelFile(name, [&ed](const std::string& p, std::string& o) { return readText(fs::path(ed.ws().project.dir) / p, o); }, out);
+            });
             preview_.setTextureLoader([this, &ed](const std::string& name, fx::FxTexture& out) {   // the sprites' loader
                 render::TextureRef r = textures_.resolve(name, false, ed.ws().project.dir + "/");
                 if (!r.valid()) return false;
@@ -359,9 +364,10 @@ private:
         for (size_t i = 0; i < def_.emitters.size(); ++i) {
             EmitterDef& d = def_.emitters[i];
             ImGui::PushID(int(i));
-            const std::string head = "Эмиттер " + std::to_string(i + 1) + " — " + d.texture + (d.blend == fx::FxBlend::Additive ? ", additive" : ", alpha");
+            static const char* kBlend[] = {"alpha", "additive", "premultiplied", "multiply", "subtract", "opaque"};
+            const std::string head = "Эмиттер " + std::to_string(i + 1) + " — " + (d.meshes.empty() ? d.texture : d.meshes[0]) + ", " + kBlend[size_t(d.blend)];
             if (ImGui::CollapsingHeader(head.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                ch |= emitterUi(d);
+                ch |= fxui::emitterUi(d);
                 if (ImGui::SmallButton("Копия")) dup = int(i);
                 ImGui::SameLine();
                 if (ImGui::SmallButton("Удалить")) remove = int(i);
@@ -373,108 +379,8 @@ private:
         ImGui::BeginDisabled(def_.emitters.size() >= size_t(fx::kMaxEmitters));
         if (ImGui::Button("+ Эмиттер")) { EmitterDef d; d.burst = 10; def_.emitters.push_back(d); ch = true; }
         ImGui::EndDisabled();
+        ch |= fxui::forceFieldsUi(def_);
         if (ch) changed();
-    }
-
-    static bool range(const char* label, fx::FxRange& r, float speed, float lo, float hi, const char* fmt = "%.2f") {
-        return ImGui::DragFloatRange2(label, &r.min, &r.max, speed, lo, hi, fmt, nullptr, ImGuiSliderFlags_AlwaysClamp);
-    }
-
-    bool emitterUi(EmitterDef& d) {
-        bool ch = false;
-        const float w = ImGui::GetFontSize() * 16;
-        ImGui::PushItemWidth(w);
-        // texture
-        if (ImGui::BeginCombo("Текстура", d.texture.c_str())) {
-            for (auto& b : fx::ParticleSystem::builtinTextures()) {
-                std::string n = "builtin:" + b;
-                if (ImGui::Selectable(n.c_str(), d.texture == n)) { d.texture = n; ch = true; }
-            }
-            ImGui::EndCombo();
-        }
-        ui::help("Встроенные: soft, spark, ring, smoke. Или путь к спрайту — он грузится той же функцией, что и спрайты игры.");
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-        std::string tex = d.texture;
-        if (ui::inputString("##texpath", tex, ImGuiInputTextFlags_EnterReturnsTrue) && !tex.empty()) { d.texture = tex; ch = true; }
-        int frames[2] = {d.frameCols, d.frameRows};
-        if (ImGui::InputInt2("Кадры (колонки, строки)", frames)) { d.frameCols = std::clamp(frames[0], 1, 16); d.frameRows = std::clamp(frames[1], 1, 16); ch = true; }
-        if (d.frameCols * d.frameRows > 1) ch |= ImGui::SliderFloat("Кадров в секунду", &d.fps, 0, 60, d.fps == 0 ? "за жизнь" : "%.0f");
-        int blend = int(d.blend);
-        if (ImGui::Combo("Смешивание", &blend, "alpha (дым, пыль)\0additive (огонь, искры, свет)\0")) { d.blend = fx::FxBlend(blend); ch = true; }
-        int align = int(d.align);
-        if (ImGui::Combo("Ориентация", &align, "к камере\0по скорости (искры)\0по земле (кольца)\0")) { d.align = fx::FxAlign(align); ch = true; }
-        if (d.align == fx::FxAlign::Velocity) ch |= ImGui::SliderFloat("Растяжение", &d.stretch, 0, 0.5f, "%.3f");
-
-        ImGui::SeparatorText("Рождение");
-        ch |= ImGui::SliderInt("Сразу (burst)", &d.burst, 0, 200);
-        ch |= ImGui::SliderFloat("В секунду (rate)", &d.rate, 0, 200, "%.1f");
-        ch |= ImGui::SliderFloat("На метр пути (perMeter)", &d.perMeter, 0, 40, "%.1f");
-        ui::help("Для шлейфов: частицы оставляются по пути, сколько бы кадров ни прошло.");
-        ch |= ImGui::SliderFloat("Задержка", &d.delay, 0, 5, "%.2f с");
-        ch |= ImGui::SliderFloat("Длительность", &d.duration, 0, 10, "%.2f с");
-        ImGui::SameLine();
-        ch |= ImGui::Checkbox("Цикл##loop", &d.loop);
-        int mq = std::max(1, int(d.minQuality)) - 1;
-        if (ImGui::Combo("Начиная с качества", &mq, "низкого (всегда)\0среднего\0высокого\0")) { d.minQuality = fx::FxQuality(mq + 1); ch = true; }
-        ui::help("Второстепенные эмиттеры (искры, ударные волны) лучше включать со «среднего»: на слабых телефонах их не будет.");
-
-        ImGui::SeparatorText("Движение");
-        ch |= range("Жизнь, с", d.life, 0.01f, 0.01f, 30);
-        ch |= range("Скорость, м/с", d.speed, 0.05f, 0, 100);
-        ch |= ImGui::DragFloat3("Направление", &d.direction.x, 0.02f, -1, 1, "%.2f");
-        ch |= ImGui::SliderFloat("Разброс, °", &d.spread, 0, 180, "%.0f");
-        int shape = int(d.shape);
-        if (ImGui::Combo("Форма", &shape, "точка\0шар\0диск (XZ)\0кольцо (XZ)\0")) { d.shape = fx::FxShape(shape); ch = true; }
-        if (d.shape != fx::FxShape::Point) ch |= ImGui::SliderFloat("Радиус, м", &d.radius, 0, 10, "%.2f");
-        ch |= ImGui::DragFloat3("Гравитация", &d.gravity.x, 0.05f, -50, 50, "%.2f");
-        ch |= ImGui::SliderFloat("Сопротивление", &d.drag, 0, 10, "%.2f");
-
-        ImGui::SeparatorText("Вид");
-        ch |= range("Размер, м", d.size, 0.01f, 0.01f, 50);
-        ch |= range("Поворот, °", d.rotation, 1, -360, 360, "%.0f");
-        ch |= range("Вращение, °/с", d.spin, 1, -720, 720, "%.0f");
-        ch |= keysUi(d);
-        ImGui::PopItemWidth();
-        return ch;
-    }
-
-    bool keysUi(EmitterDef& d) {
-        bool ch = false;
-        ImGui::TextUnformatted("Цвет за жизнь");
-        ui::help("Ключи: время 0..1 и цвет с прозрачностью. Последний ключ обычно с альфой 0 — частица гаснет, а не исчезает.");
-        int del = -1;
-        for (size_t k = 0; k < d.color.size(); ++k) {
-            ImGui::PushID(int(100 + k));
-            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 4);
-            ch |= ImGui::SliderFloat("##t", &d.color[k].t, 0, 1, "%.2f");
-            ImGui::SameLine();
-            ch |= ImGui::ColorEdit4("##c", &d.color[k].rgba.x, ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoInputs);
-            if (d.color.size() > 1) { ImGui::SameLine(); if (ImGui::SmallButton("x")) del = int(k); }
-            ImGui::PopID();
-        }
-        if (del >= 0) { d.color.erase(d.color.begin() + del); ch = true; }
-        if (ImGui::SmallButton("+ цвет")) { auto k = d.color.back(); k.t = std::min(1.0f, k.t + 0.25f); d.color.push_back(k); ch = true; }
-
-        ImGui::TextUnformatted("Размер за жизнь (множитель)");
-        del = -1;
-        for (size_t k = 0; k < d.sizeOverLife.size(); ++k) {
-            ImGui::PushID(int(200 + k));
-            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 4);
-            ch |= ImGui::SliderFloat("##t", &d.sizeOverLife[k].t, 0, 1, "%.2f");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6);
-            ch |= ImGui::SliderFloat("##k", &d.sizeOverLife[k].k, 0, 6, "x%.2f");
-            if (d.sizeOverLife.size() > 1) { ImGui::SameLine(); if (ImGui::SmallButton("x")) del = int(k); }
-            ImGui::PopID();
-        }
-        if (del >= 0) { d.sizeOverLife.erase(d.sizeOverLife.begin() + del); ch = true; }
-        if (ImGui::SmallButton("+ ключ")) { auto k = d.sizeOverLife.back(); k.t = std::min(1.0f, k.t + 0.25f); d.sizeOverLife.push_back(k); ch = true; }
-        if (ch) {
-            std::stable_sort(d.color.begin(), d.color.end(), [](auto& a, auto& b) { return a.t < b.t; });
-            std::stable_sort(d.sizeOverLife.begin(), d.sizeOverLife.end(), [](auto& a, auto& b) { return a.t < b.t; });
-        }
-        return ch;
     }
 
     gfx::Device* dev_ = nullptr;

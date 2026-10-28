@@ -1,6 +1,7 @@
 // Editor: lifecycle, docking layout, menus, documents, play-test and viewport rendering.
 // Window contents live in apps/editor/windows/*.cpp; the agent link in EditorAgent.cpp.
 #include "Editor.h"
+#include "engine/fx/FxModelMesh.h"
 #include "imgui.h"
 #include "imgui_internal.h" // DockBuilder
 
@@ -117,6 +118,7 @@ void Editor::init(gfx::Device& dev) {
         return true;
     });
     gameFx_.setGroundHeight([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : view_.heightAt(grid_, x, z); });
+    gameFx_.setMeshLoader([this](const std::string& name, fx::FxMesh& out) { return fx::meshFromModelFile(name, projectReader(ws_.project.dir), out); });
     if (!gameFx_.init(&dev)) ws_.log("fx", gameFx_.lastError(), true);
     reloadFx();
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
