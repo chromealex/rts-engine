@@ -2,6 +2,7 @@
 //   rts_headless --project templates/skirmish [--map maps/valley.json] --seed 7 --record m.rpl
 //   rts_headless --replay m.rpl
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -49,7 +50,9 @@ struct Args {
     uint64_t seed = 1;
     uint32_t maxSeconds = 1800;
     int benchPaths = 0;   // >0: time that many path queries (HPA* vs plain A*) and exit
-    int benchBody = -1;   // planets: body index for --bench-paths (default: first surface body)
+    int benchBody = -1;
+    int benchGroup = 0;   // >0: spawn that many units of player 1, order them to one far goal, time movement (--bench-flow on|off)
+    int benchFlow = -1;   // -1: rules default, 0: off, 1: on (minGroup 1)   // planets: body index for --bench-paths (default: first surface body)
     bool quiet = false;
 };
 
@@ -130,6 +133,71 @@ static int benchPaths(Simulation& sim, const Args& a) {
     return 0;
 }
 
+
+// Group movement benchmark: N units of the first mobile combat type of player 1 spread over a block, one move order to
+// the far corner (flat) / the antipode (planet). Reports ticks/s, path ms per tick, arrivals and the field cache size.
+static int benchGroup(Simulation& sim, const Args& a) {
+    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
+    auto& gs = m->state(sim);
+    game::MapGrid& g = gs.grid;
+    int type = -1;
+    for (size_t t = 0; t < m->rules().types.size() && type < 0; ++t) {
+        const auto& ut = m->rules().types[t];
+        if (!ut.structure && ut.speed.raw > 0 && !(ut.layer & game::kLayerAir) && !ut.weapons.empty() && ut.radius <= Fixed::fromRatio(1, 2)) type = int(t);
+    }
+    if (type < 0) { std::printf("no unit type\n"); return 1; }
+    const uint8_t layer = m->rules().types[size_t(type)].pathLayer;
+    // start block and goal: flat = corners, planet = face 4 centre -> face 5 centre
+    std::vector<int> cells;
+    int goal = -1;
+    const int side = int(std::ceil(std::sqrt(double(a.benchGroup)) * 1.6));
+    if (g.surf) {
+        const int body = gs.surface->startBody, N = g.surf->bodies[size_t(body)].faceSize;
+        for (int y = 0; y < N && int(cells.size()) < a.benchGroup * 3; ++y)
+            for (int x = 0; x < N; ++x) {
+                const int c = g.surf->gridCell(body, 4, (N - std::min(side, N)) / 2 + x % std::min(side, N), (N - std::min(side, N)) / 2 + y);
+                if (x < std::min(side, N) && g.passable(c % g.w, c / g.w, layer)) cells.push_back(c);
+            }
+        for (int r = 0; r < N / 2 && goal < 0; ++r) { const int c = g.surf->gridCell(body, 5, N / 2 + r, N / 2); if (g.passable(c % g.w, c / g.w, layer)) goal = c; }
+    } else {
+        for (int y = 4; y < g.h && int(cells.size()) < a.benchGroup * 3; ++y)
+            for (int x = 4; x < 4 + side && x < g.w; ++x) if (g.passable(x, y, layer)) cells.push_back(g.index(x, y));
+        for (int r = 4; r < g.w / 2 && goal < 0; ++r) if (g.passable(g.w - r, g.h - r, layer)) goal = g.index(g.w - r, g.h - r);
+    }
+    if (goal < 0 || int(cells.size()) < a.benchGroup) { std::printf("no room for %d units\n", a.benchGroup); return 1; }
+    Command c;
+    c.player = 1; c.type = game::kCmdMove;
+    for (int i = 0; i < a.benchGroup; ++i) {
+        const int cell = cells[size_t(i) * cells.size() / size_t(a.benchGroup)];
+        c.units.push_back(m->spawn(sim, uint16_t(type), 1, g.centerOf(cell)));
+    }
+    c.point = g.centerOf(goal);
+    const Vec3 goalPos = c.point;
+    sim.submit(c);
+    auto clock = [] { return int64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); };
+    g.clockNs = clock;
+    const uint32_t ticks = a.maxSeconds * sim.tickRate();
+    const auto t0 = std::chrono::steady_clock::now();
+    size_t peakFields = 0, peakBytes = 0;
+    uint32_t done = 0;
+    for (uint32_t t = 0; t < ticks; ++t) {
+        sim.step();
+        peakFields = std::max(peakFields, g.flowCount()); peakBytes = std::max(peakBytes, g.flowBytes());
+        if (t % 20 == 0) {
+            int near = 0;
+            for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < Fixed::fromInt(int64_t(std::sqrt(double(a.benchGroup))) + 4)) ++near;
+            if (near >= a.benchGroup * 9 / 10 && !done) done = t;
+        }
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    int near = 0;
+    for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < Fixed::fromInt(int64_t(std::sqrt(double(a.benchGroup))) + 4)) ++near;
+    std::printf("Group %d x %s on %dx%d%s: %u ticks in %.0f ms = %.0f ticks/s, path %.2f ms/tick, arrived %d (90%% at %.0f s), fields peak %zu (%.2f MB), checksum %016llx\n",
+                a.benchGroup, m->rules().types[size_t(type)].id.c_str(), g.w, g.h, g.surf ? " (planet)" : "", ticks, ms, ticks / (ms / 1000.0),
+                double(g.pathNs) / 1e6 / ticks, near, done ? double(done) / sim.tickRate() : -1.0, peakFields, double(peakBytes) / 1048576.0, (unsigned long long)sim.checksum());
+    return 0;
+}
+
 static int play(const Args& a) {
     Json manifest = Json::parseFile(a.project + "/game.json");
     std::string rulesPath = a.project + "/" + manifest.getStr("rules", "rules.json");
@@ -156,7 +224,13 @@ static int play(const Args& a) {
     }
     Json mapJson = loadMap(mapPath, a.project);
     const auto setupT0 = std::chrono::steady_clock::now();
-    sim.setup(Json::parseFile(rulesPath), mapJson);
+    Json rulesJson = Json::parseFile(rulesPath);
+    if (a.benchFlow >= 0) {   // benchmark switch: shared flow fields for every group order (on) or none (off)
+        Json ff = Json::object();
+        ff.set("minGroup", Json::number(int64_t(a.benchFlow ? 2 : 0)));
+        rulesJson.member("movement").set("flowField", ff);
+    }
+    sim.setup(rulesJson, mapJson);
     if (!a.quiet && (a.benchPaths > 0 || mapJson["world"].isObject()))   // planets / benchmarks: setup cost incl. the HPA* graphs
         std::printf("Setup: %.0f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - setupT0).count());
     if (auto* rm = dynamic_cast<game::RtsModule*>(&sim.module()); rm && rm->generatedMap()) {
@@ -174,6 +248,7 @@ static int play(const Args& a) {
     if (a.maxSeconds == 0) return 0;   // --max-seconds 0: set up (and generate) only
 
     if (a.benchPaths > 0) return benchPaths(sim, a);
+    if (a.benchGroup > 0) return benchGroup(sim, a);
     std::vector<game::RtsAI> bots;
     for (auto& p : sim.players()) bots.emplace_back(p.slot, a.seed);
 
@@ -251,6 +326,8 @@ int main(int argc, char** argv) {
         else if (k == "--quiet") a.quiet = true;
         else if (k == "--bench-paths") a.benchPaths = std::stoi(next());
         else if (k == "--bench-body") a.benchBody = std::stoi(next());
+        else if (k == "--bench-group") a.benchGroup = std::stoi(next());
+        else if (k == "--bench-flow") a.benchFlow = next() == "on" ? 1 : 0;
         else if (k == "--planet-hpa") setenv("RTS_PLANET_HPA", next() == "off" ? "0" : "1", 1);   // force planet HPA* on / off
         else if (k == "--generate") a.generate = next();
         else if (k == "--players") a.players = std::stoi(next());
