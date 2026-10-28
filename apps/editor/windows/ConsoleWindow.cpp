@@ -28,7 +28,7 @@ void openFolder(const std::string& dir) {
 #else
     std::string cmd = "xdg-open '" + dir + "' >/dev/null 2>&1 &";
 #endif
-    (void)std::system(cmd.c_str());
+    if (std::system(cmd.c_str()) != 0) {}   // nothing to do: the folder just does not open
 }
 } // namespace
 
