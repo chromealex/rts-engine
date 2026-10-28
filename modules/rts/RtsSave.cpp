@@ -74,7 +74,9 @@ void io(Archive& a, Merging& x) { a(x.partner); }
 void io(Archive& a, Trader& x) { a(x.home, x.dest, x.loaded); }
 void io(Archive& a, ItemBag& x) { a(x.items, x.charges); }
 void io(Archive& a, GroundItem& x) { a(x.pos, x.item, x.charges); }
-void io(Archive& a, MechState& x) { a(x.prices, x.groundItems, x.decks, x.allyRequest, x.cyclePhase, x.nextGroup); }
+void io(Archive& a, MechState::Objective& x) { a(x.id, x.text, x.state, x.player, x.primary); }
+void io(Archive& a, MechState::Dialog& x) { a(x.speaker, x.portrait, x.voice, x.text, x.duration); }
+void io(Archive& a, MechState& x) { a(x.prices, x.groundItems, x.decks, x.allyRequest, x.cyclePhase, x.nextGroup, x.objectives, x.dialogs, x.nextMission, x.missionResult); }
 // state
 void io(Archive& a, TypeMods& x) { a(x.add, x.mul); }
 void io(Archive& a, PlayerEconomy& x) {

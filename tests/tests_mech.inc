@@ -608,3 +608,40 @@ TEST(mech_save_states_all_games) {
     CHECK(!s.deserialize(bytes.substr(0, bytes.size() / 2), &err) && !err.empty());
     CHECK(!s.deserialize("garbage", &err));
 }
+
+// ---------------------------------------------------------------- S: campaign actions and carry
+TEST(mech_campaign) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 100}}, )") + kVic + R"(, "veterancy": {"xp": [10], "perLevel": []},
+      "types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 50}, "xp": 20},
+                "hero": {"tags": ["hero"], "move": {"speed": 3}, "sight": 8, "health": {"max": 500}, "weapons": [{"range": 2, "damage": 25, "cooldown": 1}]}}})";
+    std::string map = flatMap(30, 10, R"(,"entities":[{"type":"hero","owner":1,"pos":[20,5]},{"type":"hq","owner":2,"pos":[24,5]}],
+      "triggers":[{"id":"brief","event":{"type":"start"},"actions":[{"type":"objective","id":"raze","text":"Raze","player":1},{"type":"dialog","speaker":"Cpt","text":"Go","player":1},{"type":"camera","at":[24,5],"duration":2,"player":1}]},
+                  {"id":"won","event":{"type":"unitDied","unit":"hq","player":2},"actions":[{"type":"objective","id":"raze","op":"done","player":1},{"type":"endMission","result":"victory","next":"m2","player":1}]}])",
+      R"([{"name":"A","team":1,"start":[3,5]},{"name":"B","team":2}])");
+    auto sim = makeSimJson(rules, map);
+    bool camera = false, dialog = false, ended = false;
+    for (int i = 0; i < 20 * 10 && sim->result() == 0; ++i) {
+        sim->step();
+        for (auto& ev : sim->events()) {
+            if (ev.type == game::kEvCamera) camera = true;
+            if (ev.type == game::kEvDialog) dialog = true;
+            if (ev.type == game::kEvMissionEnd && ev.value == 1) ended = true;
+        }
+    }
+    auto& ms = mod(*sim).state(*sim).mech;
+    CHECK(camera && dialog && ended);
+    CHECK(ms.objectives.size() == 1 && ms.objectives[0].state == 1 && ms.dialogs[0].speaker == "Cpt");
+    game::MissionOutcome out = game::missionOutcome(*sim, Json::parse(R"({"next": "x"})"), 1);
+    CHECK(out.finished && out.won && out.next == "m2");
+    // carry the veteran hero into the next map
+    Json carry = game::collectCarry(*sim, Json::parse(R"({"tags": ["hero"], "resources": ["gold"]})"), 1);
+    CHECK(carry["units"].size() == 1 && carry["units"][size_t(0)].getInt("rank") == 2);
+    Json next = Json::parse(flatMap(30, 10, R"(,"entities":[])", R"([{"name":"A","team":1,"start":[3,5]},{"name":"B","team":2}])"));
+    game::applyCarry(next, carry, 1);
+    auto sim2 = std::make_unique<Simulation>(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim2->setup(Json::parse(rules), next);
+    game::restoreCarry(*sim2, carry, 1);
+    Entity hero = findType(*sim2, "hero", 1);
+    CHECK(hero.valid() && sim2->world().has<game::Veteran>(hero) && sim2->world().get<game::Veteran>(hero).level == 2);
+    CHECK(stockOf(*sim2, 1, "gold") == Fixed::fromInt(200));   // map start 100 + carried 100
+}

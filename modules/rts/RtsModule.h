@@ -130,6 +130,10 @@ enum GameEvent : uint16_t {
     kEvDiplomacy,       // player = who, value = other | 1 << 8 when allied
     kEvItem,            // a = unit, value = item index; b: shop (bought) / null (used, picked, dropped)
     kEvMerged,          // a = result
+    kEvObjective,       // campaigns: value = objective index | state << 16 (0 added, 1 done, 2 failed), player
+    kEvDialog,          // value = index into MechState::dialogs, a = speaking unit (if any), player 0 = everyone
+    kEvCamera,          // pos = where to look, value = duration in ms | 1 << 31 when the camera is locked, player
+    kEvMissionEnd,      // value 1 victory / 0 defeat, player
 };
 
 // ---------------------------------------------------------------- components
@@ -579,6 +583,7 @@ public:
     void mechSetup(Simulation& sim, const Json& map);   // decks, prices, alliances (after setupMap)
     void mechTunnelGather(Simulation& sim, Entity tunnel);   // pull the network's passengers into this exit
     bool applyMechEconomyCommand(Simulation& sim, const Command& cmd);   // market, trade, tribute, diplomacy, items
+    void campaignAction(Simulation& sim, const TrigAction& a, const std::vector<uint8_t>& players, Entity unit, Vec3 at);
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

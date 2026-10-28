@@ -14,6 +14,7 @@
 #include "engine/sim/Replay.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
+#include "modules/rts/RtsCampaign.h"   // agent-mech
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
 #include "modules/rts/RtsSphere.h"
