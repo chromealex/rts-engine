@@ -66,6 +66,9 @@ public:
 
     struct Impl;
 private:
+    bool processEvent(const platform::Event& e);
+    // Opens/closes the on-screen keyboard to follow the focused text field (platform::startTextInput).
+    void syncTextInput();
     std::unique_ptr<Impl> impl_;
 };
 

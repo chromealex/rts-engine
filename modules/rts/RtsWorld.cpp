@@ -21,24 +21,62 @@ void RtsModule::sysVision(Simulation& sim) {
     const MapGrid& g = gs.grid;
     const int W = g.w, H = g.h;
     const size_t np = gs.vision.size();
-    for (size_t p = 1; p < np; ++p) for (auto& c : gs.vision[p]) if (c == 2) c = 1;
+    // visible -> explored: only the cells lit last time (a whole-map sweep is too slow on 1024x1024 maps)
+    gs.visibleCells.resize(np);
+    for (size_t p = 1; p < np; ++p) {
+        for (int32_t i : gs.visibleCells[p]) gs.vision[p][size_t(i)] = 1;
+        gs.visibleCells[p].clear();
+    }
     std::vector<std::vector<uint8_t>> sharers(np);
     for (size_t p = 1; p < np; ++p) for (size_t q = 1; q < np; ++q) if (sim.allied(uint8_t(p), uint8_t(q))) sharers[p].push_back(uint8_t(q));
     const bool cliffs = rules_.heights.blockVision;
+    const bool los = g.hf && cliffs;   // heightfield: real line of sight over the surface
+    // heights in corner-sum units (4 corners of 1/16 = 1/64 units) so the ray test stays integer
+    auto sumUnits = [](Fixed v) { return (v.raw * 64) >> Fixed::kFracBits; };
+    const int64_t eyeUp = sumUnits(rules_.terrain.eyeHeight), targetUp = sumUnits(rules_.terrain.targetHeight);
+    auto cellSum = [&](int x, int y) {
+        return int64_t(g.corner[size_t(g.cornerIndex(x, y))]) + g.corner[size_t(g.cornerIndex(x + 1, y))] +
+               g.corner[size_t(g.cornerIndex(x, y + 1))] + g.corner[size_t(g.cornerIndex(x + 1, y + 1))];
+    };
+    auto see = [&](uint8_t owner, size_t i) {
+        for (uint8_t q : sharers[owner]) {
+            uint8_t& v = gs.vision[q][i];
+            if (v != 2) { v = 2; gs.visibleCells[q].push_back(int32_t(i)); }
+        }
+    };
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || o.player >= np || (u.flags & kUnitInHand)) return;
         const UnitType& t = rules_.types[u.type];
         int r = int(stat(sim, e, Stat::Sight).toInt());
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+        const bool air = (t.layer & kLayerAir) != 0;
+        if (los && !air && g.inside(cx, cy)) {
+            const int64_t eye = cellSum(cx, cy) + eyeUp;
+            for (int y = std::max(0, cy - r); y <= std::min(H - 1, cy + r); ++y)
+                for (int x = std::max(0, cx - r); x <= std::min(W - 1, cx + r); ++x) {
+                    int dx = x - cx, dy = y - cy;
+                    if (dx * dx + dy * dy > r * r) continue;
+                    // march the cells between eye and target: hidden if the ground rises above the sight line
+                    const int k = std::max(std::abs(dx), std::abs(dy));
+                    const int64_t tgt = cellSum(x, y) + targetUp;
+                    bool visible = true;
+                    for (int s = 1; s < k && visible; ++s) {
+                        int sx = cx + (dx * s * 2 + (dx >= 0 ? k : -k)) / (2 * k), sy = cy + (dy * s * 2 + (dy >= 0 ? k : -k)) / (2 * k);
+                        if (cellSum(sx, sy) * k > eye * (k - s) + tgt * s) visible = false;
+                    }
+                    if (visible) see(o.player, size_t(y * W + x));
+                }
+            return;
+        }
         // eyes on a ramp count as the lower level; air units see over cliffs
-        int eye = (t.layer & kLayerAir) || !cliffs ? 127 : g.levelAt(cx, cy);
+        int eye = air || !cliffs ? 127 : g.levelAt(cx, cy);
         for (int y = std::max(0, cy - r); y <= std::min(H - 1, cy + r); ++y)
             for (int x = std::max(0, cx - r); x <= std::min(W - 1, cx + r); ++x) {
                 int dx = x - cx, dy = y - cy;
                 if (dx * dx + dy * dy > r * r) continue;
                 size_t i = size_t(y * W + x);
                 if (g.level[i] > eye) continue;
-                for (uint8_t q : sharers[o.player]) gs.vision[q][i] = 2;
+                see(o.player, i);
             }
     });
 }
@@ -155,7 +193,7 @@ void RtsModule::sysNeutrals(Simulation& sim) {
                 Fixed r = t.wanderRadius;
                 for (int tries = 0; tries < 6; ++tries) {
                     Vec3 p = g.home + Vec3{(sim.rng().unit() * 2 - kOne) * r, Fixed{}, (sim.rng().unit() * 2 - kOne) * r};
-                    if (!gs.grid.passable(gs.grid.cellX(p.x), gs.grid.cellY(p.z), t.layer)) continue;
+                    if (!gs.grid.passable(gs.grid.cellX(p.x), gs.grid.cellY(p.z), t.pathLayer)) continue;
                     moves.push_back({e, p});
                     break;
                 }
@@ -217,7 +255,7 @@ void RtsModule::sysWaves(Simulation& sim) {
             for (int k = 0; k < n; ++k) {
                 Vec3 p = wd.at + Vec3{(sim.rng().unit() * 2 - kOne) * wd.spread, Fixed{}, (sim.rng().unit() * 2 - kOne) * wd.spread};
                 int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
-                if (!gs.grid.nearestPassable(cx, cy, rules_.types[type].layer, 6)) continue;
+                if (!gs.grid.nearestPassable(cx, cy, rules_.types[type].pathLayer, 6)) continue;
                 spawned.push_back(spawn(sim, type, wd.player, gs.grid.cellCenter(cx, cy)));
             }
         }
@@ -238,7 +276,7 @@ void RtsModule::sysWaves(Simulation& sim) {
         });
         for (auto& r : rel)
             for (int k = 0; k < r.count; ++k) {
-                Vec3 p = freeSpotNear(sim, r.from, rules_.types[r.type].layer);
+                Vec3 p = freeSpotNear(sim, r.from, rules_.types[r.type].pathLayer);
                 Entity n = spawn(sim, r.type, r.owner, p);
                 spawned.push_back(n);
                 sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, p});

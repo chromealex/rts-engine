@@ -194,6 +194,7 @@ void GameClient::startNetMatch() {
     fitCamera();
     minimap_.build(*dev_, mod().state(*sim_), rules_);
     ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
+    fx_.startMatch(*sim_, spectator_ ? 0 : human_, view_, mod().state(*sim_).grid);
     mode_ = Mode::Normal;
     notices_.clear();
     setScreen(Screen::Playing);
@@ -201,6 +202,7 @@ void GameClient::startNetMatch() {
 
 void GameClient::leaveNetMatch() {
     if (net_) { net_->leaveMatch(); net_->refreshRooms(); }   // detach before the simulation goes away
+    fx_.stopMatch();
     sim_.reset();
     bots_.clear();
     selection_.clear();
@@ -266,7 +268,7 @@ void GameClient::buildLobby(UiState& s) {
         }
         for (size_t i = 0; i < netMaps_.size(); ++i) {
             UiAction a;
-            a.label = netMaps_[i].title;
+            a.label = mapTitle(netMaps_[i].file, netMaps_[i].title);
             a.cost = std::to_string(netMaps_[i].players());
             a.id = addAction([this, i] { netAction("create", int(i)); });
             s.createMaps.push_back(a);

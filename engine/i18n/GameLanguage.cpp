@@ -2,6 +2,7 @@
 #include "../data/Json.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -56,6 +57,8 @@ std::string readSavedLanguage(const std::string& userDir) {
 }
 
 bool saveLanguage(const std::string& userDir, const std::string& tag) {
+    std::error_code ec;   // first run: the per-user directory may not exist yet
+    std::filesystem::create_directories(userDir, ec);
     std::ofstream f(userDir + "/language.txt", std::ios::trunc);
     if (!f) return false;
     f << normalizeTag(tag) << "\n";
