@@ -5830,6 +5830,260 @@ TEST(icons_generate_platform_sets) {
     fs::remove_all(dir);
 }
 
+// ------------------------------------------------------------------ fidelity mechanics (RtsOriginals.cpp)
+
+static Entity spawnAt(Simulation& sim, const std::string& type, uint8_t owner, double x, double z) {
+    return mod(sim).spawn(sim, uint16_t(mod(sim).rules().findType(type)), owner, Vec3{Fixed::fromRatio(int64_t(x * 100), 100), Fixed{}, Fixed::fromRatio(int64_t(z * 100), 100)});
+}
+
+TEST(orig_crush_infantry_and_spice_bloom) {
+    const char* rules = R"({"victory": "noUnits",
+      "resources": {"spice": {"field": true, "regrow": 0, "cellMax": 100}},
+      "types": {
+        "tank": {"tags": ["vehicle"], "move": {"speed": 4, "radius": 0.5}, "health": {"max": 300}, "crush": {"tags": ["infantry", "bloom"]}},
+        "soldier": {"tags": ["infantry"], "move": {"speed": 1, "radius": 0.25}, "health": {"max": 40}},
+        "bloom": {"tags": ["bloom"], "health": {"max": 1}, "countsForVictory": false, "deathField": {"resource": "spice", "radius": 3, "amount": 100}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, ""));
+    auto& gs = mod(*sim).state(*sim);
+    Entity tank = spawnAt(*sim, "tank", 1, 4, 8);
+    Entity foe = spawnAt(*sim, "soldier", 2, 10, 8);
+    Entity friendly = spawnAt(*sim, "soldier", 1, 14, 8.6);
+    spawnAt(*sim, "bloom", 0, 20, 8);
+    Command c; c.player = 1; c.type = game::kCmdMove; c.units = {tank}; c.point = {Fixed::fromInt(26), Fixed{}, Fixed::fromInt(8)};
+    sim->submit(c);
+    run(*sim, 8);
+    CHECK(!sim->world().alive(foe));                       // run over
+    CHECK(sim->world().alive(friendly));                   // own infantry is safe
+    CHECK(countType(*sim, "bloom", 0) == 0);               // the bloom burst...
+    CHECK(gs.grid.fieldAmt[size_t(gs.grid.index(20, 8))] > Fixed::fromInt(50));   // ...into a spice field
+    Fixed before = gs.grid.fieldAmt[size_t(gs.grid.index(21, 8))];
+    run(*sim, 5);
+    CHECK(gs.grid.fieldAmt[size_t(gs.grid.index(21, 8))] == before);                // no regrowth
+}
+
+TEST(orig_sandworm_eats_submerges_and_resurfaces) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+        "worm": {"move": {"speed": 3, "radius": 0.6, "layer": "sand"}, "health": {"max": 3000}, "sight": 10,
+                 "weapons": [{"range": 1.2, "damage": 2000, "cooldown": 1}], "neutral": {"wander": true, "wanderRadius": 5, "leash": 30, "eats": 2, "resurface": 5},
+                 "countsForVictory": false},
+        "quad": {"move": {"speed": 0.5, "radius": 0.4}, "health": {"max": 130}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[29,13]},{"type":"worm","owner":-1,"pos":[16,8]}])"));
+    auto& gs = mod(*sim).state(*sim);
+    spawnAt(*sim, "quad", 1, 18, 8);
+    spawnAt(*sim, "quad", 2, 14, 8);
+    spawnAt(*sim, "quad", 1, 16, 10);
+    run(*sim, 6);
+    CHECK(countType(*sim, "quad", 1) + countType(*sim, "quad", 2) == 1);   // two eaten
+    CHECK(countType(*sim, "worm", game::kHostileNeutral) == 0);            // full: dived
+    CHECK(gs.resurface.size() == 1);
+    run(*sim, 6);
+    CHECK(countType(*sim, "worm", game::kHostileNeutral) == 1);            // back somewhere on the sand
+}
+
+TEST(orig_armor_models_bonus_and_shields) {
+    const char* rules = R"({"victory": "noUnits", "armor": {"model": "percent", "perPoint": 0.06},
+      "types": {
+        "dummy": {"tags": ["cavalry"], "health": {"max": 1000, "armor": 5}},
+        "shielded": {"health": {"max": 100, "shields": 50, "shieldRegen": 50, "shieldDelay": 1}},
+        "spear": {"weapons": [{"damage": 10, "bonus": {"cavalry": 15}}]}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(16, 16, ""));
+    auto& m = mod(*sim);
+    Entity d = spawnAt(*sim, "dummy", 2, 4, 4);
+    m.dealDamage(*sim, d, Fixed::fromInt(100), 0, kNullEntity, 1);
+    Fixed hp = sim->world().get<game::Unit>(d).hp;
+    CHECK(hp > Fixed::fromInt(922) && hp < Fixed::fromInt(925));            // 100 * (1 - 0.3 / 1.3) = 76.9 taken
+    const game::WeaponDef& wd = m.rules().types[size_t(m.rules().findType("spear"))].weapons[0];
+    m.dealDamage(*sim, d, Fixed::fromInt(10), 0, kNullEntity, 1, &wd);       // +15 vs cavalry
+    Fixed hp2 = sim->world().get<game::Unit>(d).hp;
+    CHECK(hp - hp2 > Fixed::fromInt(19) && hp - hp2 < Fixed::fromInt(20));   // 25 * 0.769
+    Entity s = spawnAt(*sim, "shielded", 2, 8, 8);
+    m.dealDamage(*sim, s, Fixed::fromInt(30), 0, kNullEntity, 1);
+    CHECK(sim->world().get<game::Unit>(s).hp == Fixed::fromInt(100));        // soaked by the shield
+    m.dealDamage(*sim, s, Fixed::fromInt(30), 0, kNullEntity, 1);
+    CHECK(sim->world().get<game::Unit>(s).hp < Fixed::fromInt(100));
+    run(*sim, 3);
+    CHECK(sim->world().get<game::Shield>(s).value == Fixed::fromInt(50));    // regenerated after the pause
+}
+
+TEST(orig_hero_skills_limit_free_first_and_revive) {
+    const char* rules = R"({"victory": "noStructures",
+      "resources": {"gold": {"start": 2000}},
+      "heroes": {"skills": true, "max": 2, "freeFirst": true, "tiers": ["hall", "keep"], "revive": {"costShare": 0.5, "perLevel": 0.1}},
+      "types": {
+        "hall": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "upgrades": ["keep"]},
+        "keep": {"structure": {"footprint": [2, 2]}, "health": {"max": 1200}, "cost": {"gold": 100, "time": 1}},
+        "altar": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "produces": ["bm", "fs"]},
+        "bm": {"hero": {"levels": [10, 20, 30]}, "move": {"speed": 2}, "health": {"max": 500}, "energy": {"max": 100, "start": 100},
+               "cost": {"gold": 400, "time": 1, "supply": 0},
+               "abilities": [{"id": "whirl", "target": "none", "cooldown": 1, "energy": 1, "effects": [{"type": "damage", "amount": 1, "radius": 1}]},
+                             {"id": "ult", "target": "none", "cooldown": 1, "energy": 1, "learnAt": [6], "effects": [{"type": "damage", "amount": 1, "radius": 1}]}]},
+        "fs": {"hero": {"levels": [10]}, "move": {"speed": 2}, "health": {"max": 400}, "cost": {"gold": 400, "time": 1}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(16, 16, R"(,"entities":[{"type":"hall","owner":1,"pos":[3,3]},{"type":"altar","owner":1,"pos":[8,3]},{"type":"hall","owner":2,"pos":[13,13]}])"));
+    auto& m = mod(*sim);
+    auto& eco = m.state(*sim).players[1];
+    Entity altar = findType(*sim, "altar", 1);
+    Command t; t.player = 1; t.type = game::kCmdTrain; t.units = {altar}; t.param = m.rules().findType("bm");
+    sim->submit(t);
+    run(*sim, 2);
+    Entity bm = findType(*sim, "bm", 1);
+    CHECK(bm.valid() && stockOf(*sim, 1, "gold") == Fixed::fromInt(2000));   // the first hero is free
+    CHECK(sim->world().get<game::Hero>(bm).points == 1);
+    CHECK(!m.canCast(*sim, bm, 0));                                          // not learned yet
+    CHECK(!m.canTrain(*sim, 1, uint16_t(m.rules().findType("fs"))));         // second hero needs the keep
+    Command l; l.player = 1; l.type = game::kCmdLearn; l.units = {bm}; l.param = 1;   // ultimate: level 6 only
+    sim->submit(l);
+    run(*sim, 0.2);
+    CHECK(sim->world().get<game::Hero>(bm).skill[1] == 0);
+    l.param = 0; sim->submit(l);
+    run(*sim, 0.2);
+    CHECK(sim->world().get<game::Hero>(bm).skill[0] == 1 && m.canCast(*sim, bm, 0));
+    m.addHeroXp(*sim, bm, Fixed::fromInt(25), 1);                            // level 3: two more points
+    CHECK(sim->world().get<game::Hero>(bm).points == 2);
+    sim->world().get<game::Unit>(bm).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(eco.deadHeroes.size() == 1 && eco.deadHeroes[0].level == 3);
+    auto cost = m.trainCost(*sim, 1, uint16_t(m.rules().findType("bm")));
+    CHECK(cost.size() == 1 && cost[0].value > Fixed::fromInt(279) && cost[0].value < Fixed::fromInt(281));   // 400 * (0.5 + 0.1 * 2)
+    sim->submit(t);
+    run(*sim, 2);
+    bm = findType(*sim, "bm", 1);
+    CHECK(bm.valid() && sim->world().get<game::Hero>(bm).level == 3 && sim->world().get<game::Hero>(bm).skill[0] == 1);
+    CHECK(stockOf(*sim, 1, "gold") > Fixed::fromInt(1719) && stockOf(*sim, 1, "gold") < Fixed::fromInt(1721));
+}
+
+TEST(orig_gatherer_limit_and_upkeep_per_resource) {
+    const char* rules = R"({"victory": "noStructures",
+      "resources": {"gold": {}, "wood": {}},
+      "upkeep": [{"supply": 2, "gatherMult": 0.5, "resources": ["gold"]}],
+      "types": {
+        "hall": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "dropoff": ["gold", "wood"], "supply": 10},
+        "mine": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 10000, "maxGatherers": 1}},
+        "peon": {"move": {"speed": 3, "radius": 0.3}, "health": {"max": 50}, "cost": {"supply": 1}, "gather": {"gold": {"carry": 10, "time": 2}}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(24, 12, R"(,"entities":[{"type":"hall","owner":1,"pos":[3,6]},{"type":"mine","owner":0,"pos":[8,6]},{"type":"hall","owner":2,"pos":[21,6]}])"));
+    auto& m = mod(*sim);
+    Entity a = spawnAt(*sim, "peon", 1, 6, 5), b = spawnAt(*sim, "peon", 1, 6, 7);
+    Entity mine = findType(*sim, "mine", 0);
+    Command g; g.player = 1; g.type = game::kCmdGather; g.units = {a, b}; g.target = mine;
+    sim->submit(g);
+    int maxAt = 0;
+    for (int i = 0; i < 20 * 20; ++i) { sim->step(); maxAt = std::max(maxAt, m.gatherersAt(*sim, mine)); }
+    CHECK(maxAt == 1);
+    CHECK(m.gatherMultFor(*sim, 1, m.rules().findResource("gold")) == Fixed::fromRatio(1, 2));   // 2 supply used
+    CHECK(m.gatherMultFor(*sim, 1, m.rules().findResource("wood")) == Fixed::fromInt(1));
+}
+
+TEST(orig_power_field_placement_and_switch_off) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "pylon": {"structure": {"footprint": [2, 2]}, "health": {"max": 200}, "powerField": {"radius": 6}},
+        "gate": {"structure": {"footprint": [2, 2], "needsField": 0}, "health": {"max": 500}, "produces": ["zealot"]},
+        "zealot": {"move": {"speed": 2}, "health": {"max": 100}, "cost": {"time": 1}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"pylon","owner":1,"pos":[5,8]},{"type":"gate","owner":1,"pos":[9,8]},{"type":"pylon","owner":2,"pos":[28,8]}])"));
+    auto& m = mod(*sim);
+    uint16_t gt = uint16_t(m.rules().findType("gate"));
+    CHECK(m.canPlace(*sim, 1, gt, {Fixed::fromInt(7), Fixed{}, Fixed::fromInt(12)}));
+    CHECK(!m.canPlace(*sim, 1, gt, {Fixed::fromInt(20), Fixed{}, Fixed::fromInt(8)}));
+    run(*sim, 0.2);
+    Entity gate = findType(*sim, "gate", 1);
+    CHECK(!(sim->world().get<game::Unit>(gate).flags & game::kUnitDisabled));
+    sim->world().get<game::Unit>(findType(*sim, "pylon", 1)).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(sim->world().get<game::Unit>(gate).flags & game::kUnitDisabled);
+}
+
+TEST(orig_crews_snipers_and_empty_vehicles) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "fort": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+        "jeep": {"move": {"speed": 0.1, "radius": 0.5}, "health": {"max": 200}, "crew": "robot"},
+        "sniper": {"move": {"speed": 2}, "health": {"max": 50}, "weapons": [{"range": 8, "damage": 1, "cooldown": 0.5, "killsCrew": 1}]},
+        "robot": {"move": {"speed": 3, "radius": 0.3}, "health": {"max": 70}, "crews": true}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"fort","owner":1,"pos":[2,2]},{"type":"fort","owner":2,"pos":[29,13]}])"));
+    auto& m = mod(*sim);
+    Entity jeep = spawnAt(*sim, "jeep", 2, 12, 8);
+    Entity sniper = spawnAt(*sim, "sniper", 1, 6, 8);
+    run(*sim, 1.5);
+    CHECK(sim->world().get<Owner>(jeep).player == 0);                     // driver shot, vehicle empty
+    sim->world().get<game::Unit>(sniper).hp = Fixed{};
+    Entity robot = spawnAt(*sim, "robot", 1, 9, 8);
+    Command c; c.player = 1; c.type = game::kCmdSmart; c.units = {robot}; c.target = jeep;
+    sim->submit(c);
+    run(*sim, 3);
+    CHECK(sim->world().get<Owner>(jeep).player == 1 && !sim->world().alive(robot));
+    (void)m;
+}
+
+TEST(orig_infection_and_death_payload) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+        "walker": {"tags": ["infected"], "move": {"speed": 2, "radius": 0.3}, "health": {"max": 60}, "weapons": [{"range": 0.5, "damage": 100, "cooldown": 1}]},
+        "colonist": {"move": {"speed": 0.01, "radius": 0.3}, "health": {"max": 30}, "infect": {"by": ["infected"], "spawn": "walker", "count": 1}},
+        "bomb": {"health": {"max": 10}, "onDeath": [{"type": "damage", "amount": 500, "radius": 3, "affects": "any"}]}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[29,13]}])"));
+    spawnAt(*sim, "walker", 2, 10, 8);
+    spawnAt(*sim, "colonist", 1, 11, 8);
+    run(*sim, 2);
+    CHECK(countType(*sim, "colonist", 1) == 0 && countType(*sim, "walker", 2) == 2);   // the victim rose
+    Entity bomb = spawnAt(*sim, "bomb", 1, 20, 4);
+    Entity near = spawnAt(*sim, "colonist", 1, 21, 4);
+    sim->world().get<game::Unit>(bomb).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(!sim->world().alive(near));
+}
+
+TEST(orig_garrison_upgrades_capture_level_keep_and_forges) {
+    const char* rules = R"({"victory": "noEntities",
+      "types": {
+        "shroom": {"move": {"speed": 3, "radius": 0.15}, "health": {"max": 1}, "entersGarrison": true},
+        "v1": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 1, "garrison": {"max": 20, "unit": "shroom", "interval": 100, "keep": 1}, "upgrades": ["v2"]},
+        "v2": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 2, "garrison": {"max": 30, "unit": "shroom", "interval": 100, "onCapture": "v1", "keep": 1},
+               "cost": {"garrison": 10, "time": 0.5}},
+        "forge": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "garrison": {"max": 10, "unit": "shroom"},
+                  "playerMods": {"max": 2, "mods": [{"type": "shroom", "stat": "damage", "mul": 1.5}]}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"v1","owner":1,"pos":[4,8],"garrison":15},{"type":"v2","owner":2,"pos":[20,8],"garrison":3},{"type":"forge","owner":1,"pos":[4,3]}])"));
+    auto& m = mod(*sim);
+    Entity a = findType(*sim, "v1", 1), b = findType(*sim, "v2", 2);
+    Command u; u.player = 1; u.type = game::kCmdUpgrade; u.units = {a}; u.param = m.rules().findType("v2");
+    sim->submit(u);
+    run(*sim, 1);
+    CHECK(sim->world().get<game::Unit>(a).type == m.rules().findType("v2") && sim->world().get<game::Garrison>(a).count == 5);
+    Command s; s.player = 1; s.type = game::kCmdSend; s.units = {a}; s.target = b; s.param = 100;
+    sim->submit(s);
+    run(*sim, 0.3);
+    CHECK(sim->world().get<game::Garrison>(a).count + sim->world().get<game::Garrison>(a).pendingOut >= 1);   // one stays home
+    CHECK(sim->world().get<game::Garrison>(a).count == 1);
+    run(*sim, 10);
+    // 4 shrooms at x1.5 attack vs 3 defenders: captured, and the level 2 building dropped to level 1
+    CHECK(sim->world().get<Owner>(b).player == 1 && sim->world().get<game::Unit>(b).type == m.rules().findType("v1"));
+}
+
+TEST(orig_faction_only_types) {
+    const char* rules = R"({"victory": "noStructures",
+      "factions": {"atreides": {"name": "A", "start": []}, "harkonnen": {"name": "H", "start": []}},
+      "types": {
+        "yard": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "produces": ["sonic", "devastator"]},
+        "sonic": {"move": {"speed": 2}, "health": {"max": 100}, "factions": ["atreides"]},
+        "devastator": {"move": {"speed": 2}, "health": {"max": 100}, "factions": ["harkonnen"]}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(16, 16, R"(,"entities":[{"type":"yard","owner":1,"pos":[3,3]},{"type":"yard","owner":2,"pos":[12,12]}])",
+                                         R"([{"name":"A","team":1,"faction":"atreides"},{"name":"H","team":2,"faction":"harkonnen"}])"));
+    auto& m = mod(*sim);
+    CHECK(m.canTrain(*sim, 1, uint16_t(m.rules().findType("sonic"))) && !m.canTrain(*sim, 1, uint16_t(m.rules().findType("devastator"))));
+    CHECK(m.canTrain(*sim, 2, uint16_t(m.rules().findType("devastator"))) && !m.canTrain(*sim, 2, uint16_t(m.rules().findType("sonic"))));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

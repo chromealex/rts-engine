@@ -369,7 +369,10 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (!o.target.valid()) return true;
         }
         if (o.state == 0) {
-            moveTo(sim, e, w.get<Transform>(o.target).pos, rules_.types[w.get<Unit>(o.target).type].radius + t.radius + Fixed::fromRatio(4, 10));
+            // goal radius from the short side: a 3x2 refinery must not count as reached 1.5 cells away from its long side
+            const UnitType& dt = rules_.types[w.get<Unit>(o.target).type];
+            Fixed near = dt.structure ? Fixed::fromInt(std::min(dt.footprintW, dt.footprintH)) / 2 : dt.radius;
+            moveTo(sim, e, w.get<Transform>(o.target).pos, near + t.radius + Fixed::fromRatio(4, 10));
             o.state = 1;
         }
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
@@ -480,7 +483,8 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (!state(sim).roadsOnly) moveTo(sim, e, tp, Fixed{});
             o.state = 1;
         }
-        if (contactDistance(sim, e, o.target) > Fixed::fromRatio(2, 10)) {
+        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target);
+        if (contactDistance(sim, e, o.target) > (crewing ? Fixed::fromRatio(6, 10) : Fixed::fromRatio(2, 10))) {
             if (m && !m->moving) o.state = 0;
             return false;
         }

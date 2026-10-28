@@ -179,6 +179,20 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             t.garrisonKeep = int(g.getInt("keep", 0));
             if (t.captureAs != kNoType || t.garrisonKeep > 0) any = true;
         }
+        if (const Json& c = tj["crush"]; c.isObject()) { any = true; t.crushTags = tagsOf(r, where + " crush.tags", c["tags"]); }
+        if (const Json& df = tj["deathField"]; df.isObject()) {
+            any = true;
+            t.deathFieldRes = int16_t(resId(r, where + " deathField", df.getStr("resource")));
+            t.deathFieldRadius = df.getFx("radius", t.deathFieldRadius);
+            t.deathFieldAmount = df.getFx("amount", t.deathFieldAmount);
+            if (!r.resources[size_t(t.deathFieldRes)].field) fail(where + " deathField", "resource must be a field resource");
+        }
+        for (auto& f : tj["factions"].items()) {
+            int fi = r.findFaction(f.str());
+            if (fi < 0 || fi >= 32) fail(where + " factions", "unknown faction '" + f.str() + "'");
+            t.factionMask |= 1u << fi;
+            any = true;
+        }
         t.clash = tj.getBool("clash", false);
         if (t.clash || t.crews || t.queueSlots > 1) any = true;
         if (const Json& pm = tj["playerMods"]; !pm.isNull()) {

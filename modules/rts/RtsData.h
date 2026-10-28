@@ -290,6 +290,10 @@ struct UnitType {
     int playerModsMax = 0;                     // count at most this many (0 = all)
     std::vector<std::vector<int>> learnAt;     // per ability: hero levels for skill levels 1, 2, ... (WC3)
     Fixed costGrowth{};                        // cost * (1 + growth * owned) (Dungeon Keeper imps)
+    uint64_t crushTags = 0;                    // moving over units with these tags kills them (Dune / C&C tanks)
+    uint32_t factionMask = 0;                  // "factions": only these factions may train / build it (0 = all)
+    int16_t deathFieldRes = -1;                // dying spreads a resource field (Dune spice bloom)
+    Fixed deathFieldRadius = Fixed::fromInt(3), deathFieldAmount = Fixed::fromInt(100);
     Json view;
 };
 

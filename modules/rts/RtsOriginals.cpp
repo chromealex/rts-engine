@@ -100,6 +100,24 @@ void RtsModule::onDeathOriginals(Simulation& sim, Entity e, uint8_t owner, Vec3 
         ctx.owner = owner; ctx.sourceType = u.type; ctx.point = flat(pos); ctx.origin = ctx.point;
         applyPayload(sim, t.onDeath, ctx);
     }
+    if (t.deathFieldRes >= 0) {
+        // a spice bloom bursts into a field around it
+        MapGrid& g = gs.grid;
+        const int r = int(t.deathFieldRadius.floorInt()) + 1;
+        const int cx = g.cellX(pos.x), cy = g.cellY(pos.z);
+        const Fixed cap = rules_.resources[size_t(t.deathFieldRes)].fieldCellMax;
+        for (int y = cy - r; y <= cy + r; ++y)
+            for (int x = cx - r; x <= cx + r; ++x) {
+                if (!g.inside(x, y)) continue;
+                Fixed d = Vec2{Fixed::fromInt(x - cx), Fixed::fromInt(y - cy)}.length();
+                if (d > t.deathFieldRadius) continue;
+                size_t i = size_t(g.index(x, y));
+                if (!(g.flags[i] & kCellGround) || (g.fieldRes[i] >= 0 && g.fieldRes[i] != t.deathFieldRes)) continue;
+                g.fieldRes[i] = t.deathFieldRes;
+                g.fieldAmt[i] = fxMin(cap, g.fieldAmt[i] + t.deathFieldAmount * (kOne - d / (t.deathFieldRadius + kOne)));
+            }
+        gs.fieldsDirty = true;
+    }
     if ((u.flags & kUnitInfected) && t.infectSpawn != kNoType) {
         deathSpawns_.push_back({t.infectSpawn, u.lastAttacker, pos, t.infectCount});
         sim.emit({kEvInfected, u.lastAttacker, e, kNullEntity, t.infectSpawn, pos});
@@ -431,6 +449,35 @@ void RtsModule::sysOriginals(Simulation& sim) {
                 u.hp = Fixed{}; u.flags |= kUnitSilent;
                 gainOn(sim, walkers[i].owner, &ResourceDef::gainLost, kOne);
             }
+    }
+    // crushing: vehicles running over infantry (and spice blooms) kill them
+    {
+        struct Crusher { Entity e; uint8_t owner; Vec3 pos; Fixed r; uint64_t tags; };
+        std::vector<Crusher> crushers;
+        w.each<Unit, Owner, Transform, Mobile>([&](Entity e, Unit& u, Owner& o, Transform& tr, Mobile& mb) {
+            const UnitType& t = rules_.types[u.type];
+            if (t.crushTags && mb.moving && u.hp.raw > 0 && !(u.flags & (kUnitInHand | kUnitUnderConstruction))) crushers.push_back({e, o.player, tr.pos, t.radius, t.crushTags});
+        });
+        for (auto& c : crushers) {
+            std::vector<Entity> victims;
+            gs.hash.query(c.pos, c.r + kOne, [&](Entity v) {
+                auto* vu = w.tryGet<Unit>(v);
+                if (!vu || v == c.e || vu->hp.raw <= 0 || (vu->flags & kUnitInHand)) return;
+                const UnitType& vt = rules_.types[vu->type];
+                if (!(vt.tags & c.tags) || vt.invulnerable || (vt.layer & kLayerAir)) return;
+                const uint8_t vo = w.get<Owner>(v).player;
+                if (vo == c.owner || (vo != 0 && !hostile(sim, c.owner, vo))) return;
+                if (dist2D(w.get<Transform>(v).pos, c.pos) > c.r + vt.radius + Fixed::fromRatio(15, 100)) return;   // touching: avoidance never lets them overlap
+                victims.push_back(v);
+            });
+            for (Entity v : victims) {
+                Unit& vu = w.get<Unit>(v);
+                if (vu.hp.raw <= 0) continue;
+                vu.hp = Fixed{};
+                if (c.owner != 0) vu.lastAttacker = c.owner;
+                sim.emit({kEvHit, c.owner, v, c.e, 0, w.get<Transform>(v).pos});
+            }
+        }
     }
     // eaters (sandworms) submerge after enough meals and come back somewhere else later
     std::vector<Entity> sink;
