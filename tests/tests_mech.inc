@@ -304,13 +304,13 @@ TEST(mech_shields_upkeep_workers) {
     World& w = sim->world();
     run(*sim, 0.2);
     Entity z = findType(*sim, "zealot", 1);
-    CHECK(w.has<game::MechShield>(z) && w.get<game::MechShield>(z).hp == Fixed::fromInt(50));
+    CHECK(w.has<game::Shield>(z) && w.get<game::Shield>(z).value == Fixed::fromInt(50));
     mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);
-    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::MechShield>(z).hp == Fixed::fromInt(20));
+    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::Shield>(z).value == Fixed::fromInt(20));
     mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);   // 20 shield, 10 left - 1 armor = 9 to hp
-    CHECK(w.get<game::MechShield>(z).hp.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
+    CHECK(w.get<game::Shield>(z).value.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
     run(*sim, 4);
-    CHECK(w.get<game::MechShield>(z).hp > Fixed::fromInt(10));   // regenerates after the delay
+    CHECK(w.get<game::Shield>(z).value > Fixed::fromInt(10));   // regenerates after the delay
     // two peons on a mine with room for one: only one gathers at a time; upkeep halves gold, not wood
     std::vector<Entity> peons;
     w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && mod(*sim).rules().types[u.type].id == "peon") peons.push_back(e); });
@@ -685,11 +685,11 @@ TEST(mech_tactics) {
     CHECK(mod(*sim).stat(*sim, rifle, game::Stat::Speed).raw == 0);
     // the sniper kills the tank crew: it turns neutral; a rifleman re-crews it
     run(*sim, 3);
-    CHECK(w.get<Owner>(tank).player == 0 && w.has<game::Abandoned>(tank));
+    CHECK(w.get<Owner>(tank).player == 0 && mod(*sim).canCrew(*sim, covered, tank));   // empty: the rifleman may man it
     sim->submit(mechCmd(2, game::kCmdMove, {unitNear(*sim, 27, 15)}, kNullEntity, at(39, 19)));   // the sniper leaves
     sim->submit(mechCmd(1, game::kCmdSmart, {covered}, tank));
     run(*sim, 12);
-    CHECK(w.get<Owner>(tank).player == 1 && !w.has<game::Abandoned>(tank));
+    CHECK(w.get<Owner>(tank).player == 1 && !mod(*sim).canCrew(*sim, covered, tank));
     // an APC runs over infantry
     Entity apc = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("apc")), 2, at(25, 9));
     Entity victim = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("rifle")), 1, at(30, 9));
@@ -924,13 +924,18 @@ TEST(mech_flow_fields) {
         sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
         auto t0 = std::chrono::steady_clock::now();
         sim->submit(mechCmd(1, game::kCmdMove, army, kNullEntity, at(80, 20)));
-        run(*sim, 40);
+        run(*sim, 1);
+        int onField = 0;
+        for (Entity e : army) if (sim->world().get<game::Mobile>(e).flow) ++onField;
+        if (flow) CHECK(onField >= 300);   // hundreds of units on one shared field
+        if (flow && onField < 300) std::printf("  on the field after 1 s: %d\n", onField);
+        run(*sim, 39);
         ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         arrived = 0;
         for (Entity e : army) if (posOf(*sim, e).x > Fixed::fromInt(49)) ++arrived;
         if (flow) {
             auto& g = mod(*sim).state(*sim).grid;
-            CHECK(g.flowStats[0] >= 1 && g.flowStats[0] <= 3 && g.flowStats[1] >= 300);   // one field, hundreds of paths
+            CHECK(g.flowCount() >= 1 && g.flowCount() <= 3);   // one field (goal area) for the whole army
             CHECK(mechRoundTrip(*sim, rules, map, 60));
         }
     };

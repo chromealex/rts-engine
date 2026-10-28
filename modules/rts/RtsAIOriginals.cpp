@@ -29,7 +29,7 @@ void RtsAI::originals(Simulation& sim, RtsModule& m) {
     // crews: idle units that can drive go for the nearest empty vehicle or gun
     std::vector<std::pair<Entity, Vec3>> empty;
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
-        if (o.player == 0 && R.types[u.type].crew != kNoType && u.hp.raw > 0) empty.push_back({e, tr.pos});
+        if (o.player == 0 && R.types[u.type].crewed && u.hp.raw > 0) empty.push_back({e, tr.pos});
     });
     if (!empty.empty()) {
         std::vector<Entity> claimed;

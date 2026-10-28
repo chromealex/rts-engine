@@ -183,6 +183,8 @@ const char* kInstructions =
     "slot and faction, match length, what never gets built; 'mirror' separates map side from faction). "
     "Phones: device_list {filter} (iPhone, iPad, Pixel, Galaxy, Redmi, desktops: sizes, safe areas, cut-outs) -> "
     "device_set {device, orientation, safeArea: true} -> view_screenshot {window: game}. "
+    "The game's own screens (main menu, levels, shop, profile, settings, popups; RmlUi + Lua): ui_api -> ui_screen_create "
+    "{name, template} -> game_file_write ui/screens/<name>.rml -> ui_validate -> ui_preview {screen, device}. "
     "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
     "Mechanics the data blocks can't express: Lua scripts - script_api (reference) -> script_write {path: scripts/x.lua, register: true} "
     "-> script_check (compile + short bot match, errors with file:line); simulation scripts use integers and fx() numbers, no floats. "
@@ -222,6 +224,11 @@ int main(int argc, char** argv) {
     Workspace local;                      // used when no editor is reachable
     local.engineDir = opt.engine;
     local.buildTool = findTool(self, "rtsbuild");
+    for (fs::path c : {fs::path(self) / "RTSGame", fs::path(self) / "RTSGame.exe", fs::path(self) / "RTSGame.app/Contents/MacOS/RTSGame",
+                       fs::path(self) / "Release/RTSGame.exe"}) {   // ui_preview renders screens with the client
+        std::error_code ec2;
+        if (fs::exists(c, ec2)) { local.gameExe = c.string(); break; }
+    }
     if (!opt.game.empty()) { std::string err; local.openGame(opt.game, &err); }
     EditorLink link(opt, self);
 
