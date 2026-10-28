@@ -1,0 +1,13 @@
+// lastcolony — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "They Are Billions: the last colony against growing waves of the infected.",
+  "howto.goal": "Survive 12 minutes — the timer is at the top. Waves come more often and bigger.",
+  "howto.tip": "Wall off every way into the colony but one, and put the ballistas there.",
+  "howto.step1": "Colonists chop wood and quarry stone; tents and the market give gold every second.",
+  "howto.step2": "You can only build near the colony. Walls block passages, ballistas shoot into crowds.",
+  "howto.step3": "Barracks train rangers (ranged) and soldiers (melee).",
+  "howto.step4": "The first wave comes at 1:30, from 4:00 fast runners join it."
+}

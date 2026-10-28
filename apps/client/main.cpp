@@ -287,7 +287,7 @@ Entity GameClient::pick(float sx, float sy) const {
 
 void GameClient::cleanSelection() {
     World& w = sim_->world();
-    selection_.erase(std::remove_if(selection_.begin(), selection_.end(), [&](Entity e) { return !w.alive(e) || !w.has<Unit>(e); }), selection_.end());
+    selection_.erase(std::remove_if(selection_.begin(), selection_.end(), [&](Entity e) { return !w.alive(e) || !w.has<Unit>(e) || (w.get<Unit>(e).flags & kUnitInHand); }), selection_.end()); // hand: off the map
 }
 
 bool GameClient::selectionHasGarrison() const {
@@ -373,6 +373,7 @@ void GameClient::event(const Event& e) {
     // mobile apps go quiet in the background; desktop keeps playing when the window loses focus
     if (e.type == EventType::FocusLost && platform::isTouchDevice()) audio_.setPaused(true);
     if (e.type == EventType::FocusGained) audio_.setPaused(false);
+    if (howtoOpen_ && e.type == EventType::KeyDown && e.key == Key::Escape) { howtoOpen_ = false; return; }
     if (screen_ == Screen::Paused && e.type == EventType::KeyDown && e.key == Key::Escape && !uiWants) { setScreen(Screen::Playing); return; }
     if (screen_ != Screen::Playing || !sim_) return;
     World& w = sim_->world();
@@ -380,6 +381,7 @@ void GameClient::event(const Event& e) {
     case EventType::MouseDown:
         if (uiWants) return;
         downX_ = e.x; downY_ = e.y;
+        if (toolMouseDown(e)) return;   // skills, rect tools, hand, possession (ClientActions.cpp)
         if (e.button == 0) {
             if (mode_ == Mode::Place) {
                 bool ok;
@@ -437,7 +439,7 @@ void GameClient::event(const Event& e) {
             if (t.valid() && selectionHasGarrison() && w.has<Garrison>(t)) { command(kCmdSmart, e.x, e.y, false); return; }
             boxing_ = true;
         } else if (e.button == 1) {
-            if (mode_ != Mode::Normal) { mode_ = Mode::Normal; return; }
+            if (mode_ != Mode::Normal) { mode_ = Mode::Normal; rectDrag_ = false; return; }
             command(kCmdSmart, e.x, e.y, e.mods & platform::kModShift);
         } else {
             panning_ = true;
@@ -457,6 +459,7 @@ void GameClient::event(const Event& e) {
         }
         break;
     case EventType::MouseUp:
+        if (toolMouseUp(e)) { panning_ = false; break; }
         if (e.button == 0) {
             if (sendDrag_) {
                 Entity t = pick(e.x, e.y);
@@ -489,6 +492,7 @@ void GameClient::event(const Event& e) {
         touches_[e.touchId] = {e.x, e.y};
         if (touches_.size() == 1) {
             downX_ = mouseX_ = e.x; downY_ = mouseY_ = e.y; touchMoved_ = false;
+            if (rectMode()) { rectDrag_ = true; rectX_ = e.x; rectY_ = e.y; sendDrag_ = false; break; }
             Entity t = pick(e.x, e.y);
             sendDrag_ = t.valid() && w.has<Garrison>(t) && w.get<Owner>(t).player == human_;
             if (sendDrag_ && std::find(selection_.begin(), selection_.end(), t) == selection_.end()) selection_ = {t};
@@ -505,6 +509,7 @@ void GameClient::event(const Event& e) {
         if (touches_.size() == 1) {
             if (std::hypot(e.x - downX_, e.y - downY_) > 12) touchMoved_ = true;
             mouseX_ = e.x; mouseY_ = e.y;
+            if (rectDrag_) break;   // painting a rect, not panning
             if (sendDrag_) {
                 Entity t = pick(e.x, e.y);
                 if (t.valid() && w.has<Garrison>(t) && w.get<Owner>(t).player == human_ &&
@@ -531,12 +536,17 @@ void GameClient::event(const Event& e) {
         if (!touches_.count(e.touchId)) return;
         bool single = touches_.size() == 1 && e.type == EventType::TouchEnd;
         touches_.erase(e.touchId);
+        if (rectDrag_) {
+            Event up = e; up.type = EventType::MouseUp; up.button = 0;
+            if (single) toolMouseUp(up); else rectDrag_ = false;
+            break;
+        }
         if (single) {
             if (sendDrag_) {
                 if (touchMoved_) command(kCmdSmart, e.x, e.y, false);
             } else if (!touchMoved_ && !uiWants) {
                 Entity t = pick(e.x, e.y);
-                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim) {
+                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim || mode_ == Mode::Skill || mode_ == Mode::Drop) {
                     Event fake = e; fake.type = EventType::MouseDown; fake.button = 0; fake.mods = 0;
                     event(fake);
                 } else if (t.valid() && w.get<Owner>(t).player == human_ && !selectionHasGarrison()) {
@@ -556,7 +566,9 @@ void GameClient::event(const Event& e) {
     case EventType::KeyDown: {
         if (uiWants) return;
         const bool ctrl = e.mods & (platform::kModCtrl | platform::kModSuper);
-        if (e.key == Key::Escape) { if (mode_ != Mode::Normal) mode_ = Mode::Normal; else setScreen(Screen::Paused); }
+        if (e.key == Key::Escape && possessedUnit().valid() && mode_ == Mode::Normal) { Command c; c.type = kCmdPossess; issue(c); break; }
+        if (e.key == Key::Escape) { if (mode_ != Mode::Normal) { mode_ = Mode::Normal; rectDrag_ = false; } else setScreen(Screen::Paused); }
+        if (possessedUnit().valid()) break;   // WASD steers the possessed creature
         if (e.key >= Key::Num1 && e.key <= Key::Num9) {
             int gi = int(e.key) - int(Key::Num0);
             if (ctrl) groups_[size_t(gi)] = selection_;
@@ -614,7 +626,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         // edge scrolling only while the cursor is inside the window (macOS reports moves outside it too)
         bool edges = !platform::isTouchDevice() && std::string(platform::name()) != "web" && mouseX_ >= 0 && mouseY_ >= 0 && mouseX_ <= W && mouseY_ <= H;
         bool noSel = selection_.empty();
-        if (!ui_.textInputFocused()) {
+        if (!ui_.textInputFocused() && !possessedUnit().valid()) {
             if (key(Key::Up) || (noSel && key(Key::W)) || (edges && mouseY_ < 3)) cam_.target += fwd * speed;
             if (key(Key::Down) || (noSel && key(Key::S)) || (edges && mouseY_ > H - 3)) cam_.target += fwd * -speed;
             if (key(Key::Right) || (noSel && key(Key::D)) || (edges && mouseX_ > W - 3)) cam_.target += right * speed;
@@ -629,6 +641,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             shadowQuality_ = boundShadowQuality_ = quality_.shadows();
         }
 
+        steerPossessed();
         if (!netMatch_) {
             for (auto& b : bots_) b.update(*sim_);
             sim_->advance(dt);
@@ -677,6 +690,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
                 view_.drawGhost(r3d_, uint16_t(placeType_), {float(c.x.toDouble()), 0, float(c.z.toDouble())}, can, mod().state(*sim_).grid, time_);
             }
         }
+        drawToolPreview();
         r3d_.render(pass);
         fx_.render(r3d_.lighting);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
@@ -709,10 +723,11 @@ int rtsMain(int argc, char** argv) {
     cb.frame = [](gfx::Device& d, double dt) { boot.frame(d, dt); };
     cb.event = [](const Event& e) { boot.event(e); };
     cb.shutdown = [] { boot.shutdown(); };
-    // --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
+    // --howto: open "How to play"; --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
+        if (a == "--howto") g_client->showHowto();
         if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);
         // --size WxH: window size on desktops (e.g. 540x960 to look at a portrait game)
         if (a == "--size" && i + 1 < argc) {

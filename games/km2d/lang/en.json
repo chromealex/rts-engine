@@ -1,0 +1,13 @@
+// km2d — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Warcraft II in pixel 2D: peasants, gold and lumber, barracks and towers.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "Archers behind swordsmen live longer.",
+  "howto.step1": "Peasants mine gold and chop wood (right-click the resource).",
+  "howto.step2": "The town hall trains peasants, houses raise supply.",
+  "howto.step3": "Barracks train swordsmen and archers, watch towers guard the base.",
+  "howto.step4": "Gather a group, press A and click the enemy — attack-move."
+}

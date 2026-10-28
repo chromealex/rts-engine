@@ -43,7 +43,7 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `waveClock` | seconds; structures with `waveSpawn` release their units together on this clock (lane battlers) |
 | `autoBuild` | `{"pool": [types], "cost": {res: n}, "growth": 0.5}` — a BUILD button: the sim picks a type from the pool and a spot next to the base automatically; cost grows by `growth` per structure already auto-built |
 | `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}`, `{"mode": "territory", "share": 0.9}` (a team owning that share of all claimable cells wins; a player with no territory is out) |
-| `fogOfWar` | `{"mode": "full"}` — fog of war: `full` (default: unexplored black, explored dim), `explored` (the whole map starts explored, enemies only in sight), `none` (no fog, everyone sees everything); `shareAllies` (true). A map may override `mode`. The other keys are visual, see "Fog of war look" |
+| `fogOfWar` | `{"mode": "full"}` — fog of war: `full` (default: unexplored black, explored dim), `explored` (the whole map starts explored, enemies only in sight), `none` (no fog, everyone sees everything); `shareAllies` (true); `lineOfSight` (false: 3D visibility by heights and blockers, see "3D line of sight"); `rockHeight` (2: undug rock as an occluder). A map may override `mode`. The other keys are visual, see "Fog of war look" |
 | `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage. With `terrain.model: "heightfield"` the advantage is the height difference / `levelHeight` (fractional), `missUphill` scales with it (full chance from one level below) and vision follows real line of sight |
 | `terrain` | `{"model": "heightfield", "maxSlope": {"ground": 0.8, "sand": 0.6}, "buildSlope": 0.35, "uphillSpeed": 0.5, "downhillSpeed": 0.2, "eyeHeight": 1, "targetHeight": 0.5}` — terrain model, see "Heightfield terrain". `model`: `"levels"` (default: cliff levels + ramps), `"flat"` (levels ignored), `"heightfield"`. Other keys of this block are visual (view) and ignored by the simulation |
 | `regions` | `{"claimCost": {"food": 100}, "claimCostGrowth": 0.5, "buildOnlyOwned": true, "productionPerRegion": 0.1}` — territory (Northgard; with flags: Z) |
@@ -254,8 +254,9 @@ stays silent.
   "volume": {"master": 1, "sfx": 0.9, "ui": 0.7, "voice": 1, "music": 0.6, "ambient": 0.7},
   "spatial": {"minDistance": 10, "maxDistance": 55, "airAbsorption": 1500, "speedOfSound": 150,
               "reverb": {"size": 0.6, "damping": 0.45, "wet": 0.4, "near": 0.04, "far": 0.65}},
+  "groups": {"melee": {"max": 6}, "ui": {"max": 3, "bus": "ui", "steal": "oldest"}},
   "sounds": {
-    "swing": {"files": ["sfx/swing1.ogg", "sfx/swing2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 4, "cooldown": 0.05},
+    "swing": {"files": ["sfx/swing1.ogg", "sfx/swing2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 4, "cooldown": 0.05, "group": "melee"},
     "alarm": {"file": "voice/under_attack.ogg", "bus": "voice", "priority": 10},
     "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"},
     "boom":  {"file": "sfx/boom.ogg", "minDistance": 14, "maxDistance": 80, "far": {"sound": "boom_far", "from": 0.25}},
@@ -305,7 +306,9 @@ a sound can override them and add `air` / `reverb` multipliers (below).
 | `spatial` | attenuated and panned around the camera when the event has a position; default true for `sfx` / `ambient`, false otherwise (announcements are heard anywhere) |
 | `volume` | 0..4 (1) |
 | `pitch` | number or `[min, max]` random per play (1) |
-| `maxInstances` | at most this many at once; a new play stops the oldest (4; 0 = no limit) |
+| `maxInstances` | at most this many of this sound at once (4; 0 = no limit); `steal` decides who makes room |
+| `steal` | for `maxInstances`: `farthest` (default), `oldest`, `quietest`, `none` — see "groups" |
+| `group` | a group name or an array of up to 4: limits shared with other sounds (see "groups") |
 | `cooldown` | seconds between two starts (0) — 40 archers firing together make a few sounds, not 40 |
 | `priority` | -100..100 (0): when all voices are busy, the lowest priority (oldest first) is stopped; a new sound below everything playing is dropped |
 | `loop` | loops until stopped (false) |
@@ -332,6 +335,42 @@ array of layers that are mixed:
 | `lowpass` | cutoff Hz (off) |
 | `crush` | keep only N bits, 1..15 (off) |
 | `delay` | seconds before this layer starts (0) |
+
+### groups
+
+Limits shared by several sounds, so a big battle stays readable: six swords hitting at once
+sound like a fight, sixty sound like noise, and they hide the sounds that matter.
+
+```json
+"groups": {
+  "melee":      {"max": 6},
+  "missiles":   {"max": 6, "cooldown": 0.02},
+  "explosions": {"max": 4},
+  "deaths":     {"max": 4, "steal": "quietest"},
+  "ambient":    {"max": 5, "bus": "ambient"}
+}
+```
+
+| key | meaning |
+|---|---|
+| `max` | sounds of the group at once (0 = no limit, only `cooldown`) |
+| `cooldown` | seconds between two starts of any sound of the group (0) |
+| `steal` | who makes room when the group is full (below; default `farthest`) |
+| `bus` | every sound on that bus belongs to the group: a limit per bus |
+
+Sounds join with `"group": "melee"` (or `["melee", "loud"]`: every group must have room).
+Variations (`files`) are one sound; a sound with a `far` variant counts once, and its far half
+stops with it.
+
+| `steal` | when full |
+|---|---|
+| `farthest` | the sound farthest from the listener stops; a new sound farther than all playing ones is not started — fighting off-screen never cuts off the fight on screen. Non-positional sounds: the oldest |
+| `oldest` | the sound started first stops |
+| `quietest` | the sound that is quietest now stops (content loudness measured at load, volume, bus, distance); a new sound quieter than all of them is not started |
+| `none` | nothing stops: the new sound is not started |
+
+A playing sound with a higher `priority` than the new one is never stopped for it; when the
+whole group is more important, the new sound is not started. Stopping fades in a few ms (no click).
 
 ### music
 
@@ -1259,3 +1298,20 @@ Visual keys of rules.json `"fogOfWar"` (game.json `"fogOfWar"` overrides key by 
 Weak GPUs (shadow quality off/low) draw `smooth` as `cells` without noise. Heightfield maps draw
 the fog in the terrain shader (colour, transparency, cells, grid; `pattern` and `noise` are
 sheet-only).
+
+### 3D line of sight
+
+With `"fogOfWar": {"lineOfSight": true}` (always on for heightfield maps with `heights.blockVision`)
+each ground unit sees a cell only if the straight line from its eyes to the cell clears every cell in
+between. Heights: heightfield surface, or cliff level × `levelHeight` on level maps; plus dynamic
+occluders, recomputed every vision pass (5 ticks):
+
+| Source | Key | Height above the ground |
+|---|---|---|
+| Unit or structure type (walls, forests, tall buildings) | type `"vision": {"blocks": 3}` | over its footprint (structures) or its cell; gone when it dies |
+| Smoke, dust, wall-of-fog skills | delivery `{"type": "area", "radius": 2, "lifetime": 10, "blocksVision": 4}` | disc of the area while it lasts |
+| Undug rock | `fogOfWar.rockHeight` (2, 0 = transparent) | every rock cell |
+
+Eyes: `terrain.eyeHeight` + type `"vision": {"eye": 6}` (watchtowers see over walls and hills);
+targets count `terrain.targetHeight`. Air units and types with `"vision": {"seesOver": true}` see the
+full circle. Integer math, deterministic; editor: **Туман войны** → "3D: линия видимости".

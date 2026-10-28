@@ -117,20 +117,73 @@ float Mixer::lowpassCoef(float cutoff) const {
     return 1.0f - std::exp(-6.2831853f * cutoff / float(rate_));
 }
 
+float Mixer::distanceTo(float x, float y, float z) const {
+    const float dx = x - listener_.pos[0], dy = y - listener_.pos[1], dz = z - listener_.pos[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+void Mixer::stopVoices(VoiceId id, float fadeStep) {
+    for (auto& v : voices_) if (v.active && v.id == id) { v.stopping = true; v.fadeStep = fadeStep; }
+}
+
+template <class Match>
+bool Mixer::makeRoom(const MixCmd& c, int max, Steal steal, Match match) {
+    if (max <= 0) return true;
+    // How loud a sound is (or would be) now: its level, bus, master, distance and fade. The same
+    // estimate for playing and new sounds, so a voice started earlier in this block compares fairly.
+    auto loudness = [&](const Clip& clip, float volume, Bus bus, bool spatial, const DistanceDef& d, float x, float y, float z, float fade) {
+        float g = clip.rms * volume * gains_[size_t(bus)] * fade;
+        if (spatial) g *= spatialize(listener_, env_, d, x, y, z).gain;
+        return g;
+    };
+    int count = 0;
+    Voice* victim = nullptr;
+    float victimKey = 0;
+    for (auto& v : voices_) {
+        if (!v.active || v.stopping || v.role == MixCmd::Far || !match(v)) continue;
+        ++count;
+        if (v.priority > c.priority) continue;   // never stolen for a less important sound
+        float key = 0;   // larger = better victim
+        switch (steal) {
+        case Steal::Oldest: case Steal::None: break;
+        case Steal::Farthest: key = v.spatial ? distanceTo(v.x, v.y, v.z) : 0; break;
+        case Steal::Quietest: key = -loudness(*v.clip, v.volume, v.bus, v.spatial, v.distance, v.x, v.y, v.z, v.fadeStep > 0 ? 1.0f : v.fade); break;
+        }
+        // ties (e.g. all non-positional) go to the oldest; lower priority always goes first
+        if (!victim || v.priority < victim->priority || (v.priority == victim->priority && (key > victimKey + 1e-4f ||
+            (std::fabs(key - victimKey) <= 1e-4f && v.serial < victim->serial)))) { victim = &v; victimKey = key; }
+    }
+    if (count < max) return true;
+    if (!victim || steal == Steal::None) return false;
+    if (victim->priority == c.priority) {
+        if (steal == Steal::Farthest && (c.spatial ? distanceTo(c.x, c.y, c.z) : 0.0f) > victimKey + 1e-4f) return false;
+        if (steal == Steal::Quietest && -loudness(*c.clip, c.volume, c.bus, c.spatial, c.distance, c.x, c.y, c.z, 1.0f) > victimKey + 1e-6f) return false;
+    }
+    stopVoices(victim->id, -1.0f / (kStealFade * float(rate_)));
+    return true;
+}
+
 void Mixer::startVoice(MixCmd& c) {
     if (!c.clip || c.clip->frames() == 0) return;
     const float stealStep = -1.0f / (kStealFade * float(rate_));
 
-    // per-sound instance limit: the oldest instance makes room
-    if (c.maxInstances > 0) {
-        int count = 0;
-        Voice* oldest = nullptr;
-        for (auto& v : voices_) {
-            if (!v.active || v.stopping || v.sound != c.sound) continue;
-            ++count;
-            if (!oldest || v.serial < oldest->serial) oldest = &v;
+    if (c.role == MixCmd::Far) {
+        // the distant half follows its near half: it never counts against limits, and plays only
+        // if the near half was accepted (it is pushed right after it)
+        bool nearPlays = false;
+        for (auto& v : voices_) nearPlays = nearPlays || (v.active && !v.stopping && v.id == c.id && v.role == MixCmd::Near);
+        if (!nearPlays) return;
+    } else {
+        // per-sound limit, then every group of the sound; a refusal anywhere drops the sound
+        if (!makeRoom(c, c.maxInstances, c.steal, [&](const Voice& v) { return v.sound == c.sound; })) return;
+        if (groupDefs_) {
+            for (int8_t g : c.groups) {
+                if (g < 0 || size_t(g) >= groupDefs_->size()) continue;
+                const SoundGroupDef& def = (*groupDefs_)[size_t(g)];
+                if (!makeRoom(c, def.max, def.steal, [&](const Voice& v) { return std::find(std::begin(v.groups), std::end(v.groups), g) != std::end(v.groups); }))
+                    return;
+            }
         }
-        if (count >= c.maxInstances && oldest) { oldest->stopping = true; oldest->fadeStep = stealStep; }
     }
     // global limit: steal the lowest priority (oldest first), or drop the new sound
     int playing = 0;
@@ -142,8 +195,8 @@ void Mixer::startVoice(MixCmd& c) {
     }
     if (playing >= maxVoices_ && victim) {
         if (victim->priority > c.priority) return;
-        victim->stopping = true;
-        victim->fadeStep = stealStep;
+        if (victim->role == MixCmd::Near) stopVoices(victim->id, stealStep);   // with its far half
+        else { victim->stopping = true; victim->fadeStep = stealStep; }
     }
     Voice* slot = nullptr;
     for (auto& v : voices_) if (!v.active) { slot = &v; break; }
@@ -170,6 +223,7 @@ void Mixer::startVoice(MixCmd& c) {
     v.pairFrom = c.pairFrom;
     v.delay = c.delayFrames;
     v.duck = c.duck;
+    std::copy(std::begin(c.groups), std::end(c.groups), std::begin(v.groups));
     if (c.sync != Quantize::Now && music_[0]->active) // stingers land on the music's beat / bar
         v.delay += uint32_t(std::max<int64_t>(0, framesToNext(*music_[0], c.sync)));
     if (c.fade > 0) { v.fade = 0; v.fadeStep = 1.0f / (c.fade * float(rate_)); }
@@ -179,7 +233,7 @@ void Mixer::apply(MixCmd& c) {
     switch (c.kind) {
     case MixCmd::Play: startVoice(c); break;
     case MixCmd::Stop: // both halves of a near/far pair share the id
-        for (auto& v : voices_) if (v.active && v.id == c.id) { v.stopping = true; v.fadeStep = -1.0f / (std::max(c.fade, 0.002f) * float(rate_)); }
+        stopVoices(c.id, -1.0f / (std::max(c.fade, 0.002f) * float(rate_)));
         break;
     case MixCmd::StopAll:
         for (auto& v : voices_) if (v.active) { v.stopping = true; v.fadeStep = -1.0f / (std::max(c.fade, 0.002f) * float(rate_)); }
@@ -211,6 +265,7 @@ void Mixer::apply(MixCmd& c) {
         break;
     }
     case MixCmd::SetIntensity: intensityTarget_ = std::clamp(c.intensity, 0.0f, 1.0f); break;
+    case MixCmd::SetGroups: groupDefs_ = std::move(c.groupDefs); break;
     case MixCmd::StopMusic: {
         pendingMusic_.reset();
         const float frames = std::max(1.0f, c.fade * float(rate_));

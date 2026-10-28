@@ -40,7 +40,24 @@ bool writeWav(const std::string& path, const std::vector<float>& stereo, int rat
 
 } // namespace
 
+float measureRms(const Clip& c) {
+    if (c.pcm.empty()) return 0;
+    double e = 0;
+    for (int16_t v : c.pcm) e += double(v) * double(v);
+    return float(std::sqrt(e / double(c.pcm.size())) / 32768.0);
+}
+
 const char* busName(Bus b) { return size_t(b) < size_t(Bus::Count) ? kBusNames[size_t(b)] : "?"; }
+
+namespace {
+constexpr const char* kStealNames[] = {"oldest", "farthest", "quietest", "none"};
+}
+const char* stealName(Steal s) { return kStealNames[size_t(s)]; }
+bool stealFromName(std::string_view name, Steal& out) {
+    for (size_t i = 0; i < 4; ++i)
+        if (name == kStealNames[i]) { out = Steal(i); return true; }
+    return false;
+}
 
 bool busFromName(std::string_view name, Bus& out) {
     for (size_t i = 0; i < size_t(Bus::Count); ++i)
@@ -80,6 +97,9 @@ struct AudioEngine::Impl {
     std::map<std::string, std::shared_ptr<const Playlist>, std::less<>> music;
     std::vector<std::string> warnings;
     std::vector<double> lastPlay;
+    std::vector<SoundGroupDef> groups;
+    std::map<std::string, int, std::less<>> groupByName;
+    std::vector<double> lastGroupPlay;
     std::vector<int> lastVariant;
     std::string currentMusic, pendingMusic;
     float intensity = 0;
@@ -110,6 +130,13 @@ struct AudioEngine::Impl {
         c.kind = MixCmd::SetGains;
         for (size_t i = 0; i < size_t(Bus::Count); ++i) c.gains[i] = bankGain[i] * user[i];
         c.master = muted ? 0.0f : bankMaster * userMaster;
+        mixer.push(std::move(c));
+    }
+    void sendGroups() {
+        if (!mixing()) return;
+        MixCmd c;
+        c.kind = MixCmd::SetGroups;
+        c.groupDefs = std::make_shared<const std::vector<SoundGroupDef>>(groups);
         mixer.push(std::move(c));
     }
     void sendEnv() {
@@ -190,6 +217,7 @@ void AudioEngine::init(const AudioConfig& cfg) {
     m.sendGains();
     m.sendListener();
     m.sendEnv();
+    m.sendGroups();
 }
 
 void AudioEngine::shutdown() {
@@ -220,6 +248,10 @@ void AudioEngine::clearBank() {
     m.warnings.clear();
     m.lastPlay.clear();
     m.lastVariant.clear();
+    m.groups.clear();
+    m.groupByName.clear();
+    m.lastGroupPlay.clear();
+    m.sendGroups();
     std::fill(std::begin(m.bankGain), std::end(m.bankGain), 1.0f);
     m.bankMaster = 1;
     m.env = Environment{};
@@ -246,9 +278,9 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     }
 
     // RtsAudio reads the gameplay mapping sections; anything else is most likely a typo
-    static const std::set<std::string> kTopKeys = {"volume", "spatial", "sounds", "music", "events", "types", "weapons", "abilities", "build"};
+    static const std::set<std::string> kTopKeys = {"volume", "spatial", "groups", "sounds", "music", "events", "types", "weapons", "abilities", "build"};
     for (auto& [k, unused] : bank.members())
-        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, spatial, sounds, music, events, types, weapons, abilities, build)");
+        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, spatial, groups, sounds, music, events, types, weapons, abilities, build)");
 
     Environment env;
     if (const Json& sp = bank["spatial"]; !sp.isNull()) {
@@ -277,6 +309,33 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     }
     std::vector<std::pair<SoundId, std::string>> farNames;   // resolved once every sound is known
 
+    // groups: limits shared by several sounds
+    std::vector<SoundGroupDef> groups;
+    std::map<std::string, int, std::less<>> groupByName;
+    if (const Json& gs = bank["groups"]; !gs.isNull()) {
+        if (!gs.isObject()) return fail("\"groups\" must be an object of groups");
+        static const std::set<std::string> kGroupKeys = {"max", "cooldown", "steal", "bus"};
+        for (auto& [name, g] : gs.members()) {
+            const std::string who = "group '" + name + "'";
+            if (!g.isObject()) return fail(who + ": must be an object");
+            for (auto& [k, unused] : g.members())
+                if (!kGroupKeys.count(k)) warnings.push_back(who + ": unknown key '" + k + "' (max, cooldown, steal, bus)");
+            SoundGroupDef d;
+            d.name = name;
+            d.max = int(std::clamp<int64_t>(g.getInt("max", 0), 0, 128));
+            d.cooldown = std::max(0.0f, num(g["cooldown"], 0));
+            if (g.has("steal") && !stealFromName(g.getStr("steal"), d.steal))
+                return fail(who + ": unknown steal '" + g.getStr("steal") + "' (oldest, farthest, quietest, none)");
+            if (g.has("bus")) {
+                if (!busFromName(g.getStr("bus"), d.bus)) return fail(who + ": unknown bus '" + g.getStr("bus") + "' (sfx, ui, voice, music, ambient)");
+                d.wholeBus = true;
+            }
+            if (d.max == 0 && d.cooldown == 0) warnings.push_back(who + ": neither max nor cooldown: it limits nothing");
+            groupByName[name] = int(groups.size());
+            groups.push_back(std::move(d));
+        }
+    }
+
     std::map<std::string, std::shared_ptr<const Clip>> cache; // a file used by several sounds decodes once
     auto loadClip = [&](const std::string& who, const std::string& path) -> std::shared_ptr<const Clip> {
         if (auto it = cache.find(path); it != cache.end()) return it->second;
@@ -285,7 +344,7 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         if (!read || !read(path, bytes)) warnings.push_back(who + ": file not found '" + path + "'");
         else {
             auto clip = std::make_shared<Clip>();
-            if (decodeClip(bytes, *clip, why)) res = clip;
+            if (decodeClip(bytes, *clip, why)) { clip->rms = measureRms(*clip); res = clip; }
             else warnings.push_back(who + ": cannot decode '" + path + "': " + why);
         }
         cache[path] = res;
@@ -293,7 +352,7 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     };
 
     static const std::set<std::string> kSoundKeys = {"file", "files", "synth", "volume", "pitch", "bus", "maxInstances", "model",
-                                                      "minDistance", "maxDistance", "rolloff", "air", "reverb", "far", "compress", "quality", "duckMusic", "sync",
+                                                      "minDistance", "maxDistance", "rolloff", "air", "reverb", "far", "compress", "quality", "duckMusic", "sync", "group", "steal",
                                                       "cooldown", "priority", "loop", "spatial"};
     for (auto& [name, j] : bank["sounds"].members()) {
         const std::string who = "sound '" + name + "'";
@@ -310,6 +369,27 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         else d.pitchMin = d.pitchMax = num(p, 1);
         if (d.pitchMin <= 0 || d.pitchMax < d.pitchMin) return fail(who + ": pitch must be > 0 and [min, max]");
         d.maxInstances = int(std::clamp<int64_t>(j.getInt("maxInstances", 4), 0, 64));
+        if (j.has("steal") && !stealFromName(j.getStr("steal"), d.steal))
+            return fail(who + ": unknown steal '" + j.getStr("steal") + "' (oldest, farthest, quietest, none)");
+        {   // groups: named ones, then every group that takes the whole bus
+            std::vector<std::string> names;
+            const Json& g = j["group"];
+            if (g.isString()) names.push_back(g.str());
+            else if (g.isArray()) for (auto& e : g.items()) names.push_back(e.str());
+            else if (!g.isNull()) return fail(who + ": \"group\" must be a group name or an array of names");
+            for (auto& n : names) {
+                auto it = groupByName.find(n);
+                if (it == groupByName.end()) { warnings.push_back(who + ": unknown group '" + n + "'"); continue; }
+                if (std::find(d.groups.begin(), d.groups.end(), it->second) == d.groups.end()) d.groups.push_back(it->second);
+            }
+            for (size_t gi = 0; gi < groups.size(); ++gi)
+                if (groups[gi].wholeBus && groups[gi].bus == d.bus && std::find(d.groups.begin(), d.groups.end(), int(gi)) == d.groups.end())
+                    d.groups.push_back(int(gi));
+            if (d.groups.size() > size_t(kMaxSoundGroups)) {
+                warnings.push_back(who + ": in more than " + std::to_string(kMaxSoundGroups) + " groups, the rest are ignored");
+                d.groups.resize(size_t(kMaxSoundGroups));
+            }
+        }
         d.cooldown = std::max(0.0f, num(j["cooldown"], 0));
         d.priority = int(std::clamp<int64_t>(j.getInt("priority", 0), -100, 100));
         d.loop = j.getBool("loop", false);
@@ -337,6 +417,7 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
             clip->channels = 1;
             clip->sampleRate = kSynthRate;
             clip->pcm = renderSynth(layers, kSynthRate, nameSeed(name));
+            clip->rms = measureRms(*clip);
             d.clips.push_back(clip);
         } else if (j.has("file")) {
             if (!j["file"].isString()) return fail(who + ": \"file\" must be a string");
@@ -427,6 +508,10 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     m.music = std::move(music);
     m.warnings = std::move(warnings);
     m.lastPlay.assign(m.sounds.size(), -1e9);
+    m.groups = std::move(groups);
+    m.groupByName = std::move(groupByName);
+    m.lastGroupPlay.assign(m.groups.size(), -1e9);
+    m.sendGroups();
     m.lastVariant.assign(m.sounds.size(), -1);
     std::copy(std::begin(gains), std::end(gains), std::begin(m.bankGain));
     m.bankMaster = master;
@@ -447,6 +532,12 @@ const SoundDef* AudioEngine::sound(SoundId id) const {
 }
 
 size_t AudioEngine::soundCount() const { return impl_->sounds.size(); }
+int AudioEngine::findGroup(std::string_view name) const {
+    auto it = impl_->groupByName.find(name);
+    return it == impl_->groupByName.end() ? -1 : it->second;
+}
+const SoundGroupDef* AudioEngine::group(int i) const { return i >= 0 && size_t(i) < impl_->groups.size() ? &impl_->groups[size_t(i)] : nullptr; }
+size_t AudioEngine::groupCount() const { return impl_->groups.size(); }
 const std::vector<std::string>& AudioEngine::warnings() const { return impl_->warnings; }
 bool AudioEngine::hasMusic(std::string_view name) const { return impl_->music.count(name) > 0; }
 
@@ -458,9 +549,11 @@ VoiceId AudioEngine::play(SoundId id, const PlayParams& p) {
     if (!d || d->clips.empty() || !m.mixing()) return kNoVoice;
     double& last = m.lastPlay[size_t(id)];
     if (m.time - last < double(d->cooldown)) return kNoVoice;
+    for (int g : d->groups) if (m.time - m.lastGroupPlay[size_t(g)] < double(m.groups[size_t(g)].cooldown)) return kNoVoice;
     const bool spatial = d->spatial && p.positional;
     if (spatial && !d->loop && audibility(id, p.x, p.y, p.z) <= 0.001f) return kNoVoice;
     last = m.time;
+    for (int g : d->groups) m.lastGroupPlay[size_t(g)] = m.time;
 
     uint32_t delay = 0;   // speed of sound: far explosions arrive late
     if (spatial && m.env.speedOfSound > 0) {
@@ -491,6 +584,8 @@ VoiceId AudioEngine::play(SoundId id, const PlayParams& p) {
         c.bus = s.bus;
         c.priority = role == MixCmd::Far ? d->priority : s.priority;
         c.maxInstances = s.maxInstances;
+        c.steal = s.steal;
+        for (size_t gi = 0; gi < s.groups.size() && gi < size_t(kMaxSoundGroups); ++gi) c.groups[gi] = int8_t(s.groups[gi]);
         c.loop = s.loop;
         c.spatial = spatial;
         c.x = p.x; c.y = p.y; c.z = p.z;
@@ -633,6 +728,8 @@ void AudioEngine::setPaused(bool p) {
         // state changed while nothing was mixing: resend it
         m.sendGains();
         m.sendListener();
+        m.sendEnv();
+        m.sendGroups();
         if (!m.pendingMusic.empty()) { m.startMusic(m.pendingMusic, m.pendingFade); m.pendingMusic.clear(); }
         setMusicIntensity(m.intensity);
     }
