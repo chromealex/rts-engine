@@ -5460,14 +5460,14 @@ TEST(sphere_great_circle_steps) {
 
 // golden generator hashes (pure integer pipeline: identical on every platform / compiler)
 #define GEN_GOLD_NOISE 0xb63f6f508d85105full
-#define GEN_GOLD_CLASSIC 0x89eff5d9fe02c386ull
-#define GEN_GOLD_CONTINENTS 0x7f5556c92b65fd09ull
-#define GEN_GOLD_ISLANDS 0x68806f3d44be5ac9ull
-#define GEN_GOLD_HIGHLANDS 0xa45a07df3a644258ull
-#define GEN_GOLD_CANYONS 0x70774d541dd26061ull
-#define GEN_GOLD_LANES 0xda23759b4e7fbc56ull
+#define GEN_GOLD_CLASSIC 0xbca2c83d9c0791c8ull
+#define GEN_GOLD_CONTINENTS 0x169af2ca325ff112ull
+#define GEN_GOLD_ISLANDS 0x954d027fe4f6f9f7ull
+#define GEN_GOLD_HIGHLANDS 0x9e9e30de7fecd4e7ull
+#define GEN_GOLD_CANYONS 0x7fcf37e9490ffb17ull
+#define GEN_GOLD_LANES 0x6010e5d33a6a8fdbull
 #define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
-#define GEN_GOLD_METAL 0x40cbbf2882234351ull
+#define GEN_GOLD_METAL 0x5e11afce218433b2ull
 #define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
 
 // ---------------- terrain / map generator (agent-terrain-gen) ----------------
@@ -5562,6 +5562,10 @@ TEST(gen_fair_and_connected) {
                 genHash(preset, seed, np, kGenRules, "auto", &m);
                 const Json& g = m["generated"];
                 CHECK(g.getBool("connected"));
+                if (!g.getBool("connected")) {
+                    std::printf("  not connected: %s seed %d players %d %s\n", preset, int(seed), np, g["warnings"].dump(-1).c_str());
+                    if (const char* dbg = std::getenv("RTS_GEN_DUMP")) { FILE* f = std::fopen(dbg, "w"); if (f) { std::fputs(m.dump().c_str(), f); std::fclose(f); } }
+                }
                 CHECK(int(m["players"].size()) == np);
                 // symmetric layouts: every start is an image of player 1's start, objects per owner equal
                 int own[9] = {};

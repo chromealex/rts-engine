@@ -199,7 +199,7 @@ struct Placer {
                 ix = int((q.x - (int64_t(t.footprintW) << 15)) >> 16); iy = int((q.y - (int64_t(t.footprintH) << 15)) >> 16);
                 ok = fitsAt(ti, ix, iy, allowReserved, ring);
                 if (!ok && k > 0) ok = find(ti, q, allowReserved, ring, 1, ix, iy);   // rot4 with a non-square footprint
-            } else ok = find(ti, q, allowReserved, ring, c.sym.exact() ? 0 : 1, ix, iy);
+            } else ok = find(ti, q, allowReserved, ring, c.sym.exact() ? 0 : 2, ix, iy);
             if (!ok) { c.occ = save; c.cell = saveCells; c.blockRects.resize(rects); return false; }
             mark(ti, ix, iy);
             pl.push_back({ix, iy, q.x, q.y});
@@ -448,6 +448,13 @@ void placeContent(Ctx& c) {
         if (o.has("near")) s.nearOffsets.clear();
     }
     const int32_t treeMul = std::clamp(c.pq("trees", kOne), 0, 8 * kOne), resMul = std::clamp(c.pq("resources", kOne), 0, 8 * kOne);
+    // far objects are counted per template player: scale by map area per player relative to the template's
+    int32_t areaMul = kOne;
+    if (tmpl["size"].isArray()) {
+        const int64_t ta = std::max<int64_t>(1, tmpl["size"][size_t(0)].integer(64) * tmpl["size"][size_t(1)].integer(64)) / tnp;
+        const int64_t ga = int64_t(c.w) * c.h / std::max(1, c.np);
+        areaMul = int32_t(std::clamp<int64_t>(ga * kOne / ta, kOne / 8, 4 * kOne));
+    }
     const bool anySym = c.sym.kind != Sym::None;
     const int domains = anySym ? 1 : c.np;            // without symmetry every player gets its own copy
 
@@ -469,8 +476,14 @@ void placeContent(Ctx& c) {
                 off = {off.x + rot(P2{int64_t(n) << 16, 0}, kOne / 4 + angleOf(off)).x / 2, off.y + rot(P2{int64_t(n) << 16, 0}, kOne / 4 + angleOf(off)).y / 2};
             }
             bool ok = false;
-            if (anySym) ok = pl.placeSet(s.type, P2{c.starts[0].x + off.x, c.starts[0].y + off.y}, s.owner, s.extra, !tree, !tree, 4, false);
-            else {
+            if (anySym && c.sym.exact()) ok = pl.placeSet(s.type, P2{c.starts[0].x + off.x, c.starts[0].y + off.y}, s.owner, s.extra, !tree, !tree, 4, false);
+            else if (anySym) {   // rotations by 1/n turn: try the whole set, else rotate the offset per base and search
+                ok = pl.placeSet(s.type, P2{c.starts[0].x + off.x, c.starts[0].y + off.y}, s.owner, s.extra, !tree, !tree, 4, false);
+                for (int a = 1; !ok && a < 8; ++a) {
+                    const P2 o2 = rot(off, int64_t(a) * kOne / 8);
+                    ok = pl.placeSet(s.type, P2{c.starts[0].x + o2.x, c.starts[0].y + o2.y}, s.owner, s.extra, !tree, !tree, 3, false);
+                }
+            } else {
                 ok = true;
                 for (int k = 0; k < c.np; ++k) {
                     P2 p = kitPos(k, rot(off, -frameTurn));
@@ -533,7 +546,8 @@ void placeContent(Ctx& c) {
         for (auto& [ti, s] : specs) {
             if (s.kind != k) continue;
             const int32_t mul = k == Kind::Tree ? treeMul : (k == Kind::Mine || k == Kind::Spot || k == Kind::Spawner) ? resMul : kOne;
-            const int nearN = int((int64_t(s.near) * mul + kOne / 2) >> 16), farN = int((int64_t(s.far) * mul + kOne / 2) >> 16);
+            const int nearN = int((int64_t(s.near) * mul + kOne / 2) >> 16);
+            const int farN = int((((int64_t(s.far) * mul) >> 16) * (k == Kind::Tree ? areaMul : kOne) + kOne / 2) >> 16);
             int got = 0;
             if (nearN > 0) {
                 const int n = placeNear(s, nearN);
@@ -687,24 +701,19 @@ void unblockStarts(Ctx& c) {
             if (!seen[size_t(c.ci(bx, by))]) bad = int(k);
         }
         if (bad < 0) return;
-        // route on terrain only, then drop objects whose footprint touches it
+        // cheapest route through the objects (blocked cells cost extra); drop objects on it (all symmetric images)
+        std::vector<uint8_t> onPath(static_cast<size_t>(c.w * c.h), 0);
         game::MapGrid t;
         buildGrid(c, t, false);
-        std::vector<uint8_t> onPath(size_t(c.w * c.h), 0);
-        {
-            std::vector<Vec3> path;
-            t.findPath(t.cellCenter(ax, ay), t.cellCenter(bx, by), game::kLayerGround, path, c.w * c.h * 2);
-            Vec3 p = t.cellCenter(ax, ay);
-            for (auto& wp : path) {   // rasterize the segments
-                const int steps = int(std::max(fxAbs(wp.x - p.x), fxAbs(wp.z - p.z)).toInt()) * 2 + 1;
-                for (int k = 0; k <= steps; ++k) {
-                    const Vec3 q = p + (wp - p) * Fixed::fromRatio(k, steps);
-                    const int x = t.cellX(q.x), y = t.cellY(q.z);
-                    c.forImages(x, y, [&](int ix, int iy, int) { onPath[size_t(c.ci(ix, iy))] = 1; });
-                }
-                p = wp;
-            }
+        std::vector<uint8_t> objMask(static_cast<size_t>(c.w * c.h), 0);
+        for (auto& e : c.entities.items()) {   // 1 removable neutral object, 2 a player's kit (never removed)
+            int x0, y0, fw, fh; entityRect(c, e, x0, y0, fw, fh);
+            const uint8_t v = e.getInt("owner", 0) > 0 ? 2 : 1;
+            for (int y = y0; y < y0 + fh; ++y)
+                for (int x = x0; x < x0 + fw; ++x) if (c.inside(x, y)) objMask[size_t(c.ci(x, y))] = std::max(objMask[size_t(c.ci(x, y))], v);
         }
+        for (int i : repairPath(c, t, ax, ay, bx, by, dig, &objMask))
+            c.forImages(i % c.w, i / c.w, [&](int ix, int iy, int) { onPath[size_t(c.ci(ix, iy))] = 1; });
         Json kept = Json::array();
         int removed = 0;
         for (auto& e : c.entities.items()) {
@@ -715,7 +724,10 @@ void unblockStarts(Ctx& c) {
                     for (int x = x0; x < x0 + fw; ++x) if (c.inside(x, y) && onPath[size_t(c.ci(x, y))]) { hit = true; break; }
             if (hit) ++removed; else kept.push(e);
         }
-        if (!removed) { c.warn("objects could not be cleared from the route between starts"); return; }
+        if (!removed) {
+            c.warn("objects could not be cleared from the route between starts");
+            return;
+        }
         c.entities = kept;
     }
 }
