@@ -248,7 +248,13 @@ Json lintJson(const Json& issues, const std::string& loadError) {
 }
 } // namespace
 
-Json lintGameData(const Json& rules, const Json& map, std::string* loadError) {
+Json lintGameData(const Json& rules0, const Json& map, std::string* loadError) {
+    // unit designs expand into plain type blocks before loading: lint the expanded copy
+    Json expanded;
+    if (rules0.has("designs")) {
+        try { expanded = game::expandDesigns(rules0); } catch (const std::exception& e) { if (loadError) *loadError = e.what(); return Json::array(); }
+    }
+    const Json& rules = rules0.has("designs") ? expanded : rules0;
     Access a = record(rules, map, loadError);
     Json issues = Json::array();
     lintWalk(a, rules, "", false, 0, issues);

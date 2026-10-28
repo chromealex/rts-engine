@@ -70,6 +70,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         return true;
     }
     case kCmdLoad: {
+        if (rules_.mech.crews && mechRecrew(sim, cmd)) return true;
         if (!rules_.mech.transports) return true;
         std::vector<Entity> passengers = cmd.units;
         Entity carrier = cmd.target;
@@ -110,6 +111,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         return true;
     }
     case kCmdSmart: {
+        if (rules_.mech.crews && mechRecrew(sim, cmd)) return true;   // infantry right-clicks an abandoned vehicle
         // right click on an own transport with room: board it
         if (!rules_.mech.transports || !own(sim, cmd.target, cmd.player) || cmd.units.empty()) return false;
         if (rules_.types[w.get<Unit>(cmd.target).type].mech.transport.slots == 0) return false;
@@ -120,7 +122,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         c.type = kCmdLoad;
         return applyMechCommand(sim, c);
     }
-    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd);   // RtsMechUnits.cpp, stage 2
+    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd) || applyMechSocietyCommand(sim, cmd);
     }
 }
 
@@ -207,6 +209,19 @@ void RtsModule::unloadOne(Simulation& sim, Entity carrier, size_t index) {
 
 bool RtsModule::runBoard(Simulation& sim, Entity e, Order& o) {
     World& w = sim.world();
+    if (rules_.mech.crews && w.alive(o.target) && w.has<Abandoned>(o.target)) {   // Z: a soldier takes over an empty vehicle
+        if (contactDistance(sim, e, o.target) > Fixed::fromRatio(3, 2)) {
+            if (auto* m = w.tryGet<Mobile>(e); m && (!m->moving || (sim.tick() + e.index) % 20 == 0)) moveTo(sim, e, w.get<Transform>(o.target).pos, kOne);
+            return false;
+        }
+        w.get<Owner>(o.target).player = w.get<Owner>(e).player;
+        w.remove<Abandoned>(o.target);
+        Unit& pu = w.get<Unit>(e);
+        pu.hp = Fixed{};
+        pu.flags |= kUnitSilent;   // the soldier is now the crew
+        sim.emit({kEvCaptured, w.get<Owner>(o.target).player, o.target, e, 0, w.get<Transform>(o.target).pos});
+        return true;
+    }
     if (!accepts(sim, o.target, e)) return true;
     const Fixed range = rules_.types[w.get<Unit>(o.target).type].mech.transport.loadRange;
     if (contactDistance(sim, e, o.target) <= range) { board(sim, e, o.target); return true; }
@@ -283,6 +298,7 @@ bool RtsModule::mechCanAcquire(Simulation& sim, Entity e) const {
     const Unit& u = w.get<Unit>(e);
     if (u.flags & kUnitInCargo) { auto* b = w.tryGet<Boarded>(e); return b && b->fires; }
     if (auto* st = w.tryGet<Stance>(e); st && st->mode == uint8_t(StanceMode::Passive)) return false;
+    if (rules_.mech.rounds && w.resource<GameState>()->mech.roundPhase == 0) return false;   // rounds: no fighting while preparing
     if (w.has<Retreating>(e)) return false;
     return true;
 }
@@ -305,6 +321,12 @@ void RtsModule::mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed
             if (per.raw > 0) mul = mul * (kOne + per * int64_t(tp->cargo.size()));
         }
     }
+    if (auto* sp = w.tryGet<Suppression>(e); sp && sp->value >= rules_.mech.supSuppressed) {   // suppressed / pinned
+        if (s == Stat::Speed) mul = sp->value >= rules_.mech.supPinned ? Fixed{} : mul * rules_.mech.supSpeed;
+        if (s == Stat::AttackSpeed) mul = mul * rules_.mech.supAttack;
+    }
+    if (rules_.mech.staffing && (s == Stat::ProductionSpeed || s == Stat::GatherRate) && rules_.types[w.get<Unit>(e).type].mech.staff > 0)
+        mul = mul * staffFraction(sim, e);
     if (auto* inv = w.tryGet<ItemBag>(e))   // items carried
         for (int16_t it : inv->items) {
             if (it < 0) continue;
@@ -324,8 +346,36 @@ void RtsModule::mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed
     }
 }
 
-Fixed RtsModule::mechDamageTaken(Simulation& sim, Entity e) const {
-    return sim.world().has<Retreating>(e) ? rules_.mech.retreatDamageTaken : kOne;
+Fixed RtsModule::mechDamageTaken(Simulation& sim, Entity e, Entity source) const {
+    World& w = sim.world();
+    Fixed mul = w.has<Retreating>(e) ? rules_.mech.retreatDamageTaken : kOne;
+    const UnitType& t = rules_.types[w.get<Unit>(e).type];
+    const MechRules& M = rules_.mech;
+    // cover: the cell's level, or a structure that gives cover next to it
+    if (!M.coverLevels.empty() && !t.structure && (!M.coverTags || (t.tags & M.coverTags))) {
+        const GameState& gs = *w.resource<GameState>();
+        const Vec3 p = w.get<Transform>(e).pos;
+        int x, y; gs.grid.cellXY(p, x, y);
+        int lv = 0;
+        if (gs.grid.inside(x, y) && size_t(gs.grid.index(x, y)) < gs.mech.cover.size()) lv = gs.mech.cover[size_t(gs.grid.index(x, y))];
+        gs.hash.query(p, Fixed::fromInt(2), [&](Entity s) {
+            if (!w.has<Unit>(s)) return;
+            const UnitType& st = rules_.types[w.get<Unit>(s).type];
+            if (st.mech.givesCover > lv && dist2D(w.get<Transform>(s).pos, p) <= Fixed::fromRatio(st.footprintW + 3, 2)) lv = st.mech.givesCover;
+        });
+        if (lv > 0 && size_t(lv) < M.coverLevels.size()) mul = mul * M.coverLevels[size_t(lv)];
+    }
+    // directional armor: hits from the side / rear (by the target's facing)
+    if (t.mech.arcs && w.alive(source) && w.has<Transform>(source)) {
+        Vec3 d = flat(w.get<Transform>(source).pos - w.get<Transform>(e).pos);
+        Fixed len = d.length();
+        if (len.raw > 0) {
+            const Fixed c = (d / len).dot(w.get<Unit>(e).facing);   // 1 = from the front
+            if (c < -Fixed::fromRatio(1, 2)) mul = mul * t.mech.arcRear;
+            else if (c < Fixed::fromRatio(1, 2)) mul = mul * t.mech.arcSide;
+        }
+    }
+    return mul;
 }
 
 // ================================================================= system
@@ -408,6 +458,8 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* tr = w.tryGet<Trader>(e)) { h.u32(0x7DE4); h.u64(tr->dest.packed()); h.u32(tr->loaded); }
     if (auto* inv = w.tryGet<ItemBag>(e)) { h.u32(0x1A7E); for (size_t k = 0; k < inv->items.size(); ++k) { h.i32(inv->items[k]); h.i32(inv->charges[k]); } }
     if (auto* mg = w.tryGet<Merging>(e)) { h.u32(0x3E26); h.u64(mg->partner.packed()); }
+    if (auto* sp = w.tryGet<Suppression>(e)) { h.u32(0x5A99); h.fx(sp->value); }
+    if (auto* ab = w.tryGet<Abandoned>(e)) { h.u32(0xAB4D); h.u32(ab->formerOwner); }
 }
 
 } // namespace rts::game

@@ -147,6 +147,30 @@ void RtsAI::mechEconomy(Simulation& sim, RtsModule& m) {
             });
         }
     }
+    // staffed buildings (mills, workshops): idle workers fill the free places, nearest first
+    if (M.staffing) {
+        auto idle = ownOf([&](Entity e, Unit& u) { return !R.types[u.type].structure && w.has<Mobile>(e) && (!w.has<Orders>(e) || w.get<Orders>(e).queue.empty()); });
+        auto sites = ownOf([&](Entity, Unit& u) { return R.types[u.type].mech.staff > 0; });
+        for (Entity s : sites) {
+            const auto* tp = w.tryGet<Transport>(s);
+            int need = R.types[w.get<Unit>(s).type].mech.staff - (tp ? int(tp->cargo.size()) : 0);
+            if (need <= 0) continue;
+            const Vec3 sp = w.get<Transform>(s).pos;
+            Command c; c.player = player_; c.type = kCmdLoad; c.target = s;
+            while (need-- > 0) {
+                size_t bi = idle.size(); Fixed bd{};
+                for (size_t i = 0; i < idle.size(); ++i) {
+                    if (!m.accepts(sim, s, idle[i])) continue;
+                    Fixed d = dist2D(w.get<Transform>(idle[i]).pos, sp);
+                    if (bi == idle.size() || d < bd) { bi = i; bd = d; }
+                }
+                if (bi == idle.size()) break;
+                c.units.push_back(idle[bi]);
+                idle.erase(idle.begin() + std::ptrdiff_t(bi));
+            }
+            if (!c.units.empty()) send(sim, c);
+        }
+    }
     // pairs of idle mergeable units merge
     if (M.merge) {
         auto pairs = ownOf([&](Entity e, Unit& u) { return R.types[u.type].mech.mergeResult != kNoType && !w.has<Merging>(e) && (!w.has<Orders>(e) || w.get<Orders>(e).queue.empty()); });

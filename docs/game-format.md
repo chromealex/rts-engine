@@ -936,6 +936,93 @@ Map players may have `"deck": ["card ids..."]` (default: every player ability). 
 trigger variable `cycle.<id>` = phase index (event `kEvCyclePhase`). Jumps over cliffs, jetpacks and blinks are abilities
 with the `blink` effect; teleport networks are `area` effects with `teleportTo`. The AI sells surplus / buys shortages,
 sends idle carts to the farthest market, buys and drinks potions with heroes and merges idle pairs.
+Through MCP (`scenario_run` / `play_command`), `trade`, `tribute` and `bounty` take readable fields instead of the packed
+param: `{"cmd": "trade", "units": [market], "resource": "wood", "sell": true}`,
+`{"cmd": "tribute", "resource": "gold", "amount": 100, "to": 2}`, `{"cmd": "bounty", "target": id, "resource": "gold", "amount": 50}`.
+
+## Tactics and society (agent-mech stage 3)
+
+Optional blocks; a game without them loads, plays and hashes as before. Tested in `tests/tests_mech.inc`
+(`mech_tactics`, `mech_society`, `mech_rounds`, `mech_ai_staffing`, `mech_designs`).
+
+### Cover, suppression, armor arcs (Company of Heroes, Men of War)
+
+```json
+"cover": {"levels": {"1": 0.75, "2": 0.5}, "tags": ["infantry"]},
+"suppression": {"decay": 5, "suppressed": 30, "pinned": 80, "suppressedSpeed": 0.5, "suppressedAttack": 0.5, "tags": ["infantry"]}
+```
+
+- `cover.levels`: damage multiplier per cover level 1..9. A unit (with one of `tags`, all if omitted) takes the level of its
+  cell — map `"cover": {"rows": ["0012..", ...]}` (digit per cell) — or of a structure with `"givesCover": N` within
+  half its footprint + 1.5 cells, whichever is higher.
+- Weapon `"suppress": 10` adds suppression (0..100) per hit; it decays by `decay` per second. Above `suppressed` the unit is
+  slower and attacks slower; above `pinned` it cannot move.
+- Type `"armorArcs": {"side": 0.75, "rear": 0.5}`: damage multiplier for hits from the side / rear by the unit's facing.
+- Weapon `"turret": {"turnRate": 90}` (degrees per second): the weapon only fires once its turret faces the target.
+- Weapon `"crater": 1` (or `{"radius": 1}`): the ground around the hit becomes cover level 1.
+
+### Crews, crushing, ruins, infection (Z, Men of War, C&C, They Are Billions)
+
+- Weapon `"killsCrew": 1` (chance per hit) against a type with `"crew": {"accepts": ["infantry"]}`: the vehicle is left
+  empty and neutral (`Abandoned`). A unit with an accepted tag right-clicks it (smart / `load`) and becomes its crew:
+  the vehicle changes owner, the soldier is removed.
+- `"crush": {"damage": 500, "tags": ["infantry"]}`: a moving unit damages hostile mobile units with those tags it touches.
+- `"ruins": "rubble"`: a type spawned (neutral) where this one died.
+- Weapon `"infect": "zombie"`: a unit it kills rises as that type for the killer's owner. A structure with
+  `"infectable": {"spawns": "zombie", "count": 2}` destroyed by such a weapon spawns `count` of `spawns`.
+
+### Staff, growth, power fields (Settlers, Stronghold, StarCraft, Anno)
+
+- `"staff": {"count": 2, "accepts": ["worker"]}`: income and production scale with the share of places taken (workers
+  enter with `load` / smart click; a transport block with `count` slots is created). The AI sends idle workers.
+- `"grows": {"unit": "villager", "interval": 30, "cost": {"food": 20}}`: the structure produces the unit every
+  `interval` seconds while it can pay and has supply.
+- `"powerField": 6` (radius) and `"needsPower": true`: a structure that needs power works and can be placed only inside
+  a finished field of its owner.
+
+### Bounties and autonomous heroes (Majesty)
+
+`"autonomous": true` units are not commanded; they pick fights by themselves and prefer targets with a bounty.
+Command `bounty` (target, `param` = resource index | amount << 8) pays the amount, held until the target dies, to the
+owner of the unit that killed it. MCP: `{"cmd": "bounty", "target": id, "resource": "gold", "amount": 100}`.
+
+### Rounds (auto-battlers, Mushroom-style duels)
+
+```json
+"rounds": {"prepare": 20, "fight": 40, "rounds": 10, "reset": true, "lives": "lives", "damagePerUnit": 1, "income": {"gold": 5}}
+```
+
+The game alternates a prepare phase (nobody acquires targets) and a fight phase. At the end of a fight each side loses
+`damagePerUnit` of `lives` per surviving enemy unit; with `reset` the armies are restored to the snapshot taken at the
+start of the fight. Everyone gets `income` per round. After `rounds` rounds (or when a side runs out of lives) the game
+ends: the side with most lives wins.
+
+### Upgrades paid with garrison (Mushroom Wars 2)
+
+`"upgradeGarrison": 10` on the target type of an `upgrades` entry: the upgrade costs that many units of the building's
+garrison instead of resources (refused when the garrison is smaller).
+
+## Unit designs (agent-mech, UD)
+
+Types can be assembled from a chassis and parts (Master of Orion, Galactic Civilizations, Supreme Commander kits).
+`loadRules` expands them into plain type blocks before parsing (`expandDesigns`), so every other key works as usual;
+`rules_lint` lints the expanded copy.
+
+```json
+"designs": {
+  "chassis": {"light": {"move": {"speed": 4}, "health": {"max": 100}, "cost": {"gold": 50}, "slots": {"weapon": 2, "system": 1}}},
+  "parts": {
+    "laser":   {"slot": "weapon", "weapons": [{"range": 5, "damage": 10, "cooldown": 1}], "cost": {"gold": 20}},
+    "plating": {"slot": "system", "add": {"health.max": 60, "move.speed": -1}, "cost": {"gold": 30}, "health": {"armor": 2}}
+  }
+},
+"types": {"scout": {"design": {"chassis": "light", "parts": ["laser", "laser", "plating"]}, "sight": 8}}
+```
+
+- The chassis is copied; parts apply in order: `add` adds numbers at dotted paths, `cost` / `upkeep` add per resource,
+  `weapons`, `tags`, `abilities`, `upgrades` are appended, other keys are merged (objects) or replaced.
+- `slots`: a count, or a count per part `slot` kind; too many parts is a load error.
+- The type's own keys (besides `design`) are applied last.
 
 ## Save states (agent-mech)
 

@@ -92,6 +92,21 @@ struct MechType {
     std::vector<uint16_t> shopItems;       // shop: sells these items to heroes within shopRadius
     Fixed shopRadius = Fixed::fromInt(4);
     std::vector<ItemDrop> drops;           // creeps: items left on death
+    // stage 3
+    uint8_t givesCover = 0;                // structure: cover level for units next to it
+    bool arcs = false; Fixed arcSide = Fixed::fromInt(1), arcRear = Fixed::fromInt(1);   // directional armor (damage multipliers)
+    std::vector<Fixed> suppress, turretRate, killsCrew, crater;   // per weapon
+    std::vector<uint16_t> infect;          // per weapon: kills rise as this type (0xFFFF none)
+    uint16_t ruins = 0xFFFF;               // leaves this type when destroyed
+    Fixed crushDamage{}; uint64_t crushTags = 0;
+    int staff = 0;                         // workers inside (transport) needed to run at full speed
+    uint16_t growUnit = 0xFFFF; Fixed growInterval{}; std::vector<Amount> growCost;   // population growth
+    bool autonomous = false;               // acts on its own (Majesty heroes): bounties, enemies, exploring
+    Fixed powerField{};                    // pylon: powers own structures within this radius
+    bool needsPower = false;               // works and can be built only in a power field
+    bool crew = false; uint64_t crewTags = 0;   // vehicle with a crew; crewless it is neutral until re-crewed
+    uint16_t infectSpawn = 0xFFFF; int infectCount = 0;   // structure overrun by an infecting attacker spawns these
+    int upgradeGarrison = 0;               // upgrading INTO this type costs garrison units (Mushroom Wars 2)
 };
 
 struct MechRules {
@@ -141,6 +156,22 @@ struct MechRules {
     int hand = 4;
     Fixed deployNear{};                    // >0: point player abilities only within this distance of own structures
     bool deployOwnHalf = false;            // ... or on the own half of the map (left/right by start position)
+    // stage 3
+    std::vector<Fixed> coverLevels;        // damage multiplier per cover level (index 0 = none)
+    uint64_t coverTags = 0;
+    bool suppression = false;
+    Fixed supDecay = Fixed::fromInt(10), supSuppressed = Fixed::fromInt(30), supPinned = Fixed::fromInt(80);
+    Fixed supSpeed = Fixed::fromRatio(1, 2), supAttack = Fixed::fromRatio(3, 4);
+    uint64_t supTags = 0;
+    bool combat3 = false;                  // arcs / turrets / crew / infect / craters / crush present
+    bool staffing = false, growth = false, autonomy = false, power = false, crews = false, infection = false, ruinsAny = false;
+    bool rounds = false;
+    Fixed prepareTime = Fixed::fromInt(30), fightTime = Fixed::fromInt(60);
+    int roundCount = 10;
+    bool roundReset = true;
+    int16_t livesRes = -1;
+    Fixed damagePerUnit = Fixed::fromInt(1);
+    std::vector<Amount> roundIncome;
     int findItem(const std::string& id) const { for (size_t i = 0; i < items.size(); ++i) if (items[i].id == id) return int(i); return -1; }
 };
 
