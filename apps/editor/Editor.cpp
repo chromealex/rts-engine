@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 namespace fs = std::filesystem;
 
@@ -81,6 +83,15 @@ void Editor::init(gfx::Device& dev) {
         if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
     } else showPicker_ = true;
     view_.init(dev, rules());
+    gameFx_.setQuality(fx::defaultQualityFor(dev, false));
+    gameFx_.setFileReader([this](const std::string& path, std::string& out) {
+        std::ifstream f(ws_.project.dir + "/" + path, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        return true;
+    });
+    if (!gameFx_.init(&dev)) status = gameFx_.lastError();
+    reloadFx();
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
     else if (doc().data.cells.empty()) newMap(48, 32);
     ws_.changes.clear();
@@ -95,7 +106,9 @@ void Editor::init(gfx::Device& dev) {
 
 void Editor::shutdown() {
     if (!dev_) return;
+    gameFxBridge_.detach();
     sim_.reset();
+    gameFx_.shutdown();
     windows_.clear(); // windows release their viewports in their destructors via update()? keep simple: textures die with the device
     view_.shutdown(*dev_);
     r3d_.shutdown();
@@ -122,9 +135,27 @@ void Editor::openGame(const std::string& idOrDir) {
     status = "Игра: " + ws_.project.manifest.getStr("name", idOrDir);
 }
 
+void Editor::reloadFx() {
+    fxWarnings.clear();
+    gameFx_.reloadAll();
+    gameFx_.clearErrors();
+    Json bank;
+    std::string text;
+    std::ifstream f(ws_.project.dir + "/fx/fx.json", std::ios::binary);
+    if (f) {
+        text.assign(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+        try { bank = Json::parse(text); }
+        catch (const std::exception& e) { fxWarnings.push_back(std::string("fx/fx.json: ") + e.what()); }
+    }
+    std::string err;
+    if (!gameFxBridge_.init(gameFx_, rules(), bank, &err)) fxWarnings.push_back(err);
+    for (auto& w : gameFxBridge_.warnings()) fxWarnings.push_back(w);
+}
+
 void Editor::reloadRules() {
     view_.shutdown(*dev_);
     view_.init(*dev_, rules());
+    if (dev_) reloadFx();
     gridRevision_ = ~0ull;
     placeType = std::clamp(placeType, 0, std::max(0, int(rules().types.size()) - 1));
 }
@@ -350,11 +381,17 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     for (auto& o : sc.objects) o.selected = std::find(gameSelection.begin(), gameSelection.end(), o.entity) != gameSelection.end();
     r3d_.beginScene(cam, vp.w, vp.h);
     view_.draw(r3d_, sc, time_, human_ ? &gs.vision[size_t(human_)] : nullptr, gs.grid);
+    const float fxDt = fxTime_ < 0 || playPaused ? 0.0f : float(time_ - fxTime_) * playSpeed;
+    fxTime_ = time_;
+    gameFx_.setView(cam, r3d_.viewProj(), vp.w, vp.h);
+    if (fxDt > 0) gameFxBridge_.update(*sim_, &sc.objects);
+    gameFx_.update(fxDt);
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
     pass.depthTarget = vp.depth;
     pass.clearColor[0] = 0.55f; pass.clearColor[1] = 0.66f; pass.clearColor[2] = 0.78f;
     r3d_.render(pass);
+    gameFx_.render({r3d_.lighting.fogColor, r3d_.lighting.fogDensity});
     dev_->endPass();
     view_.drawOverlays(cam, sc, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
@@ -394,6 +431,11 @@ void Editor::startPlay(int humanSlot) {
         return;
     }
     human_ = humanSlot;
+    gameFx_.clear();
+    gameFxBridge_.setHeightFn([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : 0.0f; });
+    gameFxBridge_.setPlayerColorFn([](int p) { return game::RtsView::playerColor(p); });
+    gameFxBridge_.attach(*sim_, uint8_t(human_));
+    fxTime_ = -1;
     bots_.clear();
     for (auto& p : sim_->players()) if (p.slot != human_) bots_.emplace_back(p.slot, sim_->config().seed);
     playPaused = false;
@@ -413,6 +455,8 @@ void Editor::startPlay(int humanSlot) {
 }
 
 void Editor::stopPlay() {
+    gameFxBridge_.detach();
+    gameFx_.clear();
     sim_.reset();
     bots_.clear();
     gameSelection.clear();

@@ -52,10 +52,12 @@ void GameClient::init(gfx::Device& dev) {
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
+    fx_.init(dev, rules_);
     initUi();
 }
 
 void GameClient::shutdown() {
+    fx_.shutdown();
     view_.shutdown(*dev_);
     r3d_.shutdown();
     shutdownUi();
@@ -91,6 +93,7 @@ void GameClient::startMatch(size_t idx) {
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();
     minimap_.build(*dev_, mod().state(*sim_), rules_);
+    fx_.startMatch(*sim_, spectator_ ? 0 : human_, view_, mod().state(*sim_).grid);
     ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
     mode_ = Mode::Normal;
     setScreen(Screen::Playing);
@@ -491,6 +494,8 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         r3d_.beginScene(cam_, dev.framebufferWidth(), dev.framebufferHeight());
         auto& gs = mod().state(*sim_);
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
+        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
@@ -504,6 +509,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             }
         }
         r3d_.render(pass);
+        fx_.render(r3d_.lighting);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;

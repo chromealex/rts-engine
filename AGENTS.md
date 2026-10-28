@@ -22,6 +22,7 @@ the *engine* add mechanics generically — never a special case for one game.
 | `engine/data` | JSON reader (comments allowed, numbers parsed as Fixed) | no floats in parsing |
 | `engine/sim` | Simulation (lockstep tick, commands, events, checksums), Replay | deterministic |
 | `engine/gfx` | RHI `Gfx.h`; backends `gl/` (GLES3, WebGL2, GL 3.3) and `metal/` | never call GL/Metal outside |
+| `engine/fx` | particles: effect data (`FxEffect`), `ParticleSystem` (CPU sim, RHI draw, quality tiers), own GLSL + MSL shaders | float OK, presentation only |
 | `engine/render` | Renderer3D (forward, shadows, PCF tiers), shaders (GLSL + MSL in `Shaders.h`), ImGui layer, camera math | float OK |
 | `engine/platform` | Cocoa, UIKit, Android NativeActivity, Emscripten, Win32, X11 | `Platform.h` is the only API |
 | `engine/assets` | fonts, default assets copied into every build | data only (no code: it is bundled) |
@@ -108,6 +109,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
 | Resource packs `.rpak`, build size/compression | `engine/pack`, `tools/assetpipe`, `tools/rtsbuild` | packs agent |
 | Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
+| Particles: CPU sim + RHI render, event effects, Effects window | `engine/fx`, `modules/rts/fx`, `games/*/fx`, `apps/client/ClientFx.*`, `apps/editor/windows/FxWindow.cpp`, `docs/particles.md` | particles agent |
 | Other areas | as assigned by the user | the agent the user assigned |
 
 If your task is not in this table, the user's first message to you defines your area: write it

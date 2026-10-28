@@ -22,6 +22,7 @@
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/view/RtsView.h"
+#include "ClientFx.h"
 
 namespace Rml { class ElementDocument; class Element; }
 
@@ -142,11 +143,13 @@ private:
     UiState ui_state_, bound_;
     std::vector<std::function<void()>> actions_, nextActions_;
     int shadowQuality_ = 0, boundShadowQuality_ = 0;
+    int fxQuality_ = 0, boundFxQuality_ = 0;   // pause menu: particles off/low/medium/high
     bool uiOwnsPointer_ = false;
     Minimap minimap_;
 
     Renderer3D r3d_;
     RtsView view_;
+    ClientFx fx_;                         // particle effects (ClientFx.cpp)
     RTSCamera cam_;
     Json manifest_, rulesJson_;
     std::vector<MapEntry> maps_;
