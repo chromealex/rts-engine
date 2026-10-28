@@ -109,9 +109,10 @@ struct MapGrid {
     // Can a unit step from (x0,y0) to the neighbour (x1,y1)? Checks cliffs/ramps.
     bool canStep(int x0, int y0, int x1, int y1, uint8_t layer) const;
     int levelAt(int x, int y) const { return inside(x, y) ? level[size_t(index(x, y))] : 0; }
+    bool passableAt(Vec3 p, uint8_t layer) const { int x, y; cellXY(p, x, y); return passable(x, y, layer); }
     int cellX(Fixed x) const { return int(x.floorInt()); }
     int cellY(Fixed z) const { return int(z.floorInt()); }
-    Vec3 cellCenter(int x, int y) const { return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
+    Vec3 cellCenter(int x, int y) const { if (surf) return surf->cellCenter(index(x, y)); return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
     void block(int x0, int y0, int fw, int fh, int delta);
     void cellChanged(int x, int y);  // terrain of a cell changed at runtime (digging): refresh derived pathing data
     bool areaBuildable(int x0, int y0, int fw, int fh) const;  // ground, no-build-free, unblocked, flat

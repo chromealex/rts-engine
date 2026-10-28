@@ -59,26 +59,37 @@ void CubeSphere::faceFromDir(Vec3 d, int& face, Fixed& a, Fixed& b) const {
     else face = d.z.raw >= 0 ? 4 : 5;
     const SphereFace& f = kSphereFaces[face];
     const Fixed dn = dotI(d, f.n);
-    // inverse warp without trigonometry: s' = du / dn, located among the cell-edge values of the table
-    // (the same function dirFromFace uses, so cell membership is consistent), linear inside the cell
+    // inverse warp: the cell comes from the cell-edge table (the values dirFromFace uses, so membership is
+    // consistent with the forward map), the position inside it from atan (clamped into that cell)
     auto unwarp = [&](Fixed du) {
         const Fixed sw = fxClamp(du / dn, warp_.front(), warp_.back());
         int lo = 0, hi = n_;                       // warp_[lo] <= sw < warp_[hi]
         while (hi - lo > 1) { const int mid = (lo + hi) / 2; if (warp_[size_t(mid)] <= sw) lo = mid; else hi = mid; }
-        const Fixed w0 = warp_[size_t(lo)], w1 = warp_[size_t(hi)];
-        return Fixed::fromInt(lo) + fxClamp((sw - w0) / (w1 - w0), Fixed{}, Fixed::fromInt(1));
+        const Fixed ang = fxAtan2Turns(du, dn);    // in [-1/8, 1/8]
+        const Fixed r = Fixed::fromRaw(((8 * ang.raw + Fixed::kOne) * n_) / 2);
+        return fxClamp(r, Fixed::fromInt(lo), Fixed::fromInt(lo + 1) - Fixed::fromRaw(1));
     };
     a = unwarp(dotI(d, f.u));
     b = unwarp(dotI(d, f.v));
 }
 
-int CubeSphere::cellFromDir(Vec3 dir) const {
-    int face; Fixed a, b;
-    faceFromDir(dir, face, a, b);
-    int x = int(a.floorInt()), y = int(b.floorInt());
-    if (x >= n_) x = n_ - 1;
-    if (y >= n_) y = n_ - 1;
-    return cellId(face, x, y);
+int CubeSphere::cellFromDir(Vec3 d) const {
+    // same face choice and cell-edge table as faceFromDir, without the atan for the position inside the cell
+    const Fixed ax = fxAbs(d.x), ay = fxAbs(d.y), az = fxAbs(d.z);
+    if (ax.raw == 0 && ay.raw == 0 && az.raw == 0) return cellId(0, n_ / 2, n_ / 2);
+    int face;
+    if (ax >= ay && ax >= az) face = d.x.raw >= 0 ? 0 : 1;
+    else if (ay >= az) face = d.y.raw >= 0 ? 2 : 3;
+    else face = d.z.raw >= 0 ? 4 : 5;
+    const SphereFace& f = kSphereFaces[face];
+    const Fixed dn = dotI(d, f.n);
+    auto cellOf = [&](Fixed du) {
+        const Fixed sw = fxClamp(du / dn, warp_.front(), warp_.back());
+        int lo = 0, hi = n_;
+        while (hi - lo > 1) { const int mid = (lo + hi) / 2; if (warp_[size_t(mid)] <= sw) lo = mid; else hi = mid; }
+        return lo;
+    };
+    return cellId(face, cellOf(dotI(d, f.u)), cellOf(dotI(d, f.v)));
 }
 
 int CubeSphere::neighbor(int id, int dx, int dy) const {
