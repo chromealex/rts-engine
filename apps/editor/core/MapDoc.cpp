@@ -267,6 +267,7 @@ bool MapDoc::save(const std::string& file, std::string* err) {
 }
 
 void MapDoc::beginEdit() {
+    ensureLayers(); // a map that was never created/loaded still has layers sized to w*h
     undo_.push_back(data);
     if (undo_.size() > 200) undo_.erase(undo_.begin());
     redo_.clear();
