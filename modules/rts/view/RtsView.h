@@ -147,6 +147,7 @@ public:
     PlanetCamera& planetCamera() { return planetCam_; }
     const PlanetCamera& planetCamera() const { return planetCam_; }
     PlanetRenderer& planets() { return planets_; }
+    const PlanetRenderer& planets() const { return planets_; }
     // Per frame before beginScene: orbit camera smoothing; returns the RTSCamera to render with (view world).
     const render::RTSCamera& updatePlanetCamera(double seconds, float dt, int viewH);
     // Screen point -> body + body-local surface point (terrain / ocean picking).
@@ -157,6 +158,14 @@ public:
     // Where the view draws an object (view world), `lift` above its ground point. Flat maps: {x, lift, z}.
     render::float3 objectViewPos(const SceneObject& o, float lift) const;
     render::float3 bodyToView(int body, render::float3 local) const;
+    // Body and body-local position of a scene object (flat sim objects: mapped onto the start body).
+    bool objectOnBody(const SceneObject& o, int& body, render::float3& local) const {
+        if (o.body >= 0) { body = o.body; local = o.pos; return true; }
+        return flatToBody(o.pos, body, local);
+    }
+    // Fog of war of the start body as drawn (6 * N * N, 0 unexplored .. 255 visible); empty = no fog.
+    const std::vector<uint8_t>& planetVision() const { return planetVision_; }
+    double planetSeconds() const { return planetSeconds_; }
     // Object frame in the view world (columns: east, up, south, ground point); false when not on a body.
     bool planetPlacement(const SceneObject& o, render::mat4& out) const;
     void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }

@@ -1,9 +1,9 @@
 // Planet maps in the client: orbit camera input (mouse, keys, touch) on top of the regular RTS input.
 // Flat maps never reach this file (GameClient::planet() is false without a map `world` block).
 //   drag middle button / one-finger drag on empty ground: rotate over the surface (spin the globe)
-//   wheel / pinch: zoom surface -> planet -> system;  Q / E or two-finger twist: turn around the local up
-//   arrows / WASD (no selection) / screen edges: move over the surface;  Tab: focus the next body
-//   R / F (PageUp / PageDown): camera pitch
+//   wheel / pinch: zoom surface -> planet -> system;  Q / E (no selection) or two-finger twist: turn around
+//   the local up;  arrows / WASD (no selection) / screen edges: move over the surface;  Tab: focus the next
+//   body;  PageUp / PageDown: camera pitch;  Space: back to the base
 #include "GameClient.h"
 #include <cmath>
 #include <cstdio>
@@ -56,10 +56,10 @@ void GameClient::planetCameraKeys(double dt) {
     if (key(Key::Down) || (noSel && key(Key::S)) || (edges && mouseY_ > H - 3)) pc.move(0, -speed);
     if (key(Key::Right) || (noSel && key(Key::D)) || (edges && mouseX_ > W - 3)) pc.move(speed, 0);
     if (key(Key::Left) || (noSel && key(Key::A)) || (edges && mouseX_ < 3)) pc.move(-speed, 0);
-    if (key(Key::Q)) pc.rotate(float(dt) * 1.6f);
-    if (key(Key::E)) pc.rotate(-float(dt) * 1.6f);
-    if (key(Key::R) || key(Key::PageUp)) pc.pitch = std::min(pc.pitch + float(dt), 1.55f);
-    if (key(Key::F) || key(Key::PageDown)) pc.pitch = std::max(pc.pitch - float(dt), 0.25f);
+    if (noSel && key(Key::Q)) pc.rotate(float(dt) * 1.6f);   // with a selection Q / E may be command hotkeys
+    if (noSel && key(Key::E)) pc.rotate(-float(dt) * 1.6f);
+    if (key(Key::PageUp)) pc.pitch = std::min(pc.pitch + float(dt), 1.55f);
+    if (key(Key::PageDown)) pc.pitch = std::max(pc.pitch - float(dt), 0.25f);
 }
 
 // Returns true when the event was consumed by the camera.

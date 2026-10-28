@@ -213,7 +213,7 @@ void GameClient::startMatch(size_t idx) {
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();
-    minimap_.build(*dev_, mod().state(*sim_), rules_);
+    if (planet()) minimap_.buildPlanet(*dev_, view_); else minimap_.build(*dev_, mod().state(*sim_), rules_);
     ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
     mode_ = Mode::Normal;
     setScreen(Screen::Playing);
