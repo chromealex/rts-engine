@@ -164,38 +164,6 @@
    ]
   },
   {
-   "type": "blademaster",
-   "owner": 1,
-   "pos": [
-    15,
-    27
-   ]
-  },
-  {
-   "type": "blademaster",
-   "owner": 2,
-   "pos": [
-    49,
-    21
-   ]
-  },
-  {
-   "type": "burrow",
-   "owner": 1,
-   "pos": [
-    10,
-    30
-   ]
-  },
-  {
-   "type": "burrow",
-   "owner": 2,
-   "pos": [
-    54,
-    18
-   ]
-  },
-  {
    "type": "gold_mine",
    "owner": 0,
    "pos": [
@@ -1124,7 +1092,7 @@
    ]
   },
   {
-   "type": "troll",
+   "type": "forest_troll",
    "owner": -1,
    "pos": [
     24,
@@ -1132,7 +1100,7 @@
    ]
   },
   {
-   "type": "troll",
+   "type": "forest_troll",
    "owner": -1,
    "pos": [
     40,
@@ -1140,7 +1108,7 @@
    ]
   },
   {
-   "type": "troll",
+   "type": "forest_troll",
    "owner": -1,
    "pos": [
     25,
@@ -1148,7 +1116,7 @@
    ]
   },
   {
-   "type": "troll",
+   "type": "forest_troll",
    "owner": -1,
    "pos": [
     39,
@@ -1156,7 +1124,7 @@
    ]
   },
   {
-   "type": "ogre",
+   "type": "ogre_mauler",
    "owner": -1,
    "pos": [
     32,
@@ -1164,7 +1132,7 @@
    ]
   },
   {
-   "type": "ogre",
+   "type": "ogre_mauler",
    "owner": -1,
    "pos": [
     32,

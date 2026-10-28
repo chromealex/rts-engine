@@ -206,18 +206,16 @@ def frostcrown():
     m.ent("great_hall", 1, [10, 24])
     for i in range(5):
         m.ent("peon", 1, [14 + (i % 3) * 0.8, 21 + i])
-    m.ent("blademaster", 1, [15, 27])  # starting hero: shows the ability kit (chain lightning, rejuvenation)
-    m.ent("burrow", 1, [10, 30])
     m.ent("gold_mine", 0, [10.5, 17.5])
     for y in range(30, 44):
         for x in range(2, 6):
             m.ent("pine", 0, [x + 0.5, y + 0.5])
     # creep camps guarding expansions and the middle
     m.ent("gold_mine", 0, [22.5, 38.5])
-    m.ent("troll", -1, [24, 35])
-    m.ent("troll", -1, [25, 36])
-    m.ent("ogre", -1, [32, 8], sym=False)
-    m.ent("ogre", -1, [32, 40], sym=False)
+    m.ent("forest_troll", -1, [24, 35])
+    m.ent("forest_troll", -1, [25, 36])
+    m.ent("ogre_mauler", -1, [32, 8], sym=False)
+    m.ent("ogre_mauler", -1, [32, 40], sym=False)
     write("frostcrown", m, "frozen_pass")
 
 
@@ -238,15 +236,18 @@ def starfall():
 
 
 def ironfront():
-    m = Map("Ore Valley", 64, 48, duel())
+    m = Map("Ore Valley", 64, 48, duel("allies", "soviet"))
     m.border()
     m.rect(28, 0, 8, 14, '~')
     m.rect(28, 18, 3, 6, ',')
-    m.ent("mcv", 1, [10, 24])
-    m.ent("rifleman", 1, [13, 26]); m.ent("rifleman", 1, [13, 27])
+    m.players[0]["start"] = [10, 24]
+    m.players[1]["start"] = m.mirror([10, 24])
     m.field("ore", 12, 12, 4)
     m.field("ore", 26, 36, 3)
+    m.field("gems", 32, 40, 2, sym=False)
+    m.field("gems", 32, 8, 2, sym=False)
     m.ent("ore_mine", 0, [12, 12])
+    m.ent("gem_mine", 0, [32, 40], sym=False)
     write("ironfront", m, "ore_valley")
 
 
@@ -296,13 +297,14 @@ def metaltide_heights(w, h, bases, spots):
 
 
 def metaltide():
-    m = Map("Twin Craters", 64, 48, duel())
+    m = Map("Twin Craters", 64, 48, duel("arm", "core"))
     m.border()
     m.disc(32, 24, 5, '#', sym=False)
     m.heightfield(metaltide_heights(64, 48, [(10, 24, 7)],
                                     [(6, 18, 2), (6, 30, 2), (14, 16, 2), (14, 32, 2), (20, 24, 2), (24, 10, 2), (26, 38, 2),
                                      (16, 20, 1), (16, 28, 1), (8, 12, 1)]))
-    m.ent("commander", 1, [10, 24])
+    m.players[0]["start"] = [10, 24]
+    m.players[1]["start"] = m.mirror([10, 24])
     for p in [(6, 18), (6, 30), (14, 16), (14, 32), (20, 24), (24, 10), (26, 38)]:
         m.ent("metal_spot", 0, [p[0], p[1]])
     for p in [(16, 20), (16, 28), (8, 12)]:
