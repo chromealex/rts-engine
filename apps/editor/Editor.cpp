@@ -617,6 +617,12 @@ void Editor::frame(gfx::Device& dev, double dt) {
             if (!w->open) continue;
             if (w->zeroPadding()) ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
             if (focusFirst_ == 1 && w->order() == 0) ImGui::SetNextWindowFocus();
+            // a window opened for the first time (not in the saved layout) joins the tabs of its dock area
+            // instead of floating as a tiny box
+            if (!ImGui::FindWindowByName(w->title()))
+                for (auto& o : windows_)
+                    if (o.get() != w.get() && o->open && std::string(o->dockArea()) == w->dockArea())
+                        if (ImGuiWindow* ow = ImGui::FindWindowByName(o->title()); ow && ow->DockId) { ImGui::SetNextWindowDockID(ow->DockId, ImGuiCond_FirstUseEver); ImGui::SetNextWindowFocus(); break; }
             bool visible = ImGui::Begin(w->title(), &w->open, w->flags());
             if (w->zeroPadding()) ImGui::PopStyleVar();
             if (visible) w->draw(*this);

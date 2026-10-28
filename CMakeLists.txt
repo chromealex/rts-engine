@@ -457,7 +457,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
 endif()
 
 if(RTS_BUILD_TOOLS)
-    add_executable(rtsbuild tools/rtsbuild/main.cpp)
+    add_executable(rtsbuild tools/rtsbuild/main.cpp tools/rtsbuild/FileRules.cpp)
     target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer rts_audiopack)
     add_executable(assetpipe tools/assetpipe/main.cpp)
     target_link_libraries(assetpipe PRIVATE rts_pack_writer)

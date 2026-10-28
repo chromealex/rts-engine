@@ -178,15 +178,15 @@ std::string shellQuote(const std::string& s) {
 }
 } // namespace
 
-void Workspace::startBuild(const std::string& target, const std::string& config) {
+void Workspace::startBuild(const std::string& target, const std::string& config, const std::string& extraArgs) {
     if (building_) throw std::runtime_error("a build is already running");
     if (project.dir.empty()) throw std::runtime_error("no game is open");
     if (buildThread_.joinable()) buildThread_.join();
     if (map.dirty && !map.path.empty()) map.save(map.path, nullptr);
     building_ = true;
     std::string cmd = shellQuote(buildTool) + " --project " + shellQuote(project.dir) + " --engine " + shellQuote(engineDir) +
-                      " --target " + target + " --config " + config + " 2>&1";
-    { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ = "$ rtsbuild --target " + target + " --config " + config + "\n"; }
+                      " --target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs) + " 2>&1";
+    { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ = "$ rtsbuild --target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs) + "\n"; buildRc_ = 0; }
     buildThread_ = std::thread([this, cmd] {
 #if defined(_WIN32)
         FILE* p = _popen(cmd.c_str(), "r");

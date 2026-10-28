@@ -154,6 +154,7 @@ size_t PackWriter::remove(const std::vector<std::string>& packPaths) {
     std::sort(drop.begin(), drop.end());
     size_t before = inputs_.size();
     inputs_.erase(std::remove_if(inputs_.begin(), inputs_.end(), [&](const Input& in) { return std::binary_search(drop.begin(), drop.end(), in.path); }), inputs_.end());
+    for (auto& p : drop) paths_.erase(p);   // a removed path can be added again (replaced content)
     return before - inputs_.size();
 }
 
@@ -271,9 +272,17 @@ bool PackWriter::build(std::string& out, std::vector<std::string>& chunkData, co
         ZSTD_CCtx* c = ZSTD_createCCtx();
         ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, std::clamp(opt.level, 1, ZSTD_maxCLevel()));
         ZSTD_CCtx_setParameter(c, ZSTD_c_checksumFlag, 1);
+        const int baseLevel = std::clamp(opt.level, 1, ZSTD_maxCLevel());
+        int curLevel = baseLevel;
         for (size_t k; (k = next++) < blobs.size();) {
             Blob& b = blobs[k];
             if (b.dupOf >= 0 || !opt.compress || b.raw.size() < kMinCompressSize || alreadyCompressed(inputs_[order[k]].path)) continue;
+            int level = baseLevel;
+            for (auto& [glob, lv] : opt.levelRules)
+                if (globMatch(glob.c_str(), inputs_[order[k]].path.c_str())) { level = lv; break; }
+            if (level <= 0) continue;                                   // stored as is
+            level = std::clamp(level, 1, ZSTD_maxCLevel());
+            if (level != curLevel) { ZSTD_CCtx_setParameter(c, ZSTD_c_compressionLevel, level); curLevel = level; }
             std::string z(ZSTD_compressBound(b.raw.size()), '\0');
             size_t n = ZSTD_compress2(c, z.data(), z.size(), b.raw.data(), b.raw.size());
             if (ZSTD_isError(n)) { failed = true; break; }

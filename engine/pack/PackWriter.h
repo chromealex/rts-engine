@@ -16,6 +16,9 @@ struct WriteOptions {
     unsigned threads = 0;    // 0 = hardware concurrency
     bool compress = true;    // false: everything stored (debugging, fastest builds)
     bool external = false;   // set kFlagExternal (also set automatically by addPack of an external pack)
+    // Per-file overrides (build window / game.json packaging.files): the first glob matching a
+    // pack path sets its zstd level; level 0 = store uncompressed. Deterministic like the rest.
+    std::vector<std::pair<std::string, int>> levelRules;
 };
 
 struct WriteStats {
