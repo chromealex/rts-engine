@@ -4837,7 +4837,7 @@ bool visionMatches(const std::function<std::unique_ptr<Simulation>()>& mk, const
     for (int t = 0; t < ticks; ++t) {
         if (t % 15 == 0) {
             std::vector<Entity> movers;
-            A->world().each<game::Unit, Owner, game::Mobile>([&](Entity e, game::Unit&, Owner& o, game::Mobile&) { if (o.player) movers.push_back(e); });
+            A->world().each<game::Unit, Owner, game::Mobile>([&](Entity e, game::Unit&, Owner& o, game::Mobile&) { if (o.player && e.index % 3 != 0) movers.push_back(e); });   // every third unit stays put
             for (Entity e : movers) {
                 const int roll = ra.below(3); rb.below(3);
                 if (roll == 0) continue;   // some stay parked (cached lists replayed)
@@ -4980,7 +4980,7 @@ TEST(vision_fast_equals_reference_planet) {
             return "{\"rows\":[" + rows + "]}";
         };
         std::string faces;
-        for (int f = 0; f < 6; ++f) faces += std::string(f ? "," : "") + face(f == 1 || f == 2);
+        for (int f = 0; f < 6; ++f) faces += std::string(f ? "," : "") + face(f != 4);
         const char* kinds[] = {"scout", "tower", "flyer", "scout", "seer"};
         std::string ents;
         for (int i = 0; i < 18; ++i) {
@@ -4989,7 +4989,7 @@ TEST(vision_fast_equals_reference_planet) {
             ents += std::string(i ? "," : "") + "{\"type\":\"" + kinds[i % 5] + "\",\"owner\":" + std::to_string(1 + i % 3) +
                     ",\"at\":{\"body\":\"p\",\"face\":" + std::to_string(f) + ",\"x\":" + std::to_string(x) + ".5,\"y\":" + std::to_string(y) + ".5}}";
         }
-        for (int i = 0; i < 4; ++i) ents += ",{\"type\":\"wall\",\"owner\":0,\"at\":{\"body\":\"p\",\"face\":" + std::to_string(i) + ",\"x\":5,\"y\":5}}";
+        for (int i = 0; i < 10; ++i) ents += ",{\"type\":\"wall\",\"owner\":0,\"at\":{\"body\":\"p\",\"face\":" + std::to_string(i % 6) + ",\"x\":" + std::to_string(2 + r.below(6)) + ",\"y\":" + std::to_string(2 + r.below(5)) + "}}";
         const std::string map = R"J({"players": [{"name":"A","team":1,"start": {"body": "p", "face": 4, "x": 4, "y": 4}}, {"name":"B","team":1,"start": {"body": "p", "face": 0, "x": 4, "y": 4}}, {"name":"C","team":2,"start": {"body": "p", "face": 5, "x": 4, "y": 4}}],
           "world": {"start": "p", "bodies": [{"id": "p", "kind": "planet", "radius": 14, "faceSize": 10, "terrain": {"faces": [)J" + faces + "], \"corners\": [" + corners + "]}}]},\"entities\": [" + ents + "]}";
         auto mk = [&] { return makeSimJson(rules, map, seed); };
@@ -4998,11 +4998,11 @@ TEST(vision_fast_equals_reference_planet) {
         { auto s0 = mk(); CHECK(mod(*s0).surface(*s0) != nullptr); }
         CHECK(visionMatches(mk, pt, [&](Simulation& s, VisionLcg& rr) {
             auto& g = mod(s).state(s).grid;
-            for (int k = 0; k < 12; ++k) { const size_t i = size_t(rr.below(int(g.dig.size()))); if (i < g.dig.size()) g.dig[i] = 0; }
+            for (int k = 0; k < 30; ++k) { const size_t i = size_t(rr.below(int(g.dig.size()))); if (i < g.dig.size()) g.dig[i] = 0; }
             std::vector<Entity> walls;
             const int wall = mod(s).rules().findType("wall");
             s.world().each<game::Unit>([&](Entity e, game::Unit& u) { if (u.type == wall && u.hp.raw > 0) walls.push_back(e); });
-            if (!walls.empty() && rr.below(3) == 0) s.world().get<game::Unit>(walls[size_t(rr.below(int(walls.size())))]).hp = Fixed{};
+            if (!walls.empty() && rr.below(2) == 0) s.world().get<game::Unit>(walls[size_t(rr.below(int(walls.size())))]).hp = Fixed{};
         }, 420, seed, &passes));
         CHECK(passes > 60);
         // and the shipped planet maps over a stretch of a match
