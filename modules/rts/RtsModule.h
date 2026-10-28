@@ -199,6 +199,7 @@ struct Mobile {
     // flow field following (RtsFlowField.cpp): the field is keyed by (goal cell, radius, path layer, clearance)
     bool flow = false;
     uint8_t flowRadius = 0;
+    uint8_t flowStuck = 0;       // stuck events while on the field: the first re-samples it, the second falls back to A*
 };
 
 struct Orders { std::vector<Order> queue; };

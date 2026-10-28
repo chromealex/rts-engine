@@ -168,7 +168,7 @@ static int benchGroup(Simulation& sim, const Args& a) {
     int type = -1;
     for (size_t t = 0; t < m->rules().types.size() && type < 0; ++t) {
         const auto& ut = m->rules().types[t];
-        if (!ut.structure && ut.speed.raw > 0 && !(ut.layer & game::kLayerAir) && !ut.weapons.empty() && ut.radius <= Fixed::fromRatio(1, 2)) type = int(t);
+        if (!ut.structure && ut.speed.raw > 0 && !(ut.layer & game::kLayerAir) && !ut.weapons.empty() && ut.radius <= Fixed::fromRatio(1, 2) && !ut.worker) type = int(t);
     }
     if (type < 0) { std::printf("no unit type\n"); return 1; }
     const uint8_t layer = m->rules().types[size_t(type)].pathLayer;
@@ -198,6 +198,8 @@ static int benchGroup(Simulation& sim, const Args& a) {
     }
     c.point = g.centerOf(goal);
     const Vec3 goalPos = c.point;
+    // arrived = inside the area a crowd of this size occupies (~0.8 x 0.8 units per body) plus a margin
+    const Fixed arriveR = Fixed::fromRatio(int64_t(std::sqrt(double(a.benchGroup)) * 60) + 600, 100);
     sim.submit(c);
     auto clock = [] { return int64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); };
     g.clockNs = clock;
@@ -205,21 +207,33 @@ static int benchGroup(Simulation& sim, const Args& a) {
     const auto t0 = std::chrono::steady_clock::now();
     size_t peakFields = 0, peakBytes = 0;
     uint32_t done = 0;
+    int64_t peakPathNs = 0, movementNs = 0;
     for (uint32_t t = 0; t < ticks; ++t) {
+        const int64_t before = g.pathNs, s0 = clock();
         sim.step();
+        movementNs += clock() - s0;
+        peakPathNs = std::max(peakPathNs, g.pathNs - before);
         peakFields = std::max(peakFields, g.flowCount()); peakBytes = std::max(peakBytes, g.flowBytes());
+        if (t % 20 == 0 && a.quiet == false && t % 400 == 0) {
+            Fixed sum{};
+            int alive = 0;
+            for (Entity e : c.units) if (sim.world().alive(e)) { sum += (sim.world().get<Transform>(e).pos - goalPos).length(); ++alive; }
+            std::printf("  t=%3us mean distance to goal %.1f\n", t / sim.tickRate(), alive ? (sum / alive).toDouble() : 0.0);
+        }
         if (t % 20 == 0) {
             int near = 0;
-            for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < Fixed::fromInt(int64_t(std::sqrt(double(a.benchGroup))) + 4)) ++near;
+            for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < arriveR) ++near;
             if (near >= a.benchGroup * 9 / 10 && !done) done = t;
         }
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     int near = 0;
-    for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < Fixed::fromInt(int64_t(std::sqrt(double(a.benchGroup))) + 4)) ++near;
-    std::printf("Group %d x %s on %dx%d%s: %u ticks in %.0f ms = %.0f ticks/s, path %.2f ms/tick, arrived %d (90%% at %.0f s), fields peak %zu (%.2f MB), checksum %016llx\n",
-                a.benchGroup, m->rules().types[size_t(type)].id.c_str(), g.w, g.h, g.surf ? " (planet)" : "", ticks, ms, ticks / (ms / 1000.0),
-                double(g.pathNs) / 1e6 / ticks, near, done ? double(done) / sim.tickRate() : -1.0, peakFields, double(peakBytes) / 1048576.0, (unsigned long long)sim.checksum());
+    for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < arriveR) ++near;
+    (void)movementNs;
+    std::printf("Group %d x %s on %dx%d%s: %u ticks %.0f ms = %.0f ticks/s | path total %.0f ms, %.3f ms/tick, worst tick %.1f ms | arrived %d/%d (90%% at %.0f s) | fields peak %zu, %.2f MB | %016llx\n",
+                a.benchGroup, m->rules().types[size_t(type)].id.c_str(), g.w, g.h, g.surf ? " planet" : "", ticks, ms, ticks / (ms / 1000.0),
+                double(g.pathNs) / 1e6, double(g.pathNs) / 1e6 / ticks, double(peakPathNs) / 1e6, near, a.benchGroup, done ? double(done) / sim.tickRate() : -1.0,
+                peakFields, double(peakBytes) / 1048576.0, (unsigned long long)sim.checksum());
     return 0;
 }
 

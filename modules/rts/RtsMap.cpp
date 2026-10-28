@@ -319,6 +319,7 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
 }
 
 bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes, int clear, bool useSoft) {
+    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{*this, clockNs ? clockNs() : 0};
     out.clear();
     if (surf) return findPathSphere(from, to, layer, out, maxNodes, clear, useSoft);
     if (layer & 2) { out.push_back(to); return true; } // air: straight line
