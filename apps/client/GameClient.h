@@ -165,6 +165,7 @@ private:
     void startNetMatch();
     void leaveNetMatch();
     void buildLobby(UiState& s);
+    std::string mapTitle(const std::string& file, const std::string& serverTitle) const;
     void describeNetMaps();
     void loadNetSettings();
     void saveNetSettings() const;
