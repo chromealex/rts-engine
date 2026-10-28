@@ -1674,6 +1674,162 @@ TEST(models_fbx_readable_errors) {
     CHECK(threw);
 }
 
+
+// ---------------- models (models agent): IK, additive, blend space, morph targets, baking ----------------
+#include "engine/gfx/Gfx.h"
+namespace modeltest {
+// Records textures so baking / uploads can be checked without a GPU.
+class NullDevice final : public rts::gfx::Device {
+public:
+    struct Tex { rts::gfx::TextureDesc desc; std::vector<float> data; };
+    std::vector<Tex> textures;
+    const rts::gfx::DeviceInfo& info() const override { return info_; }
+    rts::gfx::BufferHandle createBuffer(const rts::gfx::BufferDesc&) override { return {++next_}; }
+    void updateBuffer(rts::gfx::BufferHandle, const void*, size_t, size_t) override {}
+    void destroyBuffer(rts::gfx::BufferHandle) override {}
+    rts::gfx::TextureHandle createTexture(const rts::gfx::TextureDesc& d) override {
+        Tex t; t.desc = d;
+        if (d.format == rts::gfx::PixelFormat::RGBA32F && d.data) {
+            const float* f = static_cast<const float*>(d.data);
+            t.data.assign(f, f + size_t(d.width) * size_t(d.height) * 4);
+        }
+        textures.push_back(std::move(t));
+        return {uint32_t(textures.size())};
+    }
+    void updateTexture(rts::gfx::TextureHandle, int, int, int, int, const void*, int) override {}
+    void destroyTexture(rts::gfx::TextureHandle) override {}
+    rts::gfx::ShaderHandle createShader(const rts::gfx::ShaderDesc&) override { return {++next_}; }
+    void destroyShader(rts::gfx::ShaderHandle) override {}
+    rts::gfx::PipelineHandle createPipeline(const rts::gfx::PipelineDesc&) override { return {++next_}; }
+    void destroyPipeline(rts::gfx::PipelineHandle) override {}
+    const std::string& lastError() const override { return err_; }
+    void beginFrame(int, int) override {}
+    void endFrame() override {}
+    void beginPass(const rts::gfx::PassDesc&) override {}
+    void endPass() override {}
+    void setViewport(const rts::gfx::Rect&) override {}
+    void setScissor(const rts::gfx::Rect&) override {}
+    void setPipeline(rts::gfx::PipelineHandle) override {}
+    void setVertexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setIndexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setTexture(int, rts::gfx::TextureHandle) override {}
+    void setUniforms(int, const void*, size_t) override {}
+    void draw(uint32_t, uint32_t) override {}
+    void drawIndexed(uint32_t, uint32_t, int32_t, uint32_t) override {}
+private:
+    rts::gfx::DeviceInfo info_;
+    std::string err_;
+    uint32_t next_ = 0;
+};
+// Three-joint chain along +Y: a (0,0,0) -> b (0,1,0) -> c (0,2,0).
+inline std::unique_ptr<Model> chainModel() {
+    auto m = std::make_unique<Model>();
+    Node a; a.name = "a"; Node b; b.name = "b"; b.parent = 0; b.t = {0, 1, 0}; Node c; c.name = "c"; c.parent = 1; c.t = {0, 1, 0};
+    m->nodes = {a, b, c};
+    m->finalize();
+    return m;
+}
+} // namespace modeltest
+
+TEST(models_two_bone_ik_reaches_target) {
+    using namespace modeltest;
+    auto m = chainModel();
+    Pose pose;
+    bindPose(*m, pose);
+    std::vector<mat4> world;
+    worldMatrices(*m, pose, world);
+    const float3 target{0.8f, 1.2f, 0};
+    solveTwoBoneIK(*m, pose, world, 0, 1, 2, target, {1, 1, 0});
+    std::vector<mat4> check;
+    worldMatrices(*m, pose, check);               // the returned world matches a fresh evaluation
+    float3 c{check[2].at(0, 3), check[2].at(1, 3), check[2].at(2, 3)};
+    CHECK(near(c.x, target.x, 2e-3f) && near(c.y, target.y, 2e-3f) && near(c.z, 0, 2e-3f));
+    CHECK(near(world[2].at(0, 3), c.x) && near(world[2].at(1, 3), c.y));
+    float3 b{check[1].at(0, 3), check[1].at(1, 3), check[1].at(2, 3)};
+    CHECK(near(length(b), 1, 1e-3f) && near(length(c - b), 1, 1e-3f));   // bone lengths kept
+    CHECK(b.x > 0.0f);                                                      // bends towards the pole
+    // unreachable target: chain stretches straight towards it
+    solveTwoBoneIK(*m, pose, world, 0, 1, 2, {0, 0, 5}, {0, 1, 1});
+    CHECK(near(world[2].at(2, 3), 2, 1e-2f));
+}
+
+TEST(models_additive_and_blend_space) {
+    using namespace modeltest;
+    auto m = chainModel();
+    AnimClip walk, run, nod;
+    AnimChannel ch; ch.node = 1; ch.path = AnimChannel::Translation;
+    walk.name = "Walk"; walk.duration = 1; ch.times = {0, 1}; ch.values = {0, 1, 0, 0, 1, 0}; walk.channels.push_back(ch);
+    run.name = "Run"; run.duration = 0.5f; ch.values = {0, 3, 0, 0, 3, 0}; run.channels.push_back(ch);
+    nod.name = "Nod"; nod.duration = 1; ch.node = 2; ch.values = {0, 1, 0, 0.5f, 1, 0}; nod.channels.push_back(ch);
+    m->clips = {walk, run, nod};
+    Animator a;
+    a.setModel(m.get());
+    Animator::Play p; p.fade = 0;
+    a.play(0, 0, p);
+    a.setBlend(0, 1, 0.5f);
+    Pose pose;
+    a.evaluate(pose);
+    CHECK(near(pose[1].t.y, 2));                  // halfway between Walk (1) and Run (3)
+    a.update(0.375f);                             // mixed cycle = 0.75 s: half a cycle
+    CHECK(near(a.time(0), 0.5f));
+    auto bs = a.baseSample();
+    CHECK(bs.clipA == 0 && bs.clipB == 1 && near(bs.w, 0.5f) && near(bs.timeB, 0.25f));
+    a.setAdditive(0, 2, 1, 0);                    // additive: adds clip(t) - clip(0)
+    a.update(0.5f);
+    a.evaluate(pose);
+    CHECK(near(pose[2].t.x, 0.25f, 1e-3f) && near(pose[2].t.y, 1));
+}
+
+TEST(models_morph_targets_and_weights) {
+    using namespace modeltest;
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    auto m = loadModel(dir + "slime.glb", diskReader(), nullptr);
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(p.morphTargets == 2 && p.vertexCount > 0 && p.morphDeltas.size() == size_t(2) * p.vertexCount * 6);
+    CHECK(m->clips.size() == 1 && m->clips[0].channels[0].path == AnimChannel::Weights && m->clips[0].channels[0].comps == 2);
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.375f, pose);        // between (0.8, 0) and (0, 0.6)
+    CHECK(near(pose[0].w[0], 0.4f) && near(pose[0].w[1], 0.3f));
+    NullDevice dev;
+    uploadModel(dev, *m);
+    CHECK(m->morphTex.valid() && m->morphTexWidth == 2048);
+    const auto& tex = dev.textures[m->morphTex.id - 1];
+    const size_t texel = p.morphTexel + 2 * 5;    // target 0, vertex 5: position delta
+    CHECK(tex.desc.format == rts::gfx::PixelFormat::RGBA32F && tex.data.size() > texel * 4 + 2);
+}
+
+TEST(models_baked_clips_match_the_pose) {
+    using namespace modeltest;
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    auto m = loadModel(dir + "golem.glb", diskReader(), nullptr);
+    NullDevice dev;
+    CHECK(bakeAnimations(dev, *m, 30));
+    const auto& b = m->baked;
+    CHECK(b.tex.valid() && b.joints == 8 && b.clips.size() == m->clips.size() && b.rows > 1);
+    const auto& tex = dev.textures[b.tex.id - 1];
+    CHECK(tex.desc.width == 8 * 3 && tex.desc.height == b.rows);
+    // row of Walk at 0.5 s holds world * inverse bind of every joint
+    const int walk = m->findClip("Walk");
+    const int row = bakedRow(*m, walk, 0.5f);
+    CHECK(row == b.clips[size_t(walk)].firstRow + 15);
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[size_t(walk)], 0.5f, pose);
+    std::vector<mat4> world;
+    worldMatrices(*m, pose, world);
+    const auto& sk = m->skins[size_t(b.skin)];
+    bool same = true;
+    for (int j = 0; j < b.joints; ++j) {
+        const mat4 jm = world[size_t(sk.joints[size_t(j)])] * sk.inverseBind[size_t(j)];
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c) same &= near(tex.data[(size_t(row) * 24 + size_t(j) * 3 + size_t(r)) * 4 + size_t(c)], jm.at(r, c), 1e-4f);
+    }
+    CHECK(same);
+    CHECK(bakedRow(*m, -1, 0) == 0);               // bind pose row
+    CHECK(bakedRow(*m, walk, 1.0f) == b.clips[size_t(walk)].firstRow); // loop wraps to frame 0
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

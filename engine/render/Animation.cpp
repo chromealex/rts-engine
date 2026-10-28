@@ -187,24 +187,27 @@ void solveTwoBoneIK(const Model& m, Pose& pose, std::vector<mat4>& world, int a,
     // current and wanted interior angles (law of cosines)
     const float acab0 = safeAcos(dot(normalize(pc - pa), normalize(pb - pa)));
     const float babc0 = safeAcos(dot(normalize(pa - pb), normalize(pc - pb)));
-    const float acat0 = safeAcos(dot(normalize(pc - pa), normalize(target - pa)));
     const float acab1 = safeAcos((lcb * lcb - lab * lab - lat * lat) / (-2 * lab * lat));
     const float babc1 = safeAcos((lat * lat - lab * lab - lcb * lcb) / (-2 * lab * lcb));
-    float3 axis0 = cross(pc - pa, pole - pa);
-    if (dot(axis0, axis0) < 1e-10f) axis0 = cross(pc - pa, pb - pa);
+    // keep the chain's current bend plane; the pole only decides it for a straight chain
+    float3 axis0 = cross(pc - pa, pb - pa);
+    if (dot(axis0, axis0) < 1e-8f * lab * lab) axis0 = cross(pc - pa, pole - pa);
     if (dot(axis0, axis0) < 1e-10f) return;
     axis0 = normalize(axis0);
-    float3 axis1 = cross(pc - pa, target - pa);
-    const bool turn = dot(axis1, axis1) > 1e-10f;
-    if (turn) axis1 = normalize(axis1);
     const quat ga = rotationOf(world[size_t(a)]), gb = rotationOf(world[size_t(b)]);
     auto local = [](const quat& g, float3 axis) { return inverse(g).rotate(axis); };
-    quat ra = quat::axisAngle(local(ga, axis0), (acab1 - acab0) * weight);
-    if (turn) ra = ra * quat::axisAngle(local(ga, axis1), acat0 * weight);
-    const quat rb = quat::axisAngle(local(gb, axis0), (babc1 - babc0) * weight);
-    pose[size_t(a)].r = qnormalize(pose[size_t(a)].r * ra);
-    pose[size_t(b)].r = qnormalize(pose[size_t(b)].r * rb);
+    // 1) bend: knee angle for the target distance (c stays on the a->c ray)
+    pose[size_t(a)].r = qnormalize(pose[size_t(a)].r * quat::axisAngle(local(ga, axis0), (acab1 - acab0) * weight));
+    pose[size_t(b)].r = qnormalize(pose[size_t(b)].r * quat::axisAngle(local(gb, axis0), (babc1 - babc0) * weight));
     refreshSubtree(m, pose, world, a);
+    // 2) swing the whole chain so a->c points at the target
+    const float3 pc2 = posOf(world[size_t(c)]);
+    float3 axis1 = cross(pc2 - pa, target - pa);
+    if (dot(axis1, axis1) > 1e-10f) {
+        const float ang = safeAcos(dot(normalize(pc2 - pa), normalize(target - pa)));
+        pose[size_t(a)].r = qnormalize(pose[size_t(a)].r * quat::axisAngle(local(rotationOf(world[size_t(a)]), normalize(axis1)), ang * weight));
+        refreshSubtree(m, pose, world, a);
+    }
 }
 
 bool bakeAnimations(gfx::Device& dev, Model& m, float fps, int maxRows) {

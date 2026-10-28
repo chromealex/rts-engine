@@ -154,8 +154,13 @@ void RtsView::buildLook(gfx::Device& dev, const UnitType& t, TypeLook& L) {
             st.choice.variant = st.choice.model->findVariant(sj.getStr("variant"));
             if (st.choice.variant < 0) warn(t, "stages: variant '" + sj.getStr("variant") + "' not found in " + st.choice.model->path);
         }
-        configureExtras(dev, t, v, st.choice);
-        if (sj.has("fx")) configureExtras(dev, t, sj, st.choice);
+        if (sj.has("model")) { // another model: node-specific parts of the type's view do not apply to it
+            auto& pr = st.choice.procs;
+            pr.erase(std::remove_if(pr.begin(), pr.end(), [&](const ProcAnim& pa) { return !pa.nodeName.empty() && st.choice.model->findNode(pa.nodeName) < 0; }), pr.end());
+        } else {
+            configureExtras(dev, t, v, st.choice);
+        }
+        configureExtras(dev, t, sj, st.choice);
         finishChoice(t, st.choice);
         buildStages |= st.build >= 0;
         L.stages.push_back(std::move(st));
