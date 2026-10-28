@@ -58,9 +58,6 @@ enum class Stat : uint8_t {
 Stat parseStat(const std::string& s, bool* ok = nullptr);
 
 struct StatMod { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); };
-}   // namespace rts::game
-#include "RtsMechData.h"   // agent-mech data (needs StatMod)
-namespace rts::game {
 
 // What a modifier applies to: types with any of `tags`, or one `type`, or everything.
 struct ModTarget { uint64_t tags = 0; uint16_t type = kNoType; bool all = false; };
@@ -142,6 +139,10 @@ struct AttractDef {
     std::vector<Amount> resources;                 // min stock
     Fixed weight = Fixed::fromInt(1);
 };
+
+}   // namespace rts::game
+#include "RtsMechData.h"   // agent-mech data (needs StatMod, Amount, layers)
+namespace rts::game {
 
 // ------------------------------------------------------------------ type
 struct UnitType {

@@ -154,6 +154,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 if (sim.tick() - c.chargeStart < uint32_t((wd.chargeTime * int64_t(sim.tickRate())).toInt())) continue;
                 c.chargeStart = sim.tick();
             }
+            if (rules_.mech.ammo && !mechUseAmmo(sim, e, i)) continue;   // agent-mech: out of ammo
             c.cooldown[i] = wd.cooldown;
             sim.emit({kEvAttack, o.player, e, c.target, int64_t(i), tr.pos});
             // shooting uphill can miss (StarCraft); the roll uses the shared deterministic RNG

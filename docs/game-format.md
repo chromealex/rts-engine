@@ -902,6 +902,40 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
   regenerate `regen`/s after `delay` seconds without hits.
 - **maxWorkers**: further workers wait next to the node until a place is free.
 
+### Genre mechanics (agent-mech stage 2)
+
+```json
+"market": {"currency": "gold", "prices": {"wood": 100, "food": 100, "stone": 130}, "fee": 0.3, "step": 3, "lot": 100},
+"tribute": {"fee": 0.3}, "diplomacy": true,
+"items": {"potion": {"cost": {"gold": 50}, "use": {"heal": 200}, "charges": 1},
+          "boots":  {"cost": {"gold": 100}, "mods": [{"stat": "speed", "add": 1}], "charges": 0, "consumable": false}},
+"cycles": [{"id": "day", "length": 480, "phases": [{"id": "day", "until": 0.6}, {"id": "night", "until": 1, "status": "night"}]},
+           {"id": "season", "length": 1200, "phases": [{"id": "summer", "until": 0.75}, {"id": "winter", "until": 1, "status": "winter"}]}],
+"hazards": [{"field": "tiberium", "damage": 6, "tags": ["infantry"]}, {"area": "lava", "status": "burning"}],
+"deck": {"hand": 4, "deployNear": 8, "ownHalf": true},
+"types": {
+  "wall":     {"wall": true, ...},                       // built in a line (kCmdBuildLine)
+  "gate":     {"gate": "own" | "allies", ...},           // the owner walks through; enemies are stopped and attack it
+  "bridge":   {"bridge": true, ...},                     // walkable ground over water while it stands (map-placed)
+  "nydus":    {"transport": {"slots": 20}, "tunnel": "nydus"},   // load at one, unload at any tunnel of the network
+  "hovercraft": {"move": {"layer": "amphibious", ...}},  // ground and water
+  "harrier":  {"weapons": [{"ammo": 2, ...}]},           // empty: flies to the nearest own dock and rearms
+  "airfield": {"dock": {"slots": 4, "rearmTime": 1}},
+  "templar":  {"mergeInto": {"with": "templar", "result": "archon"}},   "archon": {"splitInto": {"type": "templar", "count": 2}},
+  "market":   {"market": true}, "cart": {"trader": {"rate": 0.5}},     // currency per cell between the two markets per round trip
+  "hero":     {"inventory": {"slots": 6}}, "shop": {"shop": {"sells": ["potion", "boots"], "radius": 4}},
+  "kobold":   {"drops": [{"item": "potion", "chance": 0.3}]}
+}
+```
+Map players may have `"deck": ["card ids..."]` (default: every player ability). Commands: `kCmdFormation` (param 0 line, 1 box,
+2 wedge, 3 loose, -1 break; a formation ordered to a point keeps its shape and the pace of its slowest member),
+`kCmdBuildLine`, `kCmdMerge`, `kCmdSplit`, `kCmdTrade` (sell / buy one lot; prices move by `step` and are shared by all),
+`kCmdTradeRoute`, `kCmdTribute`, `kCmdDiplomacy` (alliances need both sides; war moves the player to a new team),
+`kCmdBuyItem` / `kCmdUseItem` / `kCmdDropItem` / `kCmdPickItem`. Cycles apply their phase `status` to every player and set
+trigger variable `cycle.<id>` = phase index (event `kEvCyclePhase`). Jumps over cliffs, jetpacks and blinks are abilities
+with the `blink` effect; teleport networks are `area` effects with `teleportTo`. The AI sells surplus / buys shortages,
+sends idle carts to the farthest market, buys and drinks potions with heroes and merges idle pairs.
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
