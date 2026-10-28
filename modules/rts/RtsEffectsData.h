@@ -19,10 +19,10 @@ struct EffectParser {
     void namedStatuses(const Json& j);
     void ability(const std::string& where, const Json& j, AbilityDef& a, bool withLevels = true);
     void playerAbility(const std::string& where, const Json& j, PlayerAbilityDef& a, bool withLevels = true);
+    void filter(const std::string& where, const Json& j, EffectDef& e);   // e.enemies / e.allies seed it
 
 private:
     void statusBody(const std::string& where, const Json& j, int idx);
-    void filter(const std::string& where, const Json& j, EffectDef& e);
     void delivery(const std::string& where, const Json& j, DeliveryDef& d);
     int deliveredPayload(const std::string& where, const Json& aj, bool* channel);
     uint64_t statusTags(const Json& arr);
@@ -31,5 +31,7 @@ private:
 // Fidelity mechanics of the type / rules blocks (RtsOriginalsData.cpp), called by loadRules before the
 // effect engine switch is decided.
 void loadOriginals(Rules& r, const Json& j, EffectParser& ep);
+// Foundations, traps (RtsFidelityData.cpp), called right after loadOriginals.
+void loadFidelity(Rules& r, const Json& j, EffectParser& ep);
 
 } // namespace rts::game

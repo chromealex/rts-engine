@@ -98,6 +98,7 @@
                                      { "type": "bob", "amp": 0.02, "freq": 3, "wave": "sine" },
                                      { "type": "pop" }, { "type": "fall", "amp": 25 }, { "type": "sink" } ] } ],
         "height": 0.9, "variant": "desert",
+        "assign": { "Turret": "steel_plates" },   // library material (materials.json), made with texture_generate
         "materials": { "Hull": { "teamMask": "models/tank_team.png" }, "HullDesert": { "teamMask": "models/tank_team.png" } },
         "muzzle": { "node": "Barrel", "offset": [0, 0, 0.7] },
         "fx": [ { "effect": "exhaust", "node": "Hull", "offset": [0, 0.5, -0.7], "when": "moving" } ],

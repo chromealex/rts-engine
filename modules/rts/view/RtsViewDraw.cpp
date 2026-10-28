@@ -55,6 +55,7 @@ void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, fl
     d.model = show->model;
     d.world = base * st.objXf * show->fix;
     d.materials = &show->materials;
+    d.nodeMaterial = show->nodeMaterial.empty() ? nullptr : &show->nodeMaterial;
     d.variant = show->variant;
     st.drawn = base * st.objXf * ch.fix;
 
@@ -116,7 +117,7 @@ void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, fl
             ModelDraw ad = d;
             ad.model = at.model;
             ad.materials = &at.materials;
-            ad.nodeWorld = nullptr; ad.pose = nullptr; ad.baked = nullptr; ad.variant = -1;
+            ad.nodeWorld = nullptr; ad.pose = nullptr; ad.baked = nullptr; ad.variant = -1; ad.nodeMaterial = nullptr;
             const mat4 socket = at.node >= 0 && size_t(at.node) < st.world.size() ? st.world[size_t(at.node)] : mat4{};
             ad.world = st.drawn * socket * at.local;
             r.drawModel(ad);
