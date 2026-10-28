@@ -118,8 +118,20 @@ public:
                 ch |= ImGui::DragFloat("Яркость", &in, 0.02f, 0.0f, 4.0f);
                 ch |= ImGui::DragFloat("Мерцание", &fl, 0.01f, 0.0f, 1.0f);
                 ch |= ImGui::DragFloat("Ореол", &ha, 0.02f, 0.0f, 5.0f);
+                bool spot = m.spot;
+                float ang = m.angle, pit = m.pitch, yw = m.yaw, swp = m.sweep, sws = m.sweepSpeed;
+                ch |= ImGui::Checkbox("Прожектор", &spot);
+                if (spot) {
+                    ch |= ImGui::DragFloat("Угол конуса", &ang, 0.5f, 2.0f, 170.0f, "%.0f°");
+                    ch |= ImGui::DragFloat("Наклон вниз", &pit, 0.5f, -10.0f, 90.0f, "%.0f°");
+                    ch |= ImGui::DragFloat("Направление", &yw, 1.0f, -360.0f, 360.0f, "%.0f°");
+                    ch |= ImGui::DragFloat("Качание", &swp, 0.5f, 0.0f, 180.0f, "±%.0f°");
+                    if (swp > 0) ch |= ImGui::DragFloat("Скорость качания", &sws, 0.5f, 1.0f, 180.0f, "%.0f°/с");
+                }
                 if (ch) {
                     Json p = Json::object();
+                    p.set("type", Json::string(spot ? "spot" : "point"));
+                    if (spot) { p.set("angle", n3(ang)); p.set("pitch", n3(pit)); p.set("yaw", n3(yw)); p.set("sweep", n3(swp)); p.set("sweepSpeed", n3(sws)); }
                     p.set("x", n3(pos[0])); p.set("z", n3(pos[1])); p.set("height", n3(h)); p.set("radius", n3(r));
                     p.set("intensity", n3(in)); p.set("flicker", n3(fl)); p.set("halo", n3(ha));
                     Json c = Json::array(); for (float v : col) c.push(n3(v)); p.set("color", c);

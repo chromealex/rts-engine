@@ -1,0 +1,12 @@
+// showcase — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "The same Iron and Gold (Warcraft II) with 3D models and animations — an engine showcase.",
+  "howto.goal": "Destroy every enemy building — or just look at the models.",
+  "howto.tip": "Shadows and material quality are in the pause menu — handy for comparisons.",
+  "howto.step1": "Rules as in Iron and Gold: peasants gather gold and wood, farms give supply, barracks and workshop train the army.",
+  "howto.step2": "Turn on \"Spectate only\" in the menu — bots play while you watch models, walk cycles and attacks.",
+  "howto.step3": "The mouse wheel zooms, dragging with the middle button moves the camera."
+}

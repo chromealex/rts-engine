@@ -27,11 +27,10 @@ public:
         ImVec2 avail = ImGui::GetContentRegionAvail();
         ImVec2 origin = ImGui::GetCursorScreenPos();
         ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(origin, ImVec2(origin.x + avail.x, origin.y + avail.y), IM_COL32(28, 30, 34, 255));
+        dl->AddRectFilled(origin, ImVec2(origin.x + avail.x, origin.y + avail.y), ImGui::GetColorU32(ed.theme().palette().canvas)); // lighter than the device bezel
         if (!ed.playing()) {
-            const char* msg = "Тест не запущен: «Боты» или «Играть за…» в панели выше (F5)";
-            ImVec2 ts = ImGui::CalcTextSize(msg);
-            dl->AddText(ImVec2(origin.x + (avail.x - ts.x) * 0.5f, origin.y + avail.y * 0.5f), IM_COL32(200, 200, 200, 255), msg);
+            ui::emptyState(origin, ImVec2(origin.x + avail.x, origin.y + avail.y), ICON_GAME, "Тест не запущен",
+                           "Нажмите " ICON_PLAY " на панели выше или F5: боты против ботов, или выберите, за кого играть.");
             ImGui::Dummy(avail);
             ed.gameViewport = nullptr;
             return;
@@ -75,30 +74,44 @@ public:
 private:
     std::string filter_;
     void toolbar(Editor& ed) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
-        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 6, ImGui::GetCursorPosY() + 3));
+        const float bottom = ui::beginToolbar();
+        ui::beginSegment();
         if (!ed.playing()) {
-            if (ImGui::SmallButton("Боты")) ed.startPlay(0);
+            if (ui::toolButton(ICON_BOT, "Боты против ботов")) ed.startPlay(0);
             for (size_t p = 0; p < ed.doc().data.players.size(); ++p) {
                 if (ed.doc().data.players[p].waves) continue;
-                ImGui::SameLine(0, 4);
-                if (ImGui::SmallButton(("Играть за " + ed.doc().data.players[p].name).c_str())) ed.startPlay(int(p + 1));
+                ImGui::SameLine();
+                ImGui::PushID(int(p));
+                if (ui::toolButton(ICON_USER, ("Играть за " + ed.doc().data.players[p].name).c_str())) ed.startPlay(int(p + 1));
+                ImGui::PopID();
             }
         } else {
-            if (ImGui::SmallButton("Стоп")) ed.stopPlay();
-            ImGui::SameLine(0, 4);
-            if (ImGui::SmallButton(ed.playPaused ? "Продолжить" : "Пауза")) ed.playPaused = !ed.playPaused;
-            ImGui::SameLine(0, 8);
-            ImGui::SetNextItemWidth(110);
-            ImGui::SliderFloat("##speed", &ed.playSpeed, 0.25f, 16.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
+            if (ui::toolButton(ICON_PLAY, "Идёт тест", !ed.playPaused)) ed.playPaused = false;
+            ImGui::SameLine();
+            if (ui::toolButton(ICON_PAUSE, ed.playPaused ? "Продолжить" : "Пауза", ed.playPaused)) ed.playPaused = !ed.playPaused;
+            ImGui::SameLine();
+            if (ui::toolButton(ICON_STOP, "Стоп")) ed.stopPlay();
         }
-        ImGui::SameLine(0, 16);
+        ui::endSegment();
+        if (ed.playing()) {
+            ImGui::SameLine(0, 10);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextDisabled(ICON_SPEED);
+            ImGui::SameLine(0, 4);
+            ImGui::SetNextItemWidth(130);
+            ImGui::SliderFloat("##speed", &ed.playSpeed, 0.25f, 16.0f, "%.2fx", ImGuiSliderFlags_Logarithmic);
+            ImGui::SetItemTooltip("Скорость симуляции");
+        }
+        ui::toolbarDivider();
         const DeviceProfile* cur = findDevice(ed.gameDevice);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled(cur && cur->w > 0 ? (cur->touch ? ICON_SMARTPHONE : ICON_MONITOR) : ICON_MONITOR);
+        ImGui::SameLine(0, 4);
         ImGui::SetNextItemWidth(220);
         if (ImGui::BeginCombo("##device", cur ? cur->name : "Свободный размер", ImGuiComboFlags_HeightLarge)) {
             if (ImGui::IsWindowAppearing()) { filter_.clear(); ImGui::SetKeyboardFocusHere(); }
             ui::inputString("##devfilter", filter_);
-            if (filter_.empty()) { ImGui::SameLine(14); ImGui::TextDisabled("поиск устройства"); }
+            if (filter_.empty()) { ImGui::SameLine(14); ImGui::TextDisabled(ICON_SEARCH "  поиск устройства"); }
             auto lower = [](std::string v) { for (auto& c : v) c = char(std::tolower((unsigned char)c)); return v; };
             const std::string f = lower(filter_);
             const char* group = nullptr;
@@ -115,14 +128,18 @@ private:
             }
             ImGui::EndCombo();
         }
-        ImGui::SameLine(0, 4);
-        if (ImGui::SmallButton(ed.gameLandscape ? "Альбомная" : "Портретная")) ed.gameLandscape = !ed.gameLandscape;
-        ImGui::SameLine(0, 4);
+        ImGui::SameLine();
+        ui::beginSegment();
+        if (ui::toolButton(ICON_LANDSCAPE, "Альбомная", ed.gameLandscape)) ed.gameLandscape = true;
+        ImGui::SameLine();
+        if (ui::toolButton(ICON_PORTRAIT, "Портретная", !ed.gameLandscape)) ed.gameLandscape = false;
+        ui::endSegment();
         if (cur && cur->w > 0) {
-            ImGui::Checkbox("Safe area", &ed.gameSafeArea);
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Показать безопасную зону: вырез, статус-бар, полоску «домой». HUD должен быть внутри рамки.");
+            ImGui::SameLine(0, 8);
+            if (ui::toolButton(ICON_SAFE_AREA, "Safe area: показать безопасную зону (вырез, статус-бар, полоска «домой»). HUD должен быть внутри рамки.", ed.gameSafeArea))
+                ed.gameSafeArea = !ed.gameSafeArea;
         }
-        ImGui::PopStyleVar();
+        ui::endToolbar(bottom);
     }
 
     // Device frame: rounded corners, the camera cut-out and (on demand) the safe area. Cut-outs are

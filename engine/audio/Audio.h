@@ -48,6 +48,7 @@ struct Clip {
     std::vector<int16_t> pcm;
     int channels = 1;
     int sampleRate = 44100;
+    float rms = 1.0f;       // loudness of the content (set at load): used by the "quietest" steal mode
     size_t frames() const { return channels > 0 ? pcm.size() / size_t(channels) : 0; }
     float seconds() const { return sampleRate > 0 ? float(frames()) / float(sampleRate) : 0.0f; }
 };
@@ -76,13 +77,38 @@ struct Environment {
     float reverbNear = 0.05f, reverbFar = 0.6f;      // send at min / max distance
 };
 
+// Which playing sound makes room when a limit (maxInstances or a group's max) is reached.
+//   oldest   - the one started first
+//   farthest - the one farthest from the listener; a new sound farther than all of them is dropped
+//              instead (a far explosion never cuts off a close one). Default.
+//   quietest - the one quietest right now (distance, volume, fades); a new sound quieter than all
+//              of them is dropped
+//   none     - nothing is stopped: the new sound is dropped
+enum class Steal : uint8_t { Oldest, Farthest, Quietest, None };
+const char* stealName(Steal s);
+bool stealFromName(std::string_view name, Steal& out);
+
+constexpr int kMaxSoundGroups = 4;   // groups one sound can belong to
+
+// Limits shared by several sounds ("groups" section): e.g. all melee impacts together.
+struct SoundGroupDef {
+    std::string name;
+    int max = 0;              // voices at once (0 = no limit, only cooldown)
+    float cooldown = 0;       // seconds between two starts of any sound in the group
+    Steal steal = Steal::Farthest;
+    bool wholeBus = false;    // every sound on `bus` belongs to the group ("bus": "sfx")
+    Bus bus = Bus::Sfx;
+};
+
 struct SoundDef {
     std::string name;
     std::vector<std::shared_ptr<const Clip>> clips;  // variations, one picked per play
     float volume = 1.0f;
     float pitchMin = 1.0f, pitchMax = 1.0f;
     Bus bus = Bus::Sfx;
-    int maxInstances = 4;   // more plays steal the oldest instance of this sound
+    int maxInstances = 4;   // at most this many of this sound at once (0 = no limit)
+    Steal steal = Steal::Farthest;  // who makes room for maxInstances
+    std::vector<int> groups;        // indices into the bank's groups (at most kMaxSoundGroups)
     float cooldown = 0.0f;  // seconds between two starts (stops 40 archers from firing 40 sounds)
     int priority = 0;       // when all voices are busy, lower priority is stolen first
     bool loop = false;
@@ -145,6 +171,9 @@ public:
     SoundId find(std::string_view name) const;
     const SoundDef* sound(SoundId id) const;
     size_t soundCount() const;
+    int findGroup(std::string_view name) const;   // -1 if unknown
+    const SoundGroupDef* group(int index) const;
+    size_t groupCount() const;
     const std::vector<std::string>& warnings() const;
     bool hasMusic(std::string_view name) const;
 
@@ -201,6 +230,9 @@ public:
 private:
     std::unique_ptr<Impl> impl_;
 };
+
+// RMS of the clip's content, 0..1 (measured once when a bank loads).
+float measureRms(const Clip& c);
 
 // Decodes WAV/OGG/MP3/FLAC bytes into a Clip. Returns false with a reason.
 bool decodeClip(const std::string& bytes, Clip& out, std::string& error);

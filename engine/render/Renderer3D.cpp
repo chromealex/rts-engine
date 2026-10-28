@@ -41,7 +41,7 @@ ShadowQuality Renderer3D::defaultQualityFor(const gfx::Device& dev, bool mobile)
 bool Renderer3D::init(gfx::Device& dev) {
     dev_ = &dev;
     gfx::ShaderDesc ls; ls.glslVertex = shaders::kLitVS; ls.glslFragment = shaders::kLitFS; ls.msl = shaders::kLitMSL;
-    ls.uniformSlots = 3; ls.textureSlots = 2; ls.label = "lit"; // U2/tex1: Lights
+    ls.uniformSlots = 3; ls.textureSlots = 3; ls.label = "lit"; // U2/tex1/tex2: Lights (tex2 water reflection)
     litShader_ = dev.createShader(ls);
     gfx::ShaderDesc ss; ss.glslVertex = shaders::kShadowVS; ss.glslFragment = shaders::kShadowFS; ss.msl = shaders::kShadowMSL;
     ss.uniformSlots = 2; ss.label = "shadow";
@@ -259,6 +259,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     }
 
     lights.renderMap();
+    renderReflection();   // High: mirrored pass for water (Renderer3DReflect.cpp)
 
     // ---- main pass (left open for the caller's UI)
     dev_->beginPass(screenPass);
@@ -267,7 +268,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     dev_->setPipeline(litPipe_);
     uploadFrameUniforms(false);
     dev_->setTexture(0, shadowMap_);
-    lights.bind();
+    lights.bind(2, 1, 2);
     auto drawItem = [&](const DrawItem& it) {
         DrawUniforms u{};
         std::memcpy(u.model, it.model.m, sizeof u.model);
@@ -289,7 +290,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     bool any = false;
     for (auto& it : items_) {
         if (it.color.w >= 0.99f) continue;
-        if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); lights.bind(); any = true; }
+        if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); lights.bind(2, 1, 2); any = true; }
         drawItem(it);
     }
     renderModels(2);
