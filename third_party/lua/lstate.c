@@ -369,6 +369,7 @@ LUA_API lua_State *lua_newstate (lua_Alloc f, void *ud) {
   g->currentwhite = bitmask(WHITE0BIT);
   L->marked = luaC_white(g);
   preinit_thread(L, g);
+  memset(lua_getextraspace(L), 0, LUA_EXTRASPACE);  /* RTSEngine: no RtsLuaCtx unless set */
   g->allgc = obj2gco(L);  /* by now, only object is the main thread */
   L->next = NULL;
   incnny(L);  /* main thread is always non yieldable */
