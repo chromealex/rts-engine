@@ -9,9 +9,12 @@
 #pragma once
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../gfx/Gfx.h"
+
+namespace rts::atlas { class ImageSource; }
 
 namespace rts::render {
 
@@ -36,6 +39,12 @@ public:
     const std::string& lastError() const { return error_; }
 
 private:
+    // Build-time texture atlases (engine/atlas): images packed into a page resolve to the page +
+    // their rect; trimmed/rotated ones (never sprite sheets) are rebuilt as standalone textures.
+    bool resolveAtlased(const std::string& path, bool nearest, const std::string& base, TextureRef& out);
+    std::shared_ptr<atlas::ImageSource> atlas_;
+    std::string atlasBase_;             // base the manifest was loaded for
+    std::map<std::string, gfx::TextureHandle> atlasPages_;
     gfx::Device* dev_ = nullptr;
     std::map<std::string, TextureRef> cache_;
     std::string error_;
