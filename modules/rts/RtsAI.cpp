@@ -179,8 +179,38 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             break;
         }
     }
+    // player skills (effect engine): every primitive gets a target from smartTarget; keep a resource reserve
+    if (R.advancedEffects && !R.playerAbilities.empty() && sim.tick() >= lastSkillTick_ + 30) {
+        const size_t n = R.playerAbilities.size();
+        const size_t start = rng_.below(uint32_t(n));
+        for (size_t k = 0; k < n; ++k) {
+            const int ai = int((start + k) % n);
+            if (!m.canUsePlayerAbility(sim, player_, ai)) continue;
+            const PlayerAbilityDef& a = m.playerAbilityFor(sim, player_, ai);
+            if (a.autoEvery.raw > 0) continue;                         // fires by itself
+            bool reserveOk = true;
+            for (auto& c : a.cost) {
+                Fixed cap = eco.cap[c.res].raw > 0 ? eco.cap[c.res] : R.resources[c.res].storage;
+                if (cap.raw > 0 && eco.stock[c.res] - c.value < cap / 5) reserveOk = false;
+            }
+            if (!reserveOk) continue;
+            Vec3 pt; Entity tg;
+            SmartRule rule = a.smart;
+            if (rule == SmartRule::Auto && a.target == TargetKind::None) {
+                // untargeted skills: only when they clearly help (dispels when we are debuffed, damage when enemies are near)
+                Vec3 p2; Entity t2;
+                if (!m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DebuffedOwn, p2, t2) &&
+                    !m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DensestEnemy, p2, t2)) continue;
+            }
+            if (!m.smartTarget(sim, player_, a.payload, a.target, rule, pt, tg)) continue;
+            Command c; c.type = kCmdPlayerAbility; c.param = ai; c.point = pt; c.target = tg;
+            send(sim, c);
+            lastSkillTick_ = sim.tick();
+            break;
+        }
+    }
     // player abilities: strike the densest enemy group (offensive effects only)
-    if (!R.playerAbilities.empty() && sim.tick() % 40 == 0) {
+    if (!R.advancedEffects && !R.playerAbilities.empty() && sim.tick() % 40 == 0) {
         for (size_t ai = 0; ai < R.playerAbilities.size(); ++ai) {
             const PlayerAbilityDef& a = R.playerAbilities[ai];
             bool offensive = false;
