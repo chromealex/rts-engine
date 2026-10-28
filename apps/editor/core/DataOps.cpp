@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include "modules/rts/RtsScript.h"
 
 namespace fs = std::filesystem;
 
@@ -81,6 +82,11 @@ void registerDataOps(Workspace& ws) {
             else if (p.has("text")) text = p.getStr("text");
             else throw std::runtime_error("give 'text' or 'json'");
             if (text.size() > kMaxText) throw std::runtime_error("text is larger than 2 MB");
+            if (f.extension() == ".lua") {   // same check as script_write (simulation rules unless a view script)
+                const std::string n = fs::path(rel).lexically_normal().generic_string();
+                std::string err = game::checkScriptSyntax(n, text, n.rfind("scripts/view/", 0) != 0);
+                if (!err.empty()) throw std::runtime_error("not saved: " + err);
+            }
             if (f.extension() == ".json") {
                 try { (void)Json::parse(text); }
                 catch (const std::exception& e) { throw std::runtime_error(std::string("invalid JSON, not saved: ") + e.what()); }

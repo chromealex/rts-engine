@@ -149,7 +149,7 @@ template <class T> size_t parseNumbers(const std::string& s, std::vector<T>& out
         T v{};
         if (*b == '+') ++b;
         if constexpr (std::is_floating_point_v<T>) {
-            // strtod on a copy: floating-point std::from_chars needs macOS 26 / iOS 26 in Apple's libc++
+            // strtod: floating-point std::from_chars needs macOS 26 / iOS 26 in Apple's libc++
             std::string tok(b, p);
             char* end = nullptr;
             v = T(std::strtod(tok.c_str(), &end));   // also "1.#QNAN", "inf", hex floats

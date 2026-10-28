@@ -9124,6 +9124,172 @@ TEST(pack_file_copy_into_existing) {
 
 #include "tests_mech.inc"   // agent-mech
 
+// ---- post-processing data (postfx agent): parsing, map overrides, cost model, presets
+#include "engine/render/PostFxData.h"
+TEST(postfx_parse_merge_and_cost) {
+    using namespace rts::render;
+    Json game = Json::parse(R"({"effects": [{"type": "bloom", "intensity": 1.5}, {"type": "vignette"}, {"type": "colorGrade", "saturation": 9}]})");
+    Json map = Json::parse(R"({"effects": [{"type": "bloom", "threshold": 0.5}, {"type": "vignette", "enabled": false}, {"type": "grain"}]})");
+    std::vector<std::string> issues;
+    PostFxSettings s = parsePostFx(game, map, &issues);
+    CHECK(s.effects.size() == 4);
+    const PostFxEffect* b = s.find(PostFxType::Bloom);
+    CHECK(b && std::fabs(b->get("intensity") - 1.5f) < 1e-4f && std::fabs(b->get("threshold") - 0.5f) < 1e-4f);   // map overlays params
+    CHECK(b && b->minQuality == PostFxQuality::Medium);                     // heavy: skipped on weak phones by default
+    CHECK(s.find(PostFxType::Vignette) && !s.find(PostFxType::Vignette)->enabled);
+    CHECK(std::fabs(s.find(PostFxType::ColorGrade)->get("saturation") - 2.0f) < 1e-4f && !issues.empty());   // clamped + reported
+    CHECK(s.effects[0].type == PostFxType::Bloom && s.effects.back().type == PostFxType::Grain);   // catalog order
+    CHECK(s.activeAt(PostFxQuality::Low).size() == 2 && s.activeAt(PostFxQuality::High).size() == 3);
+    CHECK(s.activeAt(PostFxQuality::Off).empty());
+    // replace + disable on the map
+    PostFxSettings r = parsePostFx(game, Json::parse(R"({"replace": true, "effects": [{"type": "fade"}]})"));
+    CHECK(r.effects.size() == 1 && r.effects[0].type == PostFxType::Fade);
+    CHECK(!parsePostFx(game, Json::parse(R"({"enabled": false})")).anyActive(PostFxQuality::High));
+    CHECK(!parsePostFx(Json(), Json()).anyActive(PostFxQuality::High));   // no block: no post pass at all
+    // strict validation (MCP)
+    bool threw = false;
+    try { parsePostFxEffect(Json::parse(R"({"type": "bloom", "strength": 1})"), true); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { parsePostFxEffect(Json::parse(R"({"type": "nope"})"), true); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    // JSON round trip keeps only non-defaults
+    Json j = postFxEffectJson(*b);
+    CHECK(j.getStr("type") == "bloom" && j.has("intensity") && !j.has("knee") && !j.has("minQuality"));
+    // cost: heavy > cheap, tiers grow, heavy effects warn, cheap ones don't
+    const auto& weak = postFxProfiles()[0];
+    PostFxEffect vg = defaultPostFxEffect(PostFxType::Vignette), bl = defaultPostFxEffect(PostFxType::Bloom);
+    CHECK(postFxMs(postFxEffectWork(bl, PostFxQuality::Low, true), weak) > 5 * postFxMs(postFxEffectWork(vg, PostFxQuality::Low, true), weak));
+    CHECK(postFxEffectWork(bl, PostFxQuality::High).units > postFxEffectWork(bl, PostFxQuality::Medium).units);
+    CHECK(postFxEffectWork(bl, PostFxQuality::Low).units == 0);   // minQuality medium
+    CHECK(!postFxEffectWarnings(bl).empty() && postFxEffectWarnings(vg).empty());
+    bl.minQuality = PostFxQuality::Low;
+    CHECK(postFxEffectWarnings(bl)[0].find("forces it onto weak phones") != std::string::npos);
+    Json rep = postFxCostReport(s);
+    CHECK(rep["total"]["weakPhone"]["ms"].toDouble() > 0 && rep["total"]["desktop"]["passes"].integer() > 1);
+    for (auto& p : postFxPresets()) {   // every preset parses cleanly
+        Json g = Json::object();
+        g.set("effects", Json::parse(p.effectsJson));
+        std::vector<std::string> pi;
+        CHECK(!parsePostFx(g, Json(), &pi).effects.empty() && pi.empty());
+    }
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/PostFxOps.h"
+TEST(postfx_neutral_lut_png) {
+    const std::vector<uint8_t> px = rts::editor::neutralLut(16);
+    CHECK(px.size() == 256u * 16u * 4u);
+    const std::string png = rts::editor::encodePngRgba(256, 16, px);
+    CHECK(png.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0 && png.find("IHDR") == 12 && png.find("IEND") != std::string::npos);
+    // IDAT = zlib header + stored blocks: unpack and compare with the filter-0 rows
+    const size_t at = png.find("IDAT");
+    const uint32_t len = (uint32_t(uint8_t(png[at - 4])) << 24) | (uint32_t(uint8_t(png[at - 3])) << 16) | (uint32_t(uint8_t(png[at - 2])) << 8) | uint8_t(png[at - 1]);
+    std::string z = png.substr(at + 4, len), raw;
+    for (size_t q = 2; q + 5 <= z.size() - 4;) {
+        const size_t n = size_t(uint8_t(z[q + 1])) | (size_t(uint8_t(z[q + 2])) << 8);
+        raw += z.substr(q + 5, n);
+        const bool last = z[q] & 1;
+        q += 5 + n;
+        if (last) break;
+    }
+    CHECK(raw.size() == 16u * (256u * 4u + 1u) && raw[0] == 0 && std::memcmp(raw.data() + 1, px.data(), 1024) == 0);
+    // Unreal layout: red grows inside a square, blue per square, green down the rows
+    CHECK(px[(0 * 256 + 15) * 4 + 0] == 255 && px[(0 * 256 + 16) * 4 + 2] == 17 && px[(15 * 256 + 0) * 4 + 1] == 255);
+}
+#endif
+
+// ---- toolchains agent: what each build target needs (tools/rtsbuild/Toolchains.h), fake HOME
+#include "tools/rtsbuild/Toolchains.h"
+TEST(toolchain_detection_fake_home) {
+    namespace fs = std::filesystem;
+    using namespace rts::build;
+    fs::path home = fs::temp_directory_path() / "rts_toolchain_test";
+    std::error_code ec;
+    fs::remove_all(home, ec);
+    fs::create_directories(home / "bin");
+    auto touch = [](const fs::path& p, const std::string& text = "") { fs::create_directories(p.parent_path()); std::ofstream(p) << text; };
+    ToolEnv env;
+    env.host = "linux";
+    env.home = home;
+    env.inherit = false;   // nothing from the real machine: no PATH, no system folders, no probing
+    env.probe = false;
+    env.vars["PATH"] = (home / "bin").string();
+
+    ToolchainStatus st = checkToolchain("web", env);
+    CHECK(!st.ok());
+    CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN web: cmake,python3,emsdk");   // ninja is optional
+    CHECK(st.find("emsdk") && st.find("emsdk")->autoInstall && !st.find("emsdk")->size.empty());
+    CHECK(st.toJson()["missing"].size() == 3);
+
+    // a not activated emsdk in ~/emsdk is reported, not used
+    touch(home / "emsdk" / "emsdk.py");
+    touch(home / "emsdk" / "upstream" / "emscripten" / "emcc");
+    st = checkToolchain("web", env);
+    CHECK(!st.find("emsdk")->found && st.find("emsdk")->detail.find("emsdk install") != std::string::npos);
+
+    // what our installers leave in ~/.rtsengine/toolchains
+    const fs::path tcd = home / ".rtsengine" / "toolchains";
+    CHECK(toolchainsDir(env) == tcd);
+    touch(tcd / "py" / "bin" / "cmake");
+    touch(tcd / "py" / "bin" / "ninja");
+    touch(home / "bin" / "python3");
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emcc");
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emscripten-version.txt", "\"3.1.70\"\n");
+    touch(tcd / "emsdk" / ".emscripten");
+    fs::create_directories(tcd / "emsdk" / "node" / "20.18.0_64bit" / "bin");
+    st = checkToolchain("web", env);
+    CHECK(st.ok());
+    CHECK(st.find("emsdk")->version == "3.1.70" && st.find("emsdk")->path == (tcd / "emsdk").string());
+    CHECK(st.find("cmake")->path == (tcd / "py" / "bin" / "cmake").string());
+    CHECK(st.env["EMSDK"] == (tcd / "emsdk").string() && st.env.count("EM_CONFIG"));
+    CHECK(std::find(st.binDirs.begin(), st.binDirs.end(), tcd / "emsdk" / "node" / "20.18.0_64bit" / "bin") != st.binDirs.end());
+    CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN web:");
+    // an emsdk too old for the engine is not used
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emscripten-version.txt", "\"3.1.6\"\n");
+    st = checkToolchain("web", env);
+    CHECK(!st.find("emsdk")->found && st.find("emsdk")->detail.find("3.1.6") != std::string::npos);
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emscripten-version.txt", "\"4.0.12\"\n");
+    CHECK(checkToolchain("web", env).ok());
+
+    // RTS_TOOLCHAINS_DIR moves our folder
+    env.vars["RTS_TOOLCHAINS_DIR"] = (home / "elsewhere").string();
+    CHECK(toolchainsDir(env) == home / "elsewhere");
+    CHECK(checkToolchain("web", env).find("cmake")->found == false);
+    env.vars.erase("RTS_TOOLCHAINS_DIR");
+
+    // Android: a too new JAVA_HOME is skipped for our JDK 17; newest NDK wins
+    CHECK(javaMajorFromRelease("JAVA_VERSION=\"17.0.12\"") == 17 && javaMajorFromRelease("JAVA_VERSION=\"1.8.0_392\"") == 8);
+    touch(home / "jdk25" / "release", "JAVA_VERSION=\"25\"\n");
+    touch(home / "jdk25" / "bin" / "java");
+    env.vars["JAVA_HOME"] = (home / "jdk25").string();
+    st = checkToolchain("android", env);
+    CHECK(!st.find("jdk")->found && st.find("jdk")->detail.find("25") != std::string::npos);
+    touch(tcd / "jdk-17" / "Contents" / "Home" / "release", "JAVA_VERSION=\"17.0.12\"\n");   // macOS layout
+    touch(tcd / "jdk-17" / "Contents" / "Home" / "bin" / "java");
+    const fs::path sdk = home / "Android" / "Sdk";
+    fs::create_directories(sdk / "platforms" / "android-35");
+    fs::create_directories(sdk / "build-tools" / "35.0.0");
+    fs::create_directories(sdk / "platform-tools");
+    fs::create_directories(sdk / "ndk" / "25.1.8937393");
+    fs::create_directories(sdk / "ndk" / "27.0.12077973");
+    st = checkToolchain("android", env);
+    CHECK(st.find("jdk")->found && st.find("jdk")->version == "17" && st.env["JAVA_HOME"] == (tcd / "jdk-17" / "Contents" / "Home").string());
+    CHECK(st.find("android-sdk")->found && st.env["ANDROID_HOME"] == sdk.string());
+    CHECK(st.find("android-ndk")->version == "27.0.12077973");
+    CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN android: android-cmake,gradle");
+    fs::create_directories(sdk / "cmake" / "3.22.1");
+    touch(tcd / "gradle-8.10.2" / "bin" / "gradle");
+    st = checkToolchain("android", env);
+    CHECK(st.ok() && st.find("gradle")->version == "8.10.2");
+
+    // targets this host can't build are not "missing"
+    st = checkToolchain("macos", env);
+    CHECK(!st.hostSupported && st.ok());
+    st = checkToolchain("linux", env);
+    CHECK(!st.ok() && st.find("cxx") && !st.find("cxx")->autoInstall);
+    fs::remove_all(home, ec);
+}
 
 TEST(gen_planet_world_players) {
     // a whole planet map from a planet preset: players, kit, objects, moons, engine-path fairness, determinism
@@ -9202,6 +9368,267 @@ TEST(gen_planet_world_players) {
     CHECK(runMatch(4) != runMatch(5));
 }
 
+// ---------------- Lua scripting (scripting agent) ----------------
+#include "modules/rts/RtsScript.h"
+#include <fstream>
+#include <iterator>
+
+// skirmish rules + map with inline simulation scripts {path: source}
+static std::unique_ptr<Simulation> scriptSim(const std::vector<std::pair<std::string, std::string>>& files, uint64_t seed = 1, Json* rulesOut = nullptr) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    Json list = Json::array(), src = Json::object();
+    for (auto& [p, t] : files) { list.push(Json::string(p)); src.set(p, Json::string(t)); }
+    rules.set("scripts", list);
+    rules.set("$scriptSources", src);
+    if (rulesOut) *rulesOut = rules;
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    return sim;
+}
+static bool scriptLogHas(Simulation& sim, const std::string& text, bool error = true) {
+    auto* se = mod(sim).scripts();
+    if (!se) return false;
+    for (auto& e : se->log()) if (e.error == error && e.text.find(text) != std::string::npos) return true;
+    return false;
+}
+static Fixed gold(Simulation& sim, uint8_t p) { return mod(sim).state(sim).players[p].stock[size_t(mod(sim).rules().findResource("gold"))]; }
+
+TEST(script_no_scripts_no_vm) {   // only the standard library: no "scripts" system, ScriptStore not hashed
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 3);
+    CHECK(mod(*sim).scripts() && !mod(*sim).scripts()->hasUserScripts());
+    CHECK(sim->world().resource<game::ScriptStore>() && !sim->world().resource<game::ScriptStore>()->userScripts);
+    CHECK(mod(*sim).scripts()->errorCount() == 0);
+}
+
+TEST(script_syntax_and_float_literals) {
+    CHECK(game::checkScriptSyntax("a.lua", "local x = 1 + 2\nreturn x // 2").empty());
+    std::string e = game::checkScriptSyntax("a.lua", "local x = 1\nlocal y = x * 1.5\n");
+    CHECK(e.find("a.lua:2:") != std::string::npos && e.find("1.5") != std::string::npos);
+    CHECK(game::checkScriptSyntax("a.lua", "local s = \"1.5\" -- 2.5\n--[[ 3.5 ]] local t = [[4.5]]").empty());
+    CHECK(!game::checkScriptSyntax("a.lua", "local x = 1e3").empty());
+    CHECK(!game::checkScriptSyntax("a.lua", "local x = .5").empty());
+    CHECK(!game::checkScriptSyntax("a.lua", "local x = 1..'a'").empty());              // malformed number in Lua too
+    CHECK(game::checkScriptSyntax("a.lua", "local x = 1 ..'a'").empty());
+    CHECK(game::checkScriptSyntax("a.lua", "local x = 7 / 2").find("float arithmetic") != std::string::npos); // constant folding
+    CHECK(game::checkScriptSyntax("a.lua", "local s = 'a'..1").empty());
+    CHECK(game::checkScriptSyntax("v.lua", "local x = 1.5", false).empty());          // view scripts: floats are fine
+    CHECK(game::checkScriptSyntax("a.lua", "x = = 1").find("a.lua:1:") != std::string::npos);
+}
+
+TEST(script_api_basics) {
+    auto sim = scriptSim({{"scripts/a.lua", R"(
+        function on_start()
+          state.started = game.tick()
+          game.give(1, "gold", 100)
+          local hall = game.units{owner = 1, type = "townhall"}[1]
+          local x, z = game.pos(hall)
+          state.spawned = game.spawn("footman", 1, x + 3, z)
+          state.half = tostring(fx(1, 2))
+          state.sq = fx.sqrt(16) == fx(4)
+        end
+        every(1, function(tick) state.ticks = (state.ticks or 0) + 1 end)
+        on("spawned", function(e) state.last_spawn = e.unit_type end)
+    )"}});
+    const Fixed g0 = gold(*sim, 1);
+    for (int i = 0; i < 45; ++i) sim->step();
+    CHECK(gold(*sim, 1) >= g0 + Fixed::fromInt(100) - Fixed::fromInt(1000));   // started (bots absent: no spending)
+    CHECK(gold(*sim, 1) == g0 + Fixed::fromInt(100));
+    CHECK(sim->world().count<game::Unit>() > 0);
+    CHECK(findType(*sim, "footman", 1).valid());
+    CHECK(mod(*sim).scripts()->errorCount() == 0);
+    for (auto& e : mod(*sim).scripts()->log()) if (e.error) std::printf("  log: %s\n", e.text.c_str());
+}
+
+TEST(script_sandbox) {
+    auto sim = scriptSim({{"scripts/a.lua", R"(
+        state.os = os == nil and io == nil and load == nil and package == nil and collectgarbage == nil and next == nil
+        state.debug = debug == nil and string.dump == nil
+        function on_start()
+          game.set_var("os_absent", state.os and state.debug and 1 or 0)
+        end
+        on("tick", function(tick) if tick == 2 then local x = tick / 2 end end)                -- float arithmetic
+        on("tick", function(tick) if tick == 3 then while true do end end end)              -- runaway loop
+        on("tick", function(tick) if tick == 4 then game.give(1, "gold", tonumber("2.5")) end end)
+        on("tick", function(tick) if tick == 5 then pcall(function() while true do end end) end end) -- budget beats pcall
+        on("tick", function(tick) if tick == 6 then setmetatable({}, {__mode = "k"}) end end)
+        on("tick", function(tick) if tick == 7 then newglobal = 1 end end)
+        on("tick", function(tick) if tick == 8 then game.give(1, "gold", fx(5)) ; game.set_var("alive", 1) end end)
+        on("tick", function(tick) if tick == 9 then for k in pairs({[{}] = 1}) do end end end)
+    )"}});
+    for (int i = 0; i < 12; ++i) sim->step();
+    auto& vars = mod(*sim).state(*sim).trig.vars;
+    CHECK(vars["os_absent"] == Fixed::fromInt(1));
+    CHECK(vars["alive"] == Fixed::fromInt(1));                     // the game and other handlers go on
+    CHECK(scriptLogHas(*sim, "float arithmetic is not allowed"));
+    CHECK(scriptLogHas(*sim, "instruction budget exceeded"));
+    CHECK(scriptLogHas(*sim, "is a float: use fx("));
+    CHECK(scriptLogHas(*sim, "__mode is not allowed"));
+    CHECK(scriptLogHas(*sim, "can't create global 'newglobal'"));
+    CHECK(scriptLogHas(*sim, "no deterministic order"));
+    CHECK(scriptLogHas(*sim, "scripts/a.lua:"));                   // errors carry file:line
+    CHECK(mod(*sim).scripts()->errorCount() == 7);                 // each failing handler once: then disabled
+    auto* st = sim->world().resource<game::ScriptStore>();
+    int disabled = 0;
+    for (auto d : st->disabled) disabled += d;
+    CHECK(disabled == 7);
+}
+
+TEST(script_state_hashed_and_rollback) {
+    const char* src = R"(
+        function on_start() state.n = 0; state.list = {} end
+        on("tick", function(tick)
+          state.n = state.n + game.var("step")
+          if tick % 3 == 0 then state.list[#state.list + 1] = fx(tick, 4) end
+          if tick == 6 then game.after(1, "later", {n = state.n}) end
+        end)
+        function later(arg) game.give(1, "gold", arg.n) end
+    )";
+    auto a = scriptSim({{"scripts/a.lua", src}});
+    auto b = scriptSim({{"scripts/a.lua", src}});
+    mod(*a).state(*a).trig.vars["step"] = Fixed::fromInt(1);
+    mod(*b).state(*b).trig.vars["step"] = Fixed::fromInt(1);
+    for (int i = 0; i < 10; ++i) { a->step(); b->step(); }
+    CHECK(a->checksum() == b->checksum());
+    // a script-only difference changes the hash
+    auto* sb = b->world().resource<game::ScriptStore>();
+    const std::string before = sb->state;
+    mod(*b).state(*b).trig.vars["step"] = Fixed::fromInt(2);
+    mod(*a).state(*a).trig.vars["step"] = Fixed::fromInt(2);
+    a->step(); b->step();
+    CHECK(sb->state != before);
+    // rollback: save, run ahead, load, re-run -> identical to a straight run
+    SimSnapshot snap;
+    b->saveState(snap);
+    for (int i = 0; i < 30; ++i) b->step();
+    const uint64_t ahead = b->checksum();
+    b->loadState(snap);
+    for (int i = 0; i < 30; ++i) { b->step(); a->step(); }
+    CHECK(b->checksum() == ahead);
+    CHECK(a->checksum() == b->checksum());
+    CHECK(gold(*a, 1) == gold(*b, 1));
+    CHECK(mod(*b).scripts()->errorCount() == 0);
+}
+
+TEST(script_data_hooks) {
+    Json rules;
+    auto sim = scriptSim({{"scripts/a.lua", R"(
+        function cond(ctx) return game.var("go") >= 1 end
+        function act(ctx) game.give(ctx.args.player, "gold", ctx.args.amount) end
+    )"}}, 1, &rules);
+    // re-create with a trigger using both
+    Json trig = Json::parse(R"([{"id": "t", "once": false, "forEachPlayer": false,
+        "event": {"type": "every", "seconds": 1},
+        "conditions": [{"type": "script", "fn": "cond"}],
+        "actions": [{"type": "script", "fn": "act", "amount": 7, "player": 1}]}])");
+    rules.set("triggers", trig);
+    SimConfig cfg;
+    sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    const Fixed g0 = gold(*sim, 1);
+    for (int i = 0; i < 25; ++i) sim->step();
+    CHECK(gold(*sim, 1) == g0);                                       // condition false
+    mod(*sim).state(*sim).trig.vars["go"] = Fixed::fromInt(1);
+    for (int i = 0; i < 20; ++i) sim->step();
+    CHECK(gold(*sim, 1) == g0 + Fixed::fromInt(7));
+    CHECK(mod(*sim).scripts()->errorCount() == 0);
+    // unknown function reported at load
+    rules.set("triggers", Json::parse(R"([{"id": "u", "event": "start", "actions": [{"type": "script", "fn": "nope"}]}])"));
+    sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    CHECK(scriptLogHas(*sim, "'nope' is not defined"));
+}
+
+static std::unique_ptr<Simulation> scriptedGame(uint64_t seed) {
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/scripted";
+    Json rules = Json::parseFile(dir + "/rules.json");
+    Json map = Json::parseFile(dir + "/maps/valley.json");
+    std::string err;
+    bool ok = game::embedScripts(rules, map, [&](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    }, &err);
+    CHECK(ok);
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, map);
+    return sim;
+}
+
+TEST(script_sample_deterministic) {
+    auto run = [](uint64_t seed) {
+        auto sim = scriptedGame(seed);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, seed);
+        for (int i = 0; i < 20 * 120; ++i) { for (auto& b : bots) b.update(*sim); sim->step(); }
+        CHECK(mod(*sim).scripts() && mod(*sim).scripts()->errorCount() == 0);
+        return sim->checksum();
+    };
+    const uint64_t a = run(3), b = run(3), c = run(4);
+    CHECK(a == b);
+    CHECK(a != c);
+}
+
+TEST(script_embed_requires) {
+    Json rules = Json::parse(R"({"scripts": ["scripts/main.lua"]})");
+    std::map<std::string, std::string> files = {{"scripts/main.lua", "local u = require(\"lib.u\")"}, {"scripts/lib/u.lua", "return {}"}};
+    std::string err;
+    CHECK(game::embedScripts(rules, Json::object(), [&](const std::string& p, std::string& out) {
+        auto it = files.find(p); if (it == files.end()) return false; out = it->second; return true; }, &err));
+    CHECK(rules["$scriptSources"].has("scripts/lib/u.lua"));
+    Json bad = Json::parse(R"({"scripts": ["scripts/missing.lua"]})");
+    CHECK(!game::embedScripts(bad, Json::object(), [](const std::string&, std::string&) { return false; }, &err) && err.find("missing.lua") != std::string::npos);
+    CHECK(game::scriptApiReference().has("actions"));
+}
+
+#include "modules/rts/view/RtsViewScript.h"
+TEST(script_view_scripts) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("viewScripts", Json::parse(R"(["scripts/view/v.lua"])"));
+    rules.set("$scriptSources", Json::parse(R"J({"scripts/view/v.lua":
+        "local n = 0.5\nview.on('unit_died', function(e) n = n + 1 end)\nview.on_frame(function(dt) n = n + dt * 2.0; if n > 0.5 then view.notice('spawned ' .. game.count{}) ; n = -100 end end)"})J"));
+    Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
+    Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim.setup(rules, map);
+    CHECK(!mod(sim).scripts()->hasUserScripts());           // view scripts alone: no simulation scripts
+    const uint64_t before = sim.checksum();
+    game::ViewScripts vs;
+    CHECK(vs.load(sim, rules, map, 1));
+    vs.attach(sim);
+    Simulation ref(SimConfig{}, std::make_unique<game::RtsModule>());
+    ref.setup(rules, map);
+    CHECK(before == ref.checksum());
+    int t = mod(sim).rules().findType("footman");
+    mod(sim).spawn(sim, uint16_t(t), 1, {Fixed::fromInt(10), Fixed{}, Fixed::fromInt(10)});
+    sim.step(); ref.step();
+    vs.update(sim, 0.016f);
+    auto req = vs.takeRequests();
+    CHECK(req.size() == 1 && req[0].kind == game::ViewRequest::Notice && req[0].text.rfind("spawned ", 0) == 0);
+    for (auto& e : vs.log()) if (e.error) std::printf("  view log: %s\n", e.text.c_str());
+    CHECK(vs.log().empty());
+}
+
+TEST(script_std_sell_refund) {   // lua/commands.lua: same formula as the former C++ (cost * sellRefund * hp / maxHp)
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 3);
+    auto& m = mod(*sim);
+    Entity hall = findType(*sim, "townhall", 1);
+    CHECK(hall.valid());
+    auto& u = sim->world().get<game::Unit>(hall);
+    u.hp = u.hp / 3;
+    const game::UnitType& t = m.rules().types[u.type];
+    const Fixed frac = m.rules().sellRefund * (u.hp / fxMax(t.maxHp, Fixed::fromInt(1)));
+    const Fixed g0 = gold(*sim, 1);
+    Fixed expect = g0;
+    for (auto& c : t.cost) if (m.rules().resources[c.res].id == "gold") expect += c.value * frac;
+    Command c; c.player = 1; c.type = game::kCmdSell; c.units = {hall};
+    m.applyCommand(*sim, c);
+    CHECK(gold(*sim, 1) == expect && expect > g0);
+    CHECK(sim->world().get<game::Unit>(hall).hp.raw == 0);
+    CHECK(m.scripts()->errorCount() == 0);
+}
+
 // ---- terrain detail surface (agent-terrain): sub-cell visual heightmap
 #include "modules/rts/view/RtsTerrainDetail.h"
 
@@ -9264,6 +9691,72 @@ TEST(terrain_detail_codec_roundtrip) {
     std::vector<uint8_t> splat;
     CHECK(game::terrain::loadMapDetail(map, [&](const std::string& f, std::string& o) { o = bytes; return f == "maps/x.detail.r16"; }, e, splat, nullptr));
     CHECK(e.k == 2 && e.hgt == d.hgt && splat.empty());
+}
+
+// Lua lab (docs/lua-coverage.md): prototypes of mechanics the C++ core doesn't have, written with the
+// public Lua API only (fire spread, attrition, unit programs, rewind, bounty flags).
+static std::unique_ptr<Simulation> luaLabGame(uint64_t seed) {
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/lua_lab";
+    Json rules = Json::parseFile(dir + "/rules.json");
+    Json map = Json::parseFile(dir + "/maps/valley.json");
+    std::string err;
+    CHECK(game::embedScripts(rules, map, [&](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    }, &err));
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, map);
+    return sim;
+}
+
+TEST(lua_lab_prototypes) {
+    auto countType = [](Simulation& sim, const char* id) {
+        const int t = mod(sim).rules().findType(id);
+        int n = 0;
+        sim.world().each<game::Unit>([&](Entity, game::Unit& u) { if (u.type == t && u.hp.raw > 0) ++n; });
+        return n;
+    };
+    auto sim = luaLabGame(3);
+    auto& m = mod(*sim);
+    CHECK(m.scripts() && m.scripts()->hasUserScripts());
+    // rewind: units come back to where they were 10 s ago
+    for (int i = 0; i < 20 * 12; ++i) sim->step();
+    Entity p = findType(*sim, "peasant", 1);
+    CHECK(p.valid());
+    const Vec3 at = sim->world().get<Transform>(p).pos;
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {p}; mv.point = at + Vec3{Fixed::fromInt(6), Fixed{}, Fixed{}};
+    m.applyCommand(*sim, mv);
+    for (int i = 0; i < 20 * 5; ++i) sim->step();
+    CHECK(dist2DTest(sim->world().get<Transform>(p).pos, at) > Fixed::fromInt(3));
+    Command rw; rw.player = 1; rw.type = game::kCmdPlayerAbility; rw.param = m.rules().findPlayerAbility("rewind");
+    m.applyCommand(*sim, rw);
+    for (int i = 0; i < 20 * 2; ++i) sim->step();
+    CHECK(dist2DTest(sim->world().get<Transform>(p).pos, at) < Fixed::fromInt(2));
+    const int trees0 = countType(*sim, "tree");
+    // ignite a forest corner (player ability with a script effect = a custom command from the UI)
+    Command c; c.player = 1; c.type = game::kCmdPlayerAbility; c.param = m.rules().findPlayerAbility("ignite");
+    c.point = {Fixed::fromRatio(5, 2), Fixed{}, Fixed::fromRatio(3, 2)};
+    m.addResource(*sim, 1, uint16_t(m.rules().findResource("gold")), Fixed::fromInt(1000));
+    m.applyCommand(*sim, c);
+    for (int i = 0; i < 20 * 20; ++i) sim->step();
+    CHECK(countType(*sim, "fire") > 0 || countType(*sim, "tree") < trees0);
+    for (int i = 0; i < 20 * 40; ++i) sim->step();
+    CHECK(countType(*sim, "tree") < trees0);                        // the fire spread and burnt trees
+    for (auto& e : m.scripts()->log()) if (e.error) std::printf("  lua_lab log: %s\n", e.text.c_str());
+    CHECK(m.scripts()->errorCount() == 0);
+    // determinism with bots
+    auto run = [](uint64_t seed) {
+        auto s = luaLabGame(seed);
+        std::vector<game::RtsAI> bots;
+        for (auto& pl : s->players()) bots.emplace_back(pl.slot, seed);
+        for (int i = 0; i < 20 * 150; ++i) { for (auto& b : bots) b.update(*s); s->step(); }
+        CHECK(mod(*s).scripts()->errorCount() == 0);
+        return s->checksum();
+    };
+    CHECK(run(3) == run(3));
 }
 
 int main() {

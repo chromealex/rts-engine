@@ -204,6 +204,9 @@ void RtsModule::mechTick(Simulation& sim) {
     mechTickTactics(sim);
     mechTickSociety(sim);
     mechTickBattle(sim);
+    if (rules_.mech.conveyors) mechTickLogistics(sim);
+    if (rules_.mech.turns) mechTickTurns(sim);
+    if (rules_.mech.altitude) mechTickAltitude(sim);
     World& w = sim.world();
     const Fixed dt = sim.dt();
     std::vector<Entity> addVet;

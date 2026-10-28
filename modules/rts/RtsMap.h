@@ -179,7 +179,7 @@ struct MapGrid {
     Vec3 cellCenter(int x, int y) const { if (surf) return surf->cellCenter(index(x, y)); return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
     void block(int x0, int y0, int fw, int fh, int delta);
     void cellChanged(int x, int y);  // terrain of a cell changed at runtime (digging): refresh derived pathing data
-    void invalidatePathing() { clearanceDirty = true; for (auto& G : hpa_) { std::fill(G.dirty.begin(), G.dirty.end(), uint8_t(1)); G.anyDirty = true; } }   // after loading a save
+    void invalidatePathing() { ++pathVersion_; clearanceDirty = true; for (auto& G : hpa_) { std::fill(G.dirty.begin(), G.dirty.end(), uint8_t(1)); G.anyDirty = true; } }   // after loading a save
     bool areaBuildable(int x0, int y0, int fw, int fh) const;  // ground, no-build-free, unblocked, flat
     // clearance: cells needed around the path for a body of that size (0 = any walkable cell); narrower
     // cells cost more instead of being forbidden. soft: also route around cells marked in `soft`.
@@ -319,6 +319,19 @@ private:
     void clusterCosts(int c, int src, uint8_t layer, std::vector<uint32_t>& d) const; // Dijkstra inside cluster c
     void clusterCostsMasked(int c, int src, const std::vector<uint8_t>& mask, std::vector<uint32_t>& d) const;
     std::vector<HpaGraph> hpa_;
+    // flow fields (agent-mech BA): distance-to-goal per cell, shared by every unit sent to the same goal cell.
+    // The path a unit gets is a pure function of the grid and the goal; the cache only saves the work.
+    struct MechFlowField { int goal = -1; uint8_t layer = 0; int clear = 0; uint32_t version = 0, used = 0; std::vector<uint32_t> dist; };
+    std::vector<MechFlowField> flow_;
+    uint32_t flowUse_ = 0, pathVersion_ = 0;
+    const MechFlowField& flowFor(int goal, uint8_t layer);
+    bool flowCells(int sx, int sy, int gx, int gy, uint8_t layer, std::vector<int>& cells);
+public:
+    bool flowFields = false;      // rules "flowFields": long ground paths follow cached flow fields
+    int flowMinCells = 8;         // shorter trips keep plain A*
+    int flowCacheSize = 16;
+    int flowStats[2] = {};        // fields built, paths traced (diagnostics only)
+private:
     std::vector<uint32_t> gCost_, stamp_;
     std::vector<int32_t> parent_;
     uint32_t search_ = 0;

@@ -22,6 +22,8 @@ bool own(Simulation& sim, Entity e, uint8_t player) {
 
 bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
     World& w = sim.world();
+    if (rules_.mech.turns && mechTurnCommand(sim, cmd)) return true;   // turn-based mode
+    if (rules_.mech.altitude) mechAltitudeCommand(sim, cmd);           // 3D flight: the point's y is the altitude
     switch (cmd.type) {
     case kCmdStance: {
         state(sim).mechActive = true;
@@ -122,7 +124,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         c.type = kCmdLoad;
         return applyMechCommand(sim, c);
     }
-    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd) || applyMechSocietyCommand(sim, cmd);
+    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd) || applyMechSocietyCommand(sim, cmd) || applyMechLogisticsCommand(sim, cmd);
     }
 }
 
@@ -249,7 +251,7 @@ void RtsModule::mechOnDeath(Simulation& sim, Entity e) {
     mechVeteranKill(sim, e);
     if (rules_.mech.morale) mechMoraleDeath(sim, e);
     if (rules_.mech.hasItems) mechDropItems(sim, e);
-    if (rules_.mech.bridges && rules_.types[w.get<Unit>(e).type].mech.bridge) mechBridgeDied(sim, e);
+    if ((rules_.mech.bridges && rules_.types[w.get<Unit>(e).type].mech.bridge) || (rules_.mech.gates && rules_.types[w.get<Unit>(e).type].mech.gate)) mechBridgeDied(sim, e);   // gates too: keep the block count
     if (auto* b = w.tryGet<Boarded>(e)) {   // a passenger died inside
         if (auto* tp = w.alive(b->carrier) ? w.tryGet<Transport>(b->carrier) : nullptr) {
             auto it = std::find(tp->cargo.begin(), tp->cargo.end(), e);
@@ -302,6 +304,7 @@ bool RtsModule::mechCanAcquire(Simulation& sim, Entity e) const {
     if (rules_.mech.rounds && w.resource<GameState>()->mech.roundPhase == 0) return false;   // rounds: no fighting while preparing
     if (w.has<Retreating>(e)) return false;
     if (rules_.mech.morale && mechRouting(sim, e)) return false;   // routing: runs, does not fight
+    if (rules_.mech.turns && w.get<Owner>(e).player != w.resource<GameState>()->mech.turnPlayer) return false;   // not its turn
     return true;
 }
 
@@ -317,6 +320,7 @@ bool RtsModule::mechMayChase(Simulation& sim, Entity e, Vec3 targetPos) {
 void RtsModule::mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed& mul) const {
     World& w = sim.world();
     if (rules_.mech.battle()) mechBattleStat(sim, e, s, mul);   // stage 4: morale, fatigue, charge, supply
+    if (rules_.mech.turns) mechTurnStat(sim, e, s, mul);
     if (s == Stat::Speed && w.has<Retreating>(e)) mul = mul * rules_.mech.retreatSpeed;
     if (s == Stat::Damage) {
         if (auto* tp = w.tryGet<Transport>(e)) {
@@ -467,6 +471,11 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* mg = w.tryGet<Merging>(e)) { h.u32(0x3E26); h.u64(mg->partner.packed()); }
     if (auto* sp = w.tryGet<Suppression>(e)) { h.u32(0x5A99); h.fx(sp->value); }
     if (auto* ab = w.tryGet<Abandoned>(e)) { h.u32(0xAB4D); h.u32(ab->formerOwner); }
+    if (auto* bl = w.tryGet<BridgeLaid>(e); bl && !bl->laid) h.u32(0x10CC);   // locked gate
+    if (auto* al = w.tryGet<Altitude>(e)) { h.u32(0xA171); h.fx(al->target); h.fx(al->y); }
+    if (auto* tb = w.tryGet<TurnBudget>(e)) { h.u32(0x7B7B); h.fx(tb->move); h.i32(tb->shots); h.u32(tb->turn); }
+    if (auto* b = w.tryGet<Belt>(e)) { h.u32(0xBE17); h.u32(b->dir); }
+    if (auto* c = w.tryGet<Crafter>(e)) { h.u32(0xC4AF); for (auto& v : c->in) h.fx(v); for (auto& v : c->out) h.fx(v); h.fx(c->timer); h.fx(c->outTimer); }
     if (auto* mo = w.tryGet<Morale>(e)) { h.u32(0x303A); h.fx(mo->value); h.fx(mo->fatigue); h.fx(mo->run); h.u32(mo->state); h.u32(mo->outOfSupply); h.u32(mo->lastCharge); }
 }
 

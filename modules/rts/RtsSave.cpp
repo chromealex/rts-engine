@@ -85,9 +85,13 @@ void io(Archive& a, Bounty& x) { a(x.pos, x.target, x.player, x.res, x.reward); 
 void io(Archive& a, RoundUnit& x) { a(x.owner, x.type, x.pos); }
 void io(Archive& a, MechState& x) {
     a(x.prices, x.groundItems, x.decks, x.allyRequest, x.cyclePhase, x.nextGroup, x.objectives, x.dialogs, x.nextMission, x.missionResult,
-      x.cover, x.bounties, x.roundPhase, x.roundIndex, x.phaseEnd, x.roundSnapshot);
+      x.cover, x.bounties, x.roundPhase, x.roundIndex, x.phaseEnd, x.roundSnapshot, x.beltRes, x.beltAmt, x.beltProg, x.beltPlan, x.turnPlayer, x.turnIndex, x.turnStart);
 }
 void io(Archive& a, Suppression& x) { a(x.value); }
+void io(Archive& a, Belt& x) { a(x.dir); }
+void io(Archive& a, TurnBudget& x) { a(x.move, x.shots, x.lastPos, x.turn); }
+void io(Archive& a, Altitude& x) { a(x.target, x.y); }
+void io(Archive& a, Crafter& x) { a(x.in, x.out, x.timer, x.outTimer); }
 void io(Archive& a, Morale& x) { a(x.value, x.fatigue, x.run, x.lastPos, x.chargeTick, x.lastCharge, x.lastFire, x.state, x.init, x.outOfSupply); }
 void io(Archive& a, Turret& x) { a(x.dir, x.init); }
 void io(Archive& a, Abandoned& x) { a(x.formerOwner); }
@@ -102,6 +106,8 @@ void io(Archive& a, WaveDef& x) { a(x.tick, x.player, x.spawn, x.at, x.spread, x
 void io(Archive& a, RoomZone& x) { a(x.type, x.owner, x.cells, x.center); }
 void io(Archive& a, PlayerAbilityState& x) { a(x.readyAt, x.charges, x.rearm, x.owned, x.level, x.stolenUntil, x.pendingAt, x.pendingPoint, x.pendingTarget, x.nextAuto); }
 void io(Archive& a, VictoryRules& x) { a(x.mode, x.tickets, x.ticketDrain, x.surviveSeconds, x.keyLoses, x.share); }
+void io(Archive& a, ScriptStore::Timer& x) { a(x.tick, x.seq, x.fn, x.arg); }   // scripting (RtsScript.h)
+void io(Archive& a, ScriptStore& x) { a(x.state, x.started, x.disabled, x.disabledFns, x.inside, x.timers, x.timerSeq); }
 void io(Archive& a, TriggerState& x) { a(x.enabled, x.fired, x.inside, x.edge, x.vars, x.messages, x.started); }
 void io(Archive& a, RoadGraph& x) { a(x.nodes, x.adj); }
 void io(Archive& a, SpatialHash& x) { a(x.cell, x.w, x.h, x.buckets, x.used); }
@@ -189,7 +195,7 @@ using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, P
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
                         Stance, Retreating, Transport, Boarded, Veteran, RallyPath, MechShield, Shield, Eater, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
                         Suppression, Turret, Abandoned, GrowState, Morale,
-                        Weathering, TrapState, TeleportBack>;
+                        Weathering, TrapState, TeleportBack, Belt, Crafter, TurnBudget, Altitude>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {
@@ -205,6 +211,11 @@ bool RtsModule::serializeState(Simulation& sim, Archive& a) {
     if (!a.writing() && pools != kPools::count) { a.fail(); return false; }
     kPools::run(a, w);
     ioState(a, gs);
+    // Lua state of games with their own scripts (the standard library keeps its state in GameState)
+    if (auto* ss = w.resource<ScriptStore>(); ss && ss->userScripts) {
+        io(a, *ss);
+        if (!a.writing()) ss->serial = 0;   // never a VM write stamp: the VM restores `state` from it
+    }
     if (!a.writing()) {
         gs.grid.invalidatePathing();   // derived caches (clearance, HPA*) rebuild from the loaded cells
         gs.grid.clearSoft();

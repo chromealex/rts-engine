@@ -4,6 +4,7 @@
 #include "engine/sim/Replay.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
+#include "modules/rts/RtsScript.h"
 
 namespace rts::netgame {
 
@@ -21,6 +22,7 @@ MatchData loadMatchData(const std::string& gameDir, const std::string& mapFile) 
     };
     std::string err;
     if (!game::applyTilesToMap(d.map, read, &err)) throw std::runtime_error(mapFile + ": " + err);
+    if (!game::embedScripts(d.rules, d.map, read, &err)) throw std::runtime_error(err);
     return d;
 }
 
