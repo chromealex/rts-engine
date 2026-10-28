@@ -65,6 +65,43 @@ open build/mac/RTSGame.app                                # игра
 
 Идентификатор, название, версия, ориентация и иконка (`icon.png`, 1024×1024; если нет — генерируется) — в `game.json`.
 
+### Инструменты сборки: проверка и автоустановка
+
+Перед сборкой `rtsbuild` проверяет, что нужно платформе, и ищет это не только в `PATH` (редактор,
+запущенный из Finder, видит лишь `/usr/bin:/bin:/usr/sbin:/sbin`): Homebrew (`/opt/homebrew/bin`,
+`/usr/local/bin`), `~/.local/bin`, `~/Library/Python/*/bin`, `~/emsdk`, `$EMSDK`, `ANDROID_HOME` /
+`ANDROID_SDK_ROOT`, `~/Library/Android/sdk`, `~/Android/Sdk`, `%LOCALAPPDATA%\Android\Sdk`, `JAVA_HOME`,
+`/usr/libexec/java_home`, Visual Studio (vswhere) и свою папку `~/.rtsengine/toolchains`. Найденные папки
+добавляются в `PATH` дочерних процессов.
+
+| Платформа | Нужно | Ставится автоматически |
+|---|---|---|
+| web | CMake, Python 3, Emscripten (emsdk), Ninja — по желанию | emsdk (≈ 400 МБ загрузки, ≈ 1.5 ГБ на диске), CMake + Ninja (≈ 50 МБ) |
+| android | JDK 17–23, Android SDK (platform 35, build-tools, platform-tools), NDK, CMake из SDK, Gradle | всё: Temurin JDK 17, command line tools + `sdkmanager` (лицензии принимаются), NDK ≈ 700 МБ, Gradle 8.10.2 |
+| macos | Xcode Command Line Tools, CMake | CLT — через установщик Apple (`xcode-select --install`), CMake |
+| ios | Xcode (App Store), CMake | CMake |
+| windows (на Windows) | Visual Studio 2022 / Build Tools (C++), CMake | CMake; VS — подсказка с командой `winget` |
+| linux | компилятор C++, CMake | CMake |
+
+```bash
+rtsbuild --check-toolchain web            # что есть, чего нет (--json — для редактора и MCP)
+rtsbuild --install-toolchain web          # поставить недостающее (или один id: emsdk, cmake, jdk, android-ndk, gradle, ...)
+rtsbuild --project ... --target web --install-missing   # поставить и сразу собрать
+```
+
+Без `--install-missing` нехватка инструментов останавливает сборку с кодом выхода 3 и строкой
+`RTS_MISSING_TOOLCHAIN web: emsdk` (её распознаёт редактор). В редакторе окно **Сборка** показывает для
+выбранной платформы, что найдено (пути, версии) и чего не хватает, с кнопкой **Установить автоматически**
+и галочкой «Устанавливать недостающее автоматически»; ход установки — в **Console** (текст можно выделять и
+копировать, «Открыть папку логов» — `<движок>/logs`). Агенты делают то же через MCP: `toolchain_check`,
+`toolchain_install`, `build_start {"installMissing": true}`.
+
+Всё ставится в `~/.rtsengine/toolchains` (Windows: `%USERPROFILE%\.rtsengine\toolchains`; другая папка —
+переменная `RTS_TOOLCHAINS_DIR`) без `sudo` и изменений в системе: `emsdk/`, `py/` (venv с cmake и ninja),
+`cmake/`, `ninja/`, `jdk-17/`, `android-sdk/`, `gradle-8.10.2/`. Повторный запуск безопасен (готовое
+пропускается). Удалить всё установленное — удалить эту папку. Исключения: Command Line Tools ставит
+установщик Apple, а если найден Android SDK пользователя, недостающие пакеты `sdkmanager` ставит в него.
+
 ### Ресурс-паки (.rpak) и размер сборки
 
 Контент игры (папка игры + `engine/assets`) попадает в сборку одним файлом `content/content.rpak`:
