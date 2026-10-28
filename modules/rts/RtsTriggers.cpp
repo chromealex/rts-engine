@@ -135,7 +135,7 @@ struct Parser {
             {"disableType", TrigAction::DisableType}, {"victory", TrigAction::Victory}, {"defeat", TrigAction::Defeat},
             {"enableTrigger", TrigAction::EnableTrigger}, {"disableTrigger", TrigAction::DisableTrigger}, {"addScore", TrigAction::AddScore},
             {"setRegionOwner", TrigAction::SetRegionOwner}, {"attackMove", TrigAction::AttackMove}, {"move", TrigAction::MoveUnits},
-            {"setTickets", TrigAction::SetTickets},
+            {"setTickets", TrigAction::SetTickets}, {"castAbility", TrigAction::CastAbility},
         };
         bool known = false;
         for (auto& [k, v] : kinds) if (t == k) { o.kind = v; known = true; }
@@ -154,6 +154,12 @@ struct Parser {
         if (a.has("at")) { o.at = {a["at"][0].fx(), Fixed{}, a["at"][1].fx()}; o.hasAt = true; }
         if (a.has("resource")) o.index = resource(a.getStr("resource"));
         if (a.has("tech")) o.index = tech(a.getStr("tech"));
+        if (o.kind == TrigAction::CastAbility) {
+            int k = r.findPlayerAbility(a.getStr("ability"));
+            if (k < 0) fail(where, "unknown player ability '" + a.getStr("ability") + "'");
+            o.index = int16_t(k);
+            o.attackMove = a.getBool("free", true);   // reused: free casts skip cost / cooldown / loadout
+        }
         if (o.kind == TrigAction::Buff) {
             bool ok = false;
             o.mod.stat = parseStat(a.getStr("stat", "damage"), &ok);
@@ -436,6 +442,14 @@ void RtsModule::runTriggerActions(Simulation& sim, size_t di, uint8_t player, En
             break;
         case TrigAction::SetTickets:
             for (uint8_t p : players) { uint8_t t = teamOf(sim, p); if (t < gs.tickets.size()) gs.tickets[t] = a.amount; }
+            break;
+        case TrigAction::CastAbility:
+            for (uint8_t p : players) {
+                if (!a.attackMove) { castPlayerAbility(sim, p, a.index, at, unit); continue; }
+                EffectCtx ctx; ctx.owner = p; ctx.point = flat(at); ctx.origin = ctx.point; ctx.target = w.alive(unit) ? unit : kNullEntity;
+                sim.emit({kEvPlayerAbility, p, kNullEntity, ctx.target, a.index, ctx.point});
+                applyPayload(sim, playerAbilityFor(sim, p, a.index).payload, ctx);
+            }
             break;
         }
     }

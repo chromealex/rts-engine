@@ -57,6 +57,7 @@ struct TrigAction {
         Spawn, Give, Take, SetOwner, Kill, Remove, Damage, Heal, Buff, Message, SetVariable, AddVariable,
         Research, EnableType, DisableType, Victory, Defeat, EnableTrigger, DisableTrigger, AddScore,
         SetRegionOwner, AttackMove, MoveUnits, SetTickets,
+        CastAbility,       // a player ability (map / timer skills): "ability", "at" / "area" (free: "free": true)
     } kind = Message;
     TrigPlayer player;
     TrigFilter filter;
