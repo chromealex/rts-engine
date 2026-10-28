@@ -192,6 +192,7 @@ static void updateSizes(NSView* view) {
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - g_last).count();
         if (dt > rts::platform::detail::FrameClock::kMaxDt) dt = rts::platform::detail::FrameClock::kMaxDt; // after sleep/background
+        rts::platform::pollContent(); // pack chunk downloads
         if (capture.active()) dt = 1.0 / 60.0;
         g_last = now;
         if (capture.active() && !armed && ++frameNo >= capture.frames) {
@@ -222,6 +223,13 @@ static void updateSizes(NSView* view) {
     [self.timer invalidate];
     state().quit = true;
 }
+// Fullscreen on notched MacBooks: the menu-bar strip around the camera is not usable.
+static void updateMacSafeArea() {
+    NSEdgeInsets in = g_window.contentView.safeAreaInsets;
+    detail::setSafeArea({float(in.left), float(in.top), float(in.right), float(in.bottom)});
+}
+- (void)windowDidEnterFullScreen:(NSNotification*)n { state().fullscreen = true; updateMacSafeArea(); }
+- (void)windowDidExitFullScreen:(NSNotification*)n { state().fullscreen = false; updateMacSafeArea(); }
 - (void)windowDidBecomeKey:(NSNotification*)n { Event e; e.type = EventType::FocusGained; detail::dispatch(e); }
 - (void)windowDidResignKey:(NSNotification*)n { Event e; e.type = EventType::FocusLost; detail::dispatch(e); }
 - (void)applicationWillTerminate:(NSNotification*)n {
@@ -235,6 +243,14 @@ static void updateSizes(NSView* view) {
 @end
 
 namespace rts::platform {
+
+namespace detail {
+void applyFullscreen(bool on) {
+    if (!g_window) return;
+    bool now = (g_window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+    if (on != now) [g_window toggleFullScreen:nil]; // native Spaces fullscreen; delegate updates state
+}
+} // namespace detail
 
 const char* name() { return "macos"; }
 void setTitle(const std::string& t) { if (g_window) g_window.title = [NSString stringWithUTF8String:t.c_str()]; }

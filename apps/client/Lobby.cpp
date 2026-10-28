@@ -9,6 +9,7 @@
 
 #include "GameClient.h"
 #include "engine/core/Hash.h"
+#include "modules/rts/RtsTiles.h"
 #include <RmlUi/Core/Input.h>
 
 namespace rts::client {
@@ -85,8 +86,8 @@ void GameClient::netAction(const std::string& what, int arg) {
         if (netName_.empty()) netName_ = tr("lobby.default_name");
         saveNetSettings();
         describeNetMaps();
-        net_ = std::make_unique<net::NetClient>(net::connectTo(netAddress_),
-                                               net::ClientIdentity{netName_, manifest_.getStr("id"), netKey_});
+        // By address: after a network drop it reconnects by itself and the match goes on (delta resume).
+        net_ = std::make_unique<net::NetClient>(netAddress_, net::ClientIdentity{netName_, manifest_.getStr("id"), netKey_});
         netError_.clear();
         chat_.clear();
         return;
@@ -133,7 +134,7 @@ void GameClient::updateNet(double dt, bool& advanced) {
             if (chat_.size() > 50) chat_.erase(chat_.begin());
             if (netMatch_) notice(text);
             break;
-        case K::PlayerStatus: case K::Desync:
+        case K::PlayerStatus: case K::Desync: case K::Reconnecting: case K::RatingChanged:
             if (netMatch_) notice(text);
             break;
         case K::MatchEnded:
@@ -171,8 +172,11 @@ void GameClient::startNetMatch() {
         selection_.clear();
         for (auto& g : groups_) g.clear();
         sim_.reset(); // MatchStart already dropped the previous session
+        Json map = Json::parse(mapText);
+        std::string terr; // 2D tile maps: same as offline, or the match desyncs from the server's replay
+        if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_ = std::make_unique<Simulation>(net_->simConfig(), std::make_unique<RtsModule>());
-        sim_->setup(Json::parse(rulesText), Json::parse(mapText));
+        sim_->setup(Json::parse(rulesText), map);
     } catch (const std::exception& e) {
         netError_ = e.what();
         sim_.reset();

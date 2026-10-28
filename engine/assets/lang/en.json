@@ -166,6 +166,7 @@
   "net": {
     "connected": "Connected to {server}",
     "disconnected": "Lost connection to the server",
+    "reconnecting": "Connection lost, reconnecting…",
     "chat_line": "{name}: {text}",
     "desync": "Desync at tick {tick}",
     "rating_up": "Rating +{delta}",

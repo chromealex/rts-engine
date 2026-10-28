@@ -14,7 +14,7 @@
 
 namespace rts::render {
 
-struct NodePose { float3 t; quat r; float3 s{1, 1, 1}; };
+struct NodePose { float3 t; quat r; float3 s{1, 1, 1}; float w[kMaxMorphTargets] = {}; };
 using Pose = std::vector<NodePose>;
 
 void bindPose(const Model& m, Pose& pose);
@@ -24,7 +24,19 @@ void worldMatrices(const Model& m, const Pose& pose, std::vector<mat4>& world);
 // Joint matrices of one primitive's palette (joint world * inverse bind).
 void paletteMatrices(const Model& m, const Skin& skin, const Primitive& prim, const std::vector<mat4>& world, std::vector<mat4>& out);
 std::vector<uint8_t> subtreeMask(const Model& m, int root);
+// Adds clip(t) - clip(0) on top of `pose` (additive animation: breathing, recoil on any action).
+void sampleClipAdditive(const AnimClip& clip, float t, Pose& pose, float w = 1);
+// Two-bone IK (hip -> knee -> foot) in model space: rotates a and b so c reaches `target`, bending
+// towards `pole`. `world` must match `pose`; both are updated for the chain.
+void solveTwoBoneIK(const Model& m, Pose& pose, std::vector<mat4>& world, int a, int b, int c, float3 target, float3 pole, float weight = 1);
+// Rotation part of a matrix (scale removed).
+quat rotationOf(const mat4& m);
 
+// Bakes every clip into Model::baked (joint matrices of the first skin, `fps` samples per second,
+// at most maxRows rows: longer sets lower the rate). Needs the CPU model (nodes, clips, skins).
+bool bakeAnimations(gfx::Device& dev, Model& m, float fps = 30, int maxRows = 2048);
+// Row of the baked texture for clip / time (clip -1 = bind pose).
+int bakedRow(const Model& m, int clip, float time, bool loop = true);
 class Animator {
 public:
     static constexpr int kLayers = 3;
@@ -40,6 +52,13 @@ public:
     void stop(int layer, float fade = 0.2f);
     void setSpeed(int layer, float speed) { if (valid(layer)) layers_[layer].cur.speed = speed; }
     void setMask(int layer, int rootNode);   // -1: whole model
+    // Blend space: mix a second clip into the layer's current clip at the same phase (walk -> run).
+    void setBlend(int layer, int clip2, float weight);
+    // Additive clips on top of everything (index = slot, weight fades towards `weight`).
+    void setAdditive(int slot, int clip, float weight, float fade = 0.3f);
+    // What the base layer shows as two clips and a mix (for baked skinning): A -> B by w.
+    struct BaseSample { int clipA = -1, clipB = -1; float timeA = 0, timeB = 0, w = 1; bool loopA = true, loopB = true; };
+    BaseSample baseSample() const;
     void update(float dt);
     void evaluate(Pose& pose) const;         // bind pose + all layers
     int clip(int layer) const { return valid(layer) ? layers_[layer].cur.clip : -1; }
@@ -47,7 +66,8 @@ public:
     bool finished(int layer) const;          // non-looping clip reached its end (or nothing playing)
 
 private:
-    struct Track { int clip = -1; float time = 0, speed = 1; bool loop = true; };
+    struct Track { int clip = -1; float time = 0, speed = 1; bool loop = true; int clip2 = -1; float w2 = 0; };
+    struct Additive { int clip = -1; float time = 0, weight = 0, target = 0, rate = 3; };
     struct Layer {
         Track cur, prev;
         float fade = 1, fadeDur = 0;     // cross-fade progress prev -> cur
@@ -56,8 +76,10 @@ private:
     };
     bool valid(int l) const { return l >= 0 && l < kLayers; }
     void advance(Track& t, float dt) const;
+    void sampleTrack(const Track& t, Pose& pose, float w, const std::vector<uint8_t>* mask) const;
     const Model* model_ = nullptr;
     Layer layers_[kLayers];
+    std::vector<Additive> additive_;
 };
 
 // ---------------------------------------------------------------- procedural
@@ -77,6 +99,7 @@ struct ProcInputs {
     float aimYaw = 0;         // target direction relative to the body (rad), when hasTarget
     float aimPitch = 0;
     bool hasTarget = false;
+    float3 groundNormal{0, 1, 0}; // terrain normal in object space (Align)
     float phase = 0;          // 0..1 per instance (desynchronizes identical units)
     uint32_t state = kProcIdle;
     float eventAge[kProcEvCount] = {1e9f, 1e9f, 1e9f, 1e9f}; // seconds since the last event
@@ -86,7 +109,7 @@ struct ProcAnim {
     enum Channel : uint8_t { Translate, Rotate, Scale };
     enum Wave : uint8_t { Sine, Abs, Saw, Triangle, Square, Const };
     enum Driver : uint8_t { ByTime, ByDistance };
-    enum Special : uint8_t { None, Lean, Aim, AimPitch, Fall };
+    enum Special : uint8_t { None, Lean, Aim, AimPitch, Fall, Align };
     std::string nodeName;     // resolved against a model with resolve()
     int node = -1;            // -1: whole object
     Channel channel = Translate;
@@ -111,7 +134,7 @@ struct ProcAnim {
     void resolve(const Model* m) { node = (m && !nodeName.empty()) ? m->findNode(nodeName) : -1; }
 };
 
-struct ProcRuntime { float weight = 0, aim = 0, aimPitch = 0; };
+struct ProcRuntime { float weight = 0, aim = 0, aimPitch = 0; quat align; };
 
 // Applies modifiers to `pose` (nodes) and to `objectXf` (whole object, model space, post-multiplied).
 // `rt` is per-instance state (resized to mods.size()).

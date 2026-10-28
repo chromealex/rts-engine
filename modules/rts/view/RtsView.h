@@ -4,7 +4,8 @@
 //   "view": { "model": "models/knight.glb", "height": 1.1, "team": ["Cloth"],
 //             "animations": { "move": {"clip": "Walk", "speedRef": 2.8}, "attack": "Slash" },
 //             "procedural": [{ "type": "aim", "node": "Turret" }] }
-// The full format (models, materials, clips, procedural animation) is in docs/models.md.
+// The full format (models, materials, clips, procedural animation, attachments, stages, LOD,
+// effects) is in docs/models.md.
 // Built-in procedural shapes cover common archetypes and are the fallback when a model fails:
 //   units:      worker, soldier, ranged, vehicle, tank, flyer, mushroom, generic
 //   structures: hall, house, barracks, workshop, factory, tower, mine, tree, rock, mushroomhouse, structure
@@ -37,6 +38,7 @@ struct SceneObject {
     float build = 1;             // construction progress 0..1
     int garrison = -1;           // shown when >= 0
     float carry = 0;             // > 0: carrying resources
+    int16_t carryRes = -1;       // resource index of the cargo
     bool selected = false, hovered = false, visible = true, isProjectile = false;
     uint8_t action = 0;          // SpriteAction (sprite animations): idle, move, attack, work
     // animation hints (sceneFromSim fills them; editor placements leave the defaults)
@@ -45,6 +47,7 @@ struct SceneObject {
     bool producing = false;      // structure training / researching
     bool hasTarget = false;      // combat target (turrets aim at it)
     render::float3 target;
+    Entity source;               // projectiles: who fired (muzzle point)
     uint16_t shooterType = UINT16_MAX; // projectiles: type of the unit that fired it (lights)
 };
 
@@ -64,6 +67,26 @@ struct RtsScene {
     // drag-to-send arrows (Mushroom-Wars input) and box selection are drawn by the client
 };
 
+// Things the view noticed this frame, for sound and particles: clip events ("step", "hit"),
+// "launch" (a projectile left a muzzle), "death", "spawn". Positions in world space.
+struct ViewEvent {
+    std::string name;
+    Entity entity;
+    uint16_t type = 0;
+    uint8_t owner = 0;
+    render::float3 pos;
+};
+// Effect anchors active this frame ("fx" in view blocks: smoke on a damaged building, exhaust
+// on a moving tank). A particle system spawns at `pos` while the anchor stays listed.
+struct ViewEffect {
+    std::string effect;
+    Entity entity;
+    uint16_t type = 0;
+    uint8_t owner = 0;
+    render::float3 pos;
+    float intensity = 1;
+};
+
 class RtsView {
 public:
     // reader: content files (models, textures); default platform::readContentFile.
@@ -80,12 +103,22 @@ public:
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid);
     // ImGui: bars, counts. ox/oy: top-left of the view on screen; drawList: ImDrawList* (default: background list)
     void drawOverlays(const render::RTSCamera& cam, const RtsScene& s, float viewW, float viewH, float ox = 0, float oy = 0, void* drawList = nullptr);
+    // Building placement preview: the type's model, green when `ok`, red otherwise.
+    void drawGhost(render::Renderer3D& r, uint16_t type, render::float3 pos, bool ok, const MapGrid& grid, double time);
+    // One object at the origin playing its idle clip (portraits, editor previews).
+    void drawPreview(render::Renderer3D& r, uint16_t type, uint8_t owner, double time, float yaw = 0.6f);
     static render::float4 playerColor(int player);
     float selectionRadius(uint16_t type) const;
     float heightAt(const MapGrid& grid, float x, float z) const;
     // Problems found while loading view blocks ("type 'knight': models/knight.glb: file not found").
     const std::vector<std::string>& warnings() const { return warnings_; }
     const render::Model* modelOf(uint16_t type) const;
+    const std::vector<ViewEvent>& events() const { return events_; }
+    const std::vector<ViewEffect>& effects() const { return effects_; }
+    void setSelectionOutline(bool on) { outline_ = on; }
+    void setAnimationLod(bool on) { animLod_ = on; }
+    // Model files referenced by the view blocks (editor hot reload watches them).
+    std::vector<std::string> modelFiles() const;
 
     enum AnimKind { kAnimIdle, kAnimMove, kAnimAttack, kAnimGather, kAnimBuild, kAnimCarry, kAnimDie, kAnimSpawn,
                     kAnimHit, kAnimWork, kAnimConstruct, kAnimCast, kAnimCount };
@@ -108,7 +141,21 @@ private:
         int layer = 0;             // 0 base, 1 overlay (attack / cast), 2 overlay (hit)
         int mask = -1;             // overlay limited to this node's subtree
         bool loop = true;
+        std::vector<std::pair<float, std::string>> events;   // clip time -> event name
+        struct BlendPoint { int clip; float speed; };
+        std::vector<BlendPoint> blend;                      // blend space by speed (move / carry)
     };
+    struct Attachment {
+        render::Model* model = nullptr;
+        std::vector<render::Material> materials;
+        int node = -1;                 // socket node of the host model (-1: object origin)
+        render::mat4 local;
+        uint32_t when = 0;             // ProcState bits, 0 = always
+        int carry = -2;                // -2 not cargo, -1 any cargo, >= 0 resource index
+    };
+    struct Fx { std::string effect; int node = -1; render::float3 offset; uint32_t when = 0; float hpBelow = 2, intensity = 1; };
+    struct AdditiveSpec { int clip = -1; uint32_t when = 0; float weight = 1; };
+    struct LegIK { int hip = -1, knee = -1, foot = -1; };
     struct ModelChoice {
         render::Model* model = nullptr;
         std::vector<render::Material> materials;  // per-type copy with overrides applied
@@ -116,11 +163,24 @@ private:
         ClipSpec clips[kAnimCount];
         bool hasClip[kAnimCount] = {};
         std::vector<render::ProcAnim> procs;
-        bool needsPose = false;                   // clips or node-targeted procedural animation
+        bool needsPose = false;                   // a CPU pose is needed (palette skinning, node procs, sockets, IK)
+        bool baked = false;                       // skinned from the baked clip texture (instanced crowds)
         int variant = -1;                         // KHR_materials_variants index
+        std::vector<Attachment> attach;
+        std::vector<Fx> fx;
+        std::vector<AdditiveSpec> additive;
+        std::vector<LegIK> legs;
+        int muzzle = -1;                          // projectile launch node
+        render::float3 muzzleOffset;
+        float lodDistance = 0;                    // LOD: used beyond this camera distance
+        std::vector<int> clipMap, nodeMap;        // LOD: base clip / node -> this model's
     };
+    struct Stage { float build = -1, hp = -1; ModelChoice choice; };
+    enum class Construction : uint8_t { Grow, Dissolve, Stages };
     struct TypeLook {
         std::vector<ModelChoice> models;          // variants (picked per object)
+        std::vector<ModelChoice> lods;            // farther LODs of models[0] (increasing distance)
+        std::vector<Stage> stages;                // construction / damage replacements
         float scale = 1;
         render::float4 tint{1, 1, 1, 1};          // linear
         bool air = false, structure = false, shape = true;
@@ -129,6 +189,8 @@ private:
         float turnSpeed = 10;                     // rad/s, 0 = instant
         float flyHeight = 2.4f;
         float unitSpeed = 0;
+        Construction construction = Construction::Grow;
+        bool dissolveSpawn = false, dissolveDeath = false;
     };
     struct EntityAnim {
         uint16_t type = 0;
@@ -138,6 +200,7 @@ private:
         std::vector<render::mat4> world;
         std::vector<render::ProcRuntime> rt;
         render::mat4 objXf;                       // procedural whole-object offset
+        render::mat4 drawn;                       // last world transform of the host model
         float yaw = 0, speed = 0, distance = 0, turnRate = 0, accel = 0, phase = 0;
         float eventAge[render::kProcEvCount] = {1e9f, 1e9f, 1e9f, 1e9f};
         float castAge = 1e9f;
@@ -147,23 +210,38 @@ private:
         int baseKind = -1;
         uint64_t seen = 0;
         SceneObject last;
+        int prevClip[render::Animator::kLayers] = {-1, -1, -1};
+        float prevTime[render::Animator::kLayers] = {0, 0, 0};
+        float lodAccum = 0;                       // animation LOD: time not yet applied to the pose
+        bool poseValid = false;
+        render::float3 launch;                    // projectiles: offset from the muzzle, decays
+        bool launched = false;
+        double lastSeenTime = -1;                 // previews keep their own clock
     };
 
     void buildShapes(gfx::Device& dev);
     void buildLook(gfx::Device& dev, const UnitType& t, TypeLook& out);
     bool loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, const std::string& path, ModelChoice& out);
     void configureChoice(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c, bool isShape);
+    void configureExtras(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c);
+    render::Model* loadModelCached(gfx::Device& dev, const UnitType& t, const std::string& path);
     int loadTexture(gfx::Device& dev, const UnitType& t, render::Model& m, const std::string& path);
     void parseProcedural(const UnitType& t, const Json& list, ModelChoice& c);
     void defaultProcedural(const UnitType& t, const TypeLook& look, ModelChoice& c);
+    void finishChoice(const UnitType& t, ModelChoice& c);
     void warn(const UnitType& t, const std::string& msg);
     void handleEvents(const RtsScene& s);
     EntityAnim& stateFor(uint64_t key, const SceneObject& o);
-    void animate(EntityAnim& st, const SceneObject& o, float dt);
-    void drawObject(render::Renderer3D& r, EntityAnim& st, const SceneObject& o, float ground, float alpha);
+    void animate(EntityAnim& st, const SceneObject& o, float dt, const MapGrid* grid);
+    void drawObject(render::Renderer3D& r, EntityAnim& st, const SceneObject& o, float ground, float alpha, const render::float4* tintOverride = nullptr);
+    void drawProjectile(render::Renderer3D& r, uint64_t key, const SceneObject& o, float dt);
+    void emitClipEvents(EntityAnim& st, const ModelChoice& ch, const SceneObject& o);
+    render::float3 nodeWorldPos(const EntityAnim& st, const ModelChoice& ch, int node, render::float3 offset) const;
+    uint32_t stateBits(const EntityAnim& st, const SceneObject& o, bool moving) const;
 
     const Rules* rules_ = nullptr;
     render::FileReader read_;
+    gfx::Device* dev_ = nullptr;
     std::map<std::string, std::unique_ptr<render::Model>> models_;  // by path; shapes as "shape:<name>"
     std::vector<TypeLook> looks_;
     std::vector<std::string> warnings_;
@@ -171,6 +249,9 @@ private:
     render::Mesh projectile_;
     TerrainRenderer terrain_;    // chunked terrain + water (RtsTerrainRender.cpp)
     bool hasTerrain_ = false;
+    std::vector<ViewEvent> events_;
+    std::vector<ViewEffect> effects_;
+    bool outline_ = true, animLod_ = true;
     std::unique_ptr<Rts2DView> twoD_;
     std::string contentBase_;
     std::vector<render::float3> bars_;   // per scene object: health bar anchor of sprite objects
@@ -179,6 +260,8 @@ private:
     uint64_t frame_ = 0;
     RtsLights lights_;
     RtsGroundFx groundFx_;   // territory, diggable rock, lanes, roads (RtsGroundFx.cpp)
+    render::mat4 viewProj_;
+    render::float3 camPos_;
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters

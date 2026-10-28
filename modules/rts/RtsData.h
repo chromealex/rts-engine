@@ -39,11 +39,22 @@ struct ResourceDef {
     uint64_t deficitDisableTags = 0; // objects with any of these tags stop working
     bool global = false;      // with rules.storage == "buildings": stays a player-wide stock (coins), not a good
     int16_t convertTo = -1;   // credited as another resource when delivered (ore -> credits)
+    Fixed regen{};            // per second for every player (mana, morale)
     Fixed convertRate = Fixed::fromInt(1);
 };
 
 // ------------------------------------------------------------------ stats / modifiers
-enum class Stat : uint8_t { MaxHp, Armor, Damage, Range, Speed, Sight, GatherRate, AttackSpeed, ProductionSpeed, Count };
+enum class Stat : uint8_t {
+    MaxHp, Armor, Damage, Range, Speed, Sight, GatherRate, AttackSpeed, ProductionSpeed,
+    EnergyRegen,    // multiplier on energy regeneration
+    Defense,        // multiplier on garrison defense (units lost per assaulting unit)
+    GarrisonCap,    // added to / multiplies the garrison maximum
+    CooldownRate,   // multiplier on how fast ability cooldowns run (2 = twice as fast)
+    UpgradeCost,    // multiplier on upgrade cost and time
+    Lifesteal,      // share of dealt damage healed (added)
+    DamageTaken,    // multiplier on damage received
+    Scale,          // presentation only (rage makes units bigger)
+    Count };
 Stat parseStat(const std::string& s, bool* ok = nullptr);
 
 struct StatMod { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); };
@@ -64,41 +75,17 @@ struct WeaponDef {
     Fixed projectileSpeed{};
     Fixed splash{};
     uint16_t damageType = 0;
+    int16_t onHit = -1;                 // payload applied to the target on hit (poison, frost)
+    Fixed onHitChance = Fixed::fromInt(1);
+    Fixed chargeTime{};                 // >0: the weapon has to stay on one target this long before each shot
 };
 
-// ------------------------------------------------------------------ abilities
-enum class TargetKind : uint8_t { None, Self, Unit, Point };
-enum class EffectKind : uint8_t { Damage, Heal, Stun, Buff, Spawn, Blink };
-
-struct EffectDef {
-    EffectKind kind = EffectKind::Damage;
-    Fixed amount{};            // damage / heal
-    Fixed radius{};            // 0 = single target
-    Fixed duration{};          // stun / buff / summon lifetime
-    uint16_t damageType = 0;
-    StatMod mod;               // buff
-    uint16_t spawnType = kNoType;
-    int count = 1;
-    bool enemies = true;       // area filters
-    bool allies = false;
-};
-
-struct AbilityDef {
-    std::string id, name;
-    TargetKind target = TargetKind::None;
-    Fixed range = Fixed::fromInt(6);
-    Fixed cooldown = Fixed::fromInt(10);
-    Fixed energyCost{};
-    int requiredLevel = 1;     // heroes
-    bool autocast = true;      // used automatically (AI and idle units)
-    std::vector<EffectDef> effects;
-    // passive aura (applied continuously around the owner)
-    bool aura = false;
-    Fixed auraRadius{};
-};
-
-// ------------------------------------------------------------------ economy blocks
+// ------------------------------------------------------------------ abilities and effects
 struct Amount { uint16_t res = 0; Fixed value{}; };
+} // namespace rts::game
+#include "RtsAbilityData.h"
+namespace rts::game {
+// ------------------------------------------------------------------ economy blocks
 struct GatherDef { uint16_t res = 0; Fixed carry = Fixed::fromInt(10); Fixed time = Fixed::fromInt(2); };
 
 enum class BuildMode : uint8_t {
@@ -177,6 +164,9 @@ struct UnitType {
     // energy & abilities
     Fixed maxEnergy{}, energyRegen{}, startEnergy{};
     std::vector<AbilityDef> abilities;
+    std::vector<int16_t> statuses;             // permanent statuses (passives) every object of this type has
+    int level = 1;                             // structure level (filters, level effects)
+    bool blocksLanes = false;                  // lane walkers can't pass it while it stands (barrier)
     // hero
     bool hero = false;
     std::vector<int> xpLevels;                 // xp needed for level 2, 3, ...
@@ -375,18 +365,6 @@ struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = F
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
 struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing = Fixed::fromRatio(35, 100); };
 
-// Player-level abilities (not tied to a unit): nukes, air strikes, reinforcements.
-struct PlayerAbilityDef {
-    std::string id, name;
-    std::vector<Amount> cost;
-    Fixed cooldown{};
-    int chargesMax = 0;                        // 0: unlimited (cooldown only)
-    std::vector<Amount> rearmCost;
-    Fixed rearmTime = Fixed::fromInt(30);
-    TargetKind target = TargetKind::Point;
-    std::vector<EffectDef> effects;
-};
-
 enum class CostModel : uint8_t { Upfront, Progressive };
 
 struct Rules {
@@ -418,11 +396,21 @@ struct Rules {
     HandRules hand;
     PossessionRules possession;
     std::vector<PlayerAbilityDef> playerAbilities;
+    std::vector<std::vector<EffectDef>> payloads;   // every effect list (abilities, projectiles, areas, statuses...)
+    std::vector<StatusDef> statuses;
+    std::vector<std::string> statusTagNames;   // status tags (dispel), separate from type tags
+    // built-in statuses used by effects that undo themselves (temporary capture, transform, links, illusions)
+    int16_t stTemp = -1, stLink = -1, stRedirect = -1, stFake = -1;
+    size_t userStatuses = 0;                   // statuses defined by the game (built-ins come after)
+    int loadoutSlots = 0;                      // >0: players pick at most this many player abilities (map "loadout")
+    int findStatus(const std::string& id) const;
+    int findPlayerAbility(const std::string& id) const;
     bool buildingStorage = false;              // "storage": "buildings": goods live in building inventories
     RoadNetworkRules roadNetwork;
     LaneRules lanes;
     MovementRules movement;
     bool settlers = false;                     // any settlers-economy mechanic present
+    bool advancedEffects = false;              // statuses / delivery / skills beyond the original instant effects
     bool dungeon = false;                      // any dungeon / territory mechanic present (systems run)
 
     int findRoom(const std::string& id) const;

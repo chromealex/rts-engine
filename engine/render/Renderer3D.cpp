@@ -129,7 +129,7 @@ void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
     camPos_ = cam.eye();
     cam_ = cam;
     items_.clear(); lines_.clear(); tris_.clear(); custom_.clear(); customOpaque_.clear();
-    modelItems_.clear(); jointData_.clear();
+    modelItems_.clear(); jointData_.clear(); morphData_.clear();
     computeShadowMatrix(cam, aspect);
     lights.begin(cam, aspect);
 }
@@ -284,6 +284,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     };
     for (auto& it : items_) if (it.color.w >= 0.99f) drawItem(it);
     renderModels(1);
+    renderModels(3);
     // translucent meshes (water, ghosts) before overlays so that overlays (fog of war, markers) stay on top
     bool any = false;
     for (auto& it : items_) {

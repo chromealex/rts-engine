@@ -7,6 +7,7 @@
 //   for (;;) { srv.update(nowMs()); sleep ~1 ms; }
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -27,6 +28,27 @@ struct QueueConfig {
     uint32_t ratingWidenPerSec = 10;   // the range grows while players wait
 };
 
+// Deciding a match the players did not settle (everyone left, results disagree): the server
+// re-simulates the confirmed input on its own copy of the game data. The server library itself
+// knows no game; the application provides this (apps/server links the RTS module).
+struct ArbiterJob {
+    std::string gameId, mapFile;
+    uint64_t dataHash = 0, seed = 0;
+    uint32_t tickRate = 20, inputDelay = 2;
+    uint32_t endTick = 0;                                  // re-simulate at most to here
+    std::vector<Command> commands;                         // confirmed input
+    std::vector<std::pair<uint32_t, uint64_t>> checkpoints; // checksums the players agreed on
+};
+struct ArbiterResult {
+    bool ok = false;           // false: no data for this game / data hash differs / error
+    int32_t result = 0;        // winning team, -1 draw, 0 still undecided at endTick
+    uint32_t tick = 0;         // tick the result appeared (or endTick)
+    uint64_t hash = 0;         // checksum there
+    uint32_t mismatchTick = 0; // first agreed checkpoint the server's simulation disagrees with (0 = none)
+    std::string error;
+};
+using Arbiter = std::function<ArbiterResult(const ArbiterJob&)>;
+
 struct ServerConfig {
     std::string name = "RTSEngine server";
     uint16_t udpPort = kDefaultUdpPort;   // 0 = disabled
@@ -37,6 +59,11 @@ struct ServerConfig {
     std::vector<QueueConfig> queues;
     uint32_t maxClients = 5000;
     uint32_t reconnectGraceSec = 120;     // a dropped player keeps the slot this long
+    // Command type that makes the issuing player give up (kCmdSurrender of the RTS module). A player
+    // who leaves (or does not come back in time) surrenders through the normal input stream, so the
+    // simulation decides the match and the replay shows it. 0 = the server decides by itself.
+    uint16_t surrenderCommand = 0;
+    Arbiter arbiter;                      // empty = matches nobody settled end without a winner
     bool log = true;
 };
 
@@ -50,7 +77,7 @@ ServerConfig loadServerConfig(const Json& j);
 
 struct ServerStats {
     uint32_t clients = 0, rooms = 0, activeMatches = 0, queued = 0;
-    uint32_t matchesStarted = 0, matchesFinished = 0, desyncs = 0;
+    uint32_t matchesStarted = 0, matchesFinished = 0, desyncs = 0, verdicts = 0;
 };
 
 class Server {
@@ -63,6 +90,7 @@ public:
     void addConnection(std::unique_ptr<Conn> c);   // in-process clients (tests, local play)
     void update(uint64_t now);
     ServerStats stats() const;
+    bool busy() const;                             // a match verdict is still being computed
     int rating(const std::string& queueId, uint64_t clientKey) const;
 
     struct Impl;

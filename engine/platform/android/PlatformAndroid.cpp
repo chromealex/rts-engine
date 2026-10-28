@@ -6,6 +6,8 @@
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
 #include <android/asset_manager.h>
+#include <android/input.h>
+#include <android/keycodes.h>
 #include <android/log.h>
 #include <android_native_app_glue.h>
 #include <jni.h>
@@ -32,7 +34,7 @@ bool g_inited = false;
 
 // ---- on-screen keyboard (RtsActivity.java). Java calls arrive on the UI thread; they are queued
 // and dispatched on the game thread, which owns the UI and the sim.
-struct TextMsg { enum Kind { Text, Backspace, Enter, Keyboard, Ended } kind; std::string text; int px = 0; };
+struct TextMsg { enum Kind { Text, Backspace, Enter, Keyboard, Ended, SafeArea } kind; std::string text; int px = 0; int inset[4] = {}; };
 std::mutex g_textMutex;
 std::vector<TextMsg> g_textQueue;
 void pushText(TextMsg m) { std::lock_guard<std::mutex> l(g_textMutex); g_textQueue.push_back(std::move(m)); }
@@ -47,8 +49,36 @@ void drainTextQueue() {
         case TextMsg::Enter: detail::dispatchKeyPress(Key::Enter); break;
         case TextMsg::Keyboard: detail::setKeyboardHeight(float(m.px) / state().scale); break;
         case TextMsg::Ended: detail::textInputEndedByUser(); break;
+        case TextMsg::SafeArea: {
+            const float s = state().scale;
+            detail::setSafeArea({float(m.inset[0]) / s, float(m.inset[1]) / s, float(m.inset[2]) / s, float(m.inset[3]) / s});
+            break;
+        }
         }
     }
+}
+
+std::string utf8(JNIEnv* env, jstring s) {
+    if (!s) return {};
+    const char* c = env->GetStringUTFChars(s, nullptr); // modified UTF-8; fine for BMP text,
+    std::string r = c ? c : "";                          // supplementary chars are rebuilt below
+    if (c) env->ReleaseStringUTFChars(s, c);
+    // modified UTF-8 encodes U+10000.. as two 3-byte surrogates: merge them into 4-byte UTF-8
+    std::string out;
+    for (size_t i = 0; i < r.size();) {
+        auto b = [&](size_t k) { return uint32_t(static_cast<unsigned char>(r[k])); };
+        if (i + 5 < r.size() && b(i) == 0xED && (b(i + 1) & 0xF0) == 0xA0 && b(i + 3) == 0xED && (b(i + 4) & 0xF0) == 0xB0) {
+            uint32_t hi = 0xD000 | ((b(i + 1) & 0x3F) << 6) | (b(i + 2) & 0x3F);
+            uint32_t lo = 0xD000 | ((b(i + 4) & 0x3F) << 6) | (b(i + 5) & 0x3F);
+            uint32_t cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+            out += char(0xF0 | (cp >> 18)); out += char(0x80 | ((cp >> 12) & 63));
+            out += char(0x80 | ((cp >> 6) & 63)); out += char(0x80 | (cp & 63));
+            i += 6;
+        } else {
+            out += r[i++];
+        }
+    }
+    return out;
 }
 
 // JNIEnv of the game thread (attached on first use, detached when android_main ends).
@@ -110,8 +140,127 @@ void onCmd(android_app* app, int32_t cmd) {
     }
 }
 
+Key mapKeycode(int32_t k) {
+    if (k >= AKEYCODE_A && k <= AKEYCODE_Z) return Key(int(Key::A) + (k - AKEYCODE_A));
+    if (k >= AKEYCODE_0 && k <= AKEYCODE_9) return Key(int(Key::Num0) + (k - AKEYCODE_0));
+    if (k >= AKEYCODE_F1 && k <= AKEYCODE_F12) return Key(int(Key::F1) + (k - AKEYCODE_F1));
+    switch (k) {
+    case AKEYCODE_BACK: case AKEYCODE_ESCAPE: return Key::Escape; // Back = Escape: pause / close a menu
+    case AKEYCODE_ENTER: case AKEYCODE_NUMPAD_ENTER: return Key::Enter;
+    case AKEYCODE_DEL: return Key::Backspace;
+    case AKEYCODE_FORWARD_DEL: return Key::Delete;
+    case AKEYCODE_TAB: return Key::Tab;
+    case AKEYCODE_SPACE: return Key::Space;
+    case AKEYCODE_INSERT: return Key::Insert;
+    case AKEYCODE_DPAD_LEFT: return Key::Left;
+    case AKEYCODE_DPAD_RIGHT: return Key::Right;
+    case AKEYCODE_DPAD_UP: return Key::Up;
+    case AKEYCODE_DPAD_DOWN: return Key::Down;
+    case AKEYCODE_MOVE_HOME: return Key::Home;
+    case AKEYCODE_MOVE_END: return Key::End;
+    case AKEYCODE_PAGE_UP: return Key::PageUp;
+    case AKEYCODE_PAGE_DOWN: return Key::PageDown;
+    case AKEYCODE_SHIFT_LEFT: return Key::LeftShift;
+    case AKEYCODE_SHIFT_RIGHT: return Key::RightShift;
+    case AKEYCODE_CTRL_LEFT: return Key::LeftCtrl;
+    case AKEYCODE_CTRL_RIGHT: return Key::RightCtrl;
+    case AKEYCODE_ALT_LEFT: return Key::LeftAlt;
+    case AKEYCODE_ALT_RIGHT: return Key::RightAlt;
+    case AKEYCODE_META_LEFT: return Key::LeftSuper;
+    case AKEYCODE_META_RIGHT: return Key::RightSuper;
+    case AKEYCODE_MINUS: return Key::Minus;
+    case AKEYCODE_EQUALS: return Key::Equal;
+    case AKEYCODE_LEFT_BRACKET: return Key::LeftBracket;
+    case AKEYCODE_RIGHT_BRACKET: return Key::RightBracket;
+    case AKEYCODE_SEMICOLON: return Key::Semicolon;
+    case AKEYCODE_APOSTROPHE: return Key::Apostrophe;
+    case AKEYCODE_COMMA: return Key::Comma;
+    case AKEYCODE_PERIOD: return Key::Period;
+    case AKEYCODE_SLASH: return Key::Slash;
+    case AKEYCODE_BACKSLASH: return Key::Backslash;
+    case AKEYCODE_GRAVE: return Key::GraveAccent;
+    default: return Key::Unknown;
+    }
+}
+
+uint8_t modsOf(int32_t meta) {
+    return uint8_t(((meta & AMETA_SHIFT_ON) ? kModShift : 0) | ((meta & AMETA_CTRL_ON) ? kModCtrl : 0) |
+                   ((meta & AMETA_ALT_ON) ? kModAlt : 0) | ((meta & AMETA_META_ON) ? kModSuper : 0));
+}
+
+// The character a hardware key produces with the current layout and modifiers (KeyCharacterMap via
+// android.view.KeyEvent.getUnicodeChar): the NDK key event carries only the key code.
+uint32_t unicodeOf(int32_t action, int32_t code, int32_t meta) {
+    JNIEnv* env = gameThreadEnv();
+    if (!env) return 0;
+    static jclass cls = nullptr;
+    static jmethodID ctor = nullptr, getChar = nullptr;
+    if (!cls) {
+        jclass local = env->FindClass("android/view/KeyEvent");
+        if (!local) { env->ExceptionClear(); return 0; }
+        cls = jclass(env->NewGlobalRef(local));
+        env->DeleteLocalRef(local);
+        ctor = env->GetMethodID(cls, "<init>", "(II)V");
+        getChar = env->GetMethodID(cls, "getUnicodeChar", "(I)I");
+    }
+    jobject ke = env->NewObject(cls, ctor, action, code);
+    jint ch = ke ? env->CallIntMethod(ke, getChar, meta) : 0;
+    if (ke) env->DeleteLocalRef(ke);
+    if (env->ExceptionCheck()) { env->ExceptionClear(); return 0; }
+    return ch > 0 ? uint32_t(ch) : 0;
+}
+
+int32_t onKey(AInputEvent* ev) {
+    const int32_t code = AKeyEvent_getKeyCode(ev), action = AKeyEvent_getAction(ev), meta = AKeyEvent_getMetaState(ev);
+    const Key key = mapKeycode(code);
+    if (key == Key::Unknown) {
+        // volume, media, camera... stay with the system; unmapped printable keys still type
+        if (action != AKEY_EVENT_ACTION_DOWN) return 0;
+        uint32_t cp = unicodeOf(action, code, meta);
+        if (cp < 32) return 0;
+        Event c; c.type = EventType::Char; c.codepoint = cp; detail::dispatch(c);
+        return 1;
+    }
+    if (action != AKEY_EVENT_ACTION_DOWN && action != AKEY_EVENT_ACTION_UP) return 1;
+    Event e;
+    e.type = action == AKEY_EVENT_ACTION_DOWN ? EventType::KeyDown : EventType::KeyUp;
+    e.key = key; e.mods = modsOf(meta); e.repeat = AKeyEvent_getRepeatCount(ev) > 0;
+    detail::dispatch(e);
+    if (action == AKEY_EVENT_ACTION_DOWN && code != AKEYCODE_BACK && !(meta & (AMETA_CTRL_ON | AMETA_META_ON))) {
+        uint32_t cp = unicodeOf(action, code, meta);
+        if (cp >= 32 && cp != 127) { Event c; c.type = EventType::Char; c.codepoint = cp; detail::dispatch(c); }
+    }
+    return 1; // consumed: Back must not finish the activity, the game decides
+}
+
+// Mouse / touchpad (Chromebooks, Samsung DeX, OTG mice): real buttons, hover and wheel instead of touches.
+int32_t onMouse(AInputEvent* ev) {
+    auto& S = state();
+    const int32_t code = AMotionEvent_getAction(ev) & AMOTION_EVENT_ACTION_MASK;
+    Event e;
+    e.x = AMotionEvent_getX(ev, 0) / S.scale; e.y = AMotionEvent_getY(ev, 0) / S.scale;
+    e.mods = modsOf(AMotionEvent_getMetaState(ev));
+    auto buttonOf = [](int32_t b) { return b == AMOTION_EVENT_BUTTON_SECONDARY ? 1 : b == AMOTION_EVENT_BUTTON_TERTIARY ? 2 : 0; };
+    switch (code) {
+    case AMOTION_EVENT_ACTION_BUTTON_PRESS: e.type = EventType::MouseDown; e.button = buttonOf(AMotionEvent_getActionButton(ev)); break;
+    case AMOTION_EVENT_ACTION_BUTTON_RELEASE: e.type = EventType::MouseUp; e.button = buttonOf(AMotionEvent_getActionButton(ev)); break;
+    case AMOTION_EVENT_ACTION_MOVE: case AMOTION_EVENT_ACTION_HOVER_MOVE: case AMOTION_EVENT_ACTION_HOVER_ENTER: e.type = EventType::MouseMove; break;
+    case AMOTION_EVENT_ACTION_SCROLL:
+        e.type = EventType::MouseWheel;
+        e.wheelX = -AMotionEvent_getAxisValue(ev, AMOTION_EVENT_AXIS_HSCROLL, 0);
+        e.wheelY = AMotionEvent_getAxisValue(ev, AMOTION_EVENT_AXIS_VSCROLL, 0);
+        break;
+    case AMOTION_EVENT_ACTION_DOWN: case AMOTION_EVENT_ACTION_UP: return 1; // BUTTON_PRESS/RELEASE carry the button
+    default: return 0;
+    }
+    detail::dispatch(e);
+    return 1;
+}
+
 int32_t onInput(android_app*, AInputEvent* ev) {
+    if (AInputEvent_getType(ev) == AINPUT_EVENT_TYPE_KEY) return onKey(ev);
     if (AInputEvent_getType(ev) != AINPUT_EVENT_TYPE_MOTION) return 0;
+    if (AMotionEvent_getToolType(ev, 0) == AMOTION_EVENT_TOOL_TYPE_MOUSE) return onMouse(ev);
     auto& S = state();
     int32_t action = AMotionEvent_getAction(ev);
     int32_t code = action & AMOTION_EVENT_ACTION_MASK;
@@ -152,6 +301,54 @@ void showSoftKeyboard(bool show, const TextInputArea&) {
 } // namespace detail
 
 const char* name() { return "android"; }
+
+namespace {
+jstring toJString(JNIEnv* env, const std::string& s) {
+    std::u16string u; // NewStringUTF expects modified UTF-8; go through UTF-16 for emoji etc.
+    for (size_t i = 0; i < s.size();) {
+        uint32_t c = static_cast<unsigned char>(s[i]);
+        int n = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+        if (n) c &= 0x3Fu >> n;
+        ++i;
+        for (; n > 0 && i < s.size(); --n, ++i) c = (c << 6) | (static_cast<unsigned char>(s[i]) & 0x3Fu);
+        if (c >= 0x10000) { c -= 0x10000; u += char16_t(0xD800 + (c >> 10)); u += char16_t(0xDC00 + (c & 0x3FF)); }
+        else u += char16_t(c);
+    }
+    return env->NewString(reinterpret_cast<const jchar*>(u.data()), jsize(u.size()));
+}
+} // namespace
+
+std::string clipboardText() {
+    JNIEnv* env = gameThreadEnv();
+    if (!env) return state().clipboard;
+    jobject act = g_app->activity->clazz;
+    jclass cls = env->GetObjectClass(act);
+    jmethodID m = env->GetMethodID(cls, "clipboardText", "()Ljava/lang/String;");
+    std::string out = state().clipboard;
+    if (m) {
+        auto js = jstring(env->CallObjectMethod(act, m));
+        if (!env->ExceptionCheck() && js) out = utf8(env, js);
+        if (js) env->DeleteLocalRef(js);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(cls);
+    return out;
+}
+
+void setClipboardText(const std::string& s) {
+    state().clipboard = s;
+    JNIEnv* env = gameThreadEnv();
+    if (!env) return;
+    jobject act = g_app->activity->clazz;
+    jclass cls = env->GetObjectClass(act);
+    if (jmethodID m = env->GetMethodID(cls, "setClipboardText", "(Ljava/lang/String;)V")) {
+        jstring js = toJString(env, s);
+        env->CallVoidMethod(act, m, js);
+        env->DeleteLocalRef(js);
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(cls);
+}
 void setTitle(const std::string&) {}
 
 namespace {
@@ -191,7 +388,11 @@ bool mountPack(const std::string& path) {
 bool readContentFile(const std::string& rel, std::string& out) {
     if (!g_app) return false;
     detail::ensurePacks(openAssetPack);
-    if (!state().packs.empty() && state().packs.read(rel, out)) return true;
+    if (!state().packs.empty()) {
+        if (state().packs.read(rel, out)) return true;
+        detail::requestChunkFor(rel);
+        if (state().packs.read(rel, out)) return true;
+    }
     AAsset* a = AAssetManager_open(g_app->activity->assetManager, ("content/" + rel).c_str(), AASSET_MODE_BUFFER);
     if (!a) return false;
     out.assign(static_cast<const char*>(AAsset_getBuffer(a)), size_t(AAsset_getLength(a)));
@@ -205,6 +406,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     S.touch = true;
     S.contentRoot = "content";
     S.userDir = g_app->activity->internalDataPath ? g_app->activity->internalDataPath : ".";
+    pack::setAndroidJavaVm(g_app->activity->vm);   // HTTP downloads of pack chunks
     AConfiguration* conf = AConfiguration_new();
     AConfiguration_fromAssetManager(conf, g_app->activity->assetManager);
     int32_t density = AConfiguration_getDensity(conf);
@@ -246,40 +448,21 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 } // namespace rts::platform
 
 // ---- JNI entry points of com.rtsengine.platform.RtsActivity (UI thread)
-namespace {
-std::string utf8(JNIEnv* env, jstring s) {
-    if (!s) return {};
-    const char* c = env->GetStringUTFChars(s, nullptr); // modified UTF-8; fine for BMP text,
-    std::string r = c ? c : "";                          // supplementary chars are rebuilt below
-    if (c) env->ReleaseStringUTFChars(s, c);
-    // modified UTF-8 encodes U+10000.. as two 3-byte surrogates: merge them into 4-byte UTF-8
-    std::string out;
-    for (size_t i = 0; i < r.size();) {
-        auto b = [&](size_t k) { return uint32_t(static_cast<unsigned char>(r[k])); };
-        if (i + 5 < r.size() && b(i) == 0xED && (b(i + 1) & 0xF0) == 0xA0 && b(i + 3) == 0xED && (b(i + 4) & 0xF0) == 0xB0) {
-            uint32_t hi = 0xD000 | ((b(i + 1) & 0x3F) << 6) | (b(i + 2) & 0x3F);
-            uint32_t lo = 0xD000 | ((b(i + 4) & 0x3F) << 6) | (b(i + 5) & 0x3F);
-            uint32_t cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
-            out += char(0xF0 | (cp >> 18)); out += char(0x80 | ((cp >> 12) & 63));
-            out += char(0x80 | ((cp >> 6) & 63)); out += char(0x80 | (cp & 63));
-            i += 6;
-        } else {
-            out += r[i++];
-        }
-    }
-    return out;
-}
-} // namespace
 
 extern "C" {
 JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeText(JNIEnv* env, jclass, jstring s) {
-    rts::platform::pushText({rts::platform::TextMsg::Text, utf8(env, s)});
+    rts::platform::pushText({rts::platform::TextMsg::Text, rts::platform::utf8(env, s)});
 }
 JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeKey(JNIEnv*, jclass, jint key) {
     rts::platform::pushText({key == 0 ? rts::platform::TextMsg::Backspace : rts::platform::TextMsg::Enter, {}});
 }
 JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeKeyboard(JNIEnv*, jclass, jint px) {
     rts::platform::TextMsg m{rts::platform::TextMsg::Keyboard, {}}; m.px = px;
+    rts::platform::pushText(std::move(m));
+}
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeSafeArea(JNIEnv*, jclass, jint l, jint t, jint r, jint b) {
+    rts::platform::TextMsg m{rts::platform::TextMsg::SafeArea, {}};
+    m.inset[0] = l; m.inset[1] = t; m.inset[2] = r; m.inset[3] = b;
     rts::platform::pushText(std::move(m));
 }
 JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeTextInputEnded(JNIEnv*, jclass) {
