@@ -3,11 +3,10 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Z (Bitmap Brothers): sectors with flags instead of resources, robots and vehicles.",
-  "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "Take the free flags near your base first — production tempo decides the game.",
-  "howto.step1": "There are no resources: every sector you own speeds up production in all factories.",
-  "howto.step2": "Capture a sector by standing at its flag. You can only build in your own sectors.",
-  "howto.step3": "The fort turns out robots and snipers, the factory robots, jeeps and light tanks.",
-  "howto.step4": "Fast jeeps grab flags, tanks storm bases."
+  "howto.like": "Z: flags, free factories, vehicle drivers.",
+  "howto.goal": "Destroy the enemy fort.",
+  "howto.tip": "A sniper shoots the driver out — any of your robots can take the empty tank.",
+  "howto.step1": "A robot at a flag takes the territory with every factory on it.",
+  "howto.step2": "Factories build for free and faster with every territory; the more territories, the stronger the units on offer.",
+  "howto.step3": "Any robot can climb into an empty vehicle or gun on the map."
 }
