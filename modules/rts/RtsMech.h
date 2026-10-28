@@ -49,6 +49,9 @@ struct Morale {
     uint8_t state = 0;                 // MoraleMode
     bool init = false, outOfSupply = false;
 };
+// Logistics: a conveyor piece's direction (1 east +x, 2 south +z, 3 west, 4 north) and a producer / crafter.
+struct Belt { uint8_t dir = 1; };
+struct Crafter { std::vector<Fixed> in, out; Fixed timer{}, outTimer{}; };
 
 // Global mech state (inside GameState; hashed when used).
 struct MechState {
@@ -73,6 +76,10 @@ struct MechState {
     uint32_t phaseEnd = 0;
     std::vector<RoundUnit> roundSnapshot;
     std::vector<std::pair<uint32_t, Fixed>> groupSpeed;   // derived each tick (not hashed)
+    // stage 4 logistics: one packet per belt cell
+    std::vector<int16_t> beltRes;                  // per cell: resource of the packet (-1 none)
+    std::vector<Fixed> beltAmt, beltProg;          // amount, progress along the cell 0..1
+    std::vector<std::pair<int32_t, uint8_t>> beltPlan;   // cell -> direction for belts ordered by build_line
 };
 
 } // namespace rts::game

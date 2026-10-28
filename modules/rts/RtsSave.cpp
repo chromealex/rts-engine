@@ -80,9 +80,11 @@ void io(Archive& a, Bounty& x) { a(x.pos, x.target, x.player, x.res, x.reward); 
 void io(Archive& a, RoundUnit& x) { a(x.owner, x.type, x.pos); }
 void io(Archive& a, MechState& x) {
     a(x.prices, x.groundItems, x.decks, x.allyRequest, x.cyclePhase, x.nextGroup, x.objectives, x.dialogs, x.nextMission, x.missionResult,
-      x.cover, x.bounties, x.roundPhase, x.roundIndex, x.phaseEnd, x.roundSnapshot);
+      x.cover, x.bounties, x.roundPhase, x.roundIndex, x.phaseEnd, x.roundSnapshot, x.beltRes, x.beltAmt, x.beltProg, x.beltPlan);
 }
 void io(Archive& a, Suppression& x) { a(x.value); }
+void io(Archive& a, Belt& x) { a(x.dir); }
+void io(Archive& a, Crafter& x) { a(x.in, x.out, x.timer, x.outTimer); }
 void io(Archive& a, Morale& x) { a(x.value, x.fatigue, x.run, x.lastPos, x.chargeTick, x.lastCharge, x.lastFire, x.state, x.init, x.outOfSupply); }
 void io(Archive& a, Turret& x) { a(x.dir, x.init); }
 void io(Archive& a, Abandoned& x) { a(x.formerOwner); }
@@ -182,7 +184,7 @@ using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, P
                         Garrison, Projectile, Hero, Transit, Squad, Buffs, AbilityState, Statuses, Area, Channel, GroupTag, Capture, Guard, Summon,
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
                         Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
-                        Suppression, Turret, Abandoned, GrowState, Morale>;
+                        Suppression, Turret, Abandoned, GrowState, Morale, Belt, Crafter>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {

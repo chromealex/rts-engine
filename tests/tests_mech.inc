@@ -992,3 +992,50 @@ TEST(mech_bench_army) {
     std::printf("  bench army: %d units, flow %d: %.2f ms per tick (worst %.1f), alive %d / %d\n", 2 * n, int(flow), ms / ticks, worst,
                 countType(*sim, "grunt", 1), countType(*sim, "grunt", 2));
 }
+
+// ---------------------------------------------------------------- L: conveyors, producers, crafters (stage 4)
+TEST(mech_logistics) {
+    std::string rules = std::string(R"({"resources": {"ore": {}, "plate": {}}, )") + kVic + R"(,
+      "types": {
+        "core": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "beltInput": ["plate", "ore"]},
+        "drill": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "beltOutput": {"resource": "ore", "amount": 1, "interval": 0.5}},
+        "smelter": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "craft": {"in": {"ore": 2}, "out": {"plate": 1}, "time": 1}},
+        "belt": {"structure": {"footprint": [1, 1]}, "health": {"max": 50}, "cost": {"time": 0.5}, "conveyor": {"speed": 4}},
+        "builder": {"move": {"speed": 4}, "health": {"max": 50}, "builds": ["belt"]}
+      }})";
+    // drill (2..3) -> belts x=4..9 -> smelter (10..11) -> belts x=12..17 -> core (18..19), all on rows 5..6
+    std::string ents = R"({"type":"drill","owner":1,"pos":[3,6]},{"type":"smelter","owner":1,"pos":[11,6]},{"type":"core","owner":1,"pos":[19,6]})";
+    for (int x = 4; x <= 9; ++x) ents += ",{\"type\":\"belt\",\"owner\":1,\"pos\":[" + std::to_string(x) + ".5,5.5],\"dir\":\"e\"}";
+    for (int x = 12; x <= 17; ++x) ents += ",{\"type\":\"belt\",\"owner\":1,\"pos\":[" + std::to_string(x) + ".5,5.5],\"dir\":\"e\"}";
+    ents += R"(,{"type":"builder","owner":1,"pos":[5,12]},{"type":"core","owner":2,"pos":[36,14]})";
+    std::string map = flatMap(40, 16, ",\"entities\":[" + ents + "]");
+    auto sim = makeSimJson(rules, map);
+    World& w = sim->world();
+    run(*sim, 0.2);
+    Entity b4 = unitNear(*sim, 4, 5);
+    CHECK(w.has<game::Belt>(b4) && w.get<game::Belt>(b4).dir == 1);
+    run(*sim, 20);
+    // ore flows into the smelter, plates reach the core
+    CHECK(stockOf(*sim, 1, "plate") >= Fixed::fromInt(5));
+    CHECK(stockOf(*sim, 1, "ore") == Fixed{});
+    // turning the last belt north breaks the line: no more plates
+    Entity b17 = unitNear(*sim, 17, 5);
+    sim->submit(mechCmd(1, game::kCmdRotate, {b17}, kNullEntity, {}, 4));
+    run(*sim, 2);
+    Fixed p0 = stockOf(*sim, 1, "plate");
+    run(*sim, 6);
+    CHECK(stockOf(*sim, 1, "plate") == p0);
+    sim->submit(mechCmd(1, game::kCmdRotate, {b17}, kNullEntity, {}, 1));
+    run(*sim, 6);
+    CHECK(stockOf(*sim, 1, "plate") > p0);
+    // build_line lays belts pointing along the line
+    Entity builder = unitNear(*sim, 5, 12);
+    const int bt = mod(*sim).rules().findType("belt");
+    sim->submit(mechCmd(1, game::kCmdBuildLine, {builder}, kNullEntity, at(10, 12), int64_t(bt) | (int64_t(10) << 16) | (int64_t(8) << 32)));
+    run(*sim, 20);
+    CHECK(countType(*sim, "belt", 1) == 12 + 5);
+    Entity nb;
+    w.each<game::Belt, Transform>([&](Entity e, game::Belt&, Transform& t) { if (t.pos.x.floorInt() == 10 && t.pos.z.floorInt() == 10) nb = e; });
+    CHECK(w.alive(nb) && w.has<game::Belt>(nb) && w.get<game::Belt>(nb).dir == 4);
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+}

@@ -122,7 +122,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         c.type = kCmdLoad;
         return applyMechCommand(sim, c);
     }
-    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd) || applyMechSocietyCommand(sim, cmd);
+    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd) || applyMechSocietyCommand(sim, cmd) || applyMechLogisticsCommand(sim, cmd);
     }
 }
 
@@ -467,6 +467,8 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* mg = w.tryGet<Merging>(e)) { h.u32(0x3E26); h.u64(mg->partner.packed()); }
     if (auto* sp = w.tryGet<Suppression>(e)) { h.u32(0x5A99); h.fx(sp->value); }
     if (auto* ab = w.tryGet<Abandoned>(e)) { h.u32(0xAB4D); h.u32(ab->formerOwner); }
+    if (auto* b = w.tryGet<Belt>(e)) { h.u32(0xBE17); h.u32(b->dir); }
+    if (auto* c = w.tryGet<Crafter>(e)) { h.u32(0xC4AF); for (auto& v : c->in) h.fx(v); for (auto& v : c->out) h.fx(v); h.fx(c->timer); h.fx(c->outTimer); }
     if (auto* mo = w.tryGet<Morale>(e)) { h.u32(0x303A); h.fx(mo->value); h.fx(mo->fatigue); h.fx(mo->run); h.u32(mo->state); h.u32(mo->outOfSupply); h.u32(mo->lastCharge); }
 }
 
