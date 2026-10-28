@@ -1,4 +1,5 @@
 #include "MapDoc.h"
+#include "TerrainOps.h"
 #include <cstring>
 #include "modules/rts/view/RtsTerrainDetail.h"
 #include <algorithm>
@@ -648,6 +649,13 @@ std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJ
     }
     for (const auto& r : d.fieldResources)
         if (rules.findResource(r) < 0) out.push_back({true, "Поле ресурса: неизвестный ресурс " + r});
+    if (d.detailScale > 0 && !d.detail.empty() && !d.planet()) { // visual detail vs the simulated ground (units would float / sink)
+        const DetailDeviation dv = detailDeviation(d, rules, 0.5f);
+        if (dv.cellsOver > 0)
+            out.push_back({false, "Детальный рельеф отличается от игровой поверхности больше чем на 0.5 в " + std::to_string(dv.cellsOver) +
+                                  " клетках (макс. " + std::to_string(int(dv.maxDev * 100) / 100.0).substr(0, 4) + ", напр. клетка " + std::to_string(dv.x) + "," +
+                                  std::to_string(dv.y) + "): юниты будут висеть или проваливаться"});
+    }
     for (size_t i = 0; i < d.entities.size() && !d.planet(); ++i) {
         int ti = rules.findType(d.entities[i].type);
         if (ti < 0 || !rules.types[size_t(ti)].structure) continue;

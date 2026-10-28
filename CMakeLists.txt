@@ -708,7 +708,7 @@ target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts
 target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
-    target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp)   # terrain agent: sculpt, materials, heightmaps
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp apps/editor/core/TerrainDetailOps.cpp)   # terrain agent: sculpt, materials, heightmaps
     target_sources(rts_editor_core PRIVATE apps/editor/core/GenOps.cpp)       # terrain-gen agent: map_generate, gen_presets
 endif()
 
