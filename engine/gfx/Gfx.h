@@ -48,7 +48,7 @@ enum class VertexFormat { Float2, Float3, Float4, UByte4N, UByte4 }; // UByte4: 
 enum class IndexType { None, UInt16, UInt32 };
 enum class Primitive { Triangles, Lines };
 enum class CullMode { None, Back, Front };
-enum class BlendMode { Opaque, Alpha, Additive };
+enum class BlendMode { Opaque, Alpha, Additive, Premultiplied };   // Premultiplied: ONE, 1-srcAlpha (particles)
 
 struct BufferDesc {
     BufferType type = BufferType::Vertex;

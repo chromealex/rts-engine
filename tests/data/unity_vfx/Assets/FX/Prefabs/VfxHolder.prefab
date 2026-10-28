@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &3000000000000001
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4200000000000001}
+  - component: {fileID: 2083052967000000001}
+  m_Layer: 0
+  m_Name: VfxHolder
+  m_IsActive: 1
+--- !u!4 &4200000000000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000000000000001}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 0}
+--- !u!2083052967 &2083052967000000001
+VisualEffect:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 3000000000000001}
+  m_Enabled: 1
+  m_Asset: {fileID: 8926484042661614527, guid: f6a6b6c6d6e64f6a8b6c6d6e6f6a0001, type: 3}
+  m_InitialEventName: OnPlay

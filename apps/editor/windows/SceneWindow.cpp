@@ -25,8 +25,9 @@ public:
         vp_.ensure(ed.device(), int(avail.x * dpi), int(avail.y * dpi));
         ImVec2 p = ImGui::GetCursorScreenPos();
         vp_.originX = p.x; vp_.originY = p.y; vp_.pointsW = avail.x; vp_.pointsH = avail.y;
-        ed.renderScene(vp_, ed.sceneCam, !ed.playing());
+        // image first (like the Game window): the screen overlays renderScene adds (bars, labels) stay on top of it
         vp_.image(ed.device(), avail.x, avail.y);
+        ed.renderScene(vp_, ed.sceneCam, !ed.playing());
         ed.sceneViewport = &vp_;
         if (ImGui::IsWindowFocused() || vp_.hovered) input(ed);
         hud(ed);

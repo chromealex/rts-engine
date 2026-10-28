@@ -590,6 +590,86 @@ if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
 endif()
 
 # ---------------------------------------------------------------------------
+# Overlays (overlays agent): data-driven helper elements (build grids, ranges, rally lines, damage
+# numbers, bars). rts_overlay_data: GPU-free schema / validation / templates, shared by the view and
+# the editor core (MCP overlay_* operations); the evaluator + renderer live in rts_game_view.
+# ---------------------------------------------------------------------------
+add_library(rts_overlay_data STATIC modules/rts/view/RtsOverlayData.cpp)
+target_link_libraries(rts_overlay_data PUBLIC rts_game)
+target_include_directories(rts_overlay_data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsOverlays.cpp modules/rts/view/RtsOverlaysDraw.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_overlay_data)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/OverlayOps.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_overlay_data)
+endif()
+
+# VFX tools (vfx tools agent): Unity particle importer tests (Python, stdlib only) and the fx_* editor
+# operations (list / get / set / delete / templates / import_unity / bind; fx_preview in the editor GUI).
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME unity_vfx_importer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/importers/unity_vfx/test_import.py)
+    endif()
+endif()
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/FxOps.cpp apps/editor/core/FxTemplates.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_game_fx)
+endif()
+if(TARGET rts_editor)
+    target_sources(rts_editor PRIVATE apps/editor/EditorFxOps.cpp)   # fx_preview (GUI)
+endif()
+
+# Splash & icons (splash agent). rts_splash: game.json "splash" timeline + the in-engine loading
+# screen (RHI quads, GLSL + MSL) driven by apps/client/ClientSplash.cpp. rts_branding: host-only
+# icon / launch screen generation (resize, .ico, .icns, Android/iOS/web/Linux sets, previews) used
+# by rtsbuild, the editor core (branding_* / icons_preview / splash_preview) and the tests.
+# ---------------------------------------------------------------------------
+add_library(rts_splash STATIC engine/splash/SplashData.cpp engine/splash/SplashScreen.cpp)
+target_include_directories(rts_splash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(rts_splash PUBLIC rts_engine rts_atlas)
+# rtsbuild: window colour before the first frame (0xRRGGBB from game.json splash.background)
+set(RTS_SPLASH_BACKGROUND "" CACHE STRING "Window background before the first frame, 0xRRGGBB (set by rtsbuild)")
+foreach(t rts_client main)
+    if(TARGET ${t})
+        target_sources(${t} PRIVATE apps/client/ClientSplash.cpp)
+        target_link_libraries(${t} PRIVATE rts_splash)
+        if(RTS_SPLASH_BACKGROUND)
+            target_compile_definitions(${t} PRIVATE RTS_SPLASH_BACKGROUND=${RTS_SPLASH_BACKGROUND})
+        endif()
+    endif()
+endforeach()
+# Generated packaging assets (rtsbuild --target ...): Windows icon resource, iOS launch storyboard.
+if(TARGET rts_client AND RTS_PLATFORM STREQUAL "windows" AND RTS_GEN_DIR AND EXISTS "${RTS_GEN_DIR}/app.rc")
+    enable_language(RC)
+    target_sources(rts_client PRIVATE "${RTS_GEN_DIR}/app.rc")
+endif()
+set(RTS_IOS_LAUNCH_STORYBOARD "")   # Info.plist: launch storyboard key when rtsbuild generated one
+if(TARGET rts_client AND RTS_PLATFORM STREQUAL "ios" AND RTS_GEN_DIR AND EXISTS "${RTS_GEN_DIR}/LaunchScreen.storyboard")
+    target_sources(rts_client PRIVATE "${RTS_GEN_DIR}/LaunchScreen.storyboard")
+    set_property(TARGET rts_client APPEND PROPERTY RESOURCE "${RTS_GEN_DIR}/LaunchScreen.storyboard")
+    set(RTS_IOS_LAUNCH_STORYBOARD "<key>UILaunchStoryboardName</key><string>LaunchScreen</string>")
+endif()
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_branding STATIC tools/branding/BrandImage.cpp tools/branding/Icons.cpp tools/branding/Splash.cpp)
+    target_include_directories(rts_branding PRIVATE third_party/stb_image_write)
+    target_link_libraries(rts_branding PUBLIC rts_splash)
+    foreach(t rtsbuild rts_tests)
+        if(TARGET ${t})
+            target_link_libraries(${t} PRIVATE rts_branding)
+        endif()
+    endforeach()
+    if(TARGET rtsbuild)
+        target_sources(rtsbuild PRIVATE tools/rtsbuild/Branding.cpp)
+    endif()
+endif()
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/BrandingOps.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_branding)
+endif()
+
+# ---------------------------------------------------------------------------
 # Scripting (scripting agent): Lua 5.4 (third_party/lua, MIT) compiled as C without the os / io /
 # package / debug libraries (same build on web, iOS, Android, desktop). Simulation scripts are
 # deterministic (fx numbers, float guard in rts_luaconf.h); docs/scripting.md.
