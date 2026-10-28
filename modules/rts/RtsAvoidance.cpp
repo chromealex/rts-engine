@@ -181,6 +181,7 @@ void RtsModule::moveAgents(Simulation& sim) {
             if (b.e == a.e) return;
             const Entity o = b.e;
             if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) return;
+            if (a.goal >= 0 && b.goal == a.goal && b.owner == a.owner) return;   // same flow crowd: skipped below anyway
             Fixed d2 = (b.p - a.p).lengthSq();
             if (d2 > reach * reach) return;
             nb.push_back({d2, byIndex[o.index]});
