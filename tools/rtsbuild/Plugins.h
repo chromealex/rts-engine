@@ -15,7 +15,8 @@
 //                                "activity": ["<intent-filter>...</intent-filter>"] } },
 //     "ios":     { "sources": ["ios/*.m"], "classes": { "admob": "RTSAdMobPlugin" },
 //                  "pods": ["pod 'Google-Mobile-Ads-SDK', '~> 13.11'"], "frameworks": ["StoreKit"],
-//                  "plist": ["<key>GADApplicationIdentifier</key><string>${appId}</string>"] },
+//                  "plist": ["<key>GADApplicationIdentifier</key><string>${appId}</string>"],
+//                  "skAdNetworks": ["cstr6suwn9"] },   // merged into one SKAdNetworkItems list
 //     "macos":   { same keys as ios },
 //     "web":     { "scripts": ["/sdk.js"], "js": ["web/admob.js"] } }
 #pragma once
@@ -31,6 +32,7 @@ struct PluginSet {
     std::vector<std::string> names;           // plugins included for this platform
     std::vector<std::filesystem::path> dirs;  // their folders
     std::vector<std::string> notes;           // human-readable report lines
+    bool mocks = false;                       // game lists mock-store / mock-ads → compile them in
 };
 
 // gameJsonText: game.json; override: comma list from --plugins ("" = game.json "plugins").

@@ -301,13 +301,21 @@ endif()
 # library so that the entry point lands in the final binary on every toolchain.
 # Native plugins bridge + store/ads services (engine/platform/Plugins.h, engine/services). No window
 # needed, so tests link it directly; platform backends live in the runtime sources.
+# Desktop mock store/ads: on for development builds; rtsbuild turns it off in packaged games unless
+# game.json lists a mock (plugins.cmake sets RTS_MOCK_PLUGINS), so they are not even compiled in.
+if(NOT DEFINED RTS_MOCK_PLUGINS)
+    set(RTS_MOCK_PLUGINS ON)
+endif()
 add_library(rts_plugins STATIC
     engine/platform/Plugins.cpp
     engine/platform/PluginJson.cpp
     engine/services/Store.cpp
-    engine/services/Ads.cpp
-    engine/services/MockPlugins.cpp)
+    engine/services/Ads.cpp)
 target_include_directories(rts_plugins PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(RTS_MOCK_PLUGINS)
+    target_sources(rts_plugins PRIVATE engine/services/MockPlugins.cpp)
+    target_compile_definitions(rts_plugins PUBLIC RTS_WITH_MOCK_PLUGINS=1)
+endif()
 
 add_library(rts_runtime OBJECT ${RTS_RUNTIME_SRC})
 target_link_libraries(rts_runtime PUBLIC rts_engine rts_models rts_imgui rts_pack rts_zstd_dec rts_plugins)

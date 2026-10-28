@@ -1,10 +1,11 @@
-// Ads, one API for every network: Yandex Mobile Ads, Google AdMob, Yandex Games (web), and mock ads
-// on desktop builds. The network is chosen per platform from game.json:
+// Ads, one API for every network: Yandex Mobile Ads, Google AdMob, AppLovin MAX, ironSource LevelPlay,
+// Yandex Games (web), and mock ads on desktop builds. The network is chosen per platform from game.json:
 //
 //   "ads": { "providers": { "android": ["yandex-ads", "admob"], "ios": ["admob"], "web": ["yandex-games"] } }
 //
 // Ad unit ids live in the plugin's own config ("plugins" → "yandex-ads" → "rewarded": {...}).
-// "providers" is optional (default order: yandex-ads, admob, yandex-games, mock-ads).
+// "providers" is optional (default order: yandex-ads, admob, applovin, ironsource, yandex-games, mock-ads;
+// only plugins listed in game.json "plugins" exist in a build, so the first listed one wins).
 //
 // Rules the stores and networks check: show interstitials only at natural pauses (between rounds,
 // after "Next"), pause the game and mute audio while an ad is up (FocusLost arrives automatically
@@ -25,7 +26,7 @@ struct ShowResult {
 };
 
 bool available();
-std::string provider();          // "yandex-ads", "admob", "yandex-games", "mock-ads", ""
+std::string provider();          // "yandex-ads", "admob", "applovin", "ironsource", "yandex-games", "mock-ads", ""
 
 // Starts loading an ad so show() is instant later (providers also preload after init).
 void preload(Format f);

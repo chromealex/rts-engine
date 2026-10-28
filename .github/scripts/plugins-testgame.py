@@ -22,6 +22,15 @@ game["plugins"] = {
     },
     "yandex-ads": {"interstitial": "demo-interstitial-yandex", "rewarded": "demo-rewarded-yandex", "banner": "demo-banner-yandex"},
     "yandex-games": {},
+    # AppLovin has no public test key: compile-only placeholders (real keys come from the dashboard)
+    "applovin": {"sdkKey": "CI_PLACEHOLDER_SDK_KEY", "interstitial": "ci000000000000a1", "rewarded": "ci000000000000a2", "banner": "ci000000000000a3"},
+    # LevelPlay demo app keys / ad units (developers.is.com test suite)
+    "ironsource": {
+        "appKey": {"android": "25b63cf85", "ios": "25c43a4a5"},
+        "interstitial": {"android": "h3xw38h9214adgxo", "ios": "obg6ohwts3y690ks"},
+        "rewarded": {"android": "syz3d8ekts22q0or", "ios": "l1quzz1xmmdhw5er"},
+        "banner": {"android": "4fpetq4lhe5lsw3e", "ios": "xc2bsuntn9ea734t"},
+    },
 }
 game["store"] = {"products": [{"id": "gems_100", "type": "consumable"}, {"id": "no_ads", "type": "nonConsumable"}]}
 (out / "game.json").write_text(json.dumps(game, ensure_ascii=False, indent=2), encoding="utf-8")
