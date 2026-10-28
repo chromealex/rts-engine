@@ -386,6 +386,7 @@ void LightSystem::bind(int uniformSlot, int textureSlot, int reflectionSlot) {
     u_.sky[1] = reflReady_ ? 0.9f : 0.0f;
     u_.sky[2] = 1.0f / viewW_; u_.sky[3] = 1.0f / viewH_;
     u_.env[0] = quality_ == LightQuality::Medium || quality_ == LightQuality::High ? 1.0f : 0.0f;
+    u_.env[1] = unlitTint_.x; u_.env[2] = unlitTint_.y; u_.env[3] = unlitTint_.z;
     dev_->setUniforms(uniformSlot, &u_, sizeof u_);
     dev_->setTexture(textureSlot, useMap ? map_ : black_);
     if (reflectionSlot >= 0) dev_->setTexture(reflectionSlot, reflReady_ ? reflColor_ : black_);
