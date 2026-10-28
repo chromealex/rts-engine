@@ -73,8 +73,11 @@ add_library(rts_game STATIC
     modules/rts/RtsData.cpp
     modules/rts/RtsMap.cpp
     modules/rts/RtsHpa.cpp
+    modules/rts/RtsMapSphere.cpp
     modules/rts/RtsSphere.cpp
+    modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
+    modules/rts/RtsPlanets.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
@@ -318,7 +321,8 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp
-    modules/rts/view/RtsFog.cpp)
+    modules/rts/view/RtsFog.cpp
+    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
@@ -412,7 +416,7 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -511,7 +515,12 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
+    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
+    if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
+        target_link_libraries(rts_tests PRIVATE rts_editor_core)
+        target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)
+    endif()
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
@@ -534,11 +543,11 @@ add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_link_libraries(rts_ui PUBLIC rts_rmlui rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 
@@ -547,6 +556,9 @@ endif()
 # sprite batch + textures (RHI only), sprite/tile presentation in the RTS view.
 # ---------------------------------------------------------------------------
 target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
+# terrain / map generator (agent-terrain-gen): integer noise, erosion, biomes, fair starts, presets, planets
+target_sources(rts_game PRIVATE modules/rts/gen/GenNoise.cpp modules/rts/gen/GenField.cpp modules/rts/gen/GenTerrain.cpp
+    modules/rts/gen/GenContent.cpp modules/rts/gen/GenPlanet.cpp modules/rts/gen/MapGen.cpp)
 add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
 target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp)
@@ -554,6 +566,7 @@ target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp)   # terrain agent: sculpt, materials, heightmaps
+    target_sources(rts_editor_core PRIVATE apps/editor/core/GenOps.cpp)       # terrain-gen agent: map_generate, gen_presets
 endif()
 
 # ---------------------------------------------------------------------------
@@ -584,6 +597,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
 endif()
 if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
     target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/PlanetOps.cpp)   # planet-render agent: planet sculpt / paint
 endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)

@@ -135,7 +135,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         if (m.moving && !stunned) {
             if (m.goalRadius.raw > 0 && dist2D(tr.pos, m.goal) <= m.goalRadius) { m.moving = false; m.path.clear(); }
             Fixed speed = stat(sim, e, Stat::Speed);
-            int cx = g.cellX(tr.pos.x), cy = g.cellY(tr.pos.z);
+            int cx, cy; g.cellXY(tr.pos, cx, cy);
             if (rules_.roadNetwork.enabled && g.inside(cx, cy) && (g.flags[size_t(g.index(cx, cy))] & kCellRoad)) speed = speed * rules_.roadNetwork.speed;
             a.speed = speed;
             while (m.moving && m.pathPos < m.path.size()) {
@@ -215,7 +215,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         Vec3 step{a.nv.x * dt, Fixed{}, a.nv.y * dt};
         auto ok = [&](Vec3 np) {
             if (ignoreGrid) return true;
-            int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(np.x), cy = g.cellY(np.z);
+            int cx0, cy0, cx, cy; g.cellXY(tr.pos, cx0, cy0); g.cellXY(np, cx, cy);
             if (cx == cx0 && cy == cy0) return true;
             if (!g.passable(cx0, cy0, t.pathLayer)) return true; // leaving a blocked cell
             if (cx != cx0 && cy != cy0) return g.canStep(cx0, cy0, cx, cy0, t.pathLayer) && g.canStep(cx, cy0, cx, cy, t.pathLayer) && g.canStep(cx0, cy0, cx, cy, t.pathLayer);
@@ -257,7 +257,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         Mobile& m = w.get<Mobile>(y.who);
         if (m.yieldUntil > tick || m.moving) continue;
         Vec3 p = w.get<Transform>(y.who).pos;
-        int cx = g.cellX(p.x), cy = g.cellY(p.z);
+        int cx, cy; g.cellXY(p, cx, cy);
         const UnitType& t = rules_.types[w.get<Unit>(y.who).type];
         int best = -1;
         Fixed bestScore{};

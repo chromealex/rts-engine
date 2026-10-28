@@ -14,7 +14,7 @@ namespace rts::editor {
 
 namespace {
 // keys the structured part owns; everything else round-trips through `extra`
-const char* kOwnedKeys[] = {"name", "size", "roadsOnly", "players", "terrain", "fields", "regions", "entities", "roads"};
+const char* kOwnedKeys[] = {"name", "size", "roadsOnly", "players", "terrain", "fields", "regions", "entities", "roads", "world"};
 bool owned(const std::string& k) {
     for (auto* o : kOwnedKeys) if (k == o) return true;
     return false;
@@ -148,7 +148,8 @@ bool MapDoc::loadJson(const Json& j, std::string* err) {
             dp.name = p.getStr("name", "Player");
             dp.team = int(p.getInt("team", int64_t(d.players.size() + 1)));
             dp.faction = p.getStr("faction");
-            if (p.has("start")) { dp.hasStart = true; dp.startX = jf(p["start"][0]); dp.startZ = jf(p["start"][p["start"].size() >= 3 ? 2 : 1]); }
+            if (p["start"].isObject()) { dp.hasStart = true; dp.startAt = p["start"]; dp.startX = jf(p["start"]["x"]); dp.startZ = jf(p["start"]["y"]); }
+            else if (p.has("start")) { dp.hasStart = true; dp.startX = jf(p["start"][0]); dp.startZ = jf(p["start"][p["start"].size() >= 3 ? 2 : 1]); }
             dp.waves = p.getBool("waves", false);
             for (auto& [r, v] : p["resources"].members()) dp.resources.push_back({r, jf(v)});
             for (auto& [k, v] : p.members())
@@ -162,11 +163,12 @@ bool MapDoc::loadJson(const Json& j, std::string* err) {
             const Json& p = e["pos"];
             de.x = jf(p[0]);
             de.z = jf(p[p.size() >= 3 ? 2 : 1]);
+            if (e["at"].isObject()) { de.at = e["at"]; de.x = jf(de.at["x"]); de.z = jf(de.at["y"]); }
             de.owner = int(e.getInt("owner", 0));
             de.garrison = e.has("garrison") ? int(e.getInt("garrison")) : -1;
             de.amount = e.has("amount") ? jf(e["amount"]) : -1;
             for (auto& [k, v] : e.members())
-                if (k != "id" && k != "type" && k != "pos" && k != "owner" && k != "garrison" && k != "amount") de.extra.set(k, v);
+                if (k != "id" && k != "type" && k != "pos" && k != "at" && k != "owner" && k != "garrison" && k != "amount") de.extra.set(k, v);
             d.entities.push_back(de);
         }
         auto find = [&](const std::string& id) {
@@ -179,6 +181,7 @@ bool MapDoc::loadJson(const Json& j, std::string* err) {
         }
         d.extra = Json::object();
         for (auto& [k, v] : j.members()) if (!owned(k)) d.extra.set(k, v);
+        if (j["world"].isObject()) loadWorld(j["world"], d);
         data = std::move(d);
         dirty = false;
         ++revision;
@@ -196,7 +199,7 @@ Json MapDoc::toJson() const {
     j.set("name", Json::string(d.name));
     Json size = Json::array();
     size.push(Json::number(int64_t(d.w))); size.push(Json::number(int64_t(d.h)));
-    j.set("size", size);
+    if (!d.planet()) j.set("size", size);
     if (d.roadsOnly) j.set("roadsOnly", Json::fromBool(true));
     Json players = Json::array();
     for (auto& p : d.players) {
@@ -204,7 +207,8 @@ Json MapDoc::toJson() const {
         pj.set("name", Json::string(p.name));
         pj.set("team", Json::number(int64_t(p.team)));
         if (!p.faction.empty()) pj.set("faction", Json::string(p.faction));
-        if (p.hasStart) { Json s = Json::array(); s.push(Json::number(double(p.startX), 2)); s.push(Json::number(double(p.startZ), 2)); pj.set("start", s); }
+        if (p.hasStart && p.startAt.isObject()) pj.set("start", p.startAt);
+        else if (p.hasStart) { Json s = Json::array(); s.push(Json::number(double(p.startX), 2)); s.push(Json::number(double(p.startZ), 2)); pj.set("start", s); }
         if (p.waves) pj.set("waves", Json::fromBool(true));
         if (!p.resources.empty()) {
             Json r = Json::object();
@@ -242,7 +246,8 @@ Json MapDoc::toJson() const {
         for (auto v : d.corners) cs.push(Json::number(int64_t(v)));
         terrain.set("corners", cs);
     }
-    j.set("terrain", terrain);
+    if (d.planet()) j.set("world", worldJson());
+    else j.set("terrain", terrain);
     Json fields = Json::array();
     for (size_t ri = 0; ri < d.fieldResources.size(); ++ri) {
         bool any = false;
@@ -259,7 +264,7 @@ Json MapDoc::toJson() const {
         f.set("rows", fr);
         fields.push(f);
     }
-    if (fields.size()) j.set("fields", fields);
+    if (fields.size() && !d.planet()) j.set("fields", fields);
     if (std::any_of(d.regions.begin(), d.regions.end(), [](char c) { return c != '.'; })) {
         Json rg = Json::object(), rr = Json::array();
         for (int y = 0; y < d.h; ++y) rr.push(Json::string(std::string(d.regions.begin() + y * d.w, d.regions.begin() + (y + 1) * d.w)));
@@ -275,9 +280,12 @@ Json MapDoc::toJson() const {
         if (!e.id.empty()) ej.set("id", Json::string(e.id));
         ej.set("type", Json::string(e.type));
         ej.set("owner", Json::number(int64_t(e.owner)));
-        Json pos = Json::array();
-        pos.push(Json::number(double(e.x), 2)); pos.push(Json::number(double(e.z), 2));
-        ej.set("pos", pos);
+        if (e.at.isObject()) ej.set("at", e.at);
+        else {
+            Json pos = Json::array();
+            pos.push(Json::number(double(e.x), 2)); pos.push(Json::number(double(e.z), 2));
+            ej.set("pos", pos);
+        }
         if (e.garrison >= 0) ej.set("garrison", Json::number(int64_t(e.garrison)));
         if (e.amount >= 0) ej.set("amount", Json::number(double(e.amount), 1));
         for (auto& [k, v] : e.extra.members()) ej.set(k, v);
@@ -315,6 +323,18 @@ bool MapDoc::save(const std::string& file, std::string* err) {
         t->erase("cornersBlob");
         data.cornersFile = t->getStr("cornersFile");
     }
+    if (Json* wj = j.find("world"); wj && wj->find("bodies"))
+        for (size_t bi = 0; bi < wj->find("bodies")->size(); ++bi) {
+            Json* t = wj->find("bodies")->at(bi).find("terrain");
+            if (!t || !t->has("cornersBlob")) continue;
+            const std::string cf = cornersPath(file, t->getStr("cornersFile"));
+            std::ofstream c(cf, std::ios::binary);
+            const std::string& blob = (*t)["cornersBlob"].str();
+            c.write(blob.data(), std::streamsize(blob.size()));
+            if (!c) { if (err) *err = "cannot write " + cf; path = oldPath; return false; }
+            t->erase("cornersBlob");
+            if (bi < data.bodies.size()) data.bodies[bi].cornersFile = t->getStr("cornersFile");
+        }
     std::ofstream f(file, std::ios::binary);
     if (!f) { if (err) *err = "cannot write " + file; path = oldPath; return false; }
     f << j.dump() << "\n";
@@ -541,6 +561,7 @@ std::string MapDoc::ascii(int maxW) const {
 std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJson) const {
     std::vector<Issue> out;
     const auto& d = data;
+    if (d.planet()) validateWorld(rules, out);
     int real = 0;
     for (auto& p : d.players) if (!p.waves) ++real;
     if (real < 1 || d.players.size() < 2) out.push_back({true, "Нужно минимум 2 игрока"});
@@ -552,6 +573,7 @@ std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJ
         if (ti < 0) { out.push_back({true, nm + ": неизвестный тип", int(i)}); continue; }
         if (!e.id.empty() && !ids.insert(e.id).second) out.push_back({true, "Повторяющийся id: " + e.id, int(i)});
         if (e.owner < -1 || e.owner > int(d.players.size())) out.push_back({true, nm + ": владелец вне диапазона", int(i)});
+        if (d.planet()) continue;   // positions checked by validateWorld, terrain by the loader below
         if (e.x < 0 || e.z < 0 || e.x > d.w || e.z > d.h) out.push_back({true, nm + ": за пределами карты", int(i)});
         const auto& t = rules.types[size_t(ti)];
         char c = d.cell(int(std::floor(e.x)), int(std::floor(e.z)));
@@ -569,7 +591,7 @@ std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJ
     }
     for (const auto& r : d.fieldResources)
         if (rules.findResource(r) < 0) out.push_back({true, "Поле ресурса: неизвестный ресурс " + r});
-    for (size_t i = 0; i < d.entities.size(); ++i) {
+    for (size_t i = 0; i < d.entities.size() && !d.planet(); ++i) {
         int ti = rules.findType(d.entities[i].type);
         if (ti < 0 || !rules.types[size_t(ti)].structure) continue;
         for (size_t k = i + 1; k < d.entities.size(); ++k) {
@@ -583,9 +605,9 @@ std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJ
     }
     if (d.roadsOnly && d.roads.empty()) out.push_back({true, "Карта «только дороги», но дорог нет"});
     // heightfield terrain (rules terrain.model)
-    if (rules.terrain.heightfield() && d.corners.empty())
+    if (rules.terrain.heightfield() && d.corners.empty() && !d.planet())
         out.push_back({false, "Правила: terrain.model = heightfield, но у карты нет высот углов (terrain.corners) - рельеф будет плоским"});
-    if (!rules.terrain.heightfield() && !d.corners.empty())
+    if (!rules.terrain.heightfield() && !d.corners.empty() && !d.planet())
         out.push_back({false, "У карты есть высоты углов, но terrain.model не heightfield - рельеф только визуальный"});
     if (rules.terrain.heightfield() && !d.corners.empty() && d.corners.size() == size_t((d.w + 1) * (d.h + 1))) {
         game::MapGrid g;  // same slope math as the simulation
@@ -625,6 +647,23 @@ std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJ
             Simulation sim(cfg, std::make_unique<game::RtsModule>());
             sim.setup(rulesJson, toJson());
             for (int k = 0; k < 3; ++k) sim.step();
+            if (d.planet()) {   // starts reachable: every pair of player key/first structures on one body by ground
+                auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
+                auto& gs = m->state(sim);
+                std::vector<std::pair<int, Vec3>> homes;   // player, position
+                sim.world().each<game::Unit, Owner, Transform>([&](Entity, game::Unit& u, Owner& o, Transform& tr) {
+                    if (o.player == 0 || o.player > d.players.size()) return;
+                    for (auto& h : homes) if (h.first == o.player) return;
+                    if (rules.types[u.type].layer & game::kLayerGround) homes.push_back({o.player, tr.pos});
+                });
+                for (size_t a = 0; a < homes.size(); ++a)
+                    for (size_t b = a + 1; b < homes.size(); ++b) {
+                        if (m->bodyOf(sim, homes[a].second) != m->bodyOf(sim, homes[b].second)) continue;
+                        std::vector<Vec3> path;
+                        if (!gs.grid.findPath(homes[a].second, homes[b].second, game::kLayerGround, path, 400000))
+                            out.push_back({false, "Игроки " + std::to_string(homes[a].first) + " и " + std::to_string(homes[b].first) + " не связаны наземным путём (только орбита)"});
+                    }
+            }
         } catch (const std::exception& e) {
             out.push_back({true, std::string("Загрузчик: ") + e.what()});
         }

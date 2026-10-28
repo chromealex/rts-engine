@@ -49,6 +49,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     lights_.init(rules);
     groundFx_.init(dev, rules, read_, contentBase_);
     terrain_.init(dev, rules, read_, contentBase_);
+    planets_.init(dev, terrain_.look(), read_, contentBase_);
     return true;
 }
 
@@ -62,6 +63,7 @@ void RtsView::shutdown(gfx::Device& dev) {
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
     groundFx_.shutdown(dev);
+    planets_.shutdown(dev);
     overlays_.shutdown(dev);
 }
 
@@ -79,6 +81,7 @@ float RtsView::selectionRadius(uint16_t type) const {
 
 
 void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid) {
+    if (planets_.active()) { drawPlanets(r, s, time, vision, grid); return; }   // RtsPlanetView.cpp
     const bool tiles = twoD_ && twoD_->hasTiles();
     if (twoD_) twoD_->beginFrame(r.camera(), time);
     bars_.assign(s.objects.size(), {});
@@ -168,6 +171,8 @@ void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, flo
 bool RtsView::overlayTop(const RTSCamera& cam, const SceneObject& o, size_t oi, float w, float h, float2& sp) const {
     if (!rules_ || o.type >= rules_->types.size() || o.type >= looks_.size()) return false;
     const UnitType& t = rules_->types[o.type];
+    if (planets_.active()) // anchors computed by drawPlanets (view world; hidden behind the planet / far away)
+        return oi < bars_.size() && oi < barOk_.size() && barOk_[oi] && cam.worldToScreen(bars_[oi], w, h, sp);
     if (twoD_ && twoD_->hasSprite(o.type) && oi < bars_.size()) {
         if (!cam.worldToScreen(bars_[oi], w, h, sp)) return false;
         sp.y -= 4;
