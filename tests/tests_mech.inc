@@ -1073,3 +1073,51 @@ TEST(mech_gate_lock) {
     run(*g, 10);
     CHECK(posOf(*g, mine).x < Fixed::fromInt(10));
 }
+
+// ---------------------------------------------------------------- TB: turn-based mode (Heroes / XCOM battles)
+TEST(mech_turns) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "turns": {"moveSeconds": 3, "attacks": 1},
+      "types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}},
+                "rifle": {"move": {"speed": 3}, "sight": 12, "health": {"max": 100}, "weapons": [{"range": 6, "damage": 10, "cooldown": 0.2}]}}})";
+    std::string map = flatMap(40, 12, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[36,2]},
+        {"type":"rifle","owner":1,"pos":[5,6]},{"type":"rifle","owner":2,"pos":[26,6]},{"type":"rifle","owner":2,"pos":[26,8]}])");
+    auto sim = makeSimJson(rules, map);
+    Entity mine = unitNear(*sim, 5, 6), foe = unitNear(*sim, 26, 6);
+    run(*sim, 0.2);
+    CHECK(mod(*sim).turnPlayer(*sim) == 1);
+    // player 2 can't act on player 1's turn; player 1 moves at most speed x moveSeconds = 9 cells
+    sim->submit(mechCmd(2, game::kCmdMove, {foe}, kNullEntity, at(20, 6)));
+    sim->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(25, 6)));
+    run(*sim, 6);
+    CHECK(posOf(*sim, foe).x > Fixed::fromInt(25));
+    CHECK(posOf(*sim, mine).x > Fixed::fromRatio(135, 10) && posOf(*sim, mine).x < Fixed::fromRatio(145, 10));
+    sim->submit(mechCmd(1, game::kCmdEndTurn, {}));
+    run(*sim, 0.3);
+    CHECK(mod(*sim).turnPlayer(*sim) == 2);
+    // player 2 walks into range: its rifles shoot once each this turn; player 1 does not shoot back
+    sim->submit(mechCmd(2, game::kCmdAttack, {foe, unitNear(*sim, 26, 8)}, mine));
+    run(*sim, 5);
+    CHECK(hpOf(*sim, mine) == Fixed::fromInt(80));
+    CHECK(hpOf(*sim, foe) == Fixed::fromInt(100));
+    sim->submit(mechCmd(2, game::kCmdEndTurn, {}));
+    run(*sim, 0.3);
+    // player 1's turn: one shot (at whichever rifle it aims first)
+    Entity foe2 = unitNear(*sim, 21, 8);
+    sim->submit(mechCmd(1, game::kCmdAttack, {mine}, foe));
+    run(*sim, 3);
+    CHECK(hpOf(*sim, foe) + hpOf(*sim, foe2) == Fixed::fromInt(190));
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+    // bots take turns and finish the match
+    auto ai = makeSimJson(rules, map);
+    std::vector<game::RtsAI> bots;
+    for (auto& p : ai->players()) bots.emplace_back(p.slot, 7);
+    int turnsSeen = 0, shots = 0;
+    for (int i = 0; i < 20 * 120 && ai->result() == 0; ++i) {
+        for (auto& b : bots) b.update(*ai);
+        ai->step();
+        for (auto& ev : ai->events()) { if (ev.type == game::kEvTurn) ++turnsSeen; if (ev.type == game::kEvAttack) ++shots; }
+    }
+    std::printf("  turns: bots played %d turns, %d shots\n", turnsSeen, shots);
+    CHECK(turnsSeen >= 8);
+    CHECK(shots > 0);
+}

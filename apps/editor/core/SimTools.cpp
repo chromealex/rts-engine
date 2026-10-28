@@ -24,10 +24,10 @@ const char* const kEventNames[] = {
     "chainJump", "castStart", "channelStart", "channelEnd", "alert", "garrisonChanged",
     "transitStart", "transitEnd",
     "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
-    "objective", "dialog", "camera", "missionEnd", "morale",
+    "objective", "dialog", "camera", "missionEnd", "morale", "turn",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
-static_assert(kEventCount == size_t(kEvMorale) + 1, "kEventNames must list every GameEvent");
+static_assert(kEventCount == size_t(kEvTurn) + 1, "kEventNames must list every GameEvent");
 
 struct CmdName { const char* name; uint16_t type; };
 const CmdName kCommands[] = {
@@ -42,7 +42,7 @@ const CmdName kCommands[] = {
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
     {"transit", kCmdTransit}, {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
     {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
-    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty}, {"rotate", kCmdRotate}, {"lock", kCmdLock},
+    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty}, {"rotate", kCmdRotate}, {"lock", kCmdLock}, {"end_turn", kCmdEndTurn},
 };
 
 Vec3 readPoint(const Json& p) {

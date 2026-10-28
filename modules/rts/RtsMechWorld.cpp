@@ -272,6 +272,7 @@ void RtsModule::mechTunnelGather(Simulation& sim, Entity exit) {
 void RtsModule::hashMechGlobal(Simulation& sim, Hasher& h) {
     const MechState& m = state(sim).mech;
     if (rules_.mech.conveyors) hashLogistics(sim, h);
+    if (rules_.mech.turns) { h.u32(0x7E5A); h.u32(m.turnPlayer); h.u32(m.turnIndex); h.u32(m.turnStart); }
     for (auto& p : m.prices) h.fx(p);
     h.u32(uint32_t(m.groundItems.size()));
     for (auto& gi : m.groundItems) { h.v3(gi.pos); h.u32(gi.item); h.i32(gi.charges); }

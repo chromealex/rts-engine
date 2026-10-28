@@ -198,7 +198,12 @@ struct MechRules {
     Fixed supplyAttrition = Fixed::fromRatio(1, 100), supplySpeed = Fixed::fromRatio(4, 5), supplyAttack = Fixed::fromRatio(4, 5);
     bool battle() const { return morale || fatigue || charge || supply; }
     bool flowFields = false; int flowMinCells = 8, flowCache = 16;
-    bool conveyors = false;   // BA: big armies share flow fields
+    bool conveyors = false;
+    // turn-based mode (TB): players act in turns on the same simulation (Heroes / XCOM style battles)
+    bool turns = false;
+    Fixed turnMoveSeconds = Fixed::fromInt(4);   // move budget per turn = type speed x this
+    int turnAttacks = 1;                         // shots per weapon per turn
+    Fixed turnTimeLimit{};                       // >0: the turn ends by itself after this many seconds   // BA: big armies share flow fields
     int findItem(const std::string& id) const { for (size_t i = 0; i < items.size(); ++i) if (items[i].id == id) return int(i); return -1; }
 };
 

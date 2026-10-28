@@ -50,7 +50,9 @@ private:
     int savingFor_ = -1;          // player skill the bot saves resources for
     uint32_t savingUntil_ = 0;
     uint32_t lastSettlersTick_ = 0;
-    uint32_t lastMechTick_ = 0;   // few workers left and one can be trained: don't spend on the army
+    uint32_t lastMechTick_ = 0;
+    bool mechTurnAI(Simulation& sim, RtsModule& m);
+    uint32_t turnActed_ = 0;   // turn-based mode: false when it is not our turn; ends our turns   // few workers left and one can be trained: don't spend on the army
 };
 
 } // namespace rts::game
