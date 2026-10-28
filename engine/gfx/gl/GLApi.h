@@ -39,6 +39,7 @@
   #define GL_FUNC_ADD 0x8006
   #define GL_FRAMEBUFFER_SRGB 0x8DB9
   #define GL_DEPTH_COMPONENT24 0x81A6
+  #define GL_RGBA32F 0x8814
   #define GL_TEXTURE_COMPARE_MODE 0x884C
   #define GL_TEXTURE_COMPARE_FUNC 0x884D
   #define GL_COMPARE_REF_TO_TEXTURE 0x884E
@@ -79,6 +80,7 @@
     X(void, glUniformBlockBinding, (GLuint p, GLuint i, GLuint b)) \
     X(void, glActiveTexture, (GLenum t)) \
     X(void, glGenerateMipmap, (GLenum t)) \
+    X(void, glDrawElementsInstanced, (GLenum m, GLsizei c, GLenum t, const void* i, GLsizei n)) \
     X(void, glBlendFuncSeparate, (GLenum a, GLenum b, GLenum c, GLenum d)) \
     X(void, glBlendEquation, (GLenum m)) \
     X(void, glGenFramebuffers, (GLsizei n, GLuint* f)) \

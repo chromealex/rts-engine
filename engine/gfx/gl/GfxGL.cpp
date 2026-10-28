@@ -112,8 +112,9 @@ public:
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
             }
         } else if (d.format == PixelFormat::R8) glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, d.width, d.height, 0, GL_RED, GL_UNSIGNED_BYTE, d.data);
+        else if (d.format == PixelFormat::RGBA32F) { t.mips = false; glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, d.width, d.height, 0, GL_RGBA, GL_FLOAT, d.data); }
         else glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, d.width, d.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, d.data);
-        GLint f = d.filter == Filter::Linear ? GL_LINEAR : GL_NEAREST;
+        GLint f = d.filter == Filter::Linear && d.format != PixelFormat::RGBA32F ? GL_LINEAR : GL_NEAREST; // float textures are not filterable on ES3
         if (t.mips) {
             if (d.data) glGenerateMipmap(GL_TEXTURE_2D);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, d.filter == Filter::Linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST);
@@ -129,13 +130,14 @@ public:
         if (!t) return;
         glBindTexture(GL_TEXTURE_2D, t->id);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        const int bpp = t->fmt == PixelFormat::R8 ? 1 : 4;
+        const int bpp = t->fmt == PixelFormat::R8 ? 1 : t->fmt == PixelFormat::RGBA32F ? 16 : 4;
         const GLenum fmt = t->fmt == PixelFormat::R8 ? GL_RED : GL_RGBA;
+        const GLenum type = t->fmt == PixelFormat::RGBA32F ? GL_FLOAT : GL_UNSIGNED_BYTE;
         if (rowPitch == w * bpp) {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, hh, fmt, GL_UNSIGNED_BYTE, pixels);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, hh, fmt, type, pixels);
         } else { // GL_UNPACK_ROW_LENGTH exists in ES3 but upload row by row for maximum portability
             for (int r = 0; r < hh; ++r)
-                glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + r, w, 1, fmt, GL_UNSIGNED_BYTE, static_cast<const uint8_t*>(pixels) + size_t(r) * rowPitch);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + r, w, 1, fmt, type, static_cast<const uint8_t*>(pixels) + size_t(r) * rowPitch);
         }
         if (t->mips) glGenerateMipmap(GL_TEXTURE_2D);
     }
@@ -384,14 +386,15 @@ public:
         applyAttribs(0);
         glDrawArrays(prim(), GLint(first), GLsizei(count));
     }
-    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex) override {
+    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
         auto* pl = pipelines_.get(pipelineId_);
         if (!pl || !buffers_.get(ibId_)) return;
         // ES 3.0 / WebGL2 lack glDrawElementsBaseVertex: emulate by offsetting attribute pointers.
         applyAttribs(baseVertex);
         const bool u32 = pl->desc.indexType == IndexType::UInt32;
         const size_t off = ibOffset_ + size_t(firstIndex) * (u32 ? 4 : 2);
-        glDrawElements(prim(), GLsizei(count), u32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(off));
+        if (instances > 1) glDrawElementsInstanced(prim(), GLsizei(count), u32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(off), GLsizei(instances));
+        else glDrawElements(prim(), GLsizei(count), u32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(off));
     }
 
 private:

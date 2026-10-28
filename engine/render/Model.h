@@ -71,6 +71,7 @@ struct ModelVertex {
 static_assert(sizeof(ModelVertex) == 60, "ModelVertex layout is shared with the shaders");
 
 constexpr int kMaxPaletteJoints = 80;  // joint matrices per draw (3 x vec4 each, fits a 4 KB uniform block)
+constexpr int kMaxMorphTargets = 8;    // morph targets applied on the GPU per primitive
 
 struct Primitive {
     uint32_t firstIndex = 0, indexCount = 0;
@@ -78,11 +79,16 @@ struct Primitive {
     std::vector<uint16_t> jointPalette;  // palette slot -> joint index of the node's skin (empty: not skinned)
     std::vector<int> variantMaterial;    // KHR_materials_variants: variant index -> material (-1 = default)
     float3 boundsMin, boundsMax;         // mesh space (bind pose)
+    uint32_t firstVertex = 0, vertexCount = 0;  // vertices of this primitive (contiguous)
+    int morphTargets = 0;                // 0..kMaxMorphTargets
+    uint32_t morphTexel = 0;             // first texel of its deltas in Model::morphTex
+    std::vector<float> morphDeltas;      // CPU: [target][vertex] position xyz, normal xyz (released after upload)
 };
 
 struct MeshDef {
     std::string name;
     std::vector<Primitive> primitives;
+    std::vector<float> weights;          // default morph weights
 };
 
 struct Node {
@@ -93,6 +99,7 @@ struct Node {
     quat r;
     float3 s{1, 1, 1};
     int mesh = -1, skin = -1;
+    float weights[kMaxMorphTargets] = {}; // morph weights (from the node or its mesh)
 };
 
 struct Skin {
@@ -102,13 +109,14 @@ struct Skin {
 };
 
 struct AnimChannel {
-    enum Path : uint8_t { Translation, Rotation, Scale };
+    enum Path : uint8_t { Translation, Rotation, Scale, Weights };
     enum Interp : uint8_t { Step, Linear, CubicSpline };
     int node = -1;
     Path path = Translation;
     Interp interp = Linear;
     std::vector<float> times;
-    std::vector<float> values;        // 3 or 4 floats per key; cubic: in-tangent, value, out-tangent per key
+    std::vector<float> values;        // comps floats per key; cubic: in-tangent, value, out-tangent per key
+    uint8_t comps = 3;                // 3 (T, S), 4 (R), morph target count (Weights)
 };
 
 struct AnimClip {
@@ -132,6 +140,17 @@ struct Model {
     std::vector<uint32_t> indices;
     gfx::BufferHandle vb, ib;
     float3 boundsMin, boundsMax;       // model space, bind pose (all meshes under their nodes)
+    gfx::TextureHandle morphTex;       // RGBA32F deltas of every morphing primitive (2 texels per vertex and target)
+    int morphTexWidth = 0;
+    // Clips baked into joint matrices (bakeAnimations, Animation.h): crowds skin from a texture and
+    // draw instanced. Row 0 is the bind pose; each row holds 3 texels (matrix rows) per skin joint.
+    struct Baked {
+        gfx::TextureHandle tex;
+        int skin = -1, joints = 0, rows = 0;
+        float fps = 30;
+        struct Clip { int firstRow = 0, frames = 1; };
+        std::vector<Clip> clips;
+    } baked;
 
     int findNode(const std::string& name) const;
     int findClip(const std::string& name) const;     // exact, then case-insensitive

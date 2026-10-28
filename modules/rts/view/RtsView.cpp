@@ -33,6 +33,7 @@ float4 RtsView::playerColor(int p) {
 
 bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     rules_ = &rules;
+    dev_ = &dev;
     read_ = reader ? std::move(reader) : FileReader([](const std::string& p, std::string& out) { return platform::readContentFile(p, out); });
     if (!models_.count("shape:generic")) buildShapes(dev);
     looks_.clear();
@@ -74,11 +75,16 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
     const float dt = lastTime_ < 0 ? 0.0f : float(std::clamp(time - lastTime_, 0.0, 0.1));
     lastTime_ = time;
     ++frame_;
+    viewProj_ = r.viewProj();
+    camPos_ = r.cameraPos();
+    events_.clear();
+    effects_.clear();
     handleEvents(s);
     for (size_t i = 0; i < s.objects.size(); ++i) {
         const SceneObject& o = s.objects[i];
         if (o.isProjectile) {
-            if (o.visible) r.drawMesh(projectile_, mat4::translate(o.pos), {1, 0.95f, 0.8f, 1}, kDrawUnlit);
+            if (o.visible && o.entity.valid()) drawProjectile(r, o.entity.packed(), o, dt);
+            else if (o.visible) r.drawMesh(projectile_, mat4::translate(o.pos), {1, 0.95f, 0.8f, 1}, kDrawUnlit);
             continue;
         }
         if (o.type >= looks_.size()) continue;
@@ -89,7 +95,7 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         if (!o.visible) continue;
         const TypeLook& L = looks_[o.type];
         const float ground = heightAt(grid, o.pos.x, o.pos.z);
-        animate(st, o, dt);
+        animate(st, o, dt, &grid);
         drawObject(r, st, o, ground, 1.0f);
         if (L.air) { // ground shadow blob helps reading the height
             r.circleXZ({o.pos.x, ground, o.pos.z}, 0.35f, rgba(0, 0, 0, 90), 16, ground + 0.03f);
@@ -114,8 +120,8 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         if (st.seen != frame_ && st.last.visible) {
             SceneObject o = st.last;
             o.selected = o.hovered = false;
-            animate(st, o, dt);
-            drawObject(r, st, o, heightAt(grid, o.pos.x, o.pos.z), std::clamp((L.corpse - st.deathAge) / 0.6f, 0.0f, 1.0f));
+            animate(st, o, dt, &grid);
+            drawObject(r, st, o, heightAt(grid, o.pos.x, o.pos.z), L.dissolveDeath ? 1.0f : std::clamp((L.corpse - st.deathAge) / 0.6f, 0.0f, 1.0f));
         }
         ++it;
     }
@@ -204,7 +210,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
         if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
         if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
-        if (auto* c = w.tryGet<Cargo>(e)) so.carry = float(c->amount.toDouble());
+        if (auto* c = w.tryGet<Cargo>(e)) { so.carry = float(c->amount.toDouble()); so.carryRes = c->res; }
         if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) so.order = uint8_t(od->queue.front().type) + 1;
         if (auto* mb = w.tryGet<Mobile>(e)) so.moving = mb->moving;
         if (auto* pr = w.tryGet<Production>(e)) so.producing = !pr->queue.empty();
@@ -219,9 +225,9 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         }
         out.objects.push_back(so);
     });
-    w.each<Projectile, Transform>([&](Entity e, Projectile&, Transform& t) {
+    w.each<Projectile, Transform>([&](Entity e, Projectile& pr, Transform& t) {
         SceneObject so;
-        so.entity = e; so.isProjectile = true;
+        so.entity = e; so.isProjectile = true; so.source = pr.source;
         so.pos = lerp(toF(t.prevPos), toF(t.pos), alpha);
         if (viewer != 0) {
             int x = int(t.pos.x.floorInt()), y = int(t.pos.z.floorInt());
