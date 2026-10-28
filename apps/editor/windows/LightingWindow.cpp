@@ -40,6 +40,9 @@ public:
     void draw(Editor& ed) override {
         render::LightSystem& ls = ed.renderer().lights;
         if (!ImGui::IsAnyItemActive()) editing_ = false;
+        ImGui::Checkbox("Маркеры источников в Scene", &gizmos_);
+        ui::help("Пока окно открыто: круг — радиус, у прожектора линии конуса до земли. Маркер можно перетащить мышью; Ctrl+Z отменяет.");
+        if (gizmos_) drawGizmos(ed);
         ImGui::SeparatorText("Предпросмотр");
         ImGui::Checkbox("Время суток и погода вручную", &preview_);
         ui::help("Только для просмотра в редакторе: в игре время идёт по блоку \"lighting\" карты или game.json.");
@@ -107,6 +110,7 @@ public:
             const auto& m = ml.front();
             const std::string head = (l.getStr("name").empty() ? "Свет " + std::to_string(i + 1) : l.getStr("name")) +
                                      "  (" + std::to_string(int(m.x)) + ", " + std::to_string(int(m.z)) + ")";
+            if (int(i) == selected_) ImGui::SetNextItemOpen(true);
             if (ImGui::TreeNode(head.c_str())) {
                 float pos[2] = {m.x, m.z}, col[3] = {m.color.x, m.color.y, m.color.z};
                 float h = m.height, r = m.radius, in = m.intensity, fl = m.flicker, ha = std::max(m.halo, 0.0f);
@@ -118,6 +122,13 @@ public:
                 ch |= ImGui::DragFloat("Яркость", &in, 0.02f, 0.0f, 4.0f);
                 ch |= ImGui::DragFloat("Мерцание", &fl, 0.01f, 0.0f, 1.0f);
                 ch |= ImGui::DragFloat("Ореол", &ha, 0.02f, 0.0f, 5.0f);
+                const char* pats[] = {"ровно", "пульс", "строб", "маяк"};
+                int pat = int(m.pattern);
+                float rate = m.rate;
+                bool nightOnly = m.nightOnly;
+                ch |= ImGui::Combo("Режим", &pat, pats, 4);
+                if (pat != 0) ch |= ImGui::DragFloat("Частота", &rate, 0.01f, 0.05f, 10.0f, "%.2f Гц");
+                ch |= ImGui::Checkbox("Только ночью", &nightOnly);
                 bool spot = m.spot;
                 float ang = m.angle, pit = m.pitch, yw = m.yaw, swp = m.sweep, sws = m.sweepSpeed;
                 ch |= ImGui::Checkbox("Прожектор", &spot);
@@ -131,6 +142,10 @@ public:
                 if (ch) {
                     Json p = Json::object();
                     p.set("type", Json::string(spot ? "spot" : "point"));
+                    const char* patIds[] = {"steady", "pulse", "strobe", "beacon"};
+                    p.set("pattern", Json::string(patIds[std::clamp(pat, 0, 3)]));
+                    p.set("rate", n3(rate));
+                    p.set("nightOnly", Json::fromBool(nightOnly));
                     if (spot) { p.set("angle", n3(ang)); p.set("pitch", n3(pit)); p.set("yaw", n3(yw)); p.set("sweep", n3(swp)); p.set("sweepSpeed", n3(sws)); }
                     p.set("x", n3(pos[0])); p.set("z", n3(pos[1])); p.set("height", n3(h)); p.set("radius", n3(r));
                     p.set("intensity", n3(in)); p.set("flicker", n3(fl)); p.set("halo", n3(ha));
@@ -149,6 +164,84 @@ public:
     }
 
 private:
+    // Scene-view gizmos for the map's lights: drawn on the foreground list, clipped to the Scene
+    // viewport; each handle is a tiny borderless window on top, so dragging it doesn't reach the
+    // Scene tools underneath.
+    void drawGizmos(Editor& ed) {
+        const Viewport* vp = ed.sceneViewport;
+        const Json& arr = ed.doc().data.extra["lights"];
+        if (!vp || vp->pointsW < 8 || vp->pointsH < 8 || !arr.isArray() || arr.size() == 0) return;
+        const render::RTSCamera& cam = ed.sceneCam;
+        const render::mat4 vpm = cam.proj(vp->pointsW / vp->pointsH, false) * cam.view();
+        auto toScreen = [&](render::float3 p, ImVec2& out) {
+            const render::float4 c = vpm * render::float4{p.x, p.y, p.z, 1};
+            if (c.w <= 0.01f) return false;
+            out = ImVec2(vp->originX + (c.x / c.w * 0.5f + 0.5f) * vp->pointsW, vp->originY + (0.5f - c.y / c.w * 0.5f) * vp->pointsH);
+            return true;
+        };
+        const game::MapGrid& grid = ed.editGrid();
+        auto ground = [&](float x, float z) { return ed.view().heightAt(grid, x, z); };
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        dl->PushClipRect(ImVec2(vp->originX, vp->originY), ImVec2(vp->originX + vp->pointsW, vp->originY + vp->pointsH), true);
+        const auto lights = game::RtsLights::parseMapLights(arr);
+        for (size_t i = 0; i < lights.size(); ++i) {
+            const auto& m = lights[i];
+            const float gy = ground(m.x, m.z);
+            const render::float3 src{m.x, gy + m.height, m.z};
+            ImVec2 hs, gs;
+            if (!toScreen(src, hs) || !toScreen({m.x, gy, m.z}, gs)) continue;
+            const ImU32 col = IM_COL32(int(std::min(m.color.x, 1.0f) * 255), int(std::min(m.color.y, 1.0f) * 255), int(std::min(m.color.z, 1.0f) * 255), 220);
+            const bool sel = int(i) == selected_;
+            if (!m.spot) { // radius on the ground
+                ImVec2 prev{};
+                for (int k = 0; k <= 32; ++k) {
+                    const float a = float(k) / 32.0f * 6.2831853f, x = m.x + std::cos(a) * m.radius, z = m.z + std::sin(a) * m.radius;
+                    ImVec2 q;
+                    if (toScreen({x, ground(x, z) + 0.05f, z}, q) && k > 0) dl->AddLine(prev, q, col, sel ? 2.0f : 1.0f);
+                    prev = q;
+                }
+            } else {       // cone: centre and edge rays down to the ground (base direction, no sweep)
+                const render::PointLight base = game::RtsLights::glowLight(m, {m.x, gy, m.z}, 0, 1, 0, 0);
+                const float half = m.angle * 0.5f * 0.0174532925f;
+                for (int e = -1; e <= 1; ++e) {
+                    const float yawR = m.yaw * 0.0174532925f + float(e) * half, pitch = m.pitch * 0.0174532925f - float(e == 0 ? 0 : 1) * 0.0f;
+                    render::float3 d{std::cos(yawR) * std::cos(pitch), -std::sin(pitch), std::sin(yawR) * std::cos(pitch)};
+                    const float len = d.y < -0.05f ? std::min(m.height / -d.y, m.radius) : m.radius;
+                    ImVec2 q;
+                    if (toScreen(base.pos + d * len, q)) dl->AddLine(hs, q, col, e == 0 ? (sel ? 2.5f : 1.5f) : 1.0f);
+                }
+            }
+            dl->AddLine(hs, gs, IM_COL32(255, 255, 255, 90));
+            dl->AddCircleFilled(hs, sel ? 7.0f : 5.5f, col);
+            dl->AddCircle(hs, sel ? 8.0f : 6.5f, sel ? IM_COL32(255, 255, 255, 255) : IM_COL32(0, 0, 0, 200), 16, 1.5f);
+
+            // handle: a small window on top of the Scene image takes the mouse
+            ImGui::SetNextWindowPos(ImVec2(hs.x - 9, hs.y - 9));
+            ImGui::SetNextWindowSize(ImVec2(18, 18));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+            const std::string wid = "##lightgizmo" + std::to_string(i);
+            if (ImGui::Begin(wid.c_str(), nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings |
+                                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking)) {
+                ImGui::InvisibleButton("h", ImVec2(18, 18));
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", arr[i].getStr("name", "Свет " + std::to_string(i + 1)).c_str());
+                if (ImGui::IsItemActivated()) { selected_ = int(i); ed.doc().beginEdit(); }
+                if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+                    const ImVec2 mp = ImGui::GetIO().MousePos;
+                    render::float3 g;
+                    if (cam.screenToGround(mp.x - vp->originX, mp.y - vp->originY, vp->pointsW, vp->pointsH, g, gy)) {
+                        Json p = Json::object();
+                        p.set("x", n3(std::round(g.x * 10) / 10)); p.set("z", n3(std::round(g.z * 10) / 10));
+                        applyLightParams(mapLights(ed).at(i), p);
+                        ed.doc().touched();
+                    }
+                }
+            }
+            ImGui::End();
+            ImGui::PopStyleVar();
+        }
+        dl->PopClipRect();
+    }
+
     static const char* timeLabel(float t) {
         static char buf[32];
         const int minutes = int(std::fmod(t, 1.0f) * 24 * 60 + 0.5f) % (24 * 60);
@@ -183,7 +276,8 @@ private:
             });
     }
 
-    bool registered_ = false, configured_ = false, preview_ = false, editing_ = false;
+    bool registered_ = false, configured_ = false, preview_ = false, editing_ = false, gizmos_ = true;
+    int selected_ = -1;
     uint64_t lastRevision_ = 0;
     float time_ = 0.5f, clouds_ = 0, storm_ = 0;
 };
