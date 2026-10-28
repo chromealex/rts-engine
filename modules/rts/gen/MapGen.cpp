@@ -20,7 +20,7 @@ const char* kPresets = R"JSON({
   "field":      {"title": "Поле (Mushroom Wars 2)", "genre": "garrison / lanes", "params": {"shape": "lanes", "open": true, "size": [44, 28], "obstacles": 0.12, "lanes": 1, "laneWidth": 3, "baseRadius": 3}},
   "rocky":      {"title": "Каменная планета", "genre": "planet", "params": {"shape": "planet", "faceSize": 32, "water": 0.25, "relief": 8, "ice": 0.12}},
   "ocean":      {"title": "Океанический мир", "genre": "planet", "params": {"shape": "planet", "faceSize": 32, "water": 0.7, "relief": 6, "ice": 0.1}},
-  "moon":       {"title": "Луна", "genre": "planet", "params": {"shape": "planet", "faceSize": 16, "water": 0.0, "relief": 5, "craters": 12, "ice": 0.0}}
+  "moon":       {"title": "Луна", "genre": "planet", "params": {"shape": "planet", "faceSize": 16, "water": 0.0, "relief": 3, "craters": 10, "ice": 0.0, "baseRadius": 11}}
 })JSON";
 
 const Json& builtin() { static const Json j = Json::parse(kPresets); return j; }
