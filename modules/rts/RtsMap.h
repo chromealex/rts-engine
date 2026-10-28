@@ -28,6 +28,12 @@ struct MapGrid {
     std::vector<uint8_t> flags;
     std::vector<int8_t> level;      // cliff level 0..9
     std::vector<int16_t> height;    // fine height in 1/16 units (visual + editor)
+    // Heightfield terrain: heights at cell corners, (w+1)*(h+1), 1/16 units, row-major (corner (x,y) =
+    // top-left corner of cell (x,y)). Empty = no heightfield (flat / cliff-level maps). Map JSON:
+    // terrain.corners. Simulation use is governed by rules terrain.model (see docs/terrain.md).
+    std::vector<int16_t> corner;
+    bool hasCorners() const { return !corner.empty(); }
+    int cornerIndex(int x, int y) const { return y * (w + 1) + x; }
     std::vector<uint16_t> blocked;  // structures covering the cell
     std::vector<uint8_t> creep;     // >0: creep present
     std::vector<int16_t> fieldRes;  // resource id of the field in this cell, -1 none
