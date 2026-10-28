@@ -23,6 +23,7 @@ bool own(Simulation& sim, Entity e, uint8_t player) {
 bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
     World& w = sim.world();
     if (rules_.mech.turns && mechTurnCommand(sim, cmd)) return true;   // turn-based mode
+    if (rules_.mech.altitude) mechAltitudeCommand(sim, cmd);           // 3D flight: the point's y is the altitude
     switch (cmd.type) {
     case kCmdStance: {
         state(sim).mechActive = true;
@@ -471,6 +472,7 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* sp = w.tryGet<Suppression>(e)) { h.u32(0x5A99); h.fx(sp->value); }
     if (auto* ab = w.tryGet<Abandoned>(e)) { h.u32(0xAB4D); h.u32(ab->formerOwner); }
     if (auto* bl = w.tryGet<BridgeLaid>(e); bl && !bl->laid) h.u32(0x10CC);   // locked gate
+    if (auto* al = w.tryGet<Altitude>(e)) { h.u32(0xA171); h.fx(al->target); h.fx(al->y); }
     if (auto* tb = w.tryGet<TurnBudget>(e)) { h.u32(0x7B7B); h.fx(tb->move); h.i32(tb->shots); h.u32(tb->turn); }
     if (auto* b = w.tryGet<Belt>(e)) { h.u32(0xBE17); h.u32(b->dir); }
     if (auto* c = w.tryGet<Crafter>(e)) { h.u32(0xC4AF); for (auto& v : c->in) h.fx(v); for (auto& v : c->out) h.fx(v); h.fx(c->timer); h.fx(c->outTimer); }
