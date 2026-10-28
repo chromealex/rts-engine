@@ -460,6 +460,7 @@ void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loa
 // Unit designs (UD): rules "designs": {"chassis": {...}, "parts": {...}} and types with "design": {"chassis", "parts"}
 // expand into plain type blocks. Returns a copy without "designs"; loadRules calls it when the block is present.
 Json expandDesigns(const Json& j);
+void loadMechStage4(Rules& r, const Json& j);   // RtsMechData4.cpp: morale, fatigue, charge, supply, conveyors
 VictoryRules loadVictory(const Json& j, const VictoryRules& def);
 
 } // namespace rts::game

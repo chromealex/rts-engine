@@ -135,6 +135,7 @@ enum GameEvent : uint16_t {
     kEvDialog,          // value = index into MechState::dialogs, a = speaking unit (if any), player 0 = everyone
     kEvCamera,          // pos = where to look, value = duration in ms | 1 << 31 when the camera is locked, player
     kEvMissionEnd,      // value 1 victory / 0 defeat, player
+    kEvMorale,          // a = unit, value = 0 steady / 1 wavering / 2 routing (stage 4)
 };
 
 // ---------------------------------------------------------------- components
@@ -551,7 +552,7 @@ public:
     bool detected(Simulation& sim, Entity e, uint8_t viewer) const;      // an allied detector reveals it
     bool canSee(Simulation& sim, Entity e, uint8_t viewer) const;        // not invisible to viewer (statuses + detectors)
     bool mechToggle(Simulation& sim, Entity caster, int ability);        // true: a toggle ability, handled
-    void mechOnHit(Simulation& sim, Entity target, Entity source);       // veterancy: who hit last
+    void mechOnHit(Simulation& sim, Entity target, Entity source, Fixed dmg);       // veterancy: who hit last
     void mechOnSpawn(Simulation& sim, Entity e, Entity producer);        // rally waypoints
     bool runFollow(Simulation& sim, Entity e, Order& o);
     bool applyMechCommand2(Simulation& sim, const Command& cmd);    // guard, follow, rally waypoints
@@ -597,6 +598,14 @@ public:
     Fixed staffFraction(Simulation& sim, Entity e) const;
     bool applyMechSocietyCommand(Simulation& sim, const Command& cmd);   // bounty, garrison-paid upgrades
     bool inMechUpgrade_ = false;
+    // stage 4 (RtsMechBattle.cpp): morale, rout, fatigue, charge, supply
+    void mechTickBattle(Simulation& sim);
+    void mechMoraleHit(Simulation& sim, Entity target, Entity source, Fixed dmg);
+    void mechMoraleDeath(Simulation& sim, Entity victim);
+    bool mechBattleFire(Simulation& sim, Entity e);      // false while routing; starts a charge
+    void mechBattleStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
+    bool mechRouting(Simulation& sim, Entity e) const;
+    Fixed moraleMaxOf(uint16_t type) const;
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

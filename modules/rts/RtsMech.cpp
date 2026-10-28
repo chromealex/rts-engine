@@ -247,6 +247,7 @@ bool RtsModule::runUnload(Simulation& sim, Entity e, Order& o) {
 void RtsModule::mechOnDeath(Simulation& sim, Entity e) {
     World& w = sim.world();
     mechVeteranKill(sim, e);
+    if (rules_.mech.morale) mechMoraleDeath(sim, e);
     if (rules_.mech.hasItems) mechDropItems(sim, e);
     if (rules_.mech.bridges && rules_.types[w.get<Unit>(e).type].mech.bridge) mechBridgeDied(sim, e);
     if (auto* b = w.tryGet<Boarded>(e)) {   // a passenger died inside
@@ -300,6 +301,7 @@ bool RtsModule::mechCanAcquire(Simulation& sim, Entity e) const {
     if (auto* st = w.tryGet<Stance>(e); st && st->mode == uint8_t(StanceMode::Passive)) return false;
     if (rules_.mech.rounds && w.resource<GameState>()->mech.roundPhase == 0) return false;   // rounds: no fighting while preparing
     if (w.has<Retreating>(e)) return false;
+    if (rules_.mech.morale && mechRouting(sim, e)) return false;   // routing: runs, does not fight
     return true;
 }
 
@@ -314,6 +316,7 @@ bool RtsModule::mechMayChase(Simulation& sim, Entity e, Vec3 targetPos) {
 
 void RtsModule::mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed& mul) const {
     World& w = sim.world();
+    if (rules_.mech.battle()) mechBattleStat(sim, e, s, mul);   // stage 4: morale, fatigue, charge, supply
     if (s == Stat::Speed && w.has<Retreating>(e)) mul = mul * rules_.mech.retreatSpeed;
     if (s == Stat::Damage) {
         if (auto* tp = w.tryGet<Transport>(e)) {
@@ -365,6 +368,10 @@ Fixed RtsModule::mechDamageTaken(Simulation& sim, Entity e, Entity source) const
         });
         if (lv > 0 && size_t(lv) < M.coverLevels.size()) mul = mul * M.coverLevels[size_t(lv)];
     }
+    // a charging attacker hits harder on the first blow (stage 4)
+    if (rules_.mech.charge && w.alive(source))
+        if (auto* sm = w.tryGet<Morale>(source); sm && sm->chargeTick == sim.tick() && sm->chargeTick != 0)
+            mul = mul * rules_.types[w.get<Unit>(source).type].mech.chargeBonus;
     // directional armor: hits from the side / rear (by the target's facing)
     if (t.mech.arcs && w.alive(source) && w.has<Transform>(source)) {
         Vec3 d = flat(w.get<Transform>(source).pos - w.get<Transform>(e).pos);
@@ -460,6 +467,7 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* mg = w.tryGet<Merging>(e)) { h.u32(0x3E26); h.u64(mg->partner.packed()); }
     if (auto* sp = w.tryGet<Suppression>(e)) { h.u32(0x5A99); h.fx(sp->value); }
     if (auto* ab = w.tryGet<Abandoned>(e)) { h.u32(0xAB4D); h.u32(ab->formerOwner); }
+    if (auto* mo = w.tryGet<Morale>(e)) { h.u32(0x303A); h.fx(mo->value); h.fx(mo->fatigue); h.fx(mo->run); h.u32(mo->state); h.u32(mo->outOfSupply); h.u32(mo->lastCharge); }
 }
 
 } // namespace rts::game
