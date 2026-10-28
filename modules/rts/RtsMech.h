@@ -40,6 +40,16 @@ struct GrowState { Fixed timer{}; };
 struct Bounty { Vec3 pos{}; Entity target = kNullEntity; uint8_t player = 0; int16_t res = -1; Fixed reward{}; };
 struct RoundUnit { uint8_t owner = 0; uint16_t type = 0; Vec3 pos{}; };
 
+// ---- stage 4: battle state of a soldier (Total War): morale, fatigue, charge run-up, supply
+enum class MoraleMode : uint8_t { Steady = 0, Wavering = 1, Routing = 2 };
+struct Morale {
+    Fixed value{}, fatigue{}, run{};
+    Vec3 lastPos{};
+    uint32_t chargeTick = 0, lastCharge = 0, lastFire = 0;
+    uint8_t state = 0;                 // MoraleMode
+    bool init = false, outOfSupply = false;
+};
+
 // Global mech state (inside GameState; hashed when used).
 struct MechState {
     std::vector<Fixed> prices;                     // market price per resource (in the currency), shared
