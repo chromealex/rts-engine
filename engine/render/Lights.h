@@ -5,8 +5,10 @@
 // shaders add that light with ONE texture fetch per pixel, however many lights there are. Values
 // are stored as light / kMapRange so an 8-bit target still holds overbright light. Low refreshes
 // the map every other frame (the map is world-aligned, so a one-frame-old map stays in place).
-// High additionally shades the kMaxPixelLights most important lights per pixel (N.L, specular,
-// 3D distance); those are left out of the map so nothing is counted twice.
+// High additionally adds per-pixel detail for the kMaxPixelLights most important lights (N.L
+// shaping around the map's light, specular). Every light always stays in the map, so a light moving
+// in or out of the per-pixel set only changes fine detail, never the brightness (no flicker); the
+// set is picked by stable importance (no fire flicker) with hysteresis on PointLight::key.
 // Halos: optional camera-facing additive glows around lights (a cheap stand-in for bloom).
 // Night glow: emissive materials are boosted by (1 + nightGlow) — windows light up at night.
 // Reflections: glossy / metallic materials get highlights from the lights and mirror the lit ground
@@ -39,6 +41,8 @@ struct PointLight {
     float cosOuter = -2, cosInner = -2;
     float groundY = -1e9f;       // ground under the light (light map projection of spots); default: pos.y - 1
     float beam = 0;              // spot: strength of the visible light shaft (display space, additive)
+    uint32_t key = 0;            // stable id across frames (0 = none): keeps a per-pixel slot (hysteresis)
+    float rank = -1;             // importance for the per-pixel slots (>= 0: instead of intensity, e.g. without flicker)
 
     void makeSpot(float3 direction, float coneAngleDeg, float softness = 0.6f) {
         dir = normalize(direction);
@@ -126,6 +130,7 @@ private:
     float3 focus_, camRight_{1, 0, 0}, camUp_{0, 1, 0};
     std::vector<PointLight> lights_;
     std::vector<uint8_t> perPixel_;
+    std::vector<uint32_t> prevKeys_;   // per-pixel set of the last frame (sorted)
     std::vector<MapVertex> verts_;
     std::vector<HaloVertex> halos_, decals_;
     gfx::ShaderHandle decalShader_, beamShader_;

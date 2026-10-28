@@ -5,7 +5,7 @@
 // agent work live: the camera flies to each change, it is listed in the activity feed and can be
 // undone. Without an editor the same operations run here directly on the project files.
 //
-// The server only touches game projects (games/<id>/...). It never edits engine code.
+// The server only touches game projects (any folder with game.json; templates in <engine>/templates). It never edits engine code.
 //
 //   rtsmcp [--engine DIR] [--game ID] [--port N] [--no-editor] [--editor PATH]
 //
@@ -169,7 +169,8 @@ Json toContent(const Json& result) {
 
 const char* kInstructions =
     "Tools to build real-time strategy games with RTSEngine: a game is data (game.json, rules.json, maps). "
-    "Workflow: list_games / create_game / open_game -> read rules_schema (the data format reference) -> rules_list / rules_get -> "
+    "Projects live anywhere on disk; the engine ships templates (sample games). "
+    "Workflow: list_projects (recent projects + templates) / create_project {name, template, location} / open_game {game: folder} -> read rules_schema (the data format reference) -> rules_list / rules_get -> "
     "edit rules with rules_set / rules_merge -> build maps (map_new, terrain_paint, terrain_level, field_paint, region_paint, "
     "entity_place, player_set, map_set for waves/triggers/areas/victory) -> map_validate -> match_run (bots, balance check) -> "
     "map_save {addToGame:true} -> view_screenshot to look at it -> build_start for a platform. "

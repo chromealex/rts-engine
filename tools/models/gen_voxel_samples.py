@@ -9,7 +9,7 @@
                    Turret, Barrel; remap colours 16..31 as team stripes; 8 HVA frames turning the
                    turret). Only for checking the loader; not used by any game.
 
-Usage: python3 tools/models/gen_voxel_samples.py games/showcase/models [--vxl /tmp/vxl]
+Usage: python3 tools/models/gen_voxel_samples.py templates/showcase/models [--vxl /tmp/vxl]
 """
 import math, os, struct, sys
 
@@ -195,7 +195,7 @@ if __name__ == "__main__":
     vxl_dir = None
     if "--vxl" in args:
         i = args.index("--vxl"); vxl_dir = args[i + 1]; del args[i:i + 2]
-    out = args[0] if args else "games/showcase/models"
+    out = args[0] if args else "templates/showcase/models"
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "voxel_tank.vox"), "wb") as f: f.write(vox_tank())
     if vxl_dir:
