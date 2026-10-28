@@ -60,6 +60,12 @@ void loadMechStage4(Rules& r, const Json& j) {
         m.supplySpeed = s.getFx("speed", m.supplySpeed);
         m.supplyAttack = s.getFx("attack", m.supplyAttack);
     }
+    if (const Json& ff = j["flowFields"]; ff.boolean() || ff.isObject()) {
+        m.flowFields = true;
+        m.flowMinCells = int(ff.getInt("minCells", m.flowMinCells));
+        m.flowCache = int(ff.getInt("cache", m.flowCache));
+        if (m.flowCache < 1 || m.flowCache > 256) fail("flowFields.cache", "1..256");
+    }
     size_t ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];
