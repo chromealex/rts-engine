@@ -263,11 +263,19 @@ Fixed RtsModule::gatherMultFor(Simulation& sim, uint8_t player, int res) const {
 }
 
 int RtsModule::gatherersAt(Simulation& sim, Entity node) const {
-    int n = 0;
-    sim.world().each<Orders>([&](Entity, Orders& ord) {
-        if (!ord.queue.empty() && ord.queue.front().type == OrderType::Gather && ord.queue.front().state == 2 && ord.queue.front().target == node) ++n;
-    });
-    return n;
+    // counted once per tick (derived); workers that start harvesting later in the same tick are added by runGather
+    if (gatherCountTick_ != sim.tick()) {
+        gatherCountTick_ = sim.tick();
+        std::fill(gatherCount_.begin(), gatherCount_.end(), 0);
+        sim.world().each<Orders>([&](Entity, Orders& ord) {
+            if (ord.queue.empty() || ord.queue.front().type != OrderType::Gather || ord.queue.front().state != 2) return;
+            Entity t = ord.queue.front().target;
+            if (!t.valid()) return;
+            if (gatherCount_.size() <= t.index) gatherCount_.resize(t.index + 1, 0);
+            gatherCount_[t.index]++;
+        });
+    }
+    return node.index < gatherCount_.size() ? gatherCount_[node.index] : 0;
 }
 
 bool RtsModule::inField(Simulation& sim, uint8_t player, int16_t field, Vec3 centre, const UnitType&) const {

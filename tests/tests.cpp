@@ -4911,7 +4911,7 @@ TEST(lighting_type_and_map_data) {
         const game::Rules fr = game::loadRules(Json::parseFile(fc));
         game::RtsLights F;
         F.init(fr);
-        const int t = fr.findType("demolisher");
+        const int t = fr.findType("far_seer");   // chain lightning: damage -> orange
         CHECK(t >= 0);
         if (t >= 0) {
             const auto& d = F.typeLights(uint16_t(t));
