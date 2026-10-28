@@ -9013,7 +9013,6 @@ TEST(postfx_neutral_lut_png) {
     CHECK(px[(0 * 256 + 15) * 4 + 0] == 255 && px[(0 * 256 + 16) * 4 + 2] == 17 && px[(15 * 256 + 0) * 4 + 1] == 255);
 }
 #endif
-}
 
 // ---- toolchains agent: what each build target needs (tools/rtsbuild/Toolchains.h), fake HOME
 #include "tools/rtsbuild/Toolchains.h"
