@@ -380,10 +380,30 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         for (auto& [i, k] : onNode) if (i == n.index) return Fixed::fromInt(std::max(0, k - 5) * 6);
         return Fixed{};
     };
+    // trips run between the node and a dropoff: a worker next to a dropoff (just trained, just delivered)
+    // measures from the dropoff's centre, not from the side of it where it happens to stand
+    std::vector<std::pair<Vec3, uint32_t>> drops;
+    if (!idleWorkers.empty())
+        w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+            const UnitType& dt = R.types[u.type];
+            if (o.player == player_ && dt.structure && dt.dropoffMask && !(u.flags & kUnitUnderConstruction)) drops.push_back({tr.pos, dt.dropoffMask});
+        });
     for (Entity wk : idleWorkers) {
         const UnitType& t = R.types[w.get<Unit>(wk).type];
         if (t.gathers.empty()) continue;
         Vec3 p = w.get<Transform>(wk).pos;
+        {
+            Fixed bd{};
+            Vec3 bp = p;
+            bool f = false;
+            for (auto& [dp, mask] : drops) {
+                bool takes = false;
+                for (auto& g : t.gathers) if (mask & (1u << g.res)) takes = true;
+                const Fixed d = dist(dp, p);
+                if (takes && d < Fixed::fromInt(6) && (!f || d < bd)) { bd = d; bp = dp; f = true; }
+            }
+            p = bp;
+        }
         Entity best;
         Vec3 bestField{};
         bool field = false;
@@ -409,6 +429,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
         if (!any) continue;
         Command c; c.type = kCmdGather; c.units = {wk};
+        if (getenv("AIDBG2")) { Vec3 tp = field ? bestField : w.get<Transform>(best).pos; std::fprintf(stderr, "t=%u p%d gather from %.2f,%.2f -> %s %.2f,%.2f score %.3f\n", sim.tick(), player_, p.x.toDouble(), p.z.toDouble(), field ? "field" : R.types[w.get<Unit>(best).type].id.c_str(), tp.x.toDouble(), tp.z.toDouble(), bestScore.toDouble()); }
         if (field) c.point = bestField; else c.target = best;
         send(sim, c);
         if (!field) {

@@ -14,6 +14,11 @@
 #include "RtsAI.h"
 #include "RtsAITerrain.h"
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+#define AIDBG(...) do { if (std::getenv("AIDBG")) std::fprintf(stderr, __VA_ARGS__); } while (0)
 
 namespace rts::game {
 
@@ -54,6 +59,14 @@ void RtsAI::applyRulesConfig(RtsModule& m) {
     if (a.exposureWeight >= 0) cfg_.exposureWeight = a.exposureWeight;
     if (a.escalateSeconds >= 0) cfg_.escalateSeconds = uint32_t(a.escalateSeconds);
     if (a.terrain >= 0) cfg_.terrain = a.terrain != 0;
+    if (const char* e = std::getenv("AICFG")) {   // TEMP experiments
+        std::string v(e);
+        auto get = [&](const char* k, int& out) { auto p = v.find(std::string(k) + "="); if (p != std::string::npos) out = std::atoi(v.c_str() + p + std::strlen(k) + 1); };
+        int t = cfg_.terrain ? 1 : 0, esc = int(cfg_.escalateSeconds);
+        get("towers", cfg_.towers); get("scouts", cfg_.scouts); get("terrain", t); get("esc", esc); get("first", cfg_.firstAttackArmy);
+        get("retreat", retreatPct_); get("hold", holdSec_);
+        cfg_.terrain = t != 0; cfg_.escalateSeconds = uint32_t(esc);
+    }
 }
 
 void RtsAI::ensureTerrain(Simulation& sim, RtsModule& m) {
@@ -195,7 +208,9 @@ bool RtsAI::findSpot(Simulation& sim, RtsModule& m, uint16_t type, Vec3 near, in
                 const int steps = std::max(std::abs(x1 - x0), std::abs(y1 - y0));
                 for (int s = 0; s <= steps; ++s) {
                     const int x = x0 + (steps ? (x1 - x0) * s / steps : 0), y = y0 + (steps ? (y1 - y0) * s / steps : 0);
-                    if (g.inside(x, y)) laneCells.push_back(g.index(x, y));
+                    for (int oy = -1; oy <= 1; ++oy)   // workers need a corridor, not a line
+                        for (int ox = -1; ox <= 1; ++ox)
+                            if (g.inside(x + ox, y + oy)) laneCells.push_back(g.index(x + ox, y + oy));
                 }
             }
         std::sort(laneCells.begin(), laneCells.end());
@@ -485,7 +500,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     int needed = defend ? 1 : std::min(cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth, cfg_.maxAttackArmy + escalation_ * 6);
     auto& eco = gs.players[player_];
     const bool maxed = eco.supplyCap.raw > 0 && eco.supplyUsed * 10 >= eco.supplyCap * 9 && eco.supplyCap * 10 >= R.supplyCap * 8;
-    if (maxed || escalation_ >= 2) needed = std::min(needed, std::max(4, int(home.size()) * 3 / 4));
+    if (maxed) needed = std::min(needed, std::max(4, int(home.size()) * 3 / 4));
     if (!wave_units_.empty()) {
         // ---------- manage the wave in flight
         Vec3 c{};
@@ -500,8 +515,9 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         }
         if (n > 0) c = c / Fixed::fromInt(n);
         const bool killed = lastKillTick_ > waveTick_;
-        if (n * 100 < waveStart_ * 35 && escalation_ < 3 && !killed) {
+        if (n * 100 < waveStart_ * retreatPct_ && escalation_ < 3 && !killed) {
             // beaten: back to the rally point, bigger next time
+            AIDBG("t=%u p%d wave retreat %d/%d\n", now / rate, player_, n, waveStart_);
             Command mv; mv.type = kCmdMove; mv.units = wave_units_; mv.point = hasRally_ ? rally_ : home_; send(sim, mv);
             wave_units_.clear(); waypoints_.clear();
             ++failedWaves_;
@@ -530,7 +546,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 const int cc = g.cellOf(c);
                 if (cc >= 0) ourElev = terr_->elev[size_t(cc)];
                 if (tn > 0 && theirElev / tn > ourElev + AITerrain::kUnit / 2 && theirs * 13 / 10 > ours && escalation_ < 3) {
-                    if (holdUntil_ == 0) holdUntil_ = now + 30 * rate;
+                    if (holdUntil_ == 0) holdUntil_ = now + uint32_t(holdSec_) * rate;
                     if (now < holdUntil_) {
                         advance = false;
                         // reinforce from home
@@ -545,22 +561,24 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 }
             }
             if (advance && !last) {
+                AIDBG("t=%u p%d wave wp %zu/%zu n=%d near=%d idle=%d\n", now / rate, player_, wp_ + 1, waypoints_.size(), n, near, idle);
                 ++wp_; wpTick_ = now; holdUntil_ = 0;
                 std::vector<Entity> go;
                 for (Entity e : wave_units_) if (!(w.get<Unit>(e).flags & kUnitInTransit)) go.push_back(e);
                 attack(go, waypoints_[wp_]);
-            } else if (last && (!w.alive(waveTarget_) || w.get<Unit>(waveTarget_).hp.raw <= 0) && idle * 10 >= n * 5) {
+            } else if (last && idle * 10 >= n * 5 && (now > wpTick_ + 8 * rate || !w.alive(waveTarget_) || w.get<Unit>(waveTarget_).hp.raw <= 0)) {
                 // target gone: the next enemy structure close to the wave (else any enemy), straight there
                 Entity best; Fixed bd{};
                 w.each<Unit, Owner, Transform>([&](Entity t, Unit& u, Owner& o, Transform& tr) {
                     if (!m.hostile(sim, player_, o.player) || u.hp.raw <= 0 || (u.flags & kUnitOffMap)) return;
                     if (S && S->bodyAt(tr.pos) != S->bodyAt(c)) return;
-                    Fixed d = dist(tr.pos, c) - (R.types[u.type].structure ? Fixed::fromInt(6) : Fixed{});
+                    Fixed d = dist(tr.pos, c) + (R.types[u.type].structure ? Fixed{} : Fixed::fromInt(8));
                     if (o.player == kHostileNeutral) d += Fixed::fromInt(20);
                     if (!best.valid() || d < bd) { best = t; bd = d; }
                 });
                 if (best.valid()) {
                     waveTarget_ = best;
+                    AIDBG("t=%u p%d wave retarget %s\n", now / rate, player_, R.types[w.get<Unit>(best).type].id.c_str());
                     waypoints_.push_back(w.get<Transform>(best).pos);
                     ++wp_; wpTick_ = now;
                     attack(wave_units_, waypoints_[wp_]);
@@ -599,7 +617,8 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             if (defend && dist(t.pos, home_) > Fixed::fromInt(25)) return;
             if (S && S->bodyAt(t.pos) != hb) return;   // other bodies: invasions (planetOps)
             const UnitType& ut = R.types[u.type];
-            Fixed d = dist(t.pos, c) - (ut.structure ? Fixed::fromInt(5) : Fixed{});
+            // structures: units on the way are fought anyway by the attack-move
+            Fixed d = dist(t.pos, c) + (ut.structure ? Fixed{} : Fixed::fromInt(15));
             if (o.player == kHostileNeutral) d += Fixed::fromInt(10);
             if (escalation_ >= 2 && (ut.worker || ut.dropoffMask || !ut.income.empty())) d -= Fixed::fromInt(8);   // the economy
             d += Fixed::fromRatio(int64_t(rng_.below(64)), 32);   // up to 2 cells: no fixed preference
@@ -645,6 +664,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 waveTarget_ = best;
                 for (Entity e : go) homeIdle.erase(std::remove(homeIdle.begin(), homeIdle.end(), e), homeIdle.end());
                 if (!defend) ++wave_;
+                AIDBG("t=%u p%d wave %d launch n=%zu wps=%zu route=%zu esc=%d target=%s\n", now / rate, player_, wave_, go.size(), waypoints_.size(), routeCells.size(), escalation_, R.types[w.get<Unit>(best).type].id.c_str());
             }
         }
     }

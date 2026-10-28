@@ -76,6 +76,7 @@ private:
     uint32_t lastMechTick_ = 0;   // few workers left and one can be trained: don't spend on the army
     // ---- agent-ai-terrain
     bool configured_ = false;
+    int retreatPct_ = 35, holdSec_ = 30;
     std::shared_ptr<const AITerrain> terr_;   // immutable once built (copies of the bot share it)
     Vec3 home_{}, enemyHome_{};
     bool hasHome_ = false, hasEnemy_ = false;
