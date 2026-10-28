@@ -568,7 +568,7 @@ std::string cmakeVars(const Game& g, const Options& o, const fs::path& content, 
     s += " -DRTS_GAME_VERSION=" + g.version;
     s += " -DRTS_GAME_BUILD=" + std::to_string(g.build);
     s += " -DRTS_GAME_EXECUTABLE=" + g.exe;
-    s += " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF";
+    s += " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF -DRTS_BUILD_SERVER=OFF";
     if (!gen.empty()) s += " -DRTS_GEN_DIR=" + quote(gen);
     s += " -DRTS_SPLASH_BACKGROUND=" + rts::build::splashBackgroundHex(o.gameJson);   // window colour before the first frame
     return s;
@@ -825,7 +825,7 @@ void buildWindows(const Game& g, Options& o) {
               "@echo off\r\nrem Requires Visual Studio 2022 (Desktop C++) and CMake.\r\n"
               "cmake -S . -B build -A x64 -DRTS_CONTENT_DIR=%~dp0content -DRTS_GAME_NAME=\"" + g.name + "\" -DRTS_GAME_ID=" + g.id +
               " -DRTS_GAME_EXECUTABLE=" + g.exe + packArg + " -DRTS_GEN_DIR=%~dp0gen" +
-              (splashBg.empty() ? std::string() : " -DRTS_SPLASH_BACKGROUND=" + splashBg) + " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF || exit /b 1\r\n"
+              (splashBg.empty() ? std::string() : " -DRTS_SPLASH_BACKGROUND=" + splashBg) + " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF -DRTS_BUILD_SERVER=OFF || exit /b 1\r\n"
               "cmake --build build --target rts_client --config Release || exit /b 1\r\n"
               "echo Done: build\\Release\\" + g.exe + ".exe\r\n");
     info("Исходники: " + src.string() + " — на Windows запустите build.bat.");
