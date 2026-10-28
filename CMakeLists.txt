@@ -773,7 +773,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
 endif()
 if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
     target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
-    target_sources(rts_editor_core PRIVATE apps/editor/core/PlanetOps.cpp)   # planet-render agent: planet sculpt / paint
+    target_sources(rts_editor_core PRIVATE apps/editor/core/PlanetOps.cpp apps/editor/core/PlanetDetailOps.cpp)   # planet-render agent: planet sculpt / paint
 endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)

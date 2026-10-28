@@ -426,7 +426,8 @@ void PlanetRenderer::setupDetail(const PlanetBody& pb, Body& b) {
     }
     stats_.buildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     if (std::getenv("RTS_TERRAIN_STATS"))
-        std::fprintf(stderr, "[terrain] planet '%s' detail k=%d samples=%zu atlas %dx%d in %.0f ms\n", pb.id.c_str(), k,
+        std::fprintf(stderr, "[terrain] planet '%s' detail k=%d (%s) samples=%zu atlas %dx%d in %.0f ms\n", pb.id.c_str(), k,
+                     pb.detail.empty() ? "synthesised" : pb.detailK == k ? "explicit" : "explicit, resampled",
                      size_t(6) * size_t(G + 1) * size_t(G + 1), b.atlasW, b.atlasH,
                      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
 }

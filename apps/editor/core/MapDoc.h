@@ -52,7 +52,7 @@ struct DocBody {
     Json meta = Json::object();
     Json terrainExtra = Json::object(); // per-face extra keys live in faceExtra
     std::vector<Json> faceExtra;        // 6 objects (fields, material, ... per face)
-    // visual detail grid (terrain.detail, docs/terrain.md): 6 * (N*k+1)^2 int16 1/16 units, seam duplicates
+    // visual detail grid (terrain.detail, docs/terrain.md): 6 * (N*k+1)^2 int16 1/256 units, seam duplicates
     // equal; empty = none (the view synthesises one when the style is smooth). Written to detailFile on save.
     int detailScale = 0;
     std::vector<int16_t> detail;

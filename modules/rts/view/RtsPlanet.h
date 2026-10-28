@@ -18,6 +18,8 @@
 
 namespace rts::game {
 
+constexpr float kPlanetDetailUnit = 256.0f;   // explicit planet detail heights: value / 256 world units
+
 struct PlanetBody {
     enum class Kind : uint8_t { Plane, Planet, Moon, Star };
     std::string id;
@@ -37,7 +39,7 @@ struct PlanetBody {
     std::vector<uint8_t> flags;       // 6 * N * N cell flags (cellFlagsFromChar of the face rows)
     // sub-cell detail surface (docs/terrain.md "Detail surface", planets): body terrain keys
     //   "style": "smooth" | "classic" (default: the game's terrain.style), "detailLook": {scale, roughness, craters},
-    //   "detail": {"scale": k, "file": "maps/<map>.<body>.detail.r16"} explicit heights 6 * (N*k+1)^2 (int16 LE, 1/16 units)
+    //   "detail": {"scale": k, "file": "maps/<map>.<body>.detail.r16"} explicit heights 6 * (N*k+1)^2 (int16 LE, 1/256 units)
     int style = -1;                   // -1 inherit, 0 classic, 1 smooth
     int detailScale = 0;              // samples per cell wanted (0 = the game's detailLook.scale)
     float roughness = -1;             // fine noise amplitude (world units); -1 = the game's
@@ -66,7 +68,8 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings 
 // them) and cell flags from the simulation's Surface / grid; only visual keys (atmosphere, colours, which body
 // has an ocean) from `visual` (loadPlanetWorld of the same map; may be empty).
 PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::vector<uint8_t>& gridFlags, const PlanetWorld& visual);
-// Explicit planet detail (body terrain.detail): int16 LE, 1/16 units, 6 faces x (N*k+1)^2 row-major. The map
+// Explicit planet detail (body terrain.detail): int16 LE, 1/256 units (kPlanetDetailUnit: fine relief needs more
+// than the corners' 1/16; range +-128 units), 6 faces x (N*k+1)^2 row-major. The map
 // JSON carries {"scale": k, "file": "..."} (read here, paths relative to the game folder) or an inline
 // "blob" (binary string; the editor's live document).
 bool decodePlanetDetail(const std::string& bytes, int N, int k, std::vector<int16_t>& out, std::string* err);

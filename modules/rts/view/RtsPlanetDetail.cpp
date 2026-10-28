@@ -140,7 +140,7 @@ void PlanetSurface::synthRect(const PlanetBody& b, int face, int i0, int j0, int
     if (b.detailK > 0) {
         const int K = b.detailK, ME = N * K, SE = (ME + 1) * (ME + 1);
         if (b.detail.size() == size_t(6 * SE)) {
-            auto E = [&](int x, int y) { return float(b.detail[size_t((face * (ME + 1) + y) * (ME + 1) + x)]) / 16.0f; };
+            auto E = [&](int x, int y) { return float(b.detail[size_t((face * (ME + 1) + y) * (ME + 1) + x)]) / kPlanetDetailUnit; };
             for (int j = j0; j <= j1; ++j)
                 for (int i = i0; i <= i1; ++i) {
                     float h;
@@ -268,7 +268,7 @@ bool PlanetSurface::updateDetail(const std::vector<int16_t>& detail, Rect (&sr)[
         for (int j = 0; j <= M; ++j)
             for (int i = 0; i <= M; ++i) {
                 const size_t id = size_t(gridIndex(f, i, j));
-                const float h = float(detail[id]) / 16.0f;
+                const float h = float(detail[id]) / kPlanetDetailUnit;
                 if (h == dh_[id]) continue;
                 dh_[id] = h;
                 Rect& r = sr[f];
