@@ -183,6 +183,9 @@ const char* kInstructions =
     "Phones: device_list {filter} (iPhone, iPad, Pixel, Galaxy, Redmi, desktops: sizes, safe areas, cut-outs) -> "
     "device_set {device, orientation, safeArea: true} -> view_screenshot {window: game}. "
     "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
+    "Visual effects: fx_templates (explosion, fire, smoke, magic, weather, ...) or fx_import_unity {source: a Unity .prefab / folder} "
+    "to make the same effect as a Unity one, tune with fx_get / fx_set, look with fx_preview {effect, advance, freeze} + view_screenshot, "
+    "attach to events with fx_bind (died, hit, attack, ability, spawned per type / weapon / ability). "
     "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";
 

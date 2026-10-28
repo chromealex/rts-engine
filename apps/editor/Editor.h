@@ -133,6 +133,7 @@ public:
     fx::ParticleSystem& gameFx() { return gameFx_; }
     void reloadFx();                           // after fx files changed (Effects window, agents)
     std::vector<std::string> fxWarnings;       // from the last reloadFx()
+    int fxRevision = 0;                        // bumped when fx files change (agents): the Effects window re-reads
 
     // helpers for windows
     bool groundAt(const Viewport& vp, const render::RTSCamera& cam, float sx, float sy, float& x, float& z) const;
@@ -170,6 +171,10 @@ private:
     void pollAgentLink();
     void registerGuiOps();
     void registerPlayOps();   // EditorPlayOps.cpp
+    void registerFxPreviewOps();   // EditorFxOps.cpp: fx_preview
+    // Particles of the Scene / Game views (EditorFxOps.cpp): after beginScene (dt, previews, event bridge,
+    // particle lights into r3d_.lights); render them after Renderer3D::render.
+    void tickFx(const render::RTSCamera& cam, int w, int h, const std::vector<game::SceneObject>* objects);
     void samplePlayStats();
     void deliverShots(gfx::Device& dev);
 
@@ -201,6 +206,9 @@ private:
     game::RtsFx gameFxBridge_;
     render::TextureCache fxTextures_;          // sprite textures of effects (same loader as sprites)
     double fxTime_ = -1;
+    struct FxPreview { std::string name; fx::float3 pos{}; float scale = 1; fx::float4 tint{1, 1, 1, 1}; bool loop = false; fx::FxHandle h; double next = 0; };
+    FxPreview fxPreview_;                      // fx_preview: the effect an agent is looking at
+    bool fxFrozen_ = false;                    // fx_preview {freeze}: particles hold still for screenshots
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;
     int human_ = 0;
