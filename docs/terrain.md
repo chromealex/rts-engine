@@ -42,6 +42,28 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
 - The view should keep reading `corners` for its own surface; on heightfield games mobile units now carry a real
   `pos.y` (the view may keep using `heightAt`, which matches the sim surface when it is bilinear on corners).
 
+## Vision (agent-vision) — how it is computed
+
+`modules/rts/RtsVision.cpp`, system `vision`, every 5 ticks. Cells lit last pass fall back to explored (only those in
+`visibleCells`), then every unit lights the cells it sees for its owner and the allies sharing vision (`see()`).
+
+- **Definition** = the brute-force reference (`visionFlatRef`, `visionSphereRef`): per unit, every cell of the sight disk;
+  cliff levels: hidden when the target level is above the eye level (air units / no `blockVision`: everything); line of
+  sight (heightfield + `blockVision`, or `fogOfWar.lineOfSight`): integer ray march over `visionBase` (ground, 1/64 units)
+  and `visionOcc` (ground + `vision.blocks` structures / units, smoke `blocksVision` areas, undug rock `rockHeight`).
+- **Fast path** (default) produces exactly the same `vision`, `visibleCells` (same order) and `visionBase/visionOcc`:
+  per unit cached cell lists keyed by (cell, sight, type) on flat maps / (exact position, sight, type) on planets, replayed
+  while no 16 x 16 tile they read changed; `visionBase/visionOcc` updated incrementally from changed corners / levels /
+  dig cells / blockers (diffed against the last pass) instead of rebuilt over the map; line-of-sight rays from per-radius
+  offset tables (no divisions). Caches are derived and live in the module (`VisionCache`), tied to the `GameState` by
+  `visionToken` (not saved / hashed): a snapshot restore, a loaded save or another simulation rebuilds them from scratch.
+- **Verification:** `RTS_VISION=ref` runs the reference, `RTS_VISION=check` runs both every pass and aborts on any
+  difference; `RtsModule::setVisionReference(true)` for tests (`vision_fast_equals_reference_flat` / `_planet`: random maps,
+  moving / parked units, blockers, smoke, digging, sculpting, rollback, save loading). `rts_headless --profile` prints
+  per-system time.
+- Measured (Release, arm64 VM): Big Planet 0.72 → 0.064 ms/tick (80% → 27% of the tick); faceSize-256 planet 0.42 → 0.043;
+  1024² heightfield, 500 moving units 0.47 → 0.12; metaltide 0.015 → 0.004. Checksums of every template unchanged.
+
 ## Branches
 | Branch | Scope |
 |---|---|
