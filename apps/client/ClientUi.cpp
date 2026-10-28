@@ -80,6 +80,7 @@ void GameClient::initUi() {
     c.Bind("difficulty", &difficulty_);
     c.Bind("spectator", &spectator_);
     c.Bind("shadows", &shadowQuality_);
+    c.Bind("particles", &fxQuality_);
 
     using Args = const Rml::VariantList&;
     c.BindEventCallback("start", [this](Rml::DataModelHandle, Rml::Event&, Args a) { if (!a.empty()) startMatch(size_t(a[0].Get<int>())); });
@@ -95,6 +96,7 @@ void GameClient::initUi() {
     model_ = c.GetModelHandle();
 
     shadowQuality_ = boundShadowQuality_ = int(r3d_.shadowQuality());
+    fxQuality_ = boundFxQuality_ = fx_.quality();
     menuDoc_ = ui_.loadDocument("menu.rml");
     hudDoc_ = ui_.loadDocument("hud.rml");
     if (!menuDoc_ || !hudDoc_) error_ = "ui: documents not found (engine/ui/menu.rml, hud.rml)";
@@ -179,6 +181,10 @@ void GameClient::updateUi() {
         if (shadowQuality_ != boundShadowQuality_) { // changed from the pause menu
             r3d_.setShadowQuality(ShadowQuality(std::clamp(shadowQuality_, 0, 3)));
             boundShadowQuality_ = shadowQuality_;
+        }
+        if (fxQuality_ != boundFxQuality_) { // changed from the pause menu
+            fx_.setQuality(fxQuality_);
+            boundFxQuality_ = fxQuality_;
         }
     }
 #undef RTS_SYNC

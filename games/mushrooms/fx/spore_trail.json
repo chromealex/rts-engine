@@ -1,0 +1,8 @@
+// Tower spores drifting through the air.
+{
+  "emitters": [
+    { "texture": "builtin:soft", "blend": "additive", "perMeter": 5, "loop": true,
+      "life": [0.25, 0.4], "speed": [0, 0.4], "drag": 2, "size": [0.18, 0.26], "sizeOverLife": [[0, 1], [1, 0.4]],
+      "color": [[0, "#c8ff8c90"], [1, "#70d04000"]] }
+  ]
+}

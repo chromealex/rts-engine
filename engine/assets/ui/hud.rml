@@ -7,7 +7,7 @@
      top[] {text, sub, style, warn}, topActions[], clock, notices[], minimapStyle,
      hasSelection, ownSelection, selTitle, selInfo[], emptyHint, showCard,
      card[] {header, kind, label, cost, hotkey, tip, enabled, active, progress, id} (header = section start),
-     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows.
+     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows, particles.
      Events: act(id), pause(), resume(), restart(), tomenu(). -->
 <body>
 <!-- the model is bound on a div: <body> is the document element itself and binds too late -->
@@ -63,6 +63,13 @@
                 <button data-class-active="shadows == 1" data-event-click="shadows = 1">низк.</button>
                 <button data-class-active="shadows == 2" data-event-click="shadows = 2">средн.</button>
                 <button data-class-active="shadows == 3" data-event-click="shadows = 3">выс.</button>
+            </div>
+            <div class="choice">
+                <span class="dim">Частицы: </span>
+                <button data-class-active="particles == 0" data-event-click="particles = 0">выкл</button>
+                <button data-class-active="particles == 1" data-event-click="particles = 1">низк.</button>
+                <button data-class-active="particles == 2" data-event-click="particles = 2">средн.</button>
+                <button data-class-active="particles == 3" data-event-click="particles = 3">выс.</button>
             </div>
             <button class="wide" data-event-click="restart()">Заново</button>
             <button class="wide" data-event-click="tomenu()">В меню</button>
