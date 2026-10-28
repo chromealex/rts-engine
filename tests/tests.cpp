@@ -16,6 +16,7 @@
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
+#include "modules/rts/RtsSphere.h"
 #include <algorithm>
 
 using namespace rts;
@@ -4917,6 +4918,126 @@ TEST(lighting_quality_governor) {
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
     feed(rec, 16.7, 60);
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
+}
+
+// ---------------- Cube-sphere (RtsSphere) ----------------
+TEST(sphere_cells_and_dirs_round_trip) {
+    using namespace rts::game;
+    for (int N : {1, 4, 7, 16}) {
+        CubeSphere s(N);
+        int bad = 0;
+        for (int id = 0; id < s.cellCount(); ++id) {
+            const SphereCell c = s.cell(id);
+            if (s.cellId(c.face, c.x, c.y) != id) ++bad;
+            const Vec3 d = s.cellCenterDir(id);
+            if (fxAbs(d.length() - Fixed::fromInt(1)) > Fixed::fromRaw(8)) ++bad;
+            if (s.cellFromDir(d) != id) ++bad;
+            int f; Fixed a, b;
+            s.faceFromDir(d * Fixed::fromInt(37), f, a, b);          // any length works
+            if (f != c.face || fxAbs(a - (Fixed::fromInt(c.x) + Fixed::fromRatio(1, 2))) > Fixed::fromRatio(1, 50)) ++bad;
+        }
+        CHECK(bad == 0);
+    }
+}
+
+TEST(sphere_neighbors_symmetric_and_adjacent) {
+    using namespace rts::game;
+    for (int N : {1, 2, 5, 8}) {
+        CubeSphere s(N);
+        int asym = 0, far = 0, cornerCells = 0, total = 0;
+        const Fixed cellTurns = Fixed::fromRatio(1, 4 * N);
+        for (int id = 0; id < s.cellCount(); ++id) {
+            int nb[8];
+            const int k = s.neighbors8(id, nb);
+            total += k;
+            if (k == 7) ++cornerCells;
+            for (int i = 0; i < k; ++i) {
+                int back[8];
+                const int kb = s.neighbors8(nb[i], back);
+                bool found = false;
+                for (int j = 0; j < kb; ++j) found |= back[j] == id;
+                if (!found || nb[i] == id) ++asym;
+                const Fixed arc = sphereArcTurns(s.cellCenterDir(id), s.cellCenterDir(nb[i]));
+                if (arc.raw <= 0 || arc > cellTurns * 2) ++far;
+            }
+            for (int i = 0; i < k; ++i) for (int j = i + 1; j < k; ++j) if (nb[i] == nb[j] && N > 1) ++asym;
+            // orthogonal neighbours are mutually orthogonal neighbours
+            static const int kO[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            for (auto& d : kO) {
+                const int o = s.neighbor(id, d[0], d[1]);
+                bool back = false;
+                for (auto& e : kO) back |= s.neighbor(o, e[0], e[1]) == id;
+                if (o < 0 || !back) ++asym;
+            }
+        }
+        CHECK(asym == 0);
+        CHECK(far == 0);
+        // 8 cube corners x 3 faces have 7 neighbours; with N == 1 every diagonal passes a cube corner (4 each)
+        CHECK(N == 1 ? total == 6 * 4 : (cornerCells == 24 && total == 8 * s.cellCount() - 24));
+    }
+}
+
+TEST(sphere_corner_duplicates_and_seams) {
+    using namespace rts::game;
+    for (int N : {1, 3, 8}) {
+        CubeSphere s(N);
+        int bad = 0, dup2 = 0, dup3 = 0;
+        for (int f = 0; f < 6; ++f) for (int j = 0; j <= N; ++j) for (int i = 0; i <= N; ++i) {
+            int ids[3];
+            const int k = s.cornerDuplicates(f, i, j, ids);
+            const bool edge = i == 0 || j == 0 || i == N || j == N, cube = (i == 0 || i == N) && (j == 0 || j == N);
+            if (k != (cube ? 3 : edge ? 2 : 1)) ++bad;
+            if (k == 2) ++dup2;
+            if (k == 3) ++dup3;
+            bool self = false;
+            const Vec3 d = s.cornerDir(f, i, j);
+            for (int m = 0; m < k; ++m) {
+                if (m && ids[m] <= ids[m - 1]) ++bad;
+                const int g = ids[m] / ((N + 1) * (N + 1)), r = ids[m] % ((N + 1) * (N + 1));
+                self |= ids[m] == s.cornerId(f, i, j);
+                if (!(s.cornerDir(g, r % (N + 1), r / (N + 1)) == d)) ++bad; // bit-identical seam vertices
+            }
+            if (!self || s.canonicalCorner(f, i, j) != ids[0]) ++bad;
+        }
+        CHECK(bad == 0);
+        CHECK(dup3 == 24 && dup2 == 24 * (N - 1));
+        // unique vertices of a cube-sphere grid: 6 N^2 + 2
+        int unique = 0;
+        for (int f = 0; f < 6; ++f) for (int j = 0; j <= N; ++j) for (int i = 0; i <= N; ++i)
+            unique += s.canonicalCorner(f, i, j) == s.cornerId(f, i, j);
+        CHECK(unique == 6 * N * N + 2);
+    }
+}
+
+TEST(sphere_great_circle_steps) {
+    using namespace rts::game;
+    CubeSphere s(16);
+    const Vec3 a = s.cellCenterDir(s.cellId(0, 3, 4)), b = s.cellCenterDir(s.cellId(5, 12, 9));
+    const Fixed arc0 = sphereArcTurns(a, b);
+    CHECK(arc0 > Fixed::fromRatio(1, 8) && arc0 < Fixed::fromRatio(1, 2));
+    Vec3 p = a;
+    bool reached = false;
+    int steps = 0;
+    Fixed prev = arc0;
+    bool monotonic = true;
+    while (!reached && steps < 1000) {
+        p = sphereRotateToward(p, b, Fixed::fromRatio(1, 200), &reached);
+        const Fixed arc = sphereArcTurns(p, b);
+        if (!reached && arc >= prev) monotonic = false;
+        prev = arc;
+        ++steps;
+    }
+    CHECK(reached && monotonic);
+    CHECK(steps >= arc0.raw * 200 / Fixed::kOne && steps <= arc0.raw * 200 / Fixed::kOne + 3);
+    CHECK(fxAbs(p.length() - Fixed::fromInt(1)) <= Fixed::fromRaw(8));
+    // antipodal start still moves deterministically
+    Vec3 q = sphereRotateToward(a, a * Fixed::fromInt(-1), Fixed::fromRatio(1, 100));
+    CHECK(sphereArcTurns(q, a) > Fixed::fromRatio(1, 200));
+    // tangents are unit and orthogonal to the direction
+    Vec3 e, so;
+    CubeSphere::faceTangents(2, s.cellCenterDir(s.cellId(2, 5, 5)), e, so);
+    CHECK(fxAbs(e.dot(s.cellCenterDir(s.cellId(2, 5, 5)))) < Fixed::fromRatio(1, 100));
+    CHECK(fxAbs(e.length() - Fixed::fromInt(1)) < Fixed::fromRatio(1, 100));
 }
 
 int main() {
