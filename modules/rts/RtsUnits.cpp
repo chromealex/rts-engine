@@ -627,7 +627,8 @@ void RtsModule::sysMovement(Simulation& sim) {
         anchored[e.index] = anchor;
     });
     const Fixed deadZone = Fixed::fromRatio(3, 100);
-    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+    if (!genericSeparation) mechSeparation(sim, weight, anchored, deadZone, pushes.size(), [&](Entity e, Vec3 d) { pushes.push_back({e, d}); });   // agent-mech BA: same pushes as the loop below, faster in crowds
+    else w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (u.flags & kUnitOffMap) return;
         if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];

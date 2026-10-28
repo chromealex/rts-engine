@@ -900,3 +900,95 @@ TEST(mech_battle) {
     CHECK(after - hpOf(*sim, dummy) == Fixed::fromInt(10));   // the next blow is plain
     CHECK(mechRoundTrip(*sim, rules, map, 60));
 }
+
+// ---------------------------------------------------------------- BA: flow fields for big armies (stage 4)
+#include <chrono>
+TEST(mech_flow_fields) {
+    // a wall with one gap between the army and its goal
+    std::vector<std::string> rows(64, std::string(96, '.'));
+    for (int y = 0; y < 64; ++y) if (y < 34 || y > 44) rows[size_t(y)][48] = '#';
+    auto build = [&](bool flow) {
+        std::string rules = std::string(R"({"resources": {"gold": {}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},)") +
+            (flow ? R"("flowFields": {"minCells": 6},)" : "") +
+            R"("types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 100}},
+                         "grunt": {"move": {"speed": 4}, "radius": 0.3, "health": {"max": 10}}}})";
+        std::string ents = R"({"type":"hq","owner":1,"pos":[2,60]},{"type":"hq","owner":2,"pos":[92,60]})";
+        for (int i = 0; i < 400; ++i) ents += ",{\"type\":\"grunt\",\"owner\":1,\"pos\":[" + std::to_string(4 + i % 20 * 2) + "," + std::to_string(4 + i / 20 * 2) + "]}";
+        return std::make_pair(rules, mapRows(96, 64, rows, ",\"entities\":[" + ents + "]"));
+    };
+    auto runArmy = [&](bool flow, double& ms, int& arrived, std::string& rules, std::string& map) {
+        auto [r, m] = build(flow);
+        rules = r; map = m;
+        auto sim = makeSimJson(r, m);
+        std::vector<Entity> army;
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
+        auto t0 = std::chrono::steady_clock::now();
+        sim->submit(mechCmd(1, game::kCmdMove, army, kNullEntity, at(80, 20)));
+        run(*sim, 40);
+        ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        arrived = 0;
+        for (Entity e : army) if (posOf(*sim, e).x > Fixed::fromInt(49)) ++arrived;
+        if (flow) {
+            auto& g = mod(*sim).state(*sim).grid;
+            CHECK(g.flowStats[0] >= 1 && g.flowStats[0] <= 3 && g.flowStats[1] >= 300);   // one field, hundreds of paths
+            CHECK(mechRoundTrip(*sim, rules, map, 60));
+        }
+    };
+    double msA = 0, msF = 0; int arrA = 0, arrF = 0; std::string r, m;
+    runArmy(false, msA, arrA, r, m);
+    runArmy(true, msF, arrF, r, m);
+    // the dense-crowd separation gives exactly the generic loop's result
+    {
+        auto [r2, m2] = build(true);
+        auto fast = makeSimJson(r2, m2), slow = makeSimJson(r2, m2);
+        mod(*slow).genericSeparation = true;
+        for (auto* s : {fast.get(), slow.get()}) {
+            std::vector<Entity> army;
+            s->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*s).rules().types[u.type].structure) army.push_back(e); });
+            s->submit(mechCmd(1, game::kCmdAttack, army, kNullEntity, at(80, 20)));
+        }
+        int diverged = -1;
+        for (int i = 0; i < 20 * 25 && diverged < 0; ++i) { fast->step(); slow->step(); if (fast->checksum() != slow->checksum()) diverged = i; }
+        CHECK(diverged < 0);
+    }
+    std::printf("  flow fields: 400 units through a gap, 40 s of play %.0f ms (A*: %.0f ms), arrived %d (A*: %d)\n", msF, msA, arrF, arrA);
+    CHECK(arrF >= arrA * 9 / 10 && arrF > 200);
+}
+
+// RTS_BENCH_ARMY=N: N units per side walk into each other on a 160x100 map (prints ms per tick; no checks).
+TEST(mech_bench_army) {
+    const char* env = std::getenv("RTS_BENCH_ARMY");
+    if (!env) return;
+    const int n = std::atoi(env);
+    const bool flow = std::getenv("RTS_BENCH_NOFLOW") == nullptr;
+    std::string rules = std::string(R"({"resources": {"gold": {}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},)") +
+        (flow ? R"("flowFields": true,)" : "") +
+        R"("types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 100}},
+                     "grunt": {"move": {"speed": 3}, "radius": 0.3, "sight": 6, "health": {"max": 60}, "weapons": [{"range": 1, "damage": 5, "cooldown": 1}]}}})";
+    std::string ents = R"({"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[156,96]})";
+    const int cols = 40;
+    for (int side = 1; side <= 2; ++side)
+        for (int i = 0; i < n; ++i) {
+            int x = side == 1 ? 4 + i % cols : 155 - i % cols, z = 4 + (i / cols) % 92;
+            ents += ",{\"type\":\"grunt\",\"owner\":" + std::to_string(side) + ",\"pos\":[" + std::to_string(x) + "." + std::to_string(i / (cols * 92) * 5) + "," + std::to_string(z) + "]}";
+        }
+    auto sim = makeSimJson(rules, flatMap(160, 100, ",\"entities\":[" + ents + "]"));
+    for (int side = 1; side <= 2; ++side) {
+        std::vector<Entity> army;
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == side && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
+        sim->submit(mechCmd(uint8_t(side), game::kCmdAttack, army, kNullEntity, side == 1 ? at(150, 50) : at(10, 50)));
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    const int ticks = 20 * 30;
+    double worst = 0;
+    for (int i = 0; i < ticks; ++i) {
+        auto a = std::chrono::steady_clock::now();
+        sim->step();
+        const double one = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+        if (one > 100) std::printf("  bench army: tick %d took %.0f ms\n", i, one);
+        worst = std::max(worst, one);
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  bench army: %d units, flow %d: %.2f ms per tick (worst %.1f), alive %d / %d\n", 2 * n, int(flow), ms / ticks, worst,
+                countType(*sim, "grunt", 1), countType(*sim, "grunt", 2));
+}

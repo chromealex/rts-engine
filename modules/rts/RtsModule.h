@@ -606,6 +606,13 @@ public:
     void mechBattleStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
     bool mechRouting(Simulation& sim, Entity e) const;
     Fixed moraleMaxOf(uint16_t type) const;
+    bool genericSeparation = false;   // tests: compare the BA separation against the generic loop
+    // BA: separation of overlapping units with a per-cell grid and flat arrays (exactly the pushes of sysMovement)
+    void mechSeparation(Simulation& sim, const std::vector<Fixed>& weight, const std::vector<uint8_t>& anchored, Fixed deadZone, size_t,
+                        const std::function<void(Entity, Vec3)>& push);
+    // BA: a big attack-move group forms a block of rows facing the goal instead of one wide arc (RtsMechBattle.cpp)
+    void mechArmyBlock(Simulation& sim, const std::vector<Entity>& sortedByLateral, Vec3 target, Vec3 dir, Vec3 perp, Fixed spacing,
+                       std::vector<std::pair<Entity, Vec3>>& out);
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

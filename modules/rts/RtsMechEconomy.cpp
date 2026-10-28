@@ -11,6 +11,7 @@ void RtsModule::mechSetup(Simulation& sim, const Json& map) {
     GameState& gs = state(sim);
     MechState& m = gs.mech;
     const MechRules& M = rules_.mech;
+    if (M.flowFields) { gs.grid.flowFields = true; gs.grid.flowMinCells = M.flowMinCells; gs.grid.flowCacheSize = M.flowCache; }
     if (M.market) m.prices = M.basePrice;
     const size_t np = sim.players().size();
     if (M.diplomacy) m.allyRequest.assign(np + 1, std::vector<uint8_t>(np + 1, 0));
