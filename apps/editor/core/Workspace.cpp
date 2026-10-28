@@ -2,6 +2,8 @@
 #include "ScenarioOps.h"
 #include "SchemaOps.h"
 namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // CampaignOps.cpp
+namespace rts::editor { void registerStrategicOps(Workspace& ws); }   // StrategicOps.cpp
+namespace rts::editor { void registerUiOps(Workspace& ws); }         // UiOps.cpp (screens, ui_preview)
 #include "SimTools.h"
 #include "TileOps.h"
 #include "TerrainOps.h"
@@ -9,13 +11,17 @@ namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // Campaign
 #include "DataOps.h"
 #include "BalanceOps.h"
 #include "LightOps.h"
+#include "ScriptOps.h"
+#include "PostFxOps.h"
 #include "PlanetOps.h"
 #include "OverlayOps.h"
 #include "FxOps.h"
 #include "MaterialOps.h"
 #include "BrandingOps.h"
+#include "ToolchainOps.h"
 #include "Projects.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <ctime>
@@ -23,6 +29,9 @@ namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // Campaign
 #include <fstream>
 #include <memory>
 #include <sstream>
+#if !defined(_WIN32)
+#include <sys/wait.h>
+#endif
 #include "engine/pack/FileCopy.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
@@ -171,7 +180,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerMaterialOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerMaterialOps(*this); registerPostFxOps(*this); registerScriptOps(*this); registerToolchainOps(*this); registerStrategicOps(*this); registerUiOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -189,17 +198,41 @@ std::string shellQuote(const std::string& s) {
 static std::string stamp(const char* fmt);
 
 void Workspace::startBuild(const std::string& target, const std::string& config, const std::string& extraArgs) {
-    if (building_) throw std::runtime_error("a build is already running");
     if (project.dir.empty()) throw std::runtime_error("no game is open");
-    if (buildThread_.joinable()) buildThread_.join();
-    if (map.dirty && !map.path.empty()) map.save(map.path, nullptr);
-    building_ = true;
-    std::string cmd = shellQuote(buildTool) + " --project " + shellQuote(project.dir) + " --engine " + shellQuote(engineDir) +
-                      " --target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs) + " 2>&1";
-    { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ = "$ rtsbuild --target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs) + "\n"; buildRc_ = 0; }
+    if (map.dirty && !map.path.empty() && !building_) map.save(map.path, nullptr);
     const bool estimate = extraArgs.find("--estimate") != std::string::npos;   // the Build window's size estimate: one file, overwritten
-    const fs::path logFile = fs::path(logsDir()) / (estimate ? "build-estimate.log" : "build-" + target + "-" + stamp("%Y%m%d-%H%M%S") + ".log");
-    buildThread_ = std::thread([this, cmd, logFile, estimate] {
+    startTool("--target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs), estimate ? "estimate" : "build-" + target, true);
+}
+
+namespace {
+// Progress lines rewritten with '\r' (sdkmanager, emsdk, curl): keep only what was printed last.
+std::string lastSegment(const std::string& line) {
+    std::string body = line, nl;
+    while (!body.empty() && (body.back() == '\n' || body.back() == '\r')) { if (body.back() == '\n') nl = "\n"; body.pop_back(); }
+    size_t cr = body.rfind('\r');
+    return (cr == std::string::npos ? body : body.substr(cr + 1)) + nl;
+}
+} // namespace
+
+void Workspace::startTool(const std::string& args, const std::string& label, bool withProject) {
+    if (building_) throw std::runtime_error("a build is already running");
+    if (withProject && project.dir.empty()) throw std::runtime_error("no game is open");
+    if (buildThread_.joinable()) buildThread_.join();
+    building_ = true;
+    std::string cmd = shellQuote(buildTool) + (withProject ? " --project " + shellQuote(project.dir) : std::string()) + " --engine " + shellQuote(engineDir) + " " + args + " 2>&1";
+#if defined(_WIN32)
+    cmd = "\"" + cmd + "\"";   // cmd.exe strips the outer quotes of a command that starts with one
+#endif
+    const bool keep = label != "estimate";
+    const fs::path logFile = fs::path(logsDir()) / (keep ? label + "-" + stamp("%Y%m%d-%H%M%S") + ".log" : "build-estimate.log");
+    {
+        std::lock_guard<std::mutex> lk(buildMutex_);
+        buildLog_ = "$ rtsbuild " + args + "\n";
+        buildRc_ = 0;
+        runLabel_ = label;
+        logFile_ = logFile.string();
+    }
+    buildThread_ = std::thread([this, cmd, logFile, keep] {
         std::ofstream lf(logFile);
         { std::lock_guard<std::mutex> lk(buildMutex_); lf << buildLog_; }
 #if defined(_WIN32)
@@ -209,12 +242,24 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
 #endif
         if (!p) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += "cannot start rtsbuild\n"; buildRc_ = -1; }
         else {
-            char buf[512];
-            while (std::fgets(buf, sizeof buf, p)) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += buf; lf << buf; lf.flush(); }
+            char buf[1024];
+            std::string line;
+            while (std::fgets(buf, sizeof buf, p)) {
+                line += buf;
+                if (line.back() != '\n' && line.size() < 64 * 1024) continue;   // fgets split a long line
+                std::string clean = lastSegment(line);
+                line.clear();
+                std::lock_guard<std::mutex> lk(buildMutex_);
+                buildLog_ += clean;
+                lf << clean;
+                lf.flush();
+            }
+            if (!line.empty()) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += lastSegment(line); lf << lastSegment(line); }
 #if defined(_WIN32)
             int rc = _pclose(p);
 #else
             int rc = pclose(p);
+            if (rc != -1 && WIFEXITED(rc)) rc = WEXITSTATUS(rc);
 #endif
             std::lock_guard<std::mutex> lk(buildMutex_);
             buildRc_ = rc;
@@ -223,9 +268,33 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
         }
         lf.close();
         std::error_code ec;
-        if (!estimate) rts::pack::copyFileReplace(logFile, logFile.parent_path() / "build-last.log", ec);
+        if (keep) rts::pack::copyFileReplace(logFile, logFile.parent_path() / "build-last.log", ec);
+        ++runCount_;
         building_ = false;
     });
+}
+
+Json Workspace::toolchainCheck(const std::string& target) const {
+    for (char c : target) if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-')) throw std::runtime_error("bad target: " + target);
+    std::string cmd = shellQuote(buildTool) + " --check-toolchain " + target + " --json";
+#if defined(_WIN32)
+    cmd = "\"" + cmd + "\"";
+    FILE* p = _popen(cmd.c_str(), "r");
+#else
+    FILE* p = popen(cmd.c_str(), "r");
+#endif
+    if (!p) throw std::runtime_error("cannot start rtsbuild");
+    std::string out;
+    char buf[1024];
+    while (std::fgets(buf, sizeof buf, p)) out += buf;
+#if defined(_WIN32)
+    _pclose(p);
+#else
+    pclose(p);
+#endif
+    size_t brace = out.find('{');
+    if (brace == std::string::npos) throw std::runtime_error("rtsbuild --check-toolchain: " + out.substr(0, 400));
+    return Json::parse(out.substr(brace));
 }
 
 void Workspace::registerOp(Op op) {
@@ -1137,7 +1206,7 @@ void Workspace::registerCoreOps() {
             cfg.seed = uint64_t(std::max(0, pi(p, "seed", 1)));
             Simulation sim(cfg, std::make_unique<game::RtsModule>());
             const Json simMap = mapForSim(map.toJson(), project.dir);
-            sim.setup(project.rulesJson, simMap);
+            sim.setup(project.simRules(simMap), simMap);
             auto& mod = *dynamic_cast<game::RtsModule*>(&sim.module());
             game::AIConfig ai;
             int diff = pi(p, "difficulty", 1);
@@ -1269,10 +1338,11 @@ void Workspace::registerCoreOps() {
         });
 
     // ---------------------------------------------------------------- build
-    add("build_start", "Package the open game for a platform in the background: macos, ios, android, web, windows, linux, all. Poll build_status.",
-        R"({"properties": {"target": {"type": "string"}, "config": {"type": "string", "enum": ["Debug", "Release"]}}, "required": ["target"]})",
+    add("build_start", "Package the open game for a platform in the background: macos, ios, android, web, windows, linux, all. Poll build_status. "
+        "A missing toolchain ends the build with exit code 3 and a log line RTS_MISSING_TOOLCHAIN <target>: <ids> (toolchain_check / toolchain_install).",
+        R"({"properties": {"target": {"type": "string"}, "config": {"type": "string", "enum": ["Debug", "Release"]}, "installMissing": {"type": "boolean", "description": "install missing toolchains first, see toolchain_check"}}, "required": ["target"]})",
         [this](const Json& p) {
-            startBuild(ps(p, "target"), ps(p, "config", "Release"));
+            startBuild(ps(p, "target"), ps(p, "config", "Release"), p.getBool("installMissing") ? "--install-missing" : "");
             Json r = ok();
             r.set("summary", str("Сборка " + ps(p, "target") + " запущена"));
             return r;

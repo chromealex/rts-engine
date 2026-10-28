@@ -85,7 +85,7 @@ Json batch(Workspace& ws, const Json& p) {
             Json a = arr[0]["faction"], b = arr[1]["faction"];
             arr[0].set("faction", b); arr[1].set("faction", a);
         }
-        auto sim = makeSim(ws.project.rulesJson, map, uint64_t(firstSeed + k));
+        auto sim = makeSim(ws.project.simRules(map), map, uint64_t(firstSeed + k));
         AIConfig ai;
         const int diff = int(p["difficulty"].integer(1));
         ai.thinkTicks = diff == 0 ? 20 : diff == 2 ? 6 : 10;
@@ -211,7 +211,7 @@ DuelResult duelOnce(Workspace& ws, const Side& a, const Side& b, uint64_t seed, 
     const double ax = W / 2.0 - distance / 2.0, bx = W / 2.0 + distance / 2.0;
     place(a, 1, ax); place(b, 2, bx);
     map.set("entities", ents);
-    auto sim = makeSim(ws.project.rulesJson, map, seed);
+    auto sim = makeSim(ws.project.simRules(map), map, seed);
     const uint32_t limit = uint32_t(limitS * double(sim->tickRate()));
     auto order = [&]() { // attack-move every group onto the other group's centre
         for (uint8_t pl = 1; pl <= 2; ++pl) {

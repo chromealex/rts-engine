@@ -46,6 +46,14 @@ input.text:focus { border-color: #ff4a3d; }
 #kb .key:active { border-color: #ff4a3d; }
 #kb .key.on { border-color: #ff4a3d; color: #ffffff; }
 
+/* the game's own screens (ui/screens, screens.rcss) */
+.screen { decorator: vertical-gradient(#292f35ff #0c0d0fff); }
+.screen-title { color: #ff4a3d; }
+.currency { color: #ffb0a8; }
+.badge, .avatar, .progress-fill { background-color: #ff4a3d; }
+.card, .list-row, .stat { border-color: #ffffff18; }
+.stat-value { color: #ff4a3d; }
+
 /* sidebar on the right, like the build sidebars of the genre */
 #card { top: 52dp; bottom: 8dp; right: 8dp; width: 250dp; max-height: none; }
 .touch #card { width: 280dp; }

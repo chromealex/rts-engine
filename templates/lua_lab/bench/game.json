@@ -1,0 +1,8 @@
+// Lua performance bench (docs/lua-coverage.md): N neutral dummies + a per-tick Lua handler.
+// rts_headless --project templates/lua_lab/bench --map maps/n1000_read.json --max-seconds 60
+{
+  "name": "Lua bench", "id": "com.rtsengine.luabench", "version": "0.1.0", "build": 1,
+  "module": "rts", "rules": "rules.json",
+  "maps": [{"file": "maps/n1000_read.json", "title": "1000 units, read"}],
+  "orientation": "landscape"
+}

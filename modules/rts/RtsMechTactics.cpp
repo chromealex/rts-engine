@@ -1,5 +1,5 @@
 // agent-mech stage 3, tactics: weapons that suppress / kill crews / leave craters / rotate turrets, crush,
-// ruins and infection on death, re-crewing abandoned vehicles.
+// ruins and infection on death (crews: RtsOriginals.cpp).
 #include "RtsInternal.h"
 #include <algorithm>
 #include "../../engine/core/FixedMath.h"
@@ -23,7 +23,8 @@ Vec3 rotateTowards(Vec3 from, Vec3 to, Fixed maxTurns) {
 
 bool RtsModule::mechOnFire(Simulation& sim, Entity e, size_t wi, Entity target) {
     World& w = sim.world();
-    if (rules_.mech.battle() && !mechBattleFire(sim, e)) return false;   // stage 4: routing units don't fight; charges
+    if (rules_.mech.battle() && !mechBattleFire(sim, e)) return false;
+    if (rules_.mech.turns && !mechTurnFire(sim, e)) return false;   // stage 4: routing units don't fight; charges
     const MechType& mt = rules_.types[w.get<Unit>(e).type].mech;
     // turret must face the target (rotated in mechTickTactics)
     if (at(mt.turretRate, wi).raw > 0 && w.alive(target)) {
@@ -40,17 +41,6 @@ bool RtsModule::mechOnFire(Simulation& sim, Entity e, size_t wi, Entity target) 
     const Fixed sup = at(mt.suppress, wi);
     if (sup.raw > 0 && rules_.mech.suppression && (!rules_.mech.supTags || (tt.tags & rules_.mech.supTags))) {
         if (auto* s = w.tryGet<Suppression>(target)) s->value = fxMin(Fixed::fromInt(100), s->value + sup);
-    }
-    // snipers kill the crew: the vehicle is left empty and neutral
-    const Fixed kc = at(mt.killsCrew, wi);
-    if (kc.raw > 0 && tt.mech.crew && w.get<Owner>(target).player != 0 && (kc >= kOne || sim.rng().unit() < kc)) {
-        const uint8_t was = w.get<Owner>(target).player;
-        w.get<Owner>(target).player = 0;
-        if (auto* ord = w.tryGet<Orders>(target)) ord->queue.clear();
-        stopMoving(sim, target);
-        if (auto* c = w.tryGet<Combat>(target)) c->target = kNullEntity;
-        if (!w.has<Abandoned>(target)) w.add<Abandoned>(target, Abandoned{was});
-        sim.emit({kEvCaptured, 0, target, e, was, w.get<Transform>(target).pos});
     }
     // craters: the ground at the target becomes cover
     const Fixed cr = at(mt.crater, wi);
@@ -145,23 +135,6 @@ void RtsModule::mechTacticsDeath(Simulation& sim, Entity e) {
     } else {
         spawn(sim, into, owner, p);
     }
-}
-
-bool RtsModule::mechRecrew(Simulation& sim, const Command& cmd) {
-    World& w = sim.world();
-    if (!w.alive(cmd.target) || !w.has<Abandoned>(cmd.target)) return false;
-    const MechType& vt = rules_.types[w.get<Unit>(cmd.target).type].mech;
-    for (Entity p : cmd.units) {
-        if (!w.alive(p) || !w.has<Unit>(p) || w.get<Owner>(p).player != cmd.player) continue;
-        const UnitType& pt = rules_.types[w.get<Unit>(p).type];
-        if (pt.structure || (vt.crewTags && !(pt.tags & vt.crewTags))) continue;
-        Order o;
-        o.type = OrderType::Board;   // walks there; boarding an abandoned vehicle re-crews it (runBoard)
-        o.target = cmd.target;
-        issue(sim, p, o, false);
-        return true;
-    }
-    return true;
 }
 
 } // namespace rts::game

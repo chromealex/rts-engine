@@ -1,0 +1,25 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        ui.screen("$NAME", {
+            open = function(params, doc) end,
+        })
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-header">
+            <button class="back" onclick="ui.back()">@meta.back</button>
+            <div class="screen-title">$TITLE</div>
+        </div>
+        <div class="screen-body">
+        </div>
+    </div>
+</div>
+</body>
+</rml>

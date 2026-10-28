@@ -20,6 +20,7 @@
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
+#include "modules/rts/RtsScript.h"
 #include "modules/rts/gen/MapGen.h"
 
 using namespace rts;
@@ -42,6 +43,30 @@ static Json loadMap(const std::string& mapPath, const std::string& projectDir) {
     };
     if (!game::applyTilesToMap(map, read, &err)) throw std::runtime_error(err);
     return map;
+}
+
+// rules.json with the game's scripts embedded (RtsScript.h)
+static Json loadRules(const std::string& rulesPath, const Json& map, const std::string& projectDir) {
+    Json rules = Json::parseFile(rulesPath);
+    std::string err;
+    auto read = [&](const std::string& p, std::string& out) {
+        std::ifstream f(projectDir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    if (!game::embedScripts(rules, map, read, &err)) throw std::runtime_error(err);
+    return rules;
+}
+
+// Script log lines (errors always, prints unless --quiet).
+static void attachScriptLog(Simulation& sim, bool quiet) {
+    auto* m = sim.module().name() == "rts" ? static_cast<game::RtsModule*>(&sim.module()) : nullptr;
+    if (!m || !m->scripts()) return;
+    for (auto& e : m->scripts()->log()) if (e.error || !quiet) std::printf("[script%s] %s\n", e.error ? " error" : "", e.text.c_str());
+    m->scripts()->onLog = [quiet](const game::ScriptLogEntry& e) {
+        if (e.error || !quiet) std::printf("[script%s t=%u] %s\n", e.error ? " error" : "", e.tick, e.text.c_str());
+    };
 }
 
 struct Args {
@@ -208,7 +233,8 @@ static int benchGroup(Simulation& sim, const Args& a) {
     } else {
         for (int y = 4; y < g.h && int(cells.size()) < a.benchGroup * 3; ++y)
             for (int x = 4; x < 4 + side && x < g.w; ++x) if (g.passable(x, y, layer)) cells.push_back(g.index(x, y));
-        for (int r = 4; r < g.w / 2 && goal < 0; ++r) if (g.passable(g.w - r, g.h - r, layer)) goal = g.index(g.w - r, g.h - r);
+        // goal well inside the map (a crowd needs room around it), the start block in the opposite corner
+        for (int r = g.w / 8; r < g.w / 2 && goal < 0; ++r) if (g.passable(g.w - r, g.h - r, layer)) goal = g.index(g.w - r, g.h - r);
     }
     if (goal < 0 || int(cells.size()) < a.benchGroup) { std::printf("no room for %d units\n", a.benchGroup); return 1; }
     Command c;
@@ -250,6 +276,15 @@ static int benchGroup(Simulation& sim, const Args& a) {
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     int near = 0;
     for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < arriveR) ++near;
+    if (std::getenv("RTS_BENCH_HIST")) {   // where the stragglers are: distance histogram, moving / stopped
+        int hist[12][2] = {};
+        for (Entity e : c.units) {
+            if (!sim.world().alive(e)) continue;
+            const int b = std::min(11, int((sim.world().get<Transform>(e).pos - goalPos).length().toInt() / 10));
+            hist[b][sim.world().get<game::Mobile>(e).moving ? 1 : 0]++;
+        }
+        for (int b = 0; b < 12; ++b) std::printf("  dist %3d-%3d: stopped %d moving %d\n", b * 10, b * 10 + 10, hist[b][0], hist[b][1]);
+    }
     (void)movementNs;
     if (a.profile) printProfile(sim);
     std::printf("Group %d x %s on %dx%d%s: %u ticks %.0f ms = %.0f ticks/s | path total %.0f ms, %.3f ms/tick, worst tick %.1f ms | arrived %d/%d (90%% at %.0f s) | fields peak %zu, %.2f MB | %016llx\n",
@@ -285,13 +320,14 @@ static int play(const Args& a) {
     }
     Json mapJson = loadMap(mapPath, a.project);
     const auto setupT0 = std::chrono::steady_clock::now();
-    Json rulesJson = Json::parseFile(rulesPath);
+    Json rulesJson = loadRules(rulesPath, mapJson, a.project);
     if (a.benchFlow >= 0) {   // benchmark switch: shared flow fields for every group order (on) or none (off)
         Json ff = Json::object();
         ff.set("minGroup", Json::number(int64_t(a.benchFlow ? 2 : 0)));
         rulesJson.member("movement").set("flowField", ff);
     }
     sim.setup(rulesJson, mapJson);
+    attachScriptLog(sim, a.quiet);
     if (!a.quiet && (a.benchPaths > 0 || mapJson["world"].isObject()))   // planets / benchmarks: setup cost incl. the HPA* graphs
         std::printf("Setup: %.0f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - setupT0).count());
     if (auto* rm = dynamic_cast<game::RtsModule*>(&sim.module()); rm && rm->generatedMap()) {
@@ -378,7 +414,11 @@ static int replay(const Args& a) {
     SimConfig cfg;
     cfg.seed = rep.seed; cfg.tickRate = rep.tickRate; cfg.inputDelayTicks = rep.inputDelay;
     Simulation sim(cfg, makeModule(rep.module));
-    sim.setup(Json::parseFile(rep.rulesPath), loadMap(rep.mapPath, fs::path(rep.rulesPath).parent_path().string()));
+    {
+        const std::string dir = fs::path(rep.rulesPath).parent_path().string();
+        Json map = loadMap(rep.mapPath, dir);
+        sim.setup(loadRules(rep.rulesPath, map, dir), map);
+    }
     for (auto& c : rep.commands) sim.submit(c);
     size_t ci = 0;
     while (sim.tick() < rep.endTick) {

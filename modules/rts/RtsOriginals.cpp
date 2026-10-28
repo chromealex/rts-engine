@@ -1,5 +1,6 @@
 // Fidelity mechanics: what the sample games need to play like their originals.
-//   damage     weapon bonuses vs tags (AoE, SC2), melee / pierce armor (AoE), percent armor (WC3), shields (SC)
+//   damage     the damage pipeline of every game: weapon bonuses vs tags (AoE, SC2), melee / pierce armor (AoE),
+//              armor models subtract / percent (WC3) / classes (AoE II), shields (SC)
 //   heroes     skill points and learned levels, hero limit and tiers, free first hero, revive with level (WC3)
 //   economy    gatherers per node (WC3 mine, SC patch), upkeep per resource / on income (WC3, CoH),
 //              power fields (pylons), parallel queues (reactor), territory income per cell (DK mana),
@@ -35,14 +36,19 @@ int learnLevel(const UnitType& t, int index, int skill) {   // hero level needed
 
 // ================================================================= damage
 
-Fixed RtsModule::mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, Entity) {
+// The damage pipeline of every game (dealDamage): bonuses vs tags, shields, then the armor model.
+//   subtract  damage - armor, at least max(minShare x damage, minDamage) (StarCraft, AoE I; old games: raw / 5)
+//   percent   armor a cuts a*k / (1 + a*k); negative armor amplifies (Warcraft III)
+//   classes   class attacks against class armors, computed when the weapon fires (classDamage, AoE II); the damage
+//             arrives as kDamagePure with armor already applied
+Fixed RtsModule::mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, uint16_t dmgType) {
     World& w = sim.world();
     const UnitType& t = rules_.types[w.get<Unit>(target).type];
     if (wd) for (auto& [tags, add] : wd->bonus) if (t.tags & tags) raw += add;
     const ArmorRules& ar = rules_.armor;
     auto floorOf = [&](Fixed r) {
         Fixed m = ar.minShare == Fixed::fromRatio(1, 5) ? r / 5 : r * ar.minShare;
-        return fxMax(m, ar.minDamage);
+        return ar.plainFloor ? m : fxMax(m, ar.minDamage);
     };
     if (auto* sh = w.tryGet<Shield>(target); sh && sh->value.raw > 0) {
         // shields soak first with their own armor; what breaks through goes on to the hull
@@ -53,15 +59,51 @@ Fixed RtsModule::mitigate(Simulation& sim, Entity target, Fixed raw, const Weapo
         sh->value = Fixed{};
         raw = onShield.raw > 0 ? raw * left / onShield : Fixed{};
     }
+    if (dmgType == kDamagePure && ar.model == ArmorModel::Classes) return raw;
     Fixed armor = stat(sim, target, wd && wd->armorClass == 1 ? Stat::Armor2 : Stat::Armor);
-    if (ar.percent) {
+    if (ar.model == ArmorModel::Percent) {
         if (armor.raw >= 0) {
             Fixed ak = armor * ar.perPoint;
             return raw - raw * ak / (kOne + ak);
         }
+        if (ar.negativeExp) {
+            // damage x (2 - (1 - k)^-a), by whole steps and a linear remainder
+            Fixed n = -armor, k = kOne - ar.perPoint, p = kOne;
+            int64_t whole = n.floorInt();
+            for (int64_t i = 0; i < whole && i < 100; ++i) p = p * k;
+            Fixed frac = n - Fixed::fromInt(whole);
+            p = p * (kOne - (kOne - k) * frac);
+            return raw * (Fixed::fromInt(2) - p);
+        }
         return raw * (kOne + fxMin(-armor * ar.perPoint, Fixed::fromRatio(71, 100)));
     }
     return fxMax(raw - armor, floorOf(raw));
+}
+
+// Classes model (Age of Empires II): damage = max(minDamage, sum over the weapon's class attacks of max(0, attack - armor
+// of that class)); base classes always count (armor upgrades raise them), bonus classes only against types that have them.
+void RtsModule::classDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const {
+    World& w = sim.world();
+    if (!w.alive(target) || !w.has<Unit>(target)) return;
+    const UnitType& at = rules_.types[w.get<Unit>(attacker).type];
+    const UnitType& tt = rules_.types[w.get<Unit>(target).type];
+    if (weapon >= at.weapons.size()) return;
+    const WeaponDef& wd = at.weapons[weapon];
+    const Fixed base = wd.damage;
+    const Fixed scale = base.raw > 0 ? dmg / base : kOne;   // techs, buffs, squads, height
+    const Fixed armorBonus = stat(sim, target, Stat::Armor) - tt.armor;
+    Fixed total{};
+    auto one = [&](uint16_t cls, Fixed amount) {
+        const bool isBase = int(cls) < rules_.armor.baseClasses;
+        if (!isBase && !(tt.classMask & (uint64_t(1) << cls))) return;   // bonus vs a class it doesn't have
+        Fixed armor = cls < tt.classArmors.size() ? tt.classArmors[cls] : Fixed{};
+        if (isBase) armor += armorBonus;
+        total += fxMax(Fixed{}, amount * scale - armor);
+    };
+    if (wd.attacks.empty()) one(0, base);
+    else for (auto& a : wd.attacks) one(a.cls, a.amount);
+    dmg = fxMax(rules_.armor.minDamage, total);
+    dmgType = kDamagePure;
 }
 
 void RtsModule::afterHit(Simulation& sim, Entity target, Entity source, const WeaponDef* wd, bool killed) {
@@ -69,7 +111,7 @@ void RtsModule::afterHit(Simulation& sim, Entity target, Entity source, const We
     Unit& u = w.get<Unit>(target);
     const UnitType& t = rules_.types[u.type];
     const bool src = w.alive(source) && w.has<Unit>(source);
-    if (!killed && wd && wd->killsCrew.raw > 0 && t.crew != kNoType) {
+    if (!killed && wd && wd->killsCrew.raw > 0 && t.crewed) {
         Owner& o = w.get<Owner>(target);
         if (o.player != 0 && sim.rng().unit() < wd->killsCrew) {
             GameState& gs = state(sim);
@@ -254,18 +296,12 @@ void RtsModule::applyLearn(Simulation& sim, Entity e, int index) {
 
 // ================================================================= economy
 
-// Gather multiplier (upkeep) of a player for a resource. Two models merged from parallel work:
-// originals: per-resource multipliers; agent-mech: upkeep applies only to rules mech.upkeep resources.
+// Gather multiplier (upkeep) of a player for a resource: per resource when tiers name resources (economyOriginals).
 Fixed RtsModule::gatherMultFor(Simulation& sim, uint8_t player, int res) const {
     auto* gs = sim.world().resource<GameState>();
     if (player >= gs->players.size()) return kOne;
     const auto& p = gs->players[player];
-    if (rules_.originals) {
-        if (res >= 0 && size_t(res) < p.gatherMultRes.size()) return p.gatherMultRes[size_t(res)];
-        return p.gatherMult;
-    }
-    const uint32_t mask = rules_.mech.upkeepMask;
-    if (mask && (res < 0 || !(mask & (1u << res)))) return kOne;
+    if (rules_.originals && res >= 0 && size_t(res) < p.gatherMultRes.size()) return p.gatherMultRes[size_t(res)];
     return p.gatherMult;
 }
 
@@ -428,7 +464,9 @@ bool RtsModule::canCrew(Simulation& sim, Entity unit, Entity vehicle) const {
     if (!w.alive(unit) || !w.alive(vehicle) || unit == vehicle || !w.has<Unit>(vehicle)) return false;
     const UnitType& ut = rules_.types[w.get<Unit>(unit).type];
     const UnitType& vt = rules_.types[w.get<Unit>(vehicle).type];
-    return ut.crews && vt.crew != kNoType && w.get<Owner>(vehicle).player == 0 && w.get<Unit>(vehicle).hp.raw > 0;
+    if (!vt.crewed || w.get<Owner>(vehicle).player != 0 || w.get<Unit>(vehicle).hp.raw <= 0) return false;
+    if (ut.crews) return true;
+    return vt.crewOpen && !ut.structure && !ut.crewed && w.has<Mobile>(unit) && (!vt.crewAccepts || (ut.tags & vt.crewAccepts));
 }
 
 bool RtsModule::crewEnter(Simulation& sim, Entity unit, Entity vehicle) {

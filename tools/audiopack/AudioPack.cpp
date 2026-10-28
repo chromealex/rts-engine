@@ -1,3 +1,4 @@
+#include "engine/pack/FileCopy.h"
 #include "AudioPack.h"
 
 #include <algorithm>
@@ -447,9 +448,16 @@ bool copyTree(const fs::path& from, const fs::path& to, std::error_code& ec) {
     if (ec) return false;
     for (auto it = fs::recursive_directory_iterator(from, fs::directory_options::skip_permission_denied, ec);
          !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
-        const fs::path out = to / it->path().lexically_relative(from);
+        const fs::path rel = it->path().lexically_relative(from);
+        // project outputs and editor state live inside the project (Builds/ holds this very staging dir)
+        const std::string top = rel.begin() == rel.end() ? std::string() : rel.begin()->string();
+        if (top == "Builds" || top == "dist" || top == "logs" || top == "Logs" || top == ".rtsengine") {
+            if (it->is_directory(ec)) it.disable_recursion_pending();
+            continue;
+        }
+        const fs::path out = to / rel;
         if (it->is_directory(ec)) fs::create_directories(out, ec);
-        else if (it->is_regular_file(ec)) fs::copy_file(it->path(), out, fs::copy_options::overwrite_existing, ec);
+        else if (it->is_regular_file(ec)) rts::pack::copyFileReplace(it->path(), out, ec);
         if (ec) return false;
     }
     return !ec;

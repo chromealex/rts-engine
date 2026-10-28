@@ -304,13 +304,13 @@ TEST(mech_shields_upkeep_workers) {
     World& w = sim->world();
     run(*sim, 0.2);
     Entity z = findType(*sim, "zealot", 1);
-    CHECK(w.has<game::MechShield>(z) && w.get<game::MechShield>(z).hp == Fixed::fromInt(50));
+    CHECK(w.has<game::Shield>(z) && w.get<game::Shield>(z).value == Fixed::fromInt(50));
     mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);
-    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::MechShield>(z).hp == Fixed::fromInt(20));
+    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::Shield>(z).value == Fixed::fromInt(20));
     mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);   // 20 shield, 10 left - 1 armor = 9 to hp
-    CHECK(w.get<game::MechShield>(z).hp.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
+    CHECK(w.get<game::Shield>(z).value.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
     run(*sim, 4);
-    CHECK(w.get<game::MechShield>(z).hp > Fixed::fromInt(10));   // regenerates after the delay
+    CHECK(w.get<game::Shield>(z).value > Fixed::fromInt(10));   // regenerates after the delay
     // two peons on a mine with room for one: only one gathers at a time; upkeep halves gold, not wood
     std::vector<Entity> peons;
     w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && mod(*sim).rules().types[u.type].id == "peon") peons.push_back(e); });
@@ -685,11 +685,11 @@ TEST(mech_tactics) {
     CHECK(mod(*sim).stat(*sim, rifle, game::Stat::Speed).raw == 0);
     // the sniper kills the tank crew: it turns neutral; a rifleman re-crews it
     run(*sim, 3);
-    CHECK(w.get<Owner>(tank).player == 0 && w.has<game::Abandoned>(tank));
+    CHECK(w.get<Owner>(tank).player == 0 && mod(*sim).canCrew(*sim, covered, tank));   // empty: the rifleman may man it
     sim->submit(mechCmd(2, game::kCmdMove, {unitNear(*sim, 27, 15)}, kNullEntity, at(39, 19)));   // the sniper leaves
     sim->submit(mechCmd(1, game::kCmdSmart, {covered}, tank));
     run(*sim, 12);
-    CHECK(w.get<Owner>(tank).player == 1 && !w.has<game::Abandoned>(tank));
+    CHECK(w.get<Owner>(tank).player == 1 && !mod(*sim).canCrew(*sim, covered, tank));
     // an APC runs over infantry
     Entity apc = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("apc")), 2, at(25, 9));
     Entity victim = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("rifle")), 1, at(30, 9));
@@ -899,4 +899,304 @@ TEST(mech_battle) {
     for (int i = 0; i < 20 * 3 && hpOf(*sim, dummy) == after; ++i) sim->step();
     CHECK(after - hpOf(*sim, dummy) == Fixed::fromInt(10));   // the next blow is plain
     CHECK(mechRoundTrip(*sim, rules, map, 60));
+}
+
+// ---------------------------------------------------------------- BA: flow fields for big armies (stage 4)
+#include <chrono>
+TEST(mech_flow_fields) {
+    // a wall with one gap between the army and its goal
+    std::vector<std::string> rows(64, std::string(96, '.'));
+    for (int y = 0; y < 64; ++y) if (y < 34 || y > 44) rows[size_t(y)][48] = '#';
+    auto build = [&](bool flow) {
+        std::string rules = std::string(R"({"resources": {"gold": {}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},)") +
+            (flow ? R"("flowFields": {"minCells": 6},)" : "") +
+            R"("types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 100}},
+                         "grunt": {"move": {"speed": 4}, "radius": 0.3, "health": {"max": 10}}}})";
+        std::string ents = R"({"type":"hq","owner":1,"pos":[2,60]},{"type":"hq","owner":2,"pos":[92,60]})";
+        for (int i = 0; i < 400; ++i) ents += ",{\"type\":\"grunt\",\"owner\":1,\"pos\":[" + std::to_string(4 + i % 20 * 2) + "," + std::to_string(4 + i / 20 * 2) + "]}";
+        return std::make_pair(rules, mapRows(96, 64, rows, ",\"entities\":[" + ents + "]"));
+    };
+    auto runArmy = [&](bool flow, double& ms, int& arrived, std::string& rules, std::string& map) {
+        auto [r, m] = build(flow);
+        rules = r; map = m;
+        auto sim = makeSimJson(r, m);
+        std::vector<Entity> army;
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
+        auto t0 = std::chrono::steady_clock::now();
+        sim->submit(mechCmd(1, game::kCmdMove, army, kNullEntity, at(80, 20)));
+        run(*sim, 1);
+        int onField = 0;
+        for (Entity e : army) if (sim->world().get<game::Mobile>(e).flow) ++onField;
+        if (flow) CHECK(onField >= 300);   // hundreds of units on one shared field
+        if (flow && onField < 300) std::printf("  on the field after 1 s: %d\n", onField);
+        run(*sim, 39);
+        ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        arrived = 0;
+        for (Entity e : army) if (posOf(*sim, e).x > Fixed::fromInt(49)) ++arrived;
+        if (flow) {
+            auto& g = mod(*sim).state(*sim).grid;
+            CHECK(g.flowCount() >= 1 && g.flowCount() <= 3);   // one field (goal area) for the whole army
+            CHECK(mechRoundTrip(*sim, rules, map, 60));
+        }
+    };
+    double msA = 0, msF = 0; int arrA = 0, arrF = 0; std::string r, m;
+    runArmy(false, msA, arrA, r, m);
+    runArmy(true, msF, arrF, r, m);
+    // the dense-crowd separation gives exactly the generic loop's result
+    {
+        auto [r2, m2] = build(true);
+        auto fast = makeSimJson(r2, m2), slow = makeSimJson(r2, m2);
+        mod(*slow).genericSeparation = true;
+        for (auto* s : {fast.get(), slow.get()}) {
+            std::vector<Entity> army;
+            s->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*s).rules().types[u.type].structure) army.push_back(e); });
+            s->submit(mechCmd(1, game::kCmdAttack, army, kNullEntity, at(80, 20)));
+        }
+        int diverged = -1;
+        for (int i = 0; i < 20 * 25 && diverged < 0; ++i) { fast->step(); slow->step(); if (fast->checksum() != slow->checksum()) diverged = i; }
+        CHECK(diverged < 0);
+    }
+    std::printf("  flow fields: 400 units through a gap, 40 s of play %.0f ms (A*: %.0f ms), arrived %d (A*: %d)\n", msF, msA, arrF, arrA);
+    CHECK(arrF >= arrA * 9 / 10 && arrF > 200);
+}
+
+// RTS_BENCH_ARMY=N: N units per side walk into each other on a 160x100 map (prints ms per tick; no checks).
+TEST(mech_bench_army) {
+    const char* env = std::getenv("RTS_BENCH_ARMY");
+    if (!env) return;
+    const int n = std::atoi(env);
+    const bool flow = std::getenv("RTS_BENCH_NOFLOW") == nullptr;
+    std::string rules = std::string(R"({"resources": {"gold": {}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},)") +
+        (flow ? R"("flowFields": true,)" : "") +
+        R"("types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 100}},
+                     "grunt": {"move": {"speed": 3}, "radius": 0.3, "sight": 6, "health": {"max": 60}, "weapons": [{"range": 1, "damage": 5, "cooldown": 1}]}}})";
+    std::string ents = R"({"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[156,96]})";
+    const int cols = 40;
+    for (int side = 1; side <= 2; ++side)
+        for (int i = 0; i < n; ++i) {
+            int x = side == 1 ? 4 + i % cols : 155 - i % cols, z = 4 + (i / cols) % 92;
+            ents += ",{\"type\":\"grunt\",\"owner\":" + std::to_string(side) + ",\"pos\":[" + std::to_string(x) + "." + std::to_string(i / (cols * 92) * 5) + "," + std::to_string(z) + "]}";
+        }
+    auto sim = makeSimJson(rules, flatMap(160, 100, ",\"entities\":[" + ents + "]"));
+    for (int side = 1; side <= 2; ++side) {
+        std::vector<Entity> army;
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == side && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
+        sim->submit(mechCmd(uint8_t(side), game::kCmdAttack, army, kNullEntity, side == 1 ? at(150, 50) : at(10, 50)));
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    const int ticks = 20 * 30;
+    double worst = 0;
+    for (int i = 0; i < ticks; ++i) {
+        auto a = std::chrono::steady_clock::now();
+        sim->step();
+        const double one = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - a).count();
+        if (one > 100) std::printf("  bench army: tick %d took %.0f ms\n", i, one);
+        worst = std::max(worst, one);
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    std::printf("  bench army: %d units, flow %d: %.2f ms per tick (worst %.1f), alive %d / %d\n", 2 * n, int(flow), ms / ticks, worst,
+                countType(*sim, "grunt", 1), countType(*sim, "grunt", 2));
+}
+
+// ---------------------------------------------------------------- L: conveyors, producers, crafters (stage 4)
+TEST(mech_logistics) {
+    std::string rules = std::string(R"({"resources": {"ore": {}, "plate": {}}, )") + kVic + R"(,
+      "types": {
+        "core": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "beltInput": ["plate", "ore"]},
+        "drill": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "beltOutput": {"resource": "ore", "amount": 1, "interval": 0.5}},
+        "smelter": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "craft": {"in": {"ore": 2}, "out": {"plate": 1}, "time": 1}},
+        "belt": {"structure": {"footprint": [1, 1]}, "health": {"max": 50}, "cost": {"time": 0.5}, "conveyor": {"speed": 4}},
+        "builder": {"move": {"speed": 4}, "health": {"max": 50}, "builds": ["belt"]}
+      }})";
+    // drill (2..3) -> belts x=4..9 -> smelter (10..11) -> belts x=12..17 -> core (18..19), all on rows 5..6
+    std::string ents = R"({"type":"drill","owner":1,"pos":[3,6]},{"type":"smelter","owner":1,"pos":[11,6]},{"type":"core","owner":1,"pos":[19,6]})";
+    for (int x = 4; x <= 9; ++x) ents += ",{\"type\":\"belt\",\"owner\":1,\"pos\":[" + std::to_string(x) + ".5,5.5],\"dir\":\"e\"}";
+    for (int x = 12; x <= 17; ++x) ents += ",{\"type\":\"belt\",\"owner\":1,\"pos\":[" + std::to_string(x) + ".5,5.5],\"dir\":\"e\"}";
+    ents += R"(,{"type":"builder","owner":1,"pos":[5,12]},{"type":"core","owner":2,"pos":[36,14]})";
+    std::string map = flatMap(40, 16, ",\"entities\":[" + ents + "]");
+    auto sim = makeSimJson(rules, map);
+    World& w = sim->world();
+    run(*sim, 0.2);
+    Entity b4 = unitNear(*sim, 4, 5);
+    CHECK(w.has<game::Belt>(b4) && w.get<game::Belt>(b4).dir == 1);
+    run(*sim, 20);
+    // ore flows into the smelter, plates reach the core
+    CHECK(stockOf(*sim, 1, "plate") >= Fixed::fromInt(5));
+    CHECK(stockOf(*sim, 1, "ore") == Fixed{});
+    // turning the last belt north breaks the line: no more plates
+    Entity b17 = unitNear(*sim, 17, 5);
+    sim->submit(mechCmd(1, game::kCmdRotate, {b17}, kNullEntity, {}, 4));
+    run(*sim, 2);
+    Fixed p0 = stockOf(*sim, 1, "plate");
+    run(*sim, 6);
+    CHECK(stockOf(*sim, 1, "plate") == p0);
+    sim->submit(mechCmd(1, game::kCmdRotate, {b17}, kNullEntity, {}, 1));
+    run(*sim, 6);
+    CHECK(stockOf(*sim, 1, "plate") > p0);
+    // build_line lays belts pointing along the line
+    Entity builder = unitNear(*sim, 5, 12);
+    const int bt = mod(*sim).rules().findType("belt");
+    sim->submit(mechCmd(1, game::kCmdBuildLine, {builder}, kNullEntity, at(10, 12), int64_t(bt) | (int64_t(10) << 16) | (int64_t(8) << 32)));
+    run(*sim, 20);
+    CHECK(countType(*sim, "belt", 1) == 12 + 5);
+    Entity nb;
+    w.each<game::Belt, Transform>([&](Entity e, game::Belt&, Transform& t) { if (t.pos.x.floorInt() == 10 && t.pos.z.floorInt() == 10) nb = e; });
+    CHECK(w.alive(nb) && w.has<game::Belt>(nb) && w.get<game::Belt>(nb).dir == 4);
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+}
+
+// ---------------------------------------------------------------- TR: doors with a lock (Dungeon Keeper) and gate deaths
+TEST(mech_gate_lock) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "types": {
+        "gate": {"structure": {"footprint": [1, 2]}, "gate": "own", "health": {"max": 600}},
+        "grunt": {"move": {"speed": 3}, "sight": 6, "health": {"max": 500}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}]}}})";
+    std::vector<std::string> rows(12, std::string(30, '.'));
+    for (int y = 0; y < 12; ++y) if (y != 5 && y != 6) rows[size_t(y)][15] = '#';
+    std::string map = mapRows(30, 12, rows, R"(,"entities":[{"type":"gate","owner":1,"pos":[15.5,6]},{"type":"grunt","owner":1,"pos":[10,3]},{"type":"grunt","owner":2,"pos":[27,10]}])");
+    auto g = makeSimJson(rules, map);
+    World& w = g->world();
+    Entity mine = findType(*g, "grunt", 1), gate = findType(*g, "gate", 1);
+    run(*g, 0.5);
+    g->submit(mechCmd(1, game::kCmdLock, {gate}, kNullEntity, {}, 1));
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(22, 3)));
+    run(*g, 10);
+    CHECK(posOf(*g, mine).x < Fixed::fromInt(15));   // locked: even the owner stays inside
+    CHECK(hpOf(*g, gate) == Fixed::fromInt(600));    // and does not attack its own door
+    g->submit(mechCmd(1, game::kCmdLock, {gate}, kNullEntity, {}, 2));
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(22, 3)));
+    run(*g, 10);
+    CHECK(posOf(*g, mine).x > Fixed::fromInt(18));
+    CHECK(mechRoundTrip(*g, rules, map, 40));
+    // a destroyed gate leaves the gap walkable (the footprint is unblocked exactly once)
+    g->submit(mechCmd(1, game::kCmdLock, {gate}, kNullEntity, {}, 1));
+    run(*g, 0.2);
+    w.get<game::Unit>(gate).hp = Fixed{};
+    run(*g, 0.5);
+    auto& grid = mod(*g).state(*g).grid;
+    CHECK(grid.passable(15, 5, 1) && grid.passable(15, 6, 1));
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(5, 6)));
+    run(*g, 10);
+    CHECK(posOf(*g, mine).x < Fixed::fromInt(10));
+}
+
+// ---------------------------------------------------------------- TB: turn-based mode (Heroes / XCOM battles)
+TEST(mech_turns) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "turns": {"moveSeconds": 3, "attacks": 1},
+      "types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}},
+                "rifle": {"move": {"speed": 3}, "sight": 12, "health": {"max": 100}, "weapons": [{"range": 6, "damage": 10, "cooldown": 0.2}]}}})";
+    std::string map = flatMap(40, 12, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[36,2]},
+        {"type":"rifle","owner":1,"pos":[5,6]},{"type":"rifle","owner":2,"pos":[26,6]},{"type":"rifle","owner":2,"pos":[26,8]}])");
+    auto sim = makeSimJson(rules, map);
+    Entity mine = unitNear(*sim, 5, 6), foe = unitNear(*sim, 26, 6);
+    run(*sim, 0.2);
+    CHECK(mod(*sim).turnPlayer(*sim) == 1);
+    // player 2 can't act on player 1's turn; player 1 moves at most speed x moveSeconds = 9 cells
+    sim->submit(mechCmd(2, game::kCmdMove, {foe}, kNullEntity, at(20, 6)));
+    sim->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(25, 6)));
+    run(*sim, 6);
+    CHECK(posOf(*sim, foe).x > Fixed::fromInt(25));
+    CHECK(posOf(*sim, mine).x > Fixed::fromRatio(135, 10) && posOf(*sim, mine).x < Fixed::fromRatio(145, 10));
+    sim->submit(mechCmd(1, game::kCmdEndTurn, {}));
+    run(*sim, 0.3);
+    CHECK(mod(*sim).turnPlayer(*sim) == 2);
+    // player 2 walks into range: its rifles shoot once each this turn; player 1 does not shoot back
+    sim->submit(mechCmd(2, game::kCmdAttack, {foe, unitNear(*sim, 26, 8)}, mine));
+    run(*sim, 5);
+    CHECK(hpOf(*sim, mine) == Fixed::fromInt(80));
+    CHECK(hpOf(*sim, foe) == Fixed::fromInt(100));
+    sim->submit(mechCmd(2, game::kCmdEndTurn, {}));
+    run(*sim, 0.3);
+    // player 1's turn: one shot (at whichever rifle it aims first)
+    Entity foe2 = unitNear(*sim, 21, 8);
+    sim->submit(mechCmd(1, game::kCmdAttack, {mine}, foe));
+    run(*sim, 3);
+    CHECK(hpOf(*sim, foe) + hpOf(*sim, foe2) == Fixed::fromInt(190));
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+    // bots take turns and finish the match
+    auto ai = makeSimJson(rules, map);
+    std::vector<game::RtsAI> bots;
+    for (auto& p : ai->players()) bots.emplace_back(p.slot, 7);
+    int turnsSeen = 0, shots = 0;
+    for (int i = 0; i < 20 * 120 && ai->result() == 0; ++i) {
+        for (auto& b : bots) b.update(*ai);
+        ai->step();
+        for (auto& ev : ai->events()) { if (ev.type == game::kEvTurn) ++turnsSeen; if (ev.type == game::kEvAttack) ++shots; }
+    }
+    std::printf("  turns: bots played %d turns, %d shots\n", turnsSeen, shots);
+    CHECK(turnsSeen >= 8);
+    CHECK(shots > 0);
+}
+
+// ---------------------------------------------------------------- TB: strategic map (Total War campaign layer)
+#include "modules/strategic/Strategic.h"
+TEST(mech_strategic) {
+    Json rules = Json::parse(std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(,
+      "types": {"spear": {"move": {"speed": 3}, "sight": 30, "radius": 0.4, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}], "cost": {"gold": 20}},
+                "archer": {"move": {"speed": 3}, "sight": 30, "radius": 0.4, "health": {"max": 60}, "weapons": [{"range": 6, "damage": 8, "cooldown": 1}], "cost": {"gold": 30}}}})");
+    Json def = Json::parse(R"({"players": [{"name": "Red"}, {"name": "Blue"}], "start": {"gold": 100}, "movesPerTurn": 1,
+      "recruit": {"spear": {}, "archer": {}},
+      "provinces": [{"id": "a", "owner": 1, "income": {"gold": 40}, "adj": ["b"]}, {"id": "b", "adj": ["c"], "income": {"gold": 10}},
+                    {"id": "c", "adj": ["d"], "income": {"gold": 10}}, {"id": "d", "owner": 2, "income": {"gold": 40}}],
+      "armies": [{"owner": 1, "at": "a", "units": {"spear": 12, "archer": 6}}, {"owner": 2, "at": "d", "units": {"spear": 6}}]})");
+    auto g = strategic::StrategicGame::create(def, rules, 5);
+    CHECK(g.current() == 1 && g.turn() == 1);
+    std::string err;
+    CHECK(!g.move(2, 2, g.findProvince("c"), &err) && err == "not your turn");
+    CHECK(!g.move(1, 1, g.findProvince("c"), &err) && err == "not adjacent");
+    CHECK(g.move(1, 1, g.findProvince("b"), &err));
+    CHECK(g.provinces()[size_t(g.findProvince("b"))].owner == 1);
+    CHECK(!g.move(1, 1, g.findProvince("c"), &err));   // one move per turn
+    CHECK(g.recruit(1, g.findProvince("a"), "spear", 5, &err) && g.treasury(1, 0) == Fixed::fromInt(0));
+    CHECK(!g.recruit(1, g.findProvince("a"), "spear", 1, &err));   // no gold left
+    CHECK(g.endTurn(1, &err) && g.current() == 2 && g.treasury(2, 0) == Fixed::fromInt(140));
+    CHECK(g.endTurn(2, &err) && g.current() == 1 && g.turn() == 2 && g.treasury(1, 0) == Fixed::fromInt(50));
+    // a save round trip keeps everything
+    auto g2 = strategic::StrategicGame::fromJson(g.toJson(), rules);
+    CHECK(g2.checksum() == g.checksum());
+    // bots play: the stronger red side wins the campaign, auto-resolved battles on the way
+    for (int k = 0; k < 40 && !g.winner(); ++k) g.botTurn(g.current());
+    CHECK(g.winner() == 1);
+    CHECK(!g.battles().empty());
+    // simulated battle on the RTS rules: 10 spears beat 4
+    Json def2 = Json::parse(R"({"players": [{"name": "Red"}, {"name": "Blue"}], "battle": {"mode": "simulate", "seconds": 120, "size": [40, 24]},
+      "provinces": [{"id": "x", "owner": 1, "adj": ["y"]}, {"id": "y", "owner": 2}],
+      "armies": [{"owner": 1, "at": "x", "units": {"spear": 10}}, {"owner": 2, "at": "y", "units": {"spear": 4}}]})");
+    auto s = strategic::StrategicGame::create(def2, rules, 9);
+    CHECK(s.move(1, 1, s.findProvince("y"), &err));
+    CHECK(s.battles().size() == 1 && s.battles()[0].simulated && s.battles()[0].winner == 1);
+    CHECK(s.provinces()[1].owner == 1 && s.winner() == 1);
+    int left = 0;
+    for (auto& a : s.armies()) if (a.owner == 1) left = a.total();
+    std::printf("  strategic: simulated battle 10 vs 4 spears, %d survive\n", left);
+    CHECK(left >= 5 && left <= 10);
+    // the same battle again gives the same result (deterministic)
+    auto s2 = strategic::StrategicGame::create(def2, rules, 9);
+    CHECK(s2.move(1, 1, s2.findProvince("y"), &err) && s2.checksum() == s.checksum());
+}
+
+// ---------------------------------------------------------------- SP: free 3D flight (Homeworld)
+TEST(mech_space_flight) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "types": {
+        "fighter": {"move": {"speed": 5, "layer": "air"}, "sight": 30, "health": {"max": 100}, "altitude": {"min": 0, "max": 30, "climb": 5, "start": 2},
+                    "weapons": [{"range": 4, "damage": 10, "cooldown": 1, "targets": ["air", "ground"]}]},
+        "frigate": {"move": {"speed": 2, "layer": "air"}, "sight": 30, "health": {"max": 500}, "altitude": {"min": 0, "max": 30, "climb": 2, "start": 20}}}})";
+    std::string map = flatMap(40, 20, R"(,"entities":[{"type":"fighter","owner":1,"pos":[5,10]},{"type":"frigate","owner":2,"pos":[8,10]}])");
+    auto sim = makeSimJson(rules, map);
+    Entity f = unitNear(*sim, 5, 10), fr = unitNear(*sim, 8, 10);
+    run(*sim, 0.2);
+    CHECK(posOf(*sim, fr).y == Fixed::fromInt(20) && posOf(*sim, f).y == Fixed::fromInt(2));
+    // 3 cells apart on the map but 18 apart in height: out of range
+    CHECK(mod(*sim).contactDistance(*sim, f, fr) > Fixed::fromInt(15));
+    sim->submit(mechCmd(1, game::kCmdHold, {f}));
+    run(*sim, 2);
+    CHECK(hpOf(*sim, fr) == Fixed::fromInt(500));
+    // climbing to the frigate's altitude brings it in range
+    Command up = mechCmd(1, game::kCmdMove, {f}, kNullEntity, Vec3{Fixed::fromInt(6), Fixed::fromInt(20), Fixed::fromInt(10)});
+    sim->submit(up);
+    run(*sim, 5);
+    CHECK(posOf(*sim, f).y == Fixed::fromInt(20));
+    sim->submit(mechCmd(1, game::kCmdAttack, {f}, fr));
+    run(*sim, 3);
+    CHECK(hpOf(*sim, fr) < Fixed::fromInt(500));
+    CHECK(mechRoundTrip(*sim, rules, map, 40));
 }
