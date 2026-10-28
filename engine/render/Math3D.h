@@ -20,6 +20,45 @@ inline float3 cross(float3 a, float3 b) { return {a.y * b.z - a.z * b.y, a.z * b
 inline float length(float3 a) { return std::sqrt(dot(a, a)); }
 inline float3 normalize(float3 a) { float l = length(a); return l > 1e-8f ? a * (1.0f / l) : float3{0, 1, 0}; }
 inline float3 lerp(float3 a, float3 b, float t) { return a + (b - a) * t; }
+inline float3 mul(float3 a, float3 b) { return {a.x * b.x, a.y * b.y, a.z * b.z}; }
+inline float3 min3(float3 a, float3 b) { return {a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y, a.z < b.z ? a.z : b.z}; }
+inline float3 max3(float3 a, float3 b) { return {a.x > b.x ? a.x : b.x, a.y > b.y ? a.y : b.y, a.z > b.z ? a.z : b.z}; }
+
+// Unit quaternion (x, y, z, w); rotation of v is q * v * q^-1.
+struct quat {
+    float x = 0, y = 0, z = 0, w = 1;
+    quat operator*(const quat& b) const {
+        return {w * b.x + x * b.w + y * b.z - z * b.y, w * b.y - x * b.z + y * b.w + z * b.x,
+                w * b.z + x * b.y - y * b.x + z * b.w, w * b.w - x * b.x - y * b.y - z * b.z};
+    }
+    static quat axisAngle(float3 axis, float a) {
+        float3 n = normalize(axis); float s = std::sin(a * 0.5f);
+        return {n.x * s, n.y * s, n.z * s, std::cos(a * 0.5f)};
+    }
+    float3 rotate(float3 v) const {
+        float3 u{x, y, z};
+        float3 t = cross(u, v) * 2.0f;
+        return v + t * w + cross(u, t);
+    }
+};
+inline float dot(const quat& a, const quat& b) { return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w; }
+inline quat qnormalize(quat q) {
+    float l = std::sqrt(dot(q, q));
+    return l > 1e-8f ? quat{q.x / l, q.y / l, q.z / l, q.w / l} : quat{};
+}
+// Normalized lerp along the shortest arc: cheap and good enough for animation keys and blending.
+inline quat nlerp(quat a, quat b, float t) {
+    if (dot(a, b) < 0) b = {-b.x, -b.y, -b.z, -b.w};
+    return qnormalize(quat{a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t, a.w + (b.w - a.w) * t});
+}
+inline quat slerp(quat a, quat b, float t) {
+    float d = dot(a, b);
+    if (d < 0) { b = {-b.x, -b.y, -b.z, -b.w}; d = -d; }
+    if (d > 0.9995f) return nlerp(a, b, t);
+    float th = std::acos(d), s = std::sin(th);
+    float wa = std::sin((1 - t) * th) / s, wb = std::sin(t * th) / s;
+    return {a.x * wa + b.x * wb, a.y * wa + b.y * wb, a.z * wa + b.z * wb, a.w * wa + b.w * wb};
+}
 
 // Column-major 4x4: m[col*4 + row]
 struct mat4 {
@@ -78,7 +117,38 @@ struct mat4 {
         else { r.at(2, 2) = -2 / (zf - zn); r.at(2, 3) = -(zf + zn) / (zf - zn); }
         return r;
     }
+    static mat4 rotateX(float a) {
+        mat4 r; float c = std::cos(a), s = std::sin(a);
+        r.at(1, 1) = c; r.at(1, 2) = -s; r.at(2, 1) = s; r.at(2, 2) = c; return r;
+    }
+    static mat4 rotateZ(float a) {
+        mat4 r; float c = std::cos(a), s = std::sin(a);
+        r.at(0, 0) = c; r.at(0, 1) = -s; r.at(1, 0) = s; r.at(1, 1) = c; return r;
+    }
+    static mat4 rotate(const quat& q) {
+        mat4 r;
+        const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z, xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+        const float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
+        r.at(0, 0) = 1 - 2 * (yy + zz); r.at(0, 1) = 2 * (xy - wz); r.at(0, 2) = 2 * (xz + wy);
+        r.at(1, 0) = 2 * (xy + wz); r.at(1, 1) = 1 - 2 * (xx + zz); r.at(1, 2) = 2 * (yz - wx);
+        r.at(2, 0) = 2 * (xz - wy); r.at(2, 1) = 2 * (yz + wx); r.at(2, 2) = 1 - 2 * (xx + yy);
+        return r;
+    }
+    // translate * rotate * scale (glTF node order)
+    static mat4 trs(float3 t, const quat& q, float3 s) {
+        mat4 r = rotate(q);
+        for (int i = 0; i < 3; ++i) { r.at(i, 0) *= s.x; r.at(i, 1) *= s.y; r.at(i, 2) *= s.z; }
+        r.at(0, 3) = t.x; r.at(1, 3) = t.y; r.at(2, 3) = t.z;
+        return r;
+    }
+    float3 transformDir(float3 v) const { float4 r = *this * float4{v.x, v.y, v.z, 0}; return {r.x, r.y, r.z}; }
     mat4 inverse() const;
+    // inverse-transpose of the upper 3x3 (normals under non-uniform scale), translation cleared
+    mat4 normalMatrix() const {
+        mat4 r = inverse(), t;
+        for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) t.at(i, j) = r.at(j, i);
+        return t;
+    }
 };
 
 inline mat4 mat4::inverse() const {
@@ -116,13 +186,27 @@ struct RTSCamera {
     float yaw = 0.0f;      // radians around Y
     float fovY = 0.75f;
     float minDistance = 6.0f, maxDistance = 120.0f;
+    // Orthographic projection (2D games): `distance` still is the zoom; the visible half height is
+    // distance * tan(fovY / 2), i.e. the same framing as the perspective camera at that distance.
+    bool ortho = false;
 
     float3 eye() const {
         float cp = std::cos(pitch), sp = std::sin(pitch);
         return target + float3{std::sin(yaw) * cp, sp, std::cos(yaw) * cp} * distance;
     }
-    mat4 view() const { return mat4::lookAt(eye(), target, {0, 1, 0}); }
-    mat4 proj(float aspect, bool zeroToOne) const { return mat4::perspective(fovY, aspect, 0.5f, 1000.0f, zeroToOne); }
+    float orthoHalfHeight() const { return distance * std::tan(fovY * 0.5f); }
+    mat4 view() const {
+        // straight down (pitch 90°, Red Alert / Dune II): world up is degenerate, use the ground
+        // direction the camera faces as screen up
+        float3 up = std::cos(pitch) < 1e-3f ? float3{-std::sin(yaw), 0, -std::cos(yaw)} : float3{0, 1, 0};
+        return mat4::lookAt(eye(), target, up);
+    }
+    mat4 proj(float aspect, bool zeroToOne) const {
+        if (!ortho) return mat4::perspective(fovY, aspect, 0.5f, 1000.0f, zeroToOne);
+        float h = orthoHalfHeight(), w = h * aspect;
+        // negative near plane: terrain/sprites taller than the zoom distance are not clipped
+        return mat4::ortho(-w, w, -h, h, -200.0f, 1000.0f, zeroToOne);
+    }
 
     // Screen (logical points) -> world ray. Returns false if degenerate.
     bool screenRay(float sx, float sy, float w, float h, float3& origin, float3& dir) const {

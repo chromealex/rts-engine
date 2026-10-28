@@ -142,8 +142,8 @@ void Server::Impl::matchUpdate(Room& r) {
         result = m.result; anyReport = true;
     }
     if (anyReport && everyone) {
-        if (agree) endMatch(r, result, "");
-        else { M.desync = true; endMatch(r, 0, "Рассинхронизация: игроки видят разный исход"); }
+        if (agree) endMatch(r, result, NetText());
+        else { M.desync = true; endMatch(r, 0, NetText("net.end.result_mismatch")); }
     }
 }
 
@@ -229,8 +229,8 @@ void Server::Impl::memberDropped(Room& r, uint32_t clientId, bool left) {
     for (auto& o : r.match->members)
         if (o.slot && !o.left) { anyHuman = true; for (auto& p : r.match->players) if (p.slot == o.slot) activeTeams.insert(p.team); }
     if (anyHuman) for (auto& p : r.match->players) if (p.kind == SlotKind::Bot) activeTeams.insert(p.team);
-    if (!anyHuman) endMatch(r, 0, "Все игроки покинули матч");
-    else if (activeTeams.size() == 1 && startTeams.size() > 1) endMatch(r, *activeTeams.begin(), "Соперники покинули игру");
+    if (!anyHuman) endMatch(r, 0, NetText("net.end.everyone_left"));
+    else if (activeTeams.size() == 1 && startTeams.size() > 1) endMatch(r, *activeTeams.begin(), NetText("net.end.opponents_left"));
 }
 
 void Server::Impl::reassignBots(Room& r) {
@@ -256,7 +256,7 @@ void Server::Impl::reassignBots(Room& r) {
     }
 }
 
-void Server::Impl::endMatch(Room& r, int32_t result, const std::string& reason) {
+void Server::Impl::endMatch(Room& r, int32_t result, const NetText& reason) {
     Match& M = *r.match;
     uint32_t endTick = M.confirmedNext;
     uint64_t endHash = 0;
@@ -302,7 +302,7 @@ void Server::Impl::endMatch(Room& r, int32_t result, const std::string& reason) 
     Bytes b = encode(end);
     for (auto& m : M.members) if (Client* c = client(m.clientId); c && c->roomId == r.id) send(*c, b);
     ++counters.matchesFinished;
-    log("room #%u: match over, result %d %s (ticks %u, desync %d)", r.id, result, reason.c_str(), endTick, int(M.desync));
+    log("room #%u: match over, result %d %s (ticks %u, desync %d)", r.id, result, reason.key.c_str(), endTick, int(M.desync));
 
     r.match.reset();
     r.phase = RoomPhase::Lobby;

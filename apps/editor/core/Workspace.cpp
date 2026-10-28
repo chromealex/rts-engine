@@ -1,4 +1,7 @@
 #include "Workspace.h"
+#include "TileOps.h"
+#include "DataOps.h"
+#include "BalanceOps.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -99,7 +102,10 @@ char cellChar(const std::string& kind) {
     if (kind == "shallow" || kind == "=") return '=';
     if (kind == "ramp" || kind == "/") return '/';
     if (kind == "rock" || kind == "R") return 'R';
-    throw std::runtime_error("unknown terrain kind '" + kind + "' (ground, water, blocked, nobuild, shallow, ramp, rock)");
+    if (kind == "road" || kind == "+") return '+';
+    // game-defined map characters (rules "diggable": dungeon rock, gold veins, ...); map_validate checks them
+    if (kind.size() == 1 && kind[0] > ' ' && kind[0] < 127 && !(kind[0] >= '0' && kind[0] <= '9')) return kind[0];
+    throw std::runtime_error("unknown terrain kind '" + kind + "' (ground, water, blocked, nobuild, shallow, ramp, rock, road, or a map character from rules 'diggable')");
 }
 // shape: {"rect": [x0,y0,x1,y1]} or {"circle": [cx,cy,r]}
 struct Shape { bool rect = true; int x0 = 0, y0 = 0, x1 = 0, y1 = 0, cx = 0, cy = 0, r = 0; };
@@ -155,7 +161,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerDataOps(*this); registerBalanceOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -909,7 +915,7 @@ void Workspace::registerCoreOps() {
             r.set("entities", arr);
             return r;
         });
-    add("entity_update", "Change an object (by id or index): type, owner, x, z, id, garrison, amount.",
+    add("entity_update", "Change an object (by id or index): type, owner, x, z, id, garrison, amount; any other key is stored on the object (e.g. inventory {\"wood\": 20}, null removes).",
         R"({"properties": {"id": {"type": "string"}, "index": {"type": "integer"}, "set": {"type": "object"}}, "required": ["set"]})",
         [this, entityRef, entityJson](const Json& p) {
             int i = entityRef(p);
@@ -923,6 +929,11 @@ void Workspace::registerCoreOps() {
             if (s.has("id")) e.id = s.getStr("id");
             if (s.has("garrison")) e.garrison = pi(s, "garrison");
             if (s.has("amount")) e.amount = pf(s, "amount");
+            // anything else is an extra block of the map object (inventory, level, ...); null removes it
+            for (auto& [k, v] : s.members()) {
+                if (k == "type" || k == "owner" || k == "x" || k == "z" || k == "id" || k == "garrison" || k == "amount") continue;
+                if (v.isNull()) e.extra.erase(k); else e.extra.set(k, v);
+            }
             map.touched();
             note({Change::Entity, int(e.x), int(e.z), int(e.x), int(e.z), i, "Изменён " + e.type});
             Json r = ok();

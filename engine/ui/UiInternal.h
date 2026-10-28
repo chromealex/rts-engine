@@ -3,6 +3,7 @@
 #include <RmlUi/Core/FontEngineInterface.h>
 #include <RmlUi/Core/RenderInterface.h>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -19,6 +20,8 @@ public:
     void shutdown();
     void beginFrame(int fbW, int fbH);
     void setDynamicTexture(const std::string& name, gfx::TextureHandle tex, int w, int h);
+    using ImageSource = std::function<bool(const std::string& path, int& w, int& h, std::vector<unsigned char>& rgba)>;
+    void setImageSource(ImageSource s) { imageSource_ = std::move(s); }
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
     void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override;
@@ -45,6 +48,7 @@ private:
     std::vector<uintptr_t> freeTexs_;
     struct Dyn { gfx::TextureHandle tex; int w = 0, h = 0; };
     std::map<std::string, Dyn> dynamic_;
+    ImageSource imageSource_;
     float proj_[16] = {};
     float transform_[16] = {};
     bool hasTransform_ = false;

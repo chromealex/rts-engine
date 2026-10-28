@@ -2,8 +2,11 @@
 // and as a way to watch bots play through the whole network stack.
 //   rts_netbot --server HOST[:PORT] | ws://HOST:PORT  --project games/skirmish
 //              [--queue 1v1 | --create NAME [--map maps/x.json] [--bots N] | --join ROOM | --spectate ROOM]
-//              [--clients N] [--name Bot] [--matches N] [--quiet]
+//              [--clients N] [--name Bot] [--matches N] [--quiet] [--engine-assets engine/assets]
+// Messages are printed in the system language (RTS_LANG=ru to force one), like the game does.
 #include <chrono>
+#include <fstream>
+#include <sstream>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -12,14 +15,16 @@
 #include <thread>
 #include <vector>
 
+#include "engine/i18n/GameLanguage.h"
 #include "engine/net/NetClient.h"
+#include "engine/net/NetLocalize.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 
 using namespace rts;
 
 struct Args {
-    std::string server = "127.0.0.1", project = "games/skirmish", name = "Bot", queue, create, map;
+    std::string server = "127.0.0.1", project = "games/skirmish", name = "Bot", queue, create, map, engineAssets = "engine/assets";
     uint32_t join = 0, spectate = 0, clients = 1, matches = 1, bots = 0;
     bool quiet = false;
 };
@@ -51,6 +56,7 @@ int main(int argc, char** argv) {
         else if (k == "--clients") a.clients = uint32_t(std::stoul(next()));
         else if (k == "--matches") a.matches = uint32_t(std::stoul(next()));
         else if (k == "--quiet") a.quiet = true;
+        else if (k == "--engine-assets") a.engineAssets = next();
         else { std::printf("see the header of apps/netbot/main.cpp for usage\n"); return 2; }
     }
     if (a.queue.empty() && a.create.empty() && !a.join && !a.spectate) a.queue = "1v1";
@@ -61,6 +67,19 @@ int main(int argc, char** argv) {
         maps = net::describeGameMaps(a.project);
     } catch (const std::exception& e) { std::fprintf(stderr, "error: %s\n", e.what()); return 2; }
     const std::string gameId = manifest.getStr("id"), rules = a.project + "/" + manifest.getStr("rules", "rules.json");
+    // Packaged layout: "engine/..." from the engine assets, everything else from the game folder.
+    i18n::FileReader reader = [&](const std::string& rel, std::string& out) {
+        const std::string path = rel.rfind("engine/", 0) == 0 ? a.engineAssets + "/" + rel.substr(7) : a.project + "/" + rel;
+        std::ifstream f(path, std::ios::binary);
+        if (!f) return false;
+        std::stringstream ss; ss << f.rdbuf(); out = ss.str();
+        return true;
+    };
+    i18n::Localization loc;
+    try {
+        const auto langs = i18n::readGameLanguages(manifest);
+        i18n::loadGameLocalization(loc, reader, langs, i18n::chooseLanguage(langs, ""));
+    } catch (const std::exception& e) { std::fprintf(stderr, "localization: %s\n", e.what()); }
     net::MapInfo chosen = maps.empty() ? net::MapInfo{} : maps[0];
     if (!a.map.empty()) {
         try { chosen = net::describeMap(a.project, a.map, manifest.getStr("rules", "rules.json")); }
@@ -89,14 +108,13 @@ int main(int argc, char** argv) {
             b.net->update(now);
             for (auto& e : b.net->takeEvents()) {
                 using K = net::NetEvent::Kind;
-                if (e.kind == K::Connected) say(b, "connected to " + e.text);
-                else if (e.kind == K::Disconnected) { say(b, e.text); b.matchesDone = a.matches; exitCode = 1; }
-                else if (e.kind == K::Error) say(b, "error: " + e.text);
-                else if (e.kind == K::Chat || e.kind == K::PlayerStatus) say(b, e.text);
-                else if (e.kind == K::Desync) { say(b, "DESYNC: " + e.text); exitCode = 3; }
+                const std::string msg = net::translate(loc, e.text);
+                if (e.kind == K::Connected || e.kind == K::Chat || e.kind == K::PlayerStatus || e.kind == K::RatingChanged) say(b, msg);
+                else if (e.kind == K::Disconnected) { say(b, msg); b.matchesDone = a.matches; exitCode = 1; }
+                else if (e.kind == K::Error) say(b, "error: " + msg);
+                else if (e.kind == K::Desync) { say(b, "DESYNC: " + msg); exitCode = 3; }
                 else if (e.kind == K::MatchEnded) {
-                    if (!e.text.empty()) say(b, e.text);
-                    if (e.text.rfind("Рейтинг", 0) == 0) continue;
+                    if (!msg.empty()) say(b, msg);
                     say(b, "match over, winner team " + std::to_string(e.value));
                     ++b.matchesDone;
                     b.requested = false; b.started = false;
@@ -139,7 +157,7 @@ int main(int argc, char** argv) {
                 b.net->attach(*b.sim);
                 b.ai.clear();
                 for (uint8_t s : m.controlled) b.ai.emplace_back(s, rng());
-                say(b, std::string(m.resumed ? "resumed" : "match started") + " on " + m.map.title + ", slot " + std::to_string(m.localSlot) +
+                say(b, std::string(m.resumed ? "resumed" : "match started") + " on " + loc.text(m.map.title) + ", slot " + std::to_string(m.localSlot) +
                            (m.controlled.size() > 1 ? " (+" + std::to_string(m.controlled.size() - 1) + " bot)" : ""));
             }
             if (auto* s = b.net->session(); s && b.sim) {

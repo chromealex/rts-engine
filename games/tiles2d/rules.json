@@ -1,0 +1,116 @@
+// "Crystal Dunes" — Dune II / Red Alert style rules: harvesters gather crystal from tile-map
+// fields and bring it to the yard or a refinery; windtraps give supply; tanks and troopers fight.
+// Every type is drawn from a sprite sheet ("sprite" block); 32 px = 1 cell.
+{
+  "victory": "noStructures",
+  "supplyCap": 120,
+  "resources": {
+    "crystal": { "name": "Crystal", "field": true, "cellMax": 100, "regrow": 0.4, "start": 900 }
+  },
+  "armorTypes": ["light", "heavy", "building"],
+  "damageTable": {
+    "bullet": { "heavy": 0.5, "building": 0.4 },
+    "shell": { "light": 0.7, "building": 1.2 }
+  },
+  "types": {
+    "harvester": {
+      "name": "Harvester",
+      "health": { "max": 420, "armor": 2, "armorType": "heavy" },
+      "move": { "speed": 2.2, "radius": 0.45 },
+      "sight": 6,
+      "cost": { "crystal": 200, "time": 12, "supply": 1 },
+      "gather": { "crystal": { "carry": 25, "time": 2.5 } },
+      "builds": ["windtrap", "refinery", "barracks", "factory", "turret"],
+      "sprite": { "sheet": "sprites/harvester.png", "frame": [32, 32], "facings": 8, "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "move": [1, 2, 6], "work": [3, 2, 5], "die": [5, 4, 8] } }
+    },
+    "trooper": {
+      "name": "Trooper",
+      "health": { "max": 160, "armorType": "light" },
+      "move": { "speed": 2.4, "radius": 0.3 },
+      "sight": 7,
+      "weapons": [ { "id": "rifle", "range": 4, "damage": 9, "cooldown": 0.9, "projectileSpeed": 18, "damageType": "bullet" } ],
+      "cost": { "crystal": 70, "time": 7, "supply": 1 },
+      "sprite": { "sheet": "sprites/trooper.png", "frame": [32, 32], "facings": 8, "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "move": [1, 4, 8], "attack": [5, 2, 6], "die": [7, 3, 6] } }
+    },
+    "tank": {
+      "name": "Combat Tank",
+      "health": { "max": 520, "armor": 3, "armorType": "heavy" },
+      "move": { "speed": 2.8, "radius": 0.5 },
+      "sight": 8,
+      "weapons": [ { "id": "cannon", "range": 5, "damage": 38, "cooldown": 2, "projectileSpeed": 12, "splash": 0.6, "damageType": "shell" } ],
+      "cost": { "crystal": 260, "time": 15, "supply": 3 },
+      "requires": ["factory"],
+      "sprite": { "sheet": "sprites/tank.png", "frame": [32, 32], "facings": 8, "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "move": [1, 2, 8], "attack": [3, 2, 4], "die": [5, 4, 8] } }
+    },
+    "yard": {
+      "name": "Construction Yard",
+      "structure": { "footprint": [3, 3] },
+      "health": { "max": 2200, "armor": 4, "armorType": "building" },
+      "sight": 9,
+      "cost": { "crystal": 500, "time": 40 },
+      "produces": ["harvester"],
+      "dropoff": ["crystal"],
+      "supply": 10,
+      "sprite": { "sheet": "sprites/yard.png", "frame": [96, 96], "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 4] } }
+    },
+    "windtrap": {
+      "name": "Windtrap",
+      "structure": { "footprint": [2, 2] },
+      "health": { "max": 600, "armor": 2, "armorType": "building" },
+      "cost": { "crystal": 100, "time": 12 },
+      "supply": 16,
+      "sprite": { "sheet": "sprites/windtrap.png", "frame": [64, 64], "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 4] } }
+    },
+    "refinery": {
+      "name": "Refinery",
+      "structure": { "footprint": [3, 2] },
+      "health": { "max": 1200, "armor": 3, "armorType": "building" },
+      "cost": { "crystal": 300, "time": 25 },
+      "dropoff": ["crystal"],
+      "sprite": { "sheet": "sprites/refinery.png", "frame": [96, 64], "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 4] } }
+    },
+    "barracks": {
+      "name": "Barracks",
+      "structure": { "footprint": [2, 2] },
+      "health": { "max": 900, "armor": 3, "armorType": "building" },
+      "cost": { "crystal": 180, "time": 20 },
+      "produces": ["trooper"],
+      "sprite": { "sheet": "sprites/barracks.png", "frame": [64, 64], "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 4] } }
+    },
+    "factory": {
+      "name": "Heavy Factory",
+      "structure": { "footprint": [3, 3] },
+      "health": { "max": 1400, "armor": 3, "armorType": "building" },
+      "cost": { "crystal": 350, "time": 30 },
+      "requires": ["barracks"],
+      "produces": ["tank"],
+      "sprite": { "sheet": "sprites/factory.png", "frame": [96, 96], "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 4] } }
+    },
+    "turret": {
+      "name": "Gun Turret",
+      "structure": { "footprint": [1, 1] },
+      "health": { "max": 500, "armor": 2, "armorType": "building" },
+      "sight": 8,
+      "weapons": [ { "id": "gun", "range": 5.5, "damage": 14, "cooldown": 1.2, "projectileSpeed": 16, "damageType": "bullet" } ],
+      "cost": { "crystal": 150, "time": 18 },
+      "requires": ["barracks"],
+      "sprite": { "sheet": "sprites/turret.png", "frame": [32, 32], "facings": 8, "mode": "ground", "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "attack": [1, 2, 6], "die": [3, 3, 4] } }
+    }
+  },
+  "factions": {
+    "house": { "name": "House", "start": [
+      { "type": "yard", "offset": [0, 0] },
+      { "type": "harvester", "offset": [3, 2], "count": 3 },
+      { "type": "trooper", "offset": [-3, 2], "count": 2 }
+    ] }
+  }
+}

@@ -5,6 +5,10 @@
 
 namespace rts::net {
 
+// Text typed by players is shown as is: clients treat a leading "@" as a localization key
+// (titles from the server config may use that), so escape it ("@@x" displays "@x").
+static std::string userText(const std::string& s) { return !s.empty() && s[0] == '@' ? "@" + s : s; }
+
 static RoomSettings settingsFrom(const Json& j, RoomSettings s = {}) {
     s.tickRate = uint32_t(j.getInt("tickRate", s.tickRate));
     s.inputDelay = uint32_t(j.getInt("inputDelay", s.inputDelay));
@@ -157,10 +161,10 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
     case Msg::CreateRoom: {
         std::string name = r.str();
         MapInfo map; RoomSettings s;
-        if (!read(r, map) || !read(r, s) || map.players() == 0) { sendError(c, ErrorCode::BadRequest, "Некорректный запрос"); break; }
+        if (!read(r, map) || !read(r, s) || map.players() == 0) { sendError(c, ErrorCode::BadRequest, NetText("net.error.bad_request")); break; }
         leaveQueue(c);
         leaveRoom(c);
-        if (name.empty()) name = c.name;
+        name = name.empty() ? c.name : userText(name);
         Room& nr = createRoom(name.substr(0, 64), c.gameId, map, s);
         nr.hostId = c.id;
         joinRoom(c, nr, false);
@@ -169,10 +173,10 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
     case Msg::JoinRoom: {
         uint32_t id = r.u32(); uint64_t hash = r.u64(); bool spectator = r.u8() != 0;
         Room* target = this->room(id);
-        if (!r.ok() || !target || target->matchmade) { sendError(c, ErrorCode::NoSuchRoom, "Комната не найдена"); break; }
-        if (target->gameId != c.gameId || target->map.dataHash != hash) { sendError(c, ErrorCode::DataMismatch, "Другая версия игры или карты"); break; }
-        if (target->match && !spectator) { sendError(c, ErrorCode::InGame, "Матч уже идёт — можно только смотреть"); break; }
-        if (spectator && !target->settings.allowSpectators) { sendError(c, ErrorCode::BadRequest, "Зрители не разрешены"); break; }
+        if (!r.ok() || !target || target->matchmade) { sendError(c, ErrorCode::NoSuchRoom, NetText("net.error.no_such_room")); break; }
+        if (target->gameId != c.gameId || target->map.dataHash != hash) { sendError(c, ErrorCode::DataMismatch, NetText("net.error.data_mismatch")); break; }
+        if (target->match && !spectator) { sendError(c, ErrorCode::InGame, NetText("net.error.in_game")); break; }
+        if (spectator && !target->settings.allowSpectators) { sendError(c, ErrorCode::BadRequest, NetText("net.error.no_spectators")); break; }
         leaveQueue(c);
         if (c.roomId != id) leaveRoom(c);
         joinRoom(c, *target, spectator);
@@ -180,7 +184,7 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
     }
     case Msg::LeaveRoom: leaveRoom(c); break;
     case Msg::SetMap: case Msg::SetSettings: {
-        if (!room || room->hostId != c.id || room->phase != RoomPhase::Lobby || room->matchmade) { sendError(c, ErrorCode::NotHost, "Только хозяин комнаты"); break; }
+        if (!room || room->hostId != c.id || room->phase != RoomPhase::Lobby || room->matchmade) { sendError(c, ErrorCode::NotHost, NetText("net.error.not_host")); break; }
         if (type == Msg::SetMap) {
             MapInfo map;
             if (!read(r, map) || map.players() == 0) break;
@@ -206,7 +210,7 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
     case Msg::TakeSlot: {
         uint8_t slot = r.u8();
         if (!room || room->phase != RoomPhase::Lobby || room->matchmade) break;
-        if (slot > room->slots.size() || (slot && room->slots[slot - 1].kind != SlotKind::Open)) { sendError(c, ErrorCode::RoomFull, "Слот занят"); break; }
+        if (slot > room->slots.size() || (slot && room->slots[slot - 1].kind != SlotKind::Open)) { sendError(c, ErrorCode::RoomFull, NetText("net.error.slot_taken")); break; }
         for (auto& s : room->slots) if (s.kind == SlotKind::Human && s.clientId == c.id) s = SlotEntry{};
         room->spectators.erase(std::remove(room->spectators.begin(), room->spectators.end(), c.id), room->spectators.end());
         if (slot) { auto& s = room->slots[slot - 1]; s.kind = SlotKind::Human; s.clientId = c.id; s.name = c.name; s.ready = false; }
@@ -216,13 +220,13 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
     }
     case Msg::SetSlotKind: {
         uint8_t slot = r.u8(); SlotKind kind = SlotKind(r.u8() & 3);
-        if (!room || room->hostId != c.id || room->phase != RoomPhase::Lobby || room->matchmade) { sendError(c, ErrorCode::NotHost, "Только хозяин комнаты"); break; }
+        if (!room || room->hostId != c.id || room->phase != RoomPhase::Lobby || room->matchmade) { sendError(c, ErrorCode::NotHost, NetText("net.error.not_host")); break; }
         if (slot == 0 || slot > room->slots.size() || kind == SlotKind::Human) break;
         auto& s = room->slots[slot - 1];
         if (s.kind == SlotKind::Human) room->spectators.push_back(s.clientId); // kicked to spectators
         s = SlotEntry{};
         s.kind = kind;
-        if (kind == SlotKind::Bot) { s.name = "Бот " + std::to_string(slot); s.ready = true; }
+        if (kind == SlotKind::Bot) { s.name = "@net.bot"; s.ready = true; }
         broadcastRoom(*room);
         break;
     }
@@ -234,10 +238,10 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
         break;
     }
     case Msg::StartMatch: {
-        if (!room || room->hostId != c.id || room->phase != RoomPhase::Lobby) { sendError(c, ErrorCode::NotHost, "Только хозяин комнаты"); break; }
+        if (!room || room->hostId != c.id || room->phase != RoomPhase::Lobby) { sendError(c, ErrorCode::NotHost, NetText("net.error.not_host")); break; }
         int humans = 0; bool ready = true;
         for (auto& s : room->slots) if (s.kind == SlotKind::Human) { ++humans; ready &= s.ready || s.clientId == c.id; }
-        if (!humans || !ready) { sendError(c, ErrorCode::NotReady, "Не все игроки готовы"); break; }
+        if (!humans || !ready) { sendError(c, ErrorCode::NotReady, NetText("net.error.not_ready")); break; }
         startMatch(*room);
         break;
     }
@@ -267,7 +271,7 @@ void Server::Impl::handle(Client& c, const Bytes& msg) {
 void Server::Impl::onHello(Client& c, ByteReader& r) {
     HelloMsg h;
     if (!decode(r, h) || h.protocol != kProtocolVersion) {
-        sendError(c, ErrorCode::Version, "Версия клиента не совпадает с сервером — обновите игру");
+        sendError(c, ErrorCode::Version, NetText("net.error.version"));
         c.conn->update(now);
         c.conn->close();
         return;
@@ -294,7 +298,7 @@ void Server::Impl::onHello(Client& c, ByteReader& r) {
         }
     }
     c.hello = true;
-    c.name = h.name.empty() ? "Игрок" : h.name.substr(0, 32);
+    c.name = userText(h.name.substr(0, 32));   // empty: clients show "Player <slot>"
     c.gameId = h.gameId.substr(0, 128);
     c.key = h.clientKey ? h.clientKey : rng();
     do c.token = rng(); while (!c.token);
