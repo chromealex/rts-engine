@@ -42,6 +42,19 @@ TEST(tools_trigger_fired_event) {
     CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(3));
 }
 
+// Save, load into a fresh simulation set up from the same data, and run both: they must stay identical.
+static bool mechRoundTrip(Simulation& a, const std::string& rules, const std::string& map, int ticks = 200) {
+    std::string bytes = a.serialize();
+    if (bytes.empty()) { std::printf("  round trip: serialize failed\n"); return false; }
+    SimConfig cfg; cfg.seed = a.config().seed;
+    Simulation b(cfg, std::make_unique<game::RtsModule>());
+    b.setup(Json::parse(rules), Json::parse(map));
+    std::string err;
+    if (!b.deserialize(bytes, &err)) { std::printf("  round trip: %s\n", err.c_str()); return false; }
+    for (int i = 0; i < ticks; ++i) { a.step(); b.step(); if (a.checksum() != b.checksum()) { std::printf("  round trip diverged at %d\n", i); return false; } }
+    return a.serialize() == b.serialize();
+}
+
 // ---------------------------------------------------------------- ST: stances and retreat
 static Entity unitNear(Simulation& sim, int x, int z) {
     Entity best; Fixed bd{};
@@ -164,6 +177,7 @@ TEST(mech_transport_bunker) {
     run(*sim, 0.2);
     CHECK(w.alive(m[0]) && !(w.get<game::Unit>(m[0]).flags & game::kUnitInCargo));
     // unload from the town centre
+    CHECK(mechRoundTrip(*sim, rules, flatMap(40, 12, R"(,"entities":[{"type":"bunker","owner":1,"pos":[10,6]},{"type":"marine","owner":1,"pos":[7,5]},{"type":"marine","owner":1,"pos":[7,7]},{"type":"tc","owner":1,"pos":[30,6]},{"type":"marine","owner":1,"pos":[26,6]}])"), 40));
     sim->submit(mechCmd(1, game::kCmdUnload, {tc}));
     run(*sim, 1);
     CHECK(!(w.get<game::Unit>(m[2]).flags & game::kUnitInCargo) && dist2DTest(posOf(*sim, m[2]), at(30, 6)) < Fixed::fromInt(4));
@@ -383,6 +397,7 @@ TEST(mech_walls_gates_bridges) {
     b->world().get<game::Unit>(br).hp = Fixed{};
     run(*b, 0.5);
     CHECK(!b->world().alive(walker) || hpOf(*b, walker).raw <= 0);
+    CHECK(mechRoundTrip(*g, rules, mapRows(30, 12, rows, R"(,"entities":[{"type":"gate","owner":1,"pos":[15.5,6]},{"type":"grunt","owner":1,"pos":[10,3]},{"type":"grunt","owner":2,"pos":[20,9]}])")));
 }
 
 TEST(mech_market_trade_tribute_diplomacy) {
@@ -464,6 +479,7 @@ TEST(mech_items_cycles_hazards) {
     CHECK(mod(*sim).stat(*sim, hero, game::Stat::Sight) == Fixed::fromInt(5));
     CHECK(mod(*sim).state(*sim).trig.vars["cycle.day"] == Fixed::fromInt(1));
     // standing on the ore field hurts bio units
+    CHECK(mechRoundTrip(*sim, rules, flatMap(40, 12, R"(,"fields":[{"resource":"ore","center":[30,8],"radius":2,"amount":50}],"entities":[{"type":"hero","owner":1,"pos":[5,5]},{"type":"shop","owner":0,"pos":[8,5]},{"type":"kobold","owner":2,"pos":[20,5]}])"), 60));
     sim->submit(mechCmd(1, game::kCmdMove, {hero}, kNullEntity, at(30, 8)));
     Fixed h0 = hpOf(*sim, hero);
     run(*sim, 8);
@@ -531,4 +547,64 @@ TEST(mech_ammo_merge_deck_tunnel_amphibious) {
     sim->submit(mechCmd(1, game::kCmdMove, {hover}, kNullEntity, at(40, 8)));
     run(*sim, 8);
     CHECK(dist2DTest(posOf(*sim, hover), at(40, 8)) < Fixed::fromInt(2));
+}
+
+// ================================================================ stage 3: save states (Simulation::serialize)
+static Json mechLoadMap(const std::string& dir, const std::string& file) {
+    Json map = Json::parseFile(dir + "/" + file);
+    auto read = [&](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    std::string err;
+    game::applyTilesToMap(map, read, &err);
+    return map;
+}
+
+TEST(mech_save_states_all_games) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> games;
+    for (auto& e : fs::directory_iterator(std::string(RTS_SOURCE_DIR) + "/games"))
+        if (e.is_directory() && fs::exists(e.path() / "rules.json") && e.path().filename().string()[0] != '_') games.push_back(e.path().string());
+    std::sort(games.begin(), games.end());
+    CHECK(games.size() >= 20);
+    for (auto& dir : games) {
+        Json manifest = Json::parseFile(dir + "/game.json");
+        const Json& m0 = manifest["maps"][size_t(0)];
+        std::string file = m0.isString() ? m0.str() : m0.getStr("file");
+        if (file.empty()) continue;
+        Json rules = Json::parseFile(dir + "/rules.json");
+        Json map = mechLoadMap(dir, file);
+        SimConfig cfg; cfg.seed = 7;
+        Simulation a(cfg, std::make_unique<game::RtsModule>());
+        a.setup(rules, map);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : a.players()) bots.emplace_back(p.slot, 7);
+        for (int i = 0; i < 20 * 40 && a.result() == 0; ++i) { for (auto& b : bots) b.update(a); a.step(); }
+        const std::string bytes = a.serialize();
+        CHECK(!bytes.empty());
+        Simulation b(cfg, std::make_unique<game::RtsModule>());
+        b.setup(rules, map);
+        std::string err;
+        const bool ok = b.deserialize(bytes, &err);
+        if (!ok) std::printf("  save state of %s: %s\n", dir.c_str(), err.c_str());
+        CHECK(ok);
+        if (!ok) continue;
+        int diverged = -1;
+        for (int i = 0; i < 300; ++i) {
+            a.step(); b.step();
+            if (a.checksum() != b.checksum()) { diverged = i; break; }
+        }
+        if (diverged >= 0) std::printf("  save state of %s diverged %d ticks after loading\n", dir.c_str(), diverged);
+        CHECK(diverged < 0);
+        CHECK(a.serialize() == b.serialize());
+    }
+    // corrupt input never crashes
+    Simulation s(SimConfig{}, std::make_unique<game::RtsModule>());
+    s.setup(Json::parseFile(kSkirmish + "/rules.json"), Json::parseFile(kSkirmish + "/maps/valley.json"));
+    std::string bytes = s.serialize(), err;
+    CHECK(!s.deserialize(bytes.substr(0, bytes.size() / 2), &err) && !err.empty());
+    CHECK(!s.deserialize("garbage", &err));
 }

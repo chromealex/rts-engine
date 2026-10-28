@@ -936,6 +936,18 @@ trigger variable `cycle.<id>` = phase index (event `kEvCyclePhase`). Jumps over 
 with the `blink` effect; teleport networks are `area` effects with `teleportTo`. The AI sells surplus / buys shortages,
 sends idle carts to the farthest market, buys and drinks potions with heroes and merges idle pairs.
 
+## Save states (agent-mech)
+
+`Simulation::serialize()` returns the whole dynamic state as bytes (versioned, little-endian, identical on every
+platform: `engine/core/Archive.h`); `deserialize(bytes)` loads it into a simulation set up from the same rules, map and
+seed and checks the state checksum stored in the file. Saved: tick, RNG, players and teams, pending and executed
+commands (replays continue), the entity allocator, every component pool in dense order and the dynamic part of
+`GameState` (per-cell layers run-length encoded). Not saved: rules, triggers, the planet surface (from setup) and derived
+caches (clearance, HPA*, rebuilt on demand). The computer players keep their own memory, so bots resume from the loaded
+state with fresh plans. Module side: `RtsModule::serializeState` (`modules/rts/RtsSave.cpp`); a component type missing from
+its list makes saving fail. `rts_headless --save F --save-at S` / `--load F`; MCP `match_run` with `saveCheck` (seconds).
+A skirmish match at 90 s is ~150 KB.
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
