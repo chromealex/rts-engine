@@ -129,6 +129,7 @@ private:
     // planet maps (ClientPlanet.cpp): orbit camera input, picking through RtsView; flat maps never get here
     bool planet() const { return view_.planetMode(); }
     void planetCameraKeys(double dt);
+    void fitPlanetCamera();
     bool planetCameraEvent(const platform::Event& e, bool uiWants);
     bool objectScreen(const SceneObject& o, float lift, float2& sp) const;   // flat maps: worldToScreen({x, lift, z})
     RtsModule& mod() { return *static_cast<RtsModule*>(&sim_->module()); }
