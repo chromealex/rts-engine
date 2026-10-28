@@ -160,6 +160,7 @@ void GameClient::applyLanguage(const std::string& tag, bool save) {
         maps_.push_back({file, loc_.trOr("map." + mapStem(file) + ".title", m.getStr("title", file))});
     }
     if (!netMaps_.empty()) describeNetMaps(); // localized titles
+    ui_.setKeyboardLanguage(loc_.language());
 }
 
 void GameClient::shutdown() {

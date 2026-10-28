@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "GameClient.h"
+#include "engine/net/NetLocalize.h"
 #include "modules/rts/RtsLocalize.h"
 #include "engine/atlas/AtlasFormat.h"
 
@@ -60,6 +61,7 @@ private:
 
 void GameClient::initUi() {
     if (!ui_.init(*dev_, "fonts/ui.ttf")) { error_ = "ui: init failed"; return; }
+    ui_.setKeyboardLanguage(loc_.language());
     // UI images the build packed into texture atlases are no longer plain files.
     auto atlasImages = std::make_shared<atlas::ImageSource>([](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, atlas::decodeImageFile);
     if (!atlasImages->manifest().empty())
@@ -282,7 +284,9 @@ void GameClient::buildTopBar(UiState& s) {
             int g = 0;
             sim_->world().each<Garrison, Owner>([&](Entity, Garrison& gg, Owner& o) { if (o.player == p.slot) g += gg.count; });
             sim_->world().each<Unit, Owner>([&](Entity en, Unit&, Owner& o) { if (o.player == p.slot && sim_->world().has<Mobile>(en)) ++g; });
-            const std::string name = netMatch_ || mapIndex_ >= maps_.size() ? p.name : localizedPlayerName(loc_, maps_[mapIndex_].file, size_t(p.slot - 1), p.name);
+            // online: names come from the lobby (bots and unnamed players as "@net.*" keys)
+            const std::string name = netMatch_ ? net::displayName(loc_, p.name, p.slot)
+                                   : mapIndex_ >= maps_.size() ? p.name : localizedPlayerName(loc_, maps_[mapIndex_].file, size_t(p.slot - 1), p.name);
             s.top.push_back({fmt("%s %d", name.c_str(), g) + (p.alive ? "" : tr("hud.eliminated")), "", cssColor(RtsView::playerColor(p.slot)), false});
         }
     }
