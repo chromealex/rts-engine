@@ -118,6 +118,9 @@ LRESULT CALLBACK wndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         e.type = (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN) ? EventType::KeyDown : EventType::KeyUp;
         e.key = mapVK(wp, lp); e.mods = currentMods(); e.repeat = (lp >> 30) & 1;
         detail::dispatch(e);
+        // F11 and Alt+Enter: the usual fullscreen toggles on Windows
+        if (e.type == EventType::KeyDown && !e.repeat && (wp == VK_F11 || (msg == WM_SYSKEYDOWN && wp == VK_RETURN)))
+            detail::applyFullscreen(!state().fullscreen);
         if (msg == WM_SYSKEYDOWN && wp == VK_F4) break; // keep Alt+F4
         return 0;
     case WM_CHAR: {
@@ -161,6 +164,27 @@ bool createGLContext() {
 
 const char* name() { return "windows"; }
 void setTitle(const std::string& t) { if (g_hwnd) SetWindowTextW(g_hwnd, widen(t).c_str()); }
+
+namespace detail {
+// Borderless window over the whole monitor; the previous placement is restored on the way back.
+void applyFullscreen(bool on) {
+    static WINDOWPLACEMENT saved = [] { WINDOWPLACEMENT w{}; w.length = sizeof(w); return w; }();
+    if (!g_hwnd || on == state().fullscreen) return;
+    LONG_PTR style = GetWindowLongPtrW(g_hwnd, GWL_STYLE);
+    if (on) {
+        MONITORINFO mi{}; mi.cbSize = sizeof(mi);
+        if (!GetWindowPlacement(g_hwnd, &saved) || !GetMonitorInfoW(MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) return;
+        SetWindowLongPtrW(g_hwnd, GWL_STYLE, style & ~LONG_PTR(WS_OVERLAPPEDWINDOW));
+        SetWindowPos(g_hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
+                     mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    } else {
+        SetWindowLongPtrW(g_hwnd, GWL_STYLE, style | WS_OVERLAPPEDWINDOW);
+        SetWindowPlacement(g_hwnd, &saved);
+        SetWindowPos(g_hwnd, nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+    state().fullscreen = on;
+}
+} // namespace detail
 
 std::string clipboardText() {
     std::string out;

@@ -26,6 +26,8 @@ struct State {
     bool textInput = false;   // startTextInput() called and not stopped
     TextInputArea textArea;
     float keyboardH = 0;      // logical points covered by the on-screen keyboard
+    Insets safe;              // safe area insets, logical points
+    bool fullscreen = false;
 };
 State& state();
 
@@ -52,6 +54,10 @@ void textInputEndedByUser();
 // Send a typed string (UTF-8) as Char events; '\n' becomes Enter, '\b' Backspace (KeyDown + KeyUp).
 void dispatchText(const std::string& utf8);
 void dispatchKeyPress(Key k);
+// Updates the safe area; dispatches Resized when it changed.
+void setSafeArea(const Insets& in);
+// Per-platform fullscreen switch (no-op on mobile, where the app is always fullscreen).
+void applyFullscreen(bool on);
 
 // Frame timing shared by all backends. Clamps dt so a frame after a long stall (app in background,
 // tab hidden, window dragged, debugger break) doesn't teleport the camera or flood the sim with
