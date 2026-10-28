@@ -324,6 +324,7 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 | шины | `sfx` и `ambient` — позиционные (3D: затухание, панорама, высота), `voice`, `ui`, `music` — нет |
 | расстояние | `spatial`: модель затухания, дальности, «воздух» (вдали пропадают верха), реверберация растёт с расстоянием, скорость звука; у звука — свои дальности и `far` — дальний вариант с кроссфейдом |
 | `maxInstances`, `cooldown`, `priority` | прореживание в больших боях: 40 лучников не дают 40 одинаковых выстрелов |
+| `groups` | общие лимиты для нескольких звуков (вся рубка, все взрывы, целая шина): `max`, `cooldown`, кого гасить — `farthest` (по умолчанию: дальний бой не обрывает тот, что на экране), `oldest`, `quietest`, `none` |
 | события (cues) | `attack hit miss died spawned trainStarted ready buildPlaced buildDone gathered captured lost playerDefeated victory defeat notEnough notEnoughSupply noRoom researched levelUp ability readyToPlace sold regionClaimed wave lowPower upgraded message underAttack baseUnderAttack select move attackOrder buildOrder click error` |
 | поиск звука | тип → оружие/способность по id → `events` |
 | музыка | плейлисты `menu`, `match`, `battle`, `victory`, `defeat` (и `match.<карта>`); кроссфейд, интро + бесшовные петли, слои по интенсивности боя, переходы по долям/тактам, стингеры, приглушение под голос |
