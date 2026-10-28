@@ -13,9 +13,9 @@ public:
     void draw(Editor& ed) override {
         std::string log = ed.ws().buildLog();
         if (ed.ws().building()) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Идёт сборка…");
-        else if (log.empty()) ImGui::TextDisabled("Сборка ещё не запускалась (меню «Сборка»)");
+        else if (log.empty()) ImGui::TextDisabled(ICON_CONSOLE "  Сборка ещё не запускалась (меню «Сборка»)");
         ImGui::SameLine();
-        if (!log.empty() && ImGui::SmallButton("Копировать журнал")) ImGui::SetClipboardText(log.c_str());
+        if (!log.empty() && ImGui::SmallButton(ICON_COPY " Копировать журнал")) ImGui::SetClipboardText(log.c_str());
         ImGui::BeginChild("##log", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
         ImGui::TextUnformatted(log.c_str());
         if (ed.ws().building() && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 20) ImGui::SetScrollHereY(1.0f);

@@ -40,6 +40,11 @@ RTS_EDITOR_WINDOW(BalanceWindow);
 } // namespace rts::editor
 ```
 
+`title()` is the plain tab text (MCP `editor_windows` reports it). The ImGui name is
+`imguiName()` = `"<icon>  <title>###<id>"`: the `###id` part keeps docking, saved layouts and focus
+stable. Use `imguiName()` (or `ed.focusWindow("id")`) whenever ImGui needs the window's name. The tab
+icon comes from `windowIconFor(id())` in `EditorIcons.h`, or override `icon()`.
+
 Rebuild the editor; the window appears in **Окна**. New windows are docked into their `dockArea`
 only when the layout is reset (**Окна → Сбросить раскладку**); otherwise they open floating and the
 user can dock them anywhere.
@@ -65,7 +70,27 @@ Rules for windows:
 - Keep per-window state in members (one instance per window).
 - Russian UI text, English code and comments (see AGENTS.md).
 
-## 3. Exposing it to agents
+## 3. Look: theme, icons, toolbars
+
+The editor style (dark / light, accent presets, menu **Окна → Тема**, MCP `editor_theme`) lives in
+`apps/editor/EditorTheme.*`; windows don't set colours of their own. Prefer the theme's colours
+(`ImGui::GetStyle().Colors`, `ui::accentColor()`, `ed.theme().palette()`) over hard-coded RGB, so
+both themes stay readable.
+
+Icons: Lucide font merged into the UI font, constants in `apps/editor/EditorIcons.h`
+(`ImGui::Button(ICON_PLAY " Играть")`). Helpers in `EditorUtil.h`:
+
+| Helper | What |
+|---|---|
+| `ui::toolButton(ICON_X, "Подсказка", active, enabled)` | square icon button: hover / active (accent) states, tooltip |
+| `ui::beginSegment()` / `ui::endSegment()` | segmented group of tool buttons on one background (`SameLine()` between them) |
+| `ui::toolbarDivider()` | thin vertical divider between groups |
+| `ui::beginToolbar()` / `ui::endToolbar(y)` | toolbar strip at the top of a `zeroPadding()` window (Scene, Game) |
+| `ui::button(ICON_X, "Текст", primary)` | icon + label button; `primary` = filled with the accent |
+| `ui::emptyState(...)` / `ui::emptyStateHere(icon, title, hint)` | centred placeholder: big icon, title, hint |
+| `ui::heading("Текст")` | section title in the semibold heading font |
+
+## 4. Exposing it to agents
 
 If the window adds an action an agent should be able to do, register an operation (in the
 window's constructor is too early; do it in `update()` once, or in `EditorAgent.cpp`):
