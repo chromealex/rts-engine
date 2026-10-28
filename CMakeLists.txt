@@ -362,7 +362,7 @@ endif()
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
-    modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp
+    modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
     modules/rts/view/RtsFog.cpp
     modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp)
 # visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)

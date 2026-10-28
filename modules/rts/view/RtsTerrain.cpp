@@ -13,6 +13,7 @@ using namespace render;
 // mesh: heightfield corners (two triangles per cell) when the map has them, otherwise levels + fine
 // heights + ramps.
 float RtsView::heightAt(const MapGrid& g, float x, float z) const {
+    if (terrain_.detailActive()) return terrain_.surfaceAt(g, x, z);   // the sub-cell detail surface that is drawn
     return terrain::heightAt(g, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f, x, z);
 }
 
