@@ -6156,7 +6156,44 @@ TEST(icons_generate_platform_sets) {
     CHECK(sheet.width > 600 && sheet.height > 400);
     branding::Image strip = branding::splashStrip(splash::parseSpec(game["splash"]), (dir / "game").string(), {0, 0.5f}, 160, 90, &pw);
     CHECK(strip.width > 320 && strip.height > 90);
-    fs::remove_all(dir);
+    ax.close(); tv31.close();   // Windows can't delete open files
+    std::error_code rmEc;
+    fs::remove_all(dir, rmEc);
+}
+
+
+// ---------------- one-click MCP setup (editor Agent window) ----------------
+#include "apps/editor/core/McpInstall.h"
+TEST(mcp_install_patches_configs_as_text) {
+    using namespace rts::editor;
+    McpServerSpec sp; sp.command = "/opt/rts/rtsmcp"; sp.args = {"--engine", "/opt/rts"};
+    const std::string entry = mcpEntryJson(sp);
+    std::string err, t;
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));                        // empty file -> fresh config
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
+    // unrelated content stays byte for byte, including numbers our reader would round
+    std::string user = "{\n  \"numStartups\": 123456789012345,\n  \"ratio\": 0.123456789,\n  \"theme\": \"dark\"\n}\n";
+    t = user;
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
+    CHECK(t.find("123456789012345") != std::string::npos && t.find("0.123456789") != std::string::npos && t.find("\"theme\": \"dark\"") != std::string::npos);
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["args"].size() == 2);
+    // existing servers: added next to them, replaced in place on update, removed cleanly
+    t = R"({"mcpServers": {"other": {"command": "x"}}, "z": 1})";
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
+    Json j = Json::parse(t);
+    CHECK(j["mcpServers"]["other"]["command"].str() == "x" && j["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
+    sp.command = "/new/rtsmcp";
+    CHECK(mcpPatchJson(t, "rtsengine", mcpEntryJson(sp), &err));
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/new/rtsmcp" && t.find("/opt/rts/rtsmcp") == std::string::npos);
+    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
+    j = Json::parse(t);
+    CHECK(!j["mcpServers"].has("rtsengine") && j["mcpServers"]["other"]["command"].str() == "x" && j["z"].integer() == 1);
+    t = R"({"mcpServers": {"a": {}, "rtsengine": {"command": "y"}}})";       // last member: the comma before it goes
+    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
+    CHECK(!Json::parse(t)["mcpServers"].has("rtsengine") && Json::parse(t)["mcpServers"].has("a"));
+    t = "[1, 2]";
+    CHECK(!mcpPatchJson(t, "rtsengine", entry, &err) && !err.empty());   // not an object: refused, untouched
+    CHECK(t == "[1, 2]");
 }
 
 int main() {
