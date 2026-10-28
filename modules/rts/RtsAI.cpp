@@ -589,7 +589,7 @@ void RtsAI::dungeon(Simulation& sim, RtsModule& m) {
             // cells reachable from home
             std::vector<uint8_t> reach(g.flags.size(), 0);
             std::vector<int> q;
-            int hx = g.cellX(home.x), hy = g.cellY(home.z);
+            int hx, hy; g.cellXY(home, hx, hy);
             g.nearestPassable(hx, hy, kLayerGround, 4);
             if (g.inside(hx, hy)) { q.push_back(g.index(hx, hy)); reach[size_t(q[0])] = 1; }
             static const int dx4[4] = {1, -1, 0, 0}, dy4[4] = {0, 0, 1, -1};

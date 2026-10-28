@@ -370,7 +370,7 @@ void RtsModule::applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint
         case EffectKind::Blink: {
             if (!w.alive(caster)) break;
             auto& g = state(sim).grid;
-            int x = g.cellX(point.x), y = g.cellY(point.z);
+            int x, y; g.cellXY(point, x, y);
             const UnitType& ct = rules_.types[w.get<Unit>(caster).type];
             if (g.passable(x, y, ct.pathLayer)) {
                 Transform& tr = w.get<Transform>(caster);

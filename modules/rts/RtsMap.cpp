@@ -257,6 +257,18 @@ bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
 
 bool MapGrid::nearestPassable(int& x, int& y, uint8_t layer, int radius) const {
     if (passable(x, y, layer)) return true;
+    if (surf) { // rings across face seams
+        if (!inside(x, y)) return false;
+        const int c0 = index(x, y);
+        for (int r = 1; r <= radius; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                    const int c = surf->offset(c0, dx, dy);
+                    if (c >= 0 && passable(c % w, c / w, layer)) { x = c % w; y = c / w; return true; }
+                }
+        return false;
+    }
     for (int r = 1; r <= radius; ++r)
         for (int dy = -r; dy <= r; ++dy)
             for (int dx = -r; dx <= r; ++dx) {
