@@ -77,6 +77,10 @@ add_library(rts_game STATIC
     modules/rts/RtsCombat.cpp
     modules/rts/RtsWorld.cpp
     modules/rts/RtsTriggers.cpp
+    modules/rts/RtsDungeon.cpp
+    modules/rts/RtsSettlers.cpp
+    modules/rts/RtsLanes.cpp
+    modules/rts/RtsAvoidance.cpp
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 
@@ -98,7 +102,35 @@ endif()
 # ---------------------------------------------------------------------------
 set(RTS_CONTENT_PACK "" CACHE FILEPATH "Prebuilt content.rpak to ship instead of loose content (set by rtsbuild)")
 add_library(rts_zstd_dec STATIC third_party/zstd/zstddeclib.c)
-add_library(rts_pack STATIC engine/pack/Pack.cpp)
+# HTTP fetcher for chunk downloads, per platform (see engine/pack/Chunks.h).
+if(RTS_PLATFORM STREQUAL "windows")
+    set(RTS_PACK_HTTP engine/pack/http/HttpWin.cpp)
+elseif(RTS_PLATFORM STREQUAL "macos" OR RTS_PLATFORM STREQUAL "ios")
+    set(RTS_PACK_HTTP engine/pack/http/HttpApple.mm)
+elseif(RTS_PLATFORM STREQUAL "android")
+    set(RTS_PACK_HTTP engine/pack/http/HttpAndroid.cpp)
+elseif(RTS_PLATFORM STREQUAL "web")
+    set(RTS_PACK_HTTP engine/pack/http/HttpWeb.cpp)
+elseif(UNIX)
+    set(RTS_PACK_HTTP engine/pack/http/HttpCurl.cpp)
+else()
+    set(RTS_PACK_HTTP engine/pack/http/HttpNone.cpp)
+endif()
+add_library(rts_pack STATIC engine/pack/Pack.cpp engine/pack/Sha256.cpp engine/pack/Chunks.cpp ${RTS_PACK_HTTP})
+find_package(Threads)
+if(Threads_FOUND)
+    target_link_libraries(rts_pack PUBLIC Threads::Threads)
+endif()
+if(RTS_PLATFORM STREQUAL "windows")
+    target_link_libraries(rts_pack PUBLIC winhttp)
+elseif(RTS_PLATFORM STREQUAL "macos" OR RTS_PLATFORM STREQUAL "ios")
+    set_source_files_properties(engine/pack/http/HttpApple.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(rts_pack PUBLIC "-framework Foundation")
+elseif(RTS_PLATFORM STREQUAL "web")
+    target_link_options(rts_pack PUBLIC -sFETCH=1)
+elseif(UNIX AND NOT ANDROID)
+    target_link_libraries(rts_pack PUBLIC ${CMAKE_DL_LIBS})
+endif()
 target_include_directories(rts_pack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(NOT MSVC)
     target_compile_options(rts_zstd_dec PRIVATE -w)
@@ -110,7 +142,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
     if(NOT MSVC)
         target_compile_options(rts_zstd PRIVATE -w)
     endif()
-    add_library(rts_pack_writer STATIC engine/pack/PackWriter.cpp)
+    add_library(rts_pack_writer STATIC engine/pack/PackWriter.cpp engine/pack/Unpacker.cpp)
     target_link_libraries(rts_pack_writer PUBLIC rts_pack rts_engine rts_zstd)
 endif()
 
@@ -154,6 +186,7 @@ endif()
 add_library(rts_audio STATIC
     engine/audio/AudioEngine.cpp
     engine/audio/AudioMixer.cpp
+    engine/audio/AudioReverb.cpp
     engine/audio/AudioDecode.cpp
     engine/audio/Synth.cpp
     ${RTS_MINIAUDIO_IMPL})
@@ -176,6 +209,12 @@ endif()
 
 add_library(rts_game_audio STATIC modules/rts/audio/RtsAudio.cpp)
 target_link_libraries(rts_game_audio PUBLIC rts_game rts_audio)
+
+# Particles: CPU simulation + RHI rendering (presentation only), and the RTS event bridge.
+add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp)
+target_link_libraries(rts_fx PUBLIC rts_engine)
+add_library(rts_game_fx STATIC modules/rts/fx/RtsFx.cpp)
+target_link_libraries(rts_game_fx PUBLIC rts_game rts_fx)
 
 # ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
@@ -211,12 +250,15 @@ if(RTS_FBX)
 else()
     target_compile_definitions(rts_models PRIVATE RTS_NO_FBX=1)
 endif()
-target_link_libraries(rts_models PUBLIC rts_engine rts_zstd_dec)
+# KTX2 zstd supercompression: the decoder comes with rts_runtime (rts_zstd_dec) or, in host tools,
+# with rts_pack_writer (full zstd); linking rts_zstd_dec here would pull both into tests and tools.
+target_link_libraries(rts_models PUBLIC rts_engine)
 
 set(RTS_RUNTIME_SRC
     engine/platform/PlatformCommon.cpp
     engine/render/Renderer3D.cpp
     engine/render/Renderer3DModels.cpp
+    engine/render/Lights.cpp
     engine/render/ImGuiLayer.cpp)
 
 if(RTS_PLATFORM STREQUAL "macos")
@@ -261,7 +303,8 @@ endif()
 
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
-    modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp)
+    modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
+    modules/rts/view/RtsLights.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
@@ -355,7 +398,8 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp)
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
+    apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
@@ -366,9 +410,10 @@ endif()
 if(RTS_BUILD_EDITOR)
     # windows register themselves (RTS_EDITOR_WINDOW): any .cpp in apps/editor/windows is part of the editor
     file(GLOB RTS_EDITOR_WINDOWS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/windows/*.cpp)
-    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp
+    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp
                    ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
+    target_link_libraries(rts_editor PRIVATE rts_game_fx)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(APPLE)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
@@ -382,11 +427,32 @@ if(RTS_BUILD_EDITOR)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Build-time audio compression (host tools and tests only; games just decode): IMA ADPCM and
+# OGG Vorbis encoders (libvorbis, BSD), profiles from audio.json, used by rtsbuild per target.
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_vorbisenc STATIC
+        third_party/vorbis/src/ogg/bitwise.c third_party/vorbis/src/ogg/framing.c
+        third_party/vorbis/src/vorbis/analysis.c third_party/vorbis/src/vorbis/bitrate.c third_party/vorbis/src/vorbis/block.c third_party/vorbis/src/vorbis/codebook.c third_party/vorbis/src/vorbis/envelope.c third_party/vorbis/src/vorbis/floor0.c third_party/vorbis/src/vorbis/floor1.c third_party/vorbis/src/vorbis/info.c third_party/vorbis/src/vorbis/lookup.c third_party/vorbis/src/vorbis/lpc.c third_party/vorbis/src/vorbis/lsp.c third_party/vorbis/src/vorbis/mapping0.c third_party/vorbis/src/vorbis/mdct.c third_party/vorbis/src/vorbis/psy.c third_party/vorbis/src/vorbis/registry.c third_party/vorbis/src/vorbis/res0.c third_party/vorbis/src/vorbis/sharedbook.c third_party/vorbis/src/vorbis/smallft.c third_party/vorbis/src/vorbis/synthesis.c third_party/vorbis/src/vorbis/vorbisenc.c third_party/vorbis/src/vorbis/window.c)
+    target_include_directories(rts_vorbisenc PUBLIC third_party/vorbis/include PRIVATE third_party/vorbis/src/vorbis)
+    target_compile_options(rts_vorbisenc PRIVATE $<IF:$<BOOL:${MSVC}>,/w,-w>)
+    if(NOT MSVC)
+        target_link_libraries(rts_vorbisenc PUBLIC m)
+    endif()
+    add_library(rts_audiopack STATIC tools/audiopack/AudioPack.cpp)
+    target_link_libraries(rts_audiopack PUBLIC rts_audio rts_vorbisenc)
+    add_executable(rts_audiopack_tool tools/audiopack/main.cpp)
+    set_target_properties(rts_audiopack_tool PROPERTIES OUTPUT_NAME rts_audiopack)
+    target_link_libraries(rts_audiopack_tool PRIVATE rts_audiopack)
+endif()
+
 if(RTS_BUILD_TOOLS)
     add_executable(rtsbuild tools/rtsbuild/main.cpp)
-    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer)
+    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer rts_audiopack)
     add_executable(assetpipe tools/assetpipe/main.cpp)
     target_link_libraries(assetpipe PRIVATE rts_pack_writer)
+    target_compile_definitions(assetpipe PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_definitions(rtsbuild PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     # MCP server for AI agents: drives the running editor live, or edits project files directly.
     add_executable(rtsmcp tools/mcp/main.cpp)
@@ -416,18 +482,19 @@ if(RTS_BUILD_SERVER)
     add_executable(rts_server apps/server/main.cpp)
     target_link_libraries(rts_server PRIVATE rts_net_server)
     add_executable(rts_netbot apps/netbot/main.cpp)
-    target_link_libraries(rts_netbot PRIVATE rts_net rts_game)
+    target_link_libraries(rts_netbot PRIVATE rts_net rts_game rts_i18n)
 endif()
 
 if(RTS_BUILD_TESTS)
     enable_testing()
     add_executable(rts_net_tests tests/net_tests.cpp)
-    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game)
+    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game rts_i18n)
     target_compile_definitions(rts_net_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
-    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
+    target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
@@ -446,14 +513,57 @@ if(NOT MSVC)
     target_compile_options(rts_rmlui PRIVATE -w)
 endif()
 
-add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp)
+add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp engine/ui/UiKeyboard.cpp)
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
-target_link_libraries(rts_ui PUBLIC rts_rmlui)
+target_link_libraries(rts_ui PUBLIC rts_rmlui rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp)
-    target_link_libraries(rts_client PRIVATE rts_ui)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp)
-    target_link_libraries(main PRIVATE rts_ui)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
+endif()
+
+# ---------------------------------------------------------------------------
+# 2D games (2D-mode agent): tile maps + autotiling (deterministic, part of the game library),
+# sprite batch + textures (RHI only), sprite/tile presentation in the RTS view.
+# ---------------------------------------------------------------------------
+target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
+add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
+target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_render2d)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
+endif()
+
+# ---------------------------------------------------------------------------
+# Texture atlases (atlas agent). rts_atlas: runtime manifest/page reader, CPU image source and
+# the GPU texture lookup (TextureLibrary, through gfx::Device only). rts_atlas_builder: host-only
+# packer used by rtsbuild/assetpipe at build time.
+# ---------------------------------------------------------------------------
+add_library(rts_atlas STATIC engine/atlas/AtlasFormat.cpp engine/atlas/ImageDecode.cpp engine/atlas/TextureLibrary.cpp)
+target_include_directories(rts_atlas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
+target_link_libraries(rts_atlas PUBLIC rts_engine)
+foreach(t rts_client main)
+    if(TARGET ${t})
+        target_link_libraries(${t} PRIVATE rts_atlas)
+    endif()
+endforeach()
+if(TARGET rts_render2d)
+    target_link_libraries(rts_render2d PUBLIC rts_atlas)  # TextureCache resolves atlased sprites
+endif()
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_atlas_builder STATIC tools/atlas/AtlasPacker.cpp tools/atlas/AtlasBuild.cpp)
+    target_include_directories(rts_atlas_builder PRIVATE third_party/stb_image_write)
+    target_link_libraries(rts_atlas_builder PUBLIC rts_atlas rts_pack_writer)
+    foreach(t rtsbuild assetpipe rts_tests)
+        if(TARGET ${t})
+            target_link_libraries(${t} PRIVATE rts_atlas_builder)
+        endif()
+    endforeach()
+endif()
+if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
+    target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
 endif()

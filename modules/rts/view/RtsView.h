@@ -20,6 +20,8 @@
 #include "../../../engine/sim/Simulation.h"
 #include "../RtsData.h"
 #include "../RtsMap.h"
+#include "Rts2DView.h"
+#include "RtsLights.h"
 
 namespace rts::game {
 
@@ -34,6 +36,7 @@ struct SceneObject {
     float carry = 0;             // > 0: carrying resources
     int16_t carryRes = -1;       // resource index of the cargo
     bool selected = false, hovered = false, visible = true, isProjectile = false;
+    uint8_t action = 0;          // SpriteAction (sprite animations): idle, move, attack, work
     // animation hints (sceneFromSim fills them; editor placements leave the defaults)
     uint8_t order = 0;           // current order: 0 none, else OrderType + 1
     bool moving = false;
@@ -41,6 +44,7 @@ struct SceneObject {
     bool hasTarget = false;      // combat target (turrets aim at it)
     render::float3 target;
     Entity source;               // projectiles: who fired (muzzle point)
+    uint16_t shooterType = UINT16_MAX; // projectiles: type of the unit that fired it (lights)
 };
 
 struct RtsScene {
@@ -51,6 +55,7 @@ struct RtsScene {
     // tells the view whether they are new
     std::vector<SimEvent> events;
     uint32_t tick = 0;
+    double seconds = 0;          // game time (tick / tick rate): drives the day/night cycle
     // drag-to-send arrows (Mushroom-Wars input) and box selection are drawn by the client
 };
 
@@ -104,6 +109,16 @@ public:
     enum AnimKind { kAnimIdle, kAnimMove, kAnimAttack, kAnimGather, kAnimBuild, kAnimCarry, kAnimDie, kAnimSpawn,
                     kAnimHit, kAnimWork, kAnimConstruct, kAnimCast, kAnimCount };
     static const char* animName(int kind);
+
+    // ---- 2D games (Rts2DView): sprite types and tile maps
+    // Prefix for content paths (editor: "<project dir>/"); call before init().
+    void setContentBase(const std::string& base) { contentBase_ = base; }
+    // The map's "tiles" block (null = none); takes effect at the next buildTerrain().
+    void setTiles(const Json& tiles) { if (twoD_) twoD_->setTiles(tiles); }
+    bool hasTiles() const { return twoD_ && twoD_->hasTiles(); }
+    // Screen-space hit test for sprite objects (they are drawn above their ground point).
+    bool spriteHit(const render::RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const;
+    RtsLights& lights() { return lights_; }
 
 private:
     struct ClipSpec {
@@ -221,9 +236,13 @@ private:
     std::vector<ViewEffect> effects_;
     render::Mesh terrain_, water_, projectile_;
     bool hasTerrain_ = false, outline_ = true, animLod_ = true;
+    std::unique_ptr<Rts2DView> twoD_;
+    std::string contentBase_;
+    std::vector<render::float3> bars_;   // per scene object: health bar anchor of sprite objects
     double lastTime_ = -1;
     uint32_t lastTick_ = ~0u;
     uint64_t frame_ = 0;
+    RtsLights lights_;
     render::mat4 viewProj_;
     render::float3 camPos_;
 };

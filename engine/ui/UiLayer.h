@@ -8,8 +8,10 @@
 // Units: the context works in framebuffer pixels; stylesheets should use `dp` so the layout scales
 // with the display density (dp ratio = platform::dpiScale()).
 #pragma once
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "engine/gfx/Gfx.h"
 #include "engine/platform/Platform.h"
@@ -43,12 +45,30 @@ public:
     // `decorator: image(#name)`. The caller may update its pixels every frame.
     void setDynamicTexture(const std::string& name, gfx::TextureHandle tex, int width, int height);
 
+    // Localized documents: text nodes and attribute values that are exactly "@some.key" are passed
+    // to `fn` while a document loads. After a language change, reload the documents.
+    void setTranslator(std::function<std::string(const std::string& key)> fn);
+    // Fallback for images that are not plain content files (e.g. packed into a texture atlas at
+    // build time): returns straight-alpha RGBA8 pixels of the original image at `path`.
+    using ImageSource = std::function<bool(const std::string& path, int& w, int& h, std::vector<unsigned char>& rgba)>;
+    void setImageSource(ImageSource source);
+
+    // On-screen keyboard (UiKeyboard): opens when a text field gets focus. Auto = on touch devices
+    // only (or with RTS_OSK=1 in the environment, to try it on a desktop).
+    enum class OnScreenKeyboard { Auto, Always, Never };
+    void setOnScreenKeyboard(OnScreenKeyboard mode);
+    void setKeyboardLanguage(const std::string& tag);  // layout that opens first (UI language)
+    bool keyboardVisible() const;
+
     float dpRatio() const;              // framebuffer pixels per dp
     bool textInputFocused() const;
     void toggleDebugger();              // RmlUi visual debugger (F8 in the client)
 
     struct Impl;
 private:
+    bool processEvent(const platform::Event& e);
+    // Opens/closes the on-screen keyboard to follow the focused text field (platform::startTextInput).
+    void syncTextInput();
     std::unique_ptr<Impl> impl_;
 };
 

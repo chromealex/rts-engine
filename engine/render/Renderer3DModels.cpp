@@ -106,7 +106,7 @@ gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, int phase, bo
         const std::string msl = defs + (shadow ? shaders::kModelShadowMSL : shaders::kModelMSL);
         gfx::ShaderDesc sd;
         sd.glslVertex = vs.c_str(); sd.glslFragment = fs.c_str(); sd.msl = msl.c_str();
-        sd.uniformSlots = 5; sd.textureSlots = 9; sd.label = shadow ? "model shadow" : "model";
+        sd.uniformSlots = shadow ? 5 : 6; sd.textureSlots = shadow ? 9 : 10; sd.label = shadow ? "model shadow" : "model"; // U5/tex9: lights
         ShaderEntry e;
         e.shader = dev_->createShader(sd);
         if (!e.shader.valid()) {
@@ -216,7 +216,10 @@ void Renderer3D::drawModelBatch(const uint32_t* items, uint32_t count, int phase
     const bool instanced = count > 1;
     gfx::PipelineHandle ph = modelPipeline(it, phase, instanced);
     if (!ph.valid()) return;
-    if (!(ph == currentPipe_)) { dev_->setPipeline(ph); currentPipe_ = ph; }
+    if (!(ph == currentPipe_)) {
+        dev_->setPipeline(ph); currentPipe_ = ph;
+        if (phase != 0) lights.bind(5, 9);   // U5 / tex9: dynamic lights
+    }
     // per-instance block (an instanced shader declares 32 entries: the block is always uploaded whole)
     const uint32_t slots = instanced ? uint32_t(kMaxInstances) : 1u;
     instData_.assign(size_t(slots) * 32, 0.0f);

@@ -7,12 +7,13 @@
      top[] {text, sub, style, warn}, topActions[], clock, notices[], minimapStyle,
      hasSelection, ownSelection, selTitle, selInfo[], emptyHint, showCard,
      card[] {header, kind, label, cost, hotkey, tip, enabled, active, progress, id} (header = section start),
-     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows.
-     Events: act(id), pause(), resume(), restart(), tomenu(). -->
+     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows, particles (0..3), volume, music (0..100).
+     netMatch (online match: no restart, "leave match" instead of "main menu").
+     Events: act(id), pause(), resume(), restart(), tomenu(). Static text: {{ 'key' | tr(lang) }}, keys in engine/assets/lang (engine/i18n/README.md). -->
 <body>
 <!-- the model is bound on a div: <body> is the document element itself and binds too late -->
 <div class="root" data-model="game" data-class-touch="touch">
-<div data-if="screen != 'menu'">
+<div data-if="screen == 'playing' || screen == 'paused' || screen == 'over'">
     <div id="selbox" data-if="boxStyle != ''" data-attr-style="boxStyle"></div>
     <div class="sendline" data-for="l : lines" data-attr-style="l"></div>
 
@@ -21,7 +22,7 @@
             <span class="item" data-for="it : top" data-class-warn="it.warn" data-attr-style="it.style">{{it.text}}<span class="sub" data-if="it.sub != ''">{{it.sub}}</span></span>
             <button class="small" data-for="a : topActions" data-class-active="a.active" data-event-click="act(a.id)" data-event-dblclick="act(a.id)">{{a.label}}<span class="cost" data-if="a.cost != ''">{{a.cost}}</span></button>
             <span class="item">{{clock}}</span>
-            <button class="small" data-event-click="pause()">Меню</button>
+            <button class="small" data-event-click="pause()">{{ 'hud.menu' | tr(lang) }}</button>
         </div>
     </div>
 
@@ -55,17 +56,40 @@
         <div id="modal" class="panel">
             <h1 data-if="screen == 'over'">{{overTitle}}</h1>
             <p class="dim" data-if="screen == 'over'">{{overTime}}</p>
-            <h1 data-if="screen == 'paused'">Пауза</h1>
-            <button class="wide" data-if="screen == 'paused'" data-event-click="resume()">Продолжить</button>
-            <div class="choice">
-                <span class="dim">Тени: </span>
-                <button data-class-active="shadows == 0" data-event-click="shadows = 0">выкл</button>
-                <button data-class-active="shadows == 1" data-event-click="shadows = 1">низк.</button>
-                <button data-class-active="shadows == 2" data-event-click="shadows = 2">средн.</button>
-                <button data-class-active="shadows == 3" data-event-click="shadows = 3">выс.</button>
+            <h1 data-if="screen == 'paused'">{{ 'pause.title' | tr(lang) }}</h1>
+            <button class="wide" data-if="screen == 'paused'" data-event-click="resume()">{{ 'pause.resume' | tr(lang) }}</button>
+            <div class="choice shadows">
+                <button data-class-active="shadows == 0" data-event-click="shadows = 0">{{ 'pause.shadows_off' | tr(lang) }}</button>
+                <button data-class-active="shadows == 1" data-event-click="shadows = 1">{{ 'pause.shadows_low' | tr(lang) }}</button>
+                <button data-class-active="shadows == 2" data-event-click="shadows = 2">{{ 'pause.shadows_medium' | tr(lang) }}</button>
+                <button data-class-active="shadows == 3" data-event-click="shadows = 3">{{ 'pause.shadows_high' | tr(lang) }}</button>
             </div>
-            <button class="wide" data-event-click="restart()">Заново</button>
-            <button class="wide" data-event-click="tomenu()">В меню</button>
+            <div class="choice">
+                <span class="dim">{{ 'pause.particles' | tr(lang) }} </span>
+                <button data-class-active="particles == 0" data-event-click="particles = 0">{{ 'pause.off' | tr(lang) }}</button>
+                <button data-class-active="particles == 1" data-event-click="particles = 1">{{ 'pause.low' | tr(lang) }}</button>
+                <button data-class-active="particles == 2" data-event-click="particles = 2">{{ 'pause.medium' | tr(lang) }}</button>
+                <button data-class-active="particles == 3" data-event-click="particles = 3">{{ 'pause.high' | tr(lang) }}</button>
+            </div>
+            <div class="choice">
+                <span class="dim">{{ 'pause.sound' | tr(lang) }} </span>
+                <button data-class-active="volume == 0" data-event-click="volume = 0">{{ 'pause.off' | tr(lang) }}</button>
+                <button data-class-active="volume == 25" data-event-click="volume = 25">25</button>
+                <button data-class-active="volume == 50" data-event-click="volume = 50">50</button>
+                <button data-class-active="volume == 75" data-event-click="volume = 75">75</button>
+                <button data-class-active="volume == 100" data-event-click="volume = 100">100</button>
+            </div>
+            <div class="choice">
+                <span class="dim">{{ 'pause.music' | tr(lang) }} </span>
+                <button data-class-active="music == 0" data-event-click="music = 0">{{ 'pause.off' | tr(lang) }}</button>
+                <button data-class-active="music == 25" data-event-click="music = 25">25</button>
+                <button data-class-active="music == 50" data-event-click="music = 50">50</button>
+                <button data-class-active="music == 75" data-event-click="music = 75">75</button>
+                <button data-class-active="music == 100" data-event-click="music = 100">100</button>
+            </div>
+            <button class="wide" data-if="!netMatch" data-event-click="restart()">{{ 'pause.restart' | tr(lang) }}</button>
+            <button class="wide" data-if="!netMatch" data-event-click="tomenu()">{{ 'pause.to_menu' | tr(lang) }}</button>
+            <button class="wide" data-if="netMatch" data-event-click="tomenu()">{{ 'ui.leave_match' | tr(lang) }}</button>
         </div>
     </div>
 </div>

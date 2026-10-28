@@ -15,11 +15,12 @@ enum CellFlags : uint8_t {
     kCellNoBuild = 4,  // no construction
     kCellRamp = 8,     // connects two cliff levels
     kCellRock = 16,    // rock (Dune: buildable; sand-only units can't enter)
+    kCellRoad = 32,    // player road network (settlers economy): faster movement, connects buildings
 };
 
 // Terrain characters in maps:
 //   '.' ground   '~' water   '#' blocked   ',' ground, no build   '=' shallow (ground+water)
-//   '/' ramp     'R' rock (ground, buildable when rules require rock)
+//   '/' ramp     'R' rock (ground, buildable when rules require rock)   '+' road (ground)
 uint8_t cellFlagsFromChar(char c);
 
 struct MapGrid {
@@ -27,11 +28,27 @@ struct MapGrid {
     std::vector<uint8_t> flags;
     std::vector<int8_t> level;      // cliff level 0..9
     std::vector<int16_t> height;    // fine height in 1/16 units (visual + editor)
+    // Heightfield terrain: heights at cell corners, (w+1)*(h+1), 1/16 units, row-major (corner (x,y) =
+    // top-left corner of cell (x,y)). Empty = no heightfield (flat / cliff-level maps). Map JSON:
+    // terrain.corners. Simulation use is governed by rules terrain.model (see docs/terrain.md).
+    std::vector<int16_t> corner;
+    bool hasCorners() const { return !corner.empty(); }
+    int cornerIndex(int x, int y) const { return y * (w + 1) + x; }
     std::vector<uint16_t> blocked;  // structures covering the cell
     std::vector<uint8_t> creep;     // >0: creep present
     std::vector<int16_t> fieldRes;  // resource id of the field in this cell, -1 none
     std::vector<Fixed> fieldAmt;
     std::vector<int16_t> region;    // region index, -1 none
+    // dungeon / territory layers
+    std::vector<uint8_t> dig;       // diggable kind + 1 (0: not diggable); such cells are solid until dug
+    std::vector<Fixed> digHp;       // remaining hardness
+    std::vector<uint8_t> digMark;   // bit (slot-1): marked for digging by that player
+    std::vector<uint8_t> territory; // owner slot of the cell (0: nobody) - DK floor, territory-war front
+    std::vector<int16_t> room;      // painted room type on the cell, -1 none (owner = territory)
+    // pathing helpers (not part of the hashed state: derived from it)
+    std::vector<uint8_t> clearance; // ground cells: Chebyshev distance to the nearest non-walkable cell (capped)
+    bool clearanceDirty = true;
+    std::vector<uint8_t> soft;      // per cell: stationary friendly units (soft obstacles for surround paths)
 
     void init(int width, int height_);
     bool inside(int x, int y) const { return x >= 0 && y >= 0 && x < w && y < h; }
@@ -45,11 +62,19 @@ struct MapGrid {
     Vec3 cellCenter(int x, int y) const { return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
     void block(int x0, int y0, int fw, int fh, int delta);
     bool areaBuildable(int x0, int y0, int fw, int fh) const;  // ground, no-build-free, unblocked, flat
-    bool findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes = 40000);
+    // clearance: cells needed around the path for a body of that size (0 = any walkable cell); narrower
+    // cells cost more instead of being forbidden. soft: also route around cells marked in `soft`.
+    bool findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes = 40000, int clearance = 0, bool soft = false);
+    void updateClearance();
+    static int clearanceFor(Fixed radius);  // body radius -> cells of clearance
     bool lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const;
     bool nearestPassable(int& x, int& y, uint8_t layer, int radius = 12) const;
 
 private:
+    int pathClear_ = 0;
+    bool pathSoft_ = false;
+    int pathEndA_ = -1, pathEndB_ = -1;
+    bool lineOk(int x, int y) const;
     std::vector<uint32_t> gCost_, stamp_;
     std::vector<int32_t> parent_;
     uint32_t search_ = 0;

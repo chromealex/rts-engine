@@ -1,0 +1,12 @@
+// Visual effects for "Mushroom Clash" (see modules/rts/fx/RtsFx.h). Built-in textures only.
+{
+  "events": {
+    "died":     "spore_pop",
+    "captured": { "effect": "capture", "teamColor": true },
+    "upgraded": { "effect": "upgrade", "height": 0.3 },
+    "buildDone": { "effect": "upgrade", "height": 0.3 }
+  },
+  "weapons": {
+    "spores": { "hit": "spore_pop", "trail": "spore_trail" }
+  }
+}

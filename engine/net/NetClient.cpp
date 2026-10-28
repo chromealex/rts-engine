@@ -45,7 +45,7 @@ void NetClient::update(uint64_t now) {
     conn_->update(now);
     if (conn_->state() == ConnState::Closed) {
         phase_ = Phase::Disconnected;
-        event(NetEvent::Kind::Disconnected, "Соединение с сервером потеряно");
+        event(NetEvent::Kind::Disconnected, NetText("net.disconnected"));
         return;
     }
     if (conn_->state() == ConnState::Connected && !helloSent_) {
@@ -71,7 +71,7 @@ void NetClient::handle(const Bytes& b) {
         if (!decode(r, m)) return;
         clientId_ = m.clientId; reconnectToken_ = m.reconnectToken; serverName_ = m.serverName; queues_ = m.queues;
         phase_ = Phase::Online;
-        event(NetEvent::Kind::Connected, m.serverName, m.resumed ? 1 : 0);
+        event(NetEvent::Kind::Connected, NetText("net.connected").str("server", m.serverName), m.resumed ? 1 : 0);
         break;
     }
     case Msg::Error: {
@@ -124,15 +124,15 @@ void NetClient::handle(const Bytes& b) {
     case Msg::PlayerStatus: {
         PlayerStatusMsg m;
         if (!decode(r, m)) return;
-        const char* what[] = {"вернулся в игру", "потерял соединение", "покинул игру"};
-        std::string name = "Игрок " + std::to_string(m.slot);
-        if (match_) for (auto& p : match_->players) if (p.slot == m.slot) name = p.name;
-        event(NetEvent::Kind::PlayerStatus, name + " " + what[std::min<uint8_t>(m.status, 2)], m.slot);
+        static const char* keys[] = {"net.player.back", "net.player.dropped", "net.player.left"};
+        std::string name = "@net.player.unnamed";   // resolved by the client with the slot argument
+        if (match_) for (auto& p : match_->players) if (p.slot == m.slot && !p.name.empty()) name = p.name;
+        event(NetEvent::Kind::PlayerStatus, NetText(keys[std::min<uint8_t>(m.status, 2)]).str("name", name).num("slot", m.slot), m.slot);
         break;
     }
     case Msg::Desync: {
         DesyncMsg m;
-        if (decode(r, m)) event(NetEvent::Kind::Desync, "Рассинхронизация на тике " + std::to_string(m.tick), int32_t(m.tick));
+        if (decode(r, m)) event(NetEvent::Kind::Desync, NetText("net.desync").num("tick", m.tick), int32_t(m.tick));
         break;
     }
     case Msg::MatchEnd: {
@@ -141,12 +141,12 @@ void NetClient::handle(const Bytes& b) {
         int32_t delta = 0;
         if (match_) for (auto& [s, d] : m.ratingDelta) if (s == match_->localSlot) delta = d;
         event(NetEvent::Kind::MatchEnded, m.reason, m.result);
-        if (delta) event(NetEvent::Kind::MatchEnded, "Рейтинг " + std::string(delta > 0 ? "+" : "") + std::to_string(delta), m.result);
+        if (delta) event(NetEvent::Kind::RatingChanged, NetText(delta > 0 ? "net.rating_up" : "net.rating_down").num("delta", delta > 0 ? delta : -delta), delta);
         break;
     }
     case Msg::ChatMsg: {
         ChatMsg m;
-        if (decode(r, m)) event(NetEvent::Kind::Chat, m.name + ": " + m.text, int32_t(m.from));
+        if (decode(r, m)) event(NetEvent::Kind::Chat, NetText("net.chat_line").str("name", m.name).str("text", m.text), int32_t(m.from));
         break;
     }
     case Msg::Pong: break;
@@ -185,7 +185,9 @@ SimConfig NetClient::simConfig() const {
 
 void NetClient::attach(Simulation& sim) {
     if (!match_) return;
-    for (auto& p : match_->players) if (auto* pi = sim.player(p.slot)) pi->name = p.name;
+    // Humans' own names replace the map's; bots ("@net.bot") and unnamed players keep the map's names.
+    for (auto& p : match_->players)
+        if (auto* pi = sim.player(p.slot); pi && !p.name.empty() && p.name != "@net.bot") pi->name = p.name.rfind("@@", 0) == 0 ? p.name.substr(1) : p.name;
     SessionConfig cfg;
     cfg.inputDelay = match_->settings.inputDelay;
     cfg.rollbackWindow = match_->settings.rollbackWindow;

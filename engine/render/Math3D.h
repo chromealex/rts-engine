@@ -186,13 +186,27 @@ struct RTSCamera {
     float yaw = 0.0f;      // radians around Y
     float fovY = 0.75f;
     float minDistance = 6.0f, maxDistance = 120.0f;
+    // Orthographic projection (2D games): `distance` still is the zoom; the visible half height is
+    // distance * tan(fovY / 2), i.e. the same framing as the perspective camera at that distance.
+    bool ortho = false;
 
     float3 eye() const {
         float cp = std::cos(pitch), sp = std::sin(pitch);
         return target + float3{std::sin(yaw) * cp, sp, std::cos(yaw) * cp} * distance;
     }
-    mat4 view() const { return mat4::lookAt(eye(), target, {0, 1, 0}); }
-    mat4 proj(float aspect, bool zeroToOne) const { return mat4::perspective(fovY, aspect, 0.5f, 1000.0f, zeroToOne); }
+    float orthoHalfHeight() const { return distance * std::tan(fovY * 0.5f); }
+    mat4 view() const {
+        // straight down (pitch 90°, Red Alert / Dune II): world up is degenerate, use the ground
+        // direction the camera faces as screen up
+        float3 up = std::cos(pitch) < 1e-3f ? float3{-std::sin(yaw), 0, -std::cos(yaw)} : float3{0, 1, 0};
+        return mat4::lookAt(eye(), target, up);
+    }
+    mat4 proj(float aspect, bool zeroToOne) const {
+        if (!ortho) return mat4::perspective(fovY, aspect, 0.5f, 1000.0f, zeroToOne);
+        float h = orthoHalfHeight(), w = h * aspect;
+        // negative near plane: terrain/sprites taller than the zoom distance are not clipped
+        return mat4::ortho(-w, w, -h, h, -200.0f, 1000.0f, zeroToOne);
+    }
 
     // Screen (logical points) -> world ray. Returns false if degenerate.
     bool screenRay(float sx, float sy, float w, float h, float3& origin, float3& dir) const {
