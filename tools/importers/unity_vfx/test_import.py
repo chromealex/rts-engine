@@ -13,7 +13,9 @@ from contextlib import redirect_stdout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import convert as cv  # noqa: E402
 import images  # noqa: E402
+import unity_scene as us  # noqa: E402
 import unity_yaml as uy  # noqa: E402
 import importlib.util  # noqa: E402
 
@@ -22,6 +24,7 @@ imp = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(imp)
 
 DATA = os.path.normpath(os.path.join(HERE, '..', '..', '..', 'tests', 'data', 'unity_vfx', 'Assets', 'FX'))
+MODULES = os.path.normpath(os.path.join(DATA, '..', 'Modules'))
 
 
 def run_import(*args):
@@ -193,7 +196,7 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(smoke['shape'], 'cone')
         self.assertEqual(smoke['spread'], 30)
         self.assertEqual(smoke['noise']['frequency'], 0.8)
-        self.assertEqual(smoke['gravity'], [0.0, 0.8, 0.0])  # local force +Z under the rotated root
+        self.assertEqual(smoke['force'], {'y': 0.8, 'space': 'local'})  # local force +Z under the rotated root
         self.assertEqual(smoke['delay'], 0.1)
 
     def test_renderer_modes_trails_lights_collision_subemitters(self):
@@ -205,7 +208,8 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(sp['trail']['width'], [[0.0, 1.0], [1.0, 0.0]])
         self.assertEqual(sp['light']['color'], '#ff9940')
         self.assertEqual(sp['light']['max'], 6)
-        self.assertEqual(sp['collision']['height'], -0.1)
+        self.assertEqual(sp['collision']['planes'], [{'point': [0, -0.1, 0], 'normal': [0, 1, 0]}])
+        self.assertFalse(sp['collision']['ground'])
         self.assertEqual(sp['subEmitters'], [{'on': 'death', 'effect': 'explosion_sparkpop', 'chance': 0.5, 'inheritColor': True}])
         self.assertEqual(by_comment(self.fx['explosion'], '/Shockwave')['align'], 'ground')
         aura = by_comment(self.fx['magicaura'], 'Magic Aura')
@@ -217,7 +221,8 @@ class ImportTests(unittest.TestCase):
         self.assertTrue(aura['loop'])
         self.assertIn('colorBySpeed', aura)
         self.assertIn('sizeBySpeed', aura)
-        self.assertEqual(aura['velocity'], [0.0, 1.0, 0.0])
+        self.assertEqual(aura['velocityOverLife'], {'y': {'curve': [[0, 0.5], [1, 1.5]]}, 'orbitalY': -114.59})
+        self.assertTrue(aura['prewarm'])
         self.assertNotIn('direction', aura)                  # circle rotated -90 X: its normal is up
         motes = by_comment(self.fx['magicaura'], '/Motes')
         self.assertEqual(motes['size'], [0.08, 0.16])        # hierarchy scaling mode: x2
@@ -231,11 +236,11 @@ class ImportTests(unittest.TestCase):
         self.assertIn('VisualEffect (VFX Graph)', dropped)
         self.assertIn('script ExplosionShake.cs', dropped)
         self.assertIn('AudioSource', dropped)
-        self.assertIn('orbital', dropped)
-        self.assertIn('prewarm', dropped)
+        self.assertNotIn('orbital', dropped)
+        self.assertNotIn('prewarm', dropped)
         self.assertIn('Shader Graph Glow.shadergraph', approx)
         self.assertIn('custom shader TrailGlow.shader', approx)
-        self.assertIn('mesh particles', approx)
+        self.assertEqual(by_comment(self.fx['magicaura'], '/Motes')['meshes'], ['builtin:cube'])
         systems = {s['system']: s['modules'] for s in self.rep['systems']}
         self.assertIn('trails', systems['Explosion/Sparks'])
 
@@ -289,6 +294,290 @@ class ImportTests(unittest.TestCase):
             code, rep = run_import('--source', binary, '--game', tmp)
             self.assertNotEqual(code, 0)
             self.assertIn('Force Text', '\n'.join(rep['warnings']))
+
+
+class ConversionTests(unittest.TestCase):
+    def mmc(self, state, scalar, keys=None, min_keys=None, min_scalar=None):
+        m = {'minMaxState': state, 'scalar': scalar}
+        if min_scalar is not None:
+            m['minScalar'] = min_scalar
+        for name, ks in (('maxCurve', keys), ('minCurve', min_keys)):
+            if ks:
+                m[name] = {'m_Curve': [{'time': t, 'value': v, 'inSlope': i, 'outSlope': o} for t, v, i, o in ks]}
+        return m
+
+    def test_min_max_curve_to_engine_ranges(self):
+        self.assertEqual(cv.value(self.mmc(0, 2)).json, 2)
+        self.assertEqual(cv.value(self.mmc(3, 4, min_scalar=-1)).json, [-1, 4])
+        v = cv.value(self.mmc(1, 2, [(0, 0, 1, 1), (1, 1, 1, 1)])).json
+        self.assertEqual(v, {'curve': [[0, 0], [1, 2]]})
+        v = cv.value(self.mmc(2, 1, [(0, 1, 0, 0), (1, 1, 0, 0)], [(0, 0, 0, 0), (1, 0.5, 0, 0)])).json
+        self.assertEqual(v['curve'], [[0, 1], [1, 1]])
+        self.assertEqual(v['curveMin'][0], [0, 0])
+        v = cv.value(self.mmc(0, 5), lim=(0, 2))
+        self.assertEqual((v.json, v.clamped), (2, 5))
+
+    def test_sampling_is_accurate_and_bounded(self):
+        # an ease in / out over the lifetime: within 1% of its range; a full wave: 16 keys, within 2%
+        for ks, tol in (([(0, 0, 0, 0), (0.4, 1, 0, 0), (1, 0.2, -2, -2)], 0.01), ([(0, 0, 0, 0), (0.3, 1, 0, 0), (0.6, -1, 0, 0), (1, 0.5, 0, 0)], 0.04)):
+            m = self.mmc(1, 1, ks)
+            keys = cv.value(m).json['curve']
+            self.assertLessEqual(len(keys), 16)
+            c = cv.Curve(m)
+            lo, hi = c.bounds()
+            for i in range(1001):
+                t = i / 1000.0
+                self.assertLess(abs(c.hi(t) - lin(keys, t)), tol * (hi - lo))
+
+    def test_weighted_tangents(self):
+        k = uy.curve_keys({'m_Curve': [
+            {'time': 0, 'value': 0, 'inSlope': 0, 'outSlope': 0, 'weightedMode': 2, 'outWeight': 1.0},
+            {'time': 1, 'value': 1, 'inSlope': 0, 'outSlope': 0, 'weightedMode': 0}]})
+        plain = uy.curve_keys({'m_Curve': [{'time': 0, 'value': 0, 'inSlope': 0, 'outSlope': 0}, {'time': 1, 'value': 1, 'inSlope': 0, 'outSlope': 0}]})
+        self.assertLess(uy.curve_eval(k, 0.3), uy.curve_eval(plain, 0.3))   # a heavier out weight holds the start longer
+        self.assertAlmostEqual(uy.curve_eval(k, 1.0), 1.0)
+        third = uy.curve_keys({'m_Curve': [dict(time=0, value=0, inSlope=1, outSlope=1, weightedMode=3, inWeight=1 / 3., outWeight=1 / 3.),
+                                           dict(time=1, value=1, inSlope=1, outSlope=1, weightedMode=3, inWeight=1 / 3., outWeight=1 / 3.)]})
+        self.assertAlmostEqual(uy.curve_eval(third, 0.4), 0.4, places=4)   # weights of 1/3 = the Hermite curve
+
+    def test_rotated_axes_combine_exactly(self):
+        # a Unity local x curve under the frame change lands on the engine z axis unchanged
+        curves = [cv.Curve(self.mmc(1, 1, [(0, 0, 1, 1), (1, 1, 1, 1)])), cv.Curve(0.0), cv.Curve(0.0)]
+        out = [cv.combine([(c, cv.P[i][j]) for j, c in enumerate(curves)]).json for i in range(3)]
+        self.assertEqual(out, [0, 0, {'curve': [[0, 0], [1, 1]]}])
+
+    def test_euler_and_frames(self):
+        for e in ((10, 20, 30), (-80, 45, 170), (0, -90, 0)):
+            m = cv.mat_zxy(e)
+            back = cv.euler_zxy(m)
+            for a, b in zip(cv.mat_zxy(back), m):
+                for x, y in zip(a, b):
+                    self.assertAlmostEqual(x, y, places=6)
+        q = us.q_euler((30, 40, 50))
+        self.assertEqual([round(x, 6) for x in cv.mv(cv.q_mat(q), (1, 2, 3))], [round(x, 6) for x in us.q_rot(q, (1, 2, 3))])
+        self.assertEqual(cv.mv(cv.P, (1, 2, 3)), us.u2rel((1, 2, 3)))
+
+    def test_prefab_modification_paths(self):
+        data = {'InitialModule': {'startSize': {'scalar': 1}}, 'EmissionModule': {'m_Bursts': [{'time': 0}]}}
+        self.assertTrue(us.set_property(data, 'InitialModule.startSize.scalar', 2))
+        self.assertTrue(us.set_property(data, 'EmissionModule.m_Bursts.Array.size', 3))
+        self.assertTrue(us.set_property(data, 'EmissionModule.m_Bursts.Array.data[2].time', 0.5))
+        self.assertEqual(data['InitialModule']['startSize']['scalar'], 2)
+        self.assertEqual([b['time'] for b in data['EmissionModule']['m_Bursts']], [0, 0, 0.5])
+        self.assertTrue(us.set_property(data, 'EmissionModule.m_Bursts.Array.size', 1))
+        self.assertEqual(len(data['EmissionModule']['m_Bursts']), 1)
+        self.assertEqual(uy.scalar('0000000000000000e000000000000000'), '0000000000000000e000000000000000')
+
+
+def lin(keys, t):
+    for a, b in zip(keys, keys[1:]):
+        if t <= b[0]:
+            f = (t - a[0]) / (b[0] - a[0]) if b[0] > a[0] else 0
+            return a[1] + (b[1] - a[1]) * f
+    return keys[-1][1]
+
+
+def corners(m, dims):
+    out = set()
+    for sx in (-0.5, 0.5):
+        for sy in (-0.5, 0.5):
+            for sz in (-0.5, 0.5):
+                p = cv.mv(m, (sx * dims[0], sy * dims[1], sz * dims[2]))
+                out.add(tuple(round(x, 3) + 0.0 for x in p))
+    return out
+
+
+class ModuleTests(unittest.TestCase):
+    """tests/data/unity_vfx/Assets/Modules: every ParticleSystem module, nested prefabs, force fields, meshes, sprites."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.code, cls.rep = run_import('--source', MODULES, '--game', cls.tmp)
+        cls.fx = {}
+        for e in cls.rep['effects']:
+            with open(os.path.join(cls.tmp, e['file'])) as f:
+                cls.fx[e['name']] = json.load(f)
+        cls.storm = by_comment(cls.fx['storm'], 'Storm')
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp)
+
+    def em(self, suffix):
+        return by_comment(self.fx['storm'], suffix)
+
+    def test_effects(self):
+        self.assertEqual(self.code, 0)
+        self.assertEqual(sorted(self.fx), ['base', 'basevariant', 'nested', 'storm', 'storm_sparkle'])
+        self.assertEqual(len(self.fx['storm']['emitters']), 7)
+
+    def test_main_module(self):
+        e = self.storm
+        self.assertTrue(e['prewarm'])
+        self.assertEqual(e['delay'], [0.1, 0.5])
+        self.assertEqual(e['life'], {'curve': [[0, 1], [1, 2]]})
+        self.assertEqual(e['speed'], [-1, 2])                       # crosses zero: passed through
+        self.assertEqual(e['size']['curveMin'], [[0, 0.2], [1, 0.4]])
+        self.assertEqual((e['size']['curve'][0], e['size']['curve'][-1]), ([0, 0.5], [1, 1]))
+        self.assertEqual((e['sizeY'], e['sizeZ']), (0.5, 0.25))
+        self.assertEqual(e['rotation'], [-90, 0])                    # billboards: Unity's z rotation mirrored
+        self.assertEqual(e['rotation3D'], {'x': -30, 'y': 0})
+        self.assertEqual(e['startColor'], {'gradient': [[0, '#ff3333ff'], [1, '#3333ff80']], 'overTime': True})
+        self.assertEqual(e['gravity'], [0, -9.81, 0])
+        self.assertEqual(e['gravityScale'], {'curve': [[0, 0], [1, 1]]})
+        self.assertEqual((e['maxParticles'], e['ringBuffer']), (200, True))
+        ring = self.em('/Ring')['startColor']
+        self.assertEqual(ring['gradientMin'], [[0, '#ff0000ff'], [1, '#00ff00ff']])
+        self.assertTrue(ring['overTime'])
+
+    def test_emission(self):
+        e = self.storm
+        self.assertEqual(e['bursts'], [{'time': 0.5, 'count': [5, 10], 'cycles': 0, 'interval': 0.5, 'chance': 0.5}])
+        rate = e['rate']['curve']
+        self.assertEqual((rate[0], rate[-1]), ([0, 40], [1, 40]))
+        self.assertIn([0.499, 10], rate)                             # the step key stays sharp
+        self.assertLessEqual(len(rate), 16)
+
+    def test_shapes(self):
+        e = self.storm
+        self.assertEqual((e['shape'], e['emitFrom'], e['length'], e['spread'], e['thickness']), ('cone', 'volume', 2, 20, 0.5))
+        self.assertNotIn('direction', e)                             # cone rotated -90 X: up
+        self.assertEqual((e['arc'], e['arcMode'], e['arcSpeed'], e['arcSpread']), (270, 'loop', 2, 0.25))
+        self.assertEqual((e['randomDirection'], e['sphericalDirection'], e['randomPosition'], e['alignToDirection']), (0.25, 0.5, 0.1, True))
+        ring = self.em('/Ring')
+        self.assertEqual((ring['shape'], ring['radius'], ring['donutRadius'], ring['shapeRotation']), ('donut', 1, 0.1, [0, 0, 135]))
+        shards = self.em('/Shards')
+        self.assertEqual((shards['shape'], shards['mesh'], shards['emitFrom']), ('mesh', 'builtin:cube', 'triangle'))
+        self.assertIn('shapeRotation', shards)
+        hull = self.em('/Hull')
+        self.assertEqual((hull['mesh'], hull['emitFrom']), ('models/shard.obj', 'edge'))
+        self.assertEqual(hull['box'], [2, 2, 3])                     # the mesh shape's scale (model axes)
+        self.assertNotIn('shapeRotation', hull)                      # unrotated mesh: identity
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, 'models', 'shard.obj')))
+        self.assertTrue(os.path.exists(os.path.join(self.tmp, 'models', 'rock.fbx')))
+        panel = self.em('/Panel')
+        self.assertEqual((panel['shape'], panel['emitFrom']), ('box', 'edge'))
+        unity = cv.mm(cv.P, cv.q_mat(us.q_euler((0, 45, 0))))       # the box placed by Unity, in the effect frame
+        self.assertEqual(corners(cv.mat_zxy(panel['shapeRotation']), panel['box']), corners(unity, (2, 1, 0.5)))
+        d = cv.mv(cv.mat_zxy(panel['shapeRotation']), panel['direction'])
+        self.assertEqual([round(x, 3) + 0.0 for x in d], [round(x, 3) + 0.0 for x in cv.mv(unity, (0, 0, 1))])
+        badge = self.em('/Badge')
+        self.assertEqual((badge['shape'], badge['box']), ('box', [0, 1, 2]))   # 16 px sprite at 16 px/unit, x scale 2, z = 0
+        funnel = self.em('/Funnel')
+        self.assertEqual(funnel['shape'], 'line')
+        self.assertEqual([round(x, 3) + 0.0 for x in cv.mv(cv.mat_zxy(funnel['shapeRotation']), (1, 0, 0))], [0, 1, 0])
+
+    def test_velocity_forces_limits(self):
+        e = self.storm
+        vo = e['velocityOverLife']
+        self.assertEqual(vo['z'], {'curve': [[0, 0], [1, 1]]})    # Unity local x = effect z
+        self.assertEqual(vo['y'], 1)
+        self.assertEqual(vo['orbitalY'], -57.296)                  # 1 rad/s around Unity y, mirrored
+        self.assertEqual(vo['orbitalOffset'], [0, 0, 0.5])
+        self.assertEqual(vo['radial'], 0.2)
+        self.assertEqual(vo['speedModifier'], {'curve': [[0, 1], [1, 0.5]]})
+        self.assertEqual(e['force'], {'y': [1, 2], 'space': 'world', 'randomize': True})
+        self.assertEqual(e['speedLimitAxes'], {'x': 3, 'y': 5, 'z': 2, 'space': 'local'})
+        self.assertEqual((e['limitDampen'], e['drag'], e['dragBySize']), (0.5, {'curve': [[0, 0], [1, 2]]}, True))
+        self.assertNotIn('dragBySpeed', e)
+        self.assertEqual(e['inheritVelocity'], {'mode': 'current', 'amount': 0.5})
+        self.assertEqual(e['lifeBySpeed'], {'speed': [0, 10], 'factor': [[0, 1], [1, 0.3]]})
+        self.assertEqual(e['spinBySpeed'], {'speed': [0, 5], 'spin': [[0, -180], [1, -180]]})
+        self.assertEqual(e['externalForces'], 1.5)
+        ff = self.fx['storm']['forceFields']
+        self.assertEqual(ff, [{'position': [0, 2, 0], 'shape': 'cylinder', 'length': 4, 'radius': 3, 'startRadius': 0.5, 'direction': [0, 1, 0],
+                               'gravity': 2, 'gravityFocus': 0.3, 'rotation': -57.296, 'rotationAttraction': 0.5, 'drag': 0.3}])
+
+    def test_over_lifetime_and_noise(self):
+        e = self.storm
+        self.assertEqual(e['color'], [[0, '#ffcc66ff'], [1, '#ff330000']])
+        self.assertEqual(e['colorMin'], [[0, '#ffffffff'], [1, '#80808000']])
+        self.assertEqual(e['sizeOverLifeMin'], [[0, 0.5], [1, 0.5]])
+        self.assertEqual(e['sizeOverLifeY'], [[0, 1], [1, 0]])
+        self.assertEqual(e['spin'], {'curve': [[0, -180], [1, 0]]})
+        self.assertEqual(e['spin3D'], {'x': -90, 'y': 0})
+        n = e['noise']
+        self.assertEqual(n['strength'], {'curve': [[0, 1], [1, 0]]})
+        self.assertEqual(n['axes'], [1, 0.5, 1])
+        self.assertEqual((n['octaves'], n['octaveMultiplier'], n['octaveScale'], n['damping']), (3, 0.4, 2.5, True))
+        self.assertEqual((n['position'], n['rotation'], n['size']), (0.8, -45, 0.2))
+        self.assertEqual((n['remap'][0], n['remap'][-1]), ([0, -1], [1, 1]))
+        shards = self.em('/Shards')
+        self.assertEqual(shards['rotation'], 45)                   # mesh particles: engine world Euler, z kept
+        self.assertEqual(shards['rotation3D'], {'x': [-180, 0], 'y': 0})
+        self.assertEqual(shards['spin3D'], {'x': -57.296, 'y': [-28.648, 28.648]})
+
+    def test_texture_sheet(self):
+        e = self.storm
+        self.assertEqual((e['frames'], e['row'], e['cycles'], e['flip']), ([4, 4], 'random', 2, [0.5, 0]))
+        fot = e['frameOverTime']['curve']
+        self.assertEqual((fot[0], fot[-1]), ([0, 0], [1, 0.9999]))
+        ring = self.em('/Ring')
+        self.assertEqual(ring['sprites'], ['fx/textures/sheet_star.png', 'fx/textures/sheet_disc.png', 'fx/textures/dot.png'])
+        self.assertEqual((ring['fps'], ring['flip']), (10, [0, 0.5]))
+        with open(os.path.join(self.tmp, 'fx', 'textures', 'sheet_disc.png'), 'rb') as f:
+            disc = images.read_png(f.read())
+        self.assertEqual((disc.w, disc.h), (32, 32))
+        self.assertGreater(disc.rgba[(16 * 32 + 16) * 4 + 1], 200)     # the green disc, not the red star
+        panel = self.em('/Panel')
+        self.assertEqual((panel['framesBySpeed'], panel['startFrame']), ([0.5, 4], {'curve': [[0, 0], [1, 3]]}))
+
+    def test_renderer_and_materials(self):
+        e = self.storm
+        self.assertEqual((e['align'], e['pivot'], e['sort'], e['sortOrder']), ('world', [0, 0.5, -0.25], 'youngest', -5))
+        self.assertEqual((e['minScreenSize'], e['maxScreenSize']), (0.01, 0.8))
+        shards = self.em('/Shards')
+        self.assertEqual((shards['meshes'], shards['blend']), (['models/shard.obj', 'models/rock.fbx'], 'opaque'))
+        self.assertEqual(self.em('/Ring')['blend'], 'multiply')
+        self.assertEqual(self.em('/Hull')['blend'], 'subtract')
+        funnel = self.em('/Funnel')
+        self.assertEqual((funnel['align'], funnel['cameraStretch'], funnel['sortOrder']), ('velocity', 0.3, 3))
+
+    def test_collision_trigger_subemitters(self):
+        e = self.storm
+        c = e['collision']
+        self.assertEqual((c['ground'], c['planes'], c['radius'], c['maxKillSpeed']), (False, [{'point': [0, -0.5, 0], 'normal': [0, 1, 0]}], 0.8, 50))
+        t = e['trigger']
+        self.assertEqual(t['volumes'][0], {'center': [0, 0.5, 2], 'radius': 0.75})
+        self.assertEqual((t['inside'], t['enter'], t['radius']), ('kill', 'callback', 1))
+        self.assertNotIn('outside', t)
+        self.assertEqual(e['subEmitters'], [{'on': 'trigger', 'effect': 'storm_sparkle', 'inherit': ['color', 'size']},
+                                            {'on': 'manual', 'effect': 'storm_sparkle', 'chance': 0.25, 'inherit': ['rotation', 'lifetime', 'duration']}])
+        self.assertTrue(self.em('/Funnel')['collision'].get('ground', True))
+
+    def test_trails_and_lights(self):
+        t = self.storm['trail']
+        self.assertEqual((t['mode'], t['ribbons'], t['textureMode'], t['dieWithParticles'], t['sizeAffectsLifetime']), ('ribbon', 2, 'tile', False, True))
+        self.assertEqual(t['lifeColor'], [[0, '#ffffffff'], [1, '#3366ff00']])
+        self.assertEqual(t['minDistance'], 0.1)
+        st = self.em('/Shards')['trail']
+        self.assertEqual((st['lifeFraction'], st['ratio'], st['textureMode']), (0.3, 0.5, 'distribute'))
+        light = self.storm['light']
+        self.assertEqual((light['color'], light['radius'], light['intensity']), ('#66ccff', 4, 3))   # template from another prefab
+        self.assertEqual(light['radiusOverLife'], [[0, 1], [1, 0]])
+
+    def test_nested_prefabs_and_variants(self):
+        n = self.fx['nested']['emitters']
+        self.assertEqual([e['comment'] for e in n], ['Unity: Holder/Mount/Base', 'Unity: Holder/Mount/Base/Glow2', 'Unity: Holder/Mount/Base/Extra'])
+        base = n[0]
+        self.assertEqual((base['size'], base['bursts'], base['offset']), (1.5, [[0.25, 6], [0.5, 3]], [0, 1, 2]))
+        self.assertEqual(n[1]['blend'], 'multiply')                  # objectReference override (material)
+        self.assertEqual(n[2]['offset'], [-1, 1, 2])                 # added child under the nested root
+        self.assertEqual(self.fx['basevariant']['emitters'][0]['life'], 3)
+        self.assertIn('Nested.prefab: nested prefab Base.prefab: 2 system(s), 8 modification(s) applied', self.rep['notes'])
+        self.assertFalse(any('Nested.prefab: script' in d for d in self.rep['dropped']))   # removed component
+
+    def test_report(self):
+        dropped = '\n'.join(self.rep['dropped'])
+        approx = '\n'.join(self.rep['approximate'])
+        self.assertIn('customData', dropped)
+        self.assertIn('custom vertex streams', dropped)
+        self.assertIn('custom simulation space', dropped)
+        self.assertIn('collider outside the prefab', dropped)
+        self.assertIn('box collider -> its bounding sphere', approx)
+        self.assertNotIn('limits', approx)
+        self.assertNotIn('SphereCollider', dropped)                 # used by the trigger module
 
 
 if __name__ == '__main__':

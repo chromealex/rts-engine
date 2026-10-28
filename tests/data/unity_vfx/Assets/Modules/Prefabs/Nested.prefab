@@ -1,0 +1,161 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1800000000000001
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4800000000000001}
+  m_Layer: 0
+  m_Name: Holder
+  m_IsActive: 1
+--- !u!4 &4800000000000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1800000000000001}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 4800000000000002}
+  m_Father: {fileID: 0}
+--- !u!1 &1800000000000002
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4800000000000002}
+  m_Layer: 0
+  m_Name: Mount
+  m_IsActive: 1
+--- !u!4 &4800000000000002
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1800000000000002}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 1, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 3353218183888896}
+  m_Father: {fileID: 4800000000000001}
+--- !u!1001 &7700000000000001
+PrefabInstance:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Modification:
+    serializedVersion: 3
+    m_TransformParent: {fileID: 4800000000000002}
+    m_Modifications:
+    - target: {fileID: 4700000000000001, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: m_LocalPosition.x
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 1987000000000001, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: InitialModule.startSize.scalar
+      value: 1.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 1987000000000001, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: EmissionModule.m_Bursts.Array.size
+      value: 2
+      objectReference: {fileID: 0}
+    - target: {fileID: 1987000000000001, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: EmissionModule.m_Bursts.Array.data[0].time
+      value: 0.25
+      objectReference: {fileID: 0}
+    - target: {fileID: 1987000000000001, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: EmissionModule.m_Bursts.Array.data[1].time
+      value: 0.5
+      objectReference: {fileID: 0}
+    - target: {fileID: 1987000000000001, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: EmissionModule.m_Bursts.Array.data[1].countCurve.scalar
+      value: 3
+      objectReference: {fileID: 0}
+    - target: {fileID: 1700000000000002, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: m_Name
+      value: Glow2
+      objectReference: {fileID: 0}
+    - target: {fileID: 1997000000000002, guid: c1000000000000000000000000000002, type: 3}
+      propertyPath: m_Materials.Array.data[0]
+      value: 
+      objectReference: {fileID: 2100000, guid: c1000000000000000000000000000020, type: 2}
+    m_RemovedComponents:
+    - {fileID: 1147000000000001, guid: c1000000000000000000000000000002, type: 3}
+    m_RemovedGameObjects: []
+    m_AddedGameObjects: []
+    m_AddedComponents: []
+  m_SourcePrefab: {fileID: 100100000, guid: c1000000000000000000000000000002, type: 3}
+--- !u!4 &3353218183888896 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 4700000000000001, guid: c1000000000000000000000000000002, type: 3}
+  m_PrefabInstance: {fileID: 7700000000000001}
+  m_PrefabAsset: {fileID: 0}
+--- !u!1 &1800000000000003
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4800000000000003}
+  - component: {fileID: 1988000000000003}
+  - component: {fileID: 1998000000000003}
+  m_Layer: 0
+  m_Name: Extra
+  m_IsActive: 1
+--- !u!4 &4800000000000003
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1800000000000003}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 3353218183888896}
+--- !u!198 &1988000000000003
+ParticleSystem:
+  m_GameObject: {fileID: 1800000000000003}
+  serializedVersion: 8
+  lengthInSec: 1
+  simulationSpeed: 1
+  looping: 0
+  startDelay:
+    minMaxState: 0
+    scalar: 0
+  moveWithTransform: 1
+  scalingMode: 1
+  InitialModule:
+    enabled: 1
+    startLifetime:
+      minMaxState: 0
+      scalar: 0.5
+    startSpeed:
+      minMaxState: 0
+      scalar: 1
+    startSize:
+      minMaxState: 0
+      scalar: 0.3
+    maxNumParticles: 1000
+  ShapeModule:
+    enabled: 1
+    type: 0
+    radius:
+      value: 0.1
+  EmissionModule:
+    enabled: 1
+    rateOverTime:
+      minMaxState: 0
+      scalar: 0
+    m_Bursts:
+    - serializedVersion: 2
+      time: 0
+      countCurve:
+        minMaxState: 0
+        scalar: 2
+      cycleCount: 1
+      repeatInterval: 0.01
+      probability: 1
+--- !u!199 &1998000000000003
+ParticleSystemRenderer:
+  m_GameObject: {fileID: 1800000000000003}
+  m_Enabled: 1
+  m_Materials:
+  - {fileID: 2100000, guid: b2c2d2e2f2a24b2c8d2e2f2a2b2c0003, type: 2}
+  m_RenderMode: 0
