@@ -617,7 +617,6 @@ public:
     bool mechPowered(Simulation& sim, uint8_t player, Vec3 at) const;
     Fixed staffFraction(Simulation& sim, Entity e) const;
     bool applyMechSocietyCommand(Simulation& sim, const Command& cmd);   // bounty, garrison-paid upgrades
-    bool inMechUpgrade_ = false;
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

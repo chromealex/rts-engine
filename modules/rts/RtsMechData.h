@@ -94,7 +94,6 @@ struct MechType {
     Fixed powerField{};                    // pylon: powers own structures within this radius
     bool needsPower = false;               // works and can be built only in a power field
     uint16_t infectSpawn = 0xFFFF; int infectCount = 0;   // structure overrun by an infecting attacker spawns these
-    int upgradeGarrison = 0;               // upgrading INTO this type costs garrison units (Mushroom Wars 2)
 };
 
 struct MechRules {

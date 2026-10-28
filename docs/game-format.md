@@ -1006,8 +1006,9 @@ ends: the side with most lives wins.
 
 ### Upgrades paid with garrison (Mushroom Wars 2)
 
-`"upgradeGarrison": 10` on the target type of an `upgrades` entry: the upgrade costs that many units of the building's
-garrison instead of resources (refused when the garrison is smaller).
+`"upgradeGarrison": 10` on the target type of an `upgrades` entry is an alias of the fidelity key `"cost": {"garrison": 10}`:
+the upgrade costs that many units of the building's garrison on top of its resource cost (refused when the garrison is
+smaller; the units are taken only when the upgrade is queued).
 
 ## Unit designs (agent-mech, UD)
 
@@ -1555,7 +1556,7 @@ uses none of them keeps its exact checksums.
 | `resourceNode.maxGatherers` (alias `maxWorkers`) | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
 | `powerField` / `structure.needsField` | type | `{"id": 0, "radius": 6.5}` on pylons; structures with `needsField` are placed and work only inside an own field |
 | `queueSlots` | type | items produced at once (reactor) |
-| `cost.garrison` | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |
+| `cost.garrison` (alias `upgradeGarrison`) | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |
 | `garrison.onCapture`, `garrison.keep` | type | type it drops to when captured (loses a level); units that always stay home when sending (State.io) |
 | `clash` | type | units in transit fight hostile units they meet |
 | `playerMods` | type | `{"max": 4, "mods": [{"tags": [...], "stat": "damage", "mul": 1.08}]}` — every completed one modifies the owner's types (forges) |

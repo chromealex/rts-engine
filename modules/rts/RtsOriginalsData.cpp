@@ -240,8 +240,10 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             if (t.eats > 0) any = true;
         }
         if (tj.has("onDeath")) { any = true; t.onDeath = int16_t(ep.payload(where + " onDeath", tj["onDeath"])); }
+        t.upgradeGarrison = int(tj.getInt("upgradeGarrison", 0));   // agent-mech alias of cost.garrison
+        if (t.upgradeGarrison > 0) any = true;
         if (const Json& c = tj["cost"]; c.isObject()) {
-            t.upgradeGarrison = int(c.getInt("garrison", 0));
+            t.upgradeGarrison = int(c.getInt("garrison", t.upgradeGarrison));
             t.costGrowth = c.getFx("growth");
             if (t.upgradeGarrison > 0 || t.costGrowth.raw != 0) any = true;
         }

@@ -231,7 +231,7 @@ static void loadMechStage2(Rules& r, const Json& j) {
 }
 
 // stage 3: cover, suppression, arcs, turrets, ruins, crush, craters, staff, growth, autonomy, power fields,
-// infection, garrison-paid upgrades, rounds
+// infection, rounds (garrison-paid upgrades: RtsOriginalsData.cpp cost.garrison)
 static void loadMechStage3(Rules& r, const Json& j) {
     MechRules& m = r.mech;
     if (const Json& cv = j["cover"]; cv.isObject()) {
@@ -298,8 +298,6 @@ static void loadMechStage3(Rules& r, const Json& j) {
         if (tj.has("powerField")) { mt.powerField = tj.getFx("powerField"); m.any = m.power = true; }
         if (tj.getBool("needsPower", false)) { mt.needsPower = true; m.any = m.power = true; }
         if (const Json& inf = tj["infectable"]; inf.isObject()) { mt.infectSpawn = typeRef(r, where + " infectable.spawns", inf.getStr("spawns")); mt.infectCount = int(inf.getInt("count", 1)); m.any = m.infection = true; }
-        mt.upgradeGarrison = int(tj.getInt("upgradeGarrison", 0));
-        if (mt.upgradeGarrison > 0) m.any = true;
     }
 }
 
