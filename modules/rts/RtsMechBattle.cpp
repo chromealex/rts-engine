@@ -195,4 +195,24 @@ void RtsModule::mechTickBattle(Simulation& sim) {
     for (auto& a : attrition) if (w.alive(a.first)) dealDamage(sim, a.first, a.second, kDamagePure, kNullEntity, 0);
 }
 
+void RtsModule::mechArmyBlock(Simulation& sim, const std::vector<Entity>& ms, Vec3 target, Vec3 dir, Vec3 perp, Fixed spacing,
+                              std::vector<std::pair<Entity, Vec3>>& out) {
+    const MapGrid& g = state(sim).grid;
+    const int n = int(ms.size());
+    int cols = 8;
+    while (cols * cols < 2 * n) ++cols;            // about twice as wide as deep
+    cols = std::min(cols, n);
+    const int rows = (n + cols - 1) / cols;
+    for (int i = 0; i < n; ++i) {
+        // units are sorted by lateral position: each column takes a contiguous slice, so paths don't cross
+        const int col = int(int64_t(i) * cols / n), row = i - (int(int64_t(col) * n + cols - 1) / cols);
+        const Fixed lat = spacing * (2 * col - (cols - 1)) / 2;
+        const Fixed back = spacing * (row - (rows - 1) / 2);
+        Vec3 p = flat(target + perp * lat - dir * back);
+        p.x = std::clamp(p.x, kHalf, Fixed::fromInt(g.w) - kHalf);
+        p.z = std::clamp(p.z, kHalf, Fixed::fromInt(g.h) - kHalf);
+        out.push_back({ms[size_t(i)], p});
+    }
+}
+
 } // namespace rts::game
