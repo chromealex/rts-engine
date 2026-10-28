@@ -18,6 +18,7 @@
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
+#include "modules/rts/gen/MapGen.h"
 
 using namespace rts;
 namespace fs = std::filesystem;
@@ -43,6 +44,8 @@ static Json loadMap(const std::string& mapPath, const std::string& projectDir) {
 
 struct Args {
     std::string project = "games/skirmish", map, replay, record;
+    std::string generate, symmetry = "auto", genOut, genParams;   // --generate PRESET: a generated map (template = the map)
+    int players = 0;
     uint64_t seed = 1;
     uint32_t maxSeconds = 1800;
     int benchPaths = 0;   // >0: time that many path queries (HPA* vs plain A*) and exit
@@ -145,7 +148,36 @@ static int play(const Args& a) {
     SimConfig cfg;
     cfg.seed = a.seed;
     Simulation sim(cfg, makeModule(module));
-    sim.setup(Json::parseFile(rulesPath), loadMap(mapPath, a.project));
+    if (!a.generate.empty()) {
+        // the map with a "generate" block is written next to the replay (or the scratch output) so that
+        // --replay regenerates exactly the same terrain from the recorded seed
+        Json m = Json::parseFile(mapPath);
+        Json g = Json::object();
+        g.set("preset", Json::string(a.generate));
+        g.set("seed", Json::string("match"));
+        g.set("players", Json::number(int64_t(a.players > 0 ? a.players : std::max<int>(2, int(m["players"].size())))));
+        g.set("symmetry", Json::string(a.symmetry));
+        if (!a.genParams.empty()) g.set("params", Json::parse(a.genParams));
+        g.set("template", Json::string(fs::relative(mapPath, a.project).generic_string()));
+        m.set("generate", g);
+        mapPath = (a.record.empty() ? (fs::temp_directory_path() / ("rts_gen_" + a.generate + "_" + std::to_string(a.seed) + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json")).string() : a.record + ".map.json");
+        std::ofstream(mapPath) << m.dump();
+    }
+    Json mapJson = loadMap(mapPath, a.project);
+    sim.setup(Json::parseFile(rulesPath), mapJson);
+    if (auto* rm = dynamic_cast<game::RtsModule*>(&sim.module()); rm && rm->generatedMap()) {
+        const Json& gm = *rm->generatedMap();
+        if (!a.quiet) {
+            const Json& gi = gm["generated"];
+            std::printf("Generated: preset=%s seed=%lld players=%lld symmetry=%s size=%lldx%lld objects=%zu hash=%016llx\n", gi.getStr("preset").c_str(),
+                        (long long)gi.getInt("seed"), (long long)gi.getInt("players"), gi.getStr("symmetry").c_str(), (long long)gm["size"][size_t(0)].integer(),
+                        (long long)gm["size"][size_t(1)].integer(), gm["entities"].size(), (unsigned long long)gen::mapHash(gm));
+            if (gi.has("paths")) std::printf("  paths %s  connected=%d\n", gi["paths"].dump(-1).c_str(), int(gi.getBool("connected")));
+            for (auto& w : gi["warnings"].items()) std::printf("  warning: %s\n", w.str().c_str());
+        }
+        if (!a.genOut.empty()) { std::ofstream(a.genOut) << gm.dump(); if (!a.quiet) std::printf("Generated map written: %s\n", a.genOut.c_str()); }
+    }
+    if (a.maxSeconds == 0) return 0;   // --max-seconds 0: set up (and generate) only
 
     if (a.benchPaths > 0) return benchPaths(sim, a);
     std::vector<game::RtsAI> bots;
@@ -226,7 +258,12 @@ int main(int argc, char** argv) {
         else if (k == "--quiet") a.quiet = true;
         else if (k == "--dump") a.dump = true;
         else if (k == "--bench-paths") a.benchPaths = std::stoi(next());
-        else { std::printf("usage: rts_headless --project DIR [--map FILE] [--seed N] [--record F] | --replay F\n"); return 2; }
+        else if (k == "--generate") a.generate = next();
+        else if (k == "--players") a.players = std::stoi(next());
+        else if (k == "--symmetry") a.symmetry = next();
+        else if (k == "--gen-params") a.genParams = next();
+        else if (k == "--gen-out") a.genOut = next();
+        else { std::printf("usage: rts_headless --project DIR [--map FILE] [--seed N] [--record F] [--generate PRESET [--players N] [--symmetry S] [--gen-params JSON] [--gen-out F]] | --replay F\n"); return 2; }
     }
     try { return a.replay.empty() ? play(a) : replay(a); }
     catch (const std::exception& e) { std::fprintf(stderr, "error: %s\n", e.what()); return 2; }

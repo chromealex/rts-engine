@@ -79,14 +79,19 @@ bool RtsModule::attackSlot(Simulation& sim, Entity e, Entity target, Fixed range
     const Vec3 tp = w.get<Transform>(target).pos, me = w.get<Transform>(e).pos;
     Fixed rT = tt.structure ? Fixed::fromInt(std::max(tt.footprintW, tt.footprintH)) / 2 : tt.radius;
     Fixed ring = rT + t.radius + range / 2 + Fixed::fromRatio(1, 20);
-    if (c->slotTarget == target && c->slot >= 0 && sim.tick() < c->slotTick + 20) { out = tp + dir32(c->slot) * ring; return true; }
+    if (c->slotTarget == target && c->slot >= 0 && sim.tick() < c->slotTick + 20) {
+        const Surface* S0 = state(sim).surface.get();
+        out = S0 ? S0->project(tp + S0->fromPlane(tp, dir32(c->slot) * ring)) : tp + dir32(c->slot) * ring;
+        return true;
+    }
     // drop the old claim
     for (auto& cl : slotClaims_) if (cl.claimer == e.packed()) cl.target = 0;
     int n = int((ring * 6283 / 1000 / (t.radius * 2 + Fixed::fromRatio(1, 10))).toInt());
     n = std::clamp(n, 4, 32);
     const int stride = 32 / n;
     n = 32 / stride;
-    Vec3 d = flat(me - tp);
+    const Surface* S = state(sim).surface.get();
+    Vec3 d = S ? S->toPlane(tp, me - tp) : flat(me - tp);
     if (d.length().raw == 0) d = {kOne, Fixed{}, Fixed{}};
     int k0 = 0;
     Fixed best{};
@@ -94,8 +99,8 @@ bool RtsModule::attackSlot(Simulation& sim, Entity e, Entity target, Fixed range
     for (int step = 0; step < n; ++step) {
         int k = ((k0 + ((step + 1) / 2) * ((step & 1) ? 1 : -1)) % n + n) % n;
         int dirIdx = k * stride;
-        Vec3 p = tp + dir32(dirIdx) * ring;
-        if (!g.passable(g.cellX(p.x), g.cellY(p.z), t.pathLayer)) continue;
+        Vec3 p = S ? S->project(tp + S->fromPlane(tp, dir32(dirIdx) * ring)) : tp + dir32(dirIdx) * ring;
+        if (!g.passableAt(p, t.pathLayer)) continue;
         bool taken = false;
         for (auto& cl : slotClaims_) if (cl.target == target.packed() && cl.slot == dirIdx && cl.claimer != e.packed()) taken = true;
         if (taken) continue;
@@ -152,7 +157,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
             return false;
         }
         // state 2: harvesting the current cell
-        int cx = gs.grid.cellX(o.point2.x), cy = gs.grid.cellY(o.point2.z);
+        int cx, cy; gs.grid.cellXY(o.point2, cx, cy);
         if (!gs.grid.inside(cx, cy)) return true;
         size_t ci = size_t(gs.grid.index(cx, cy));
         if (cargo->res != res) { cargo->amount = Fixed{}; cargo->res = int16_t(res); }
@@ -290,7 +295,7 @@ bool RtsModule::runBuild(Simulation& sim, Entity e, Order& o) {
             // step aside and carry on
             auto& f = w.get<Footprint>(s);
             Transform& tr = w.get<Transform>(e);
-            int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+            int cx, cy; state(sim).grid.cellXY(tr.pos, cx, cy);
             if (cx >= f.x && cx < f.x + f.w && cy >= f.y && cy < f.y + f.h) tr.pos = freeSpotNear(sim, s, t.pathLayer);
             return true;
         }
@@ -298,7 +303,7 @@ bool RtsModule::runBuild(Simulation& sim, Entity e, Order& o) {
         o.state = 2;
         auto& f = w.get<Footprint>(s);
         Transform& tr = w.get<Transform>(e);
-        int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+        int cx, cy; state(sim).grid.cellXY(tr.pos, cx, cy);
         if (cx >= f.x && cx < f.x + f.w && cy >= f.y && cy < f.y + f.h) tr.pos = freeSpotNear(sim, s, t.pathLayer);
         return false;
     }
@@ -546,7 +551,7 @@ void RtsModule::sysOrders(Simulation& sim) {
     slotClaims_.clear();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (m.moving || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & kLayerGround)) return;
-        int x = g.cellX(tr.pos.x), y = g.cellY(tr.pos.z);
+        int x, y; g.cellXY(tr.pos, x, y);
         if (g.inside(x, y)) g.markSoft(x, y);
         (void)e;
     });
@@ -588,6 +593,8 @@ void RtsModule::sysMovement(Simulation& sim) {
     gs.hash.reset(g.w, g.h, 4);
     w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitInHand)) gs.hash.insert(e, t.pos); });
 
+    if (gs.surface) { moveSphere(sim); return; }   // planets (RtsPlanets.cpp)
+
     // 1) desired movement along paths
     if (rules_.movement.rvo) moveAgents(sim);
     else w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
@@ -598,7 +605,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         const UnitType& t = rules_.types[u.type];
         if (m.goalRadius.raw > 0 && dist2D(tr.pos, m.goal) <= m.goalRadius) { m.moving = false; m.path.clear(); return; }
         Fixed step = stat(sim, e, Stat::Speed) * dt;
-        if (rules_.roadNetwork.enabled && g.inside(g.cellX(tr.pos.x), g.cellY(tr.pos.z)) && (g.flags[size_t(g.index(g.cellX(tr.pos.x), g.cellY(tr.pos.z)))] & kCellRoad))
+        if (rules_.roadNetwork.enabled && g.cellOf(tr.pos) >= 0 && (g.flags[size_t(g.cellOf(tr.pos))] & kCellRoad))
             step = step * rules_.roadNetwork.speed;
         const bool ignoreGrid = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison); // road walkers pass through buildings
         if (g.hf && (t.layer & kLayerGround) && m.pathPos < m.path.size()) { // uphill slower, downhill faster
@@ -611,7 +618,7 @@ void RtsModule::sysMovement(Simulation& sim) {
             Vec3 d = flat(wp - tr.pos);
             Fixed len = d.length();
             Vec3 next = len <= step ? Vec3{wp.x, tr.pos.y, wp.z} : tr.pos + d * (step / len);
-            int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(next.x), cy = g.cellY(next.z);
+            int cx0, cy0, cx, cy; g.cellXY(tr.pos, cx0, cy0); g.cellXY(next, cx, cy);
             if (!ignoreGrid && (cx != cx0 || cy != cy0) && g.passable(cx0, cy0, t.pathLayer) && !g.canStep(cx0, cy0, cx, cy, t.pathLayer)) {
                 m.stuck += dt;
                 break;
@@ -690,7 +697,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         Transform& tr = w.get<Transform>(p.e);
         const UnitType& t = rules_.types[w.get<Unit>(p.e).type];
         Vec3 np = tr.pos + p.d;
-        int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(np.x), cy = g.cellY(np.z);
+        int cx0, cy0, cx, cy; g.cellXY(tr.pos, cx0, cy0); g.cellXY(np, cx, cy);
         bool ok = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison) ||
                   ((cx == cx0 && cy == cy0) ? g.passable(cx, cy, t.pathLayer) || !g.passable(cx0, cy0, t.pathLayer) : g.canStep(cx0, cy0, cx, cy, t.pathLayer));
         if (ok) tr.pos = np;

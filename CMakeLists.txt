@@ -73,8 +73,11 @@ add_library(rts_game STATIC
     modules/rts/RtsData.cpp
     modules/rts/RtsMap.cpp
     modules/rts/RtsHpa.cpp
+    modules/rts/RtsMapSphere.cpp
     modules/rts/RtsSphere.cpp
+    modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
+    modules/rts/RtsPlanets.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
@@ -416,7 +419,7 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -517,6 +520,10 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
+    if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
+        target_link_libraries(rts_tests PRIVATE rts_editor_core)
+        target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)
+    endif()
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
@@ -552,6 +559,9 @@ endif()
 # sprite batch + textures (RHI only), sprite/tile presentation in the RTS view.
 # ---------------------------------------------------------------------------
 target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
+# terrain / map generator (agent-terrain-gen): integer noise, erosion, biomes, fair starts, presets, planets
+target_sources(rts_game PRIVATE modules/rts/gen/GenNoise.cpp modules/rts/gen/GenField.cpp modules/rts/gen/GenTerrain.cpp
+    modules/rts/gen/GenContent.cpp modules/rts/gen/GenPlanet.cpp modules/rts/gen/MapGen.cpp)
 add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
 target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp)
@@ -559,6 +569,7 @@ target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp)   # terrain agent: sculpt, materials, heightmaps
+    target_sources(rts_editor_core PRIVATE apps/editor/core/GenOps.cpp)       # terrain-gen agent: map_generate, gen_presets
 endif()
 
 # ---------------------------------------------------------------------------

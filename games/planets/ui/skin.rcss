@@ -1,0 +1,50 @@
+/* Metal Tide: UI skin (linked after engine/ui/theme.rcss). Machine war: black glass, thin cyan-green lines, flowing metal.
+   Title font: fonts/title.ttf (Exo 2, SIL OFL, fonts/OFL.txt). */
+
+body { color: #d9fff2; }
+h1 { font-family: title; color: #4dffc3; font-size: 28dp; font-weight: bold; text-transform: uppercase; letter-spacing: 4dp; }
+h2 { color: #6fa896; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #6fa896; }
+.error { color: #ff6b6b; }
+
+.panel {
+    background-color: #03120ddb;
+    border: 1dp #2fe6a6;
+    border-radius: 0;
+}
+
+button {
+    color: #cffff0;
+    border: 1dp #1f7a5d;
+    border-radius: 0;
+    decorator: vertical-gradient(#0b2a21ff #061a14ff);
+}
+button:hover { decorator: vertical-gradient(#11402fff #0a281eff); border-color: #4dffc3; }
+button:active { decorator: vertical-gradient(#061a14ff #0b2a21ff); }
+button.active { border-color: #4dffc3; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#0b2a21ff #061a14ff); border-color: #1f7a5d; }
+button .cost { color: #8fffd9; }
+button .tip { color: #ff6b6b; }
+
+progress { background-color: #1f7a5d60; }
+progress fill { background-color: #4dffc3; }
+
+#card .title { color: #4dffc3; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff6b6b; }
+.notice { color: #a8ffe0; }
+#selbox { border-color: #4dffc3; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#052218ff #010907ff); }
+input.text { background-color: #020b08; border-color: #1f7a5d; color: #d9fff2; }
+input.text:focus { border-color: #4dffc3; }
+#lobby .slot.mine { border-color: #4dffc3; }
+#lobby .roomtitle { color: #4dffc3; font-family: title; }
+
+#kb { background-color: #03120ddb; border-color: #2fe6a6; }
+#kb .key { color: #cffff0; border-color: #1f7a5d; border-radius: 0; decorator: vertical-gradient(#0b2a21ff #061a14ff); }
+#kb .key:active { border-color: #4dffc3; }
+#kb .key.on { border-color: #4dffc3; color: #ffffff; }
+
+button { text-transform: uppercase; letter-spacing: 1dp; font-size: 13dp; }
+#topbar .sub { color: #4dffc3; }
