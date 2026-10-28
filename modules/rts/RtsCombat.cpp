@@ -97,7 +97,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     }
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
-    if ((rules_.mech.veterancy || rules_.mech.infection) && w.alive(source)) mechOnHit(sim, target, source);   // agent-mech: last hitter
+    if ((rules_.mech.veterancy || rules_.mech.infection || rules_.mech.morale) && w.alive(source)) mechOnHit(sim, target, source, fin);   // agent-mech: last hitter, morale
     sim.emit({kEvHit, sourceOwner, target, source, fin.raw, w.get<Transform>(target).pos});
     if (rules_.originals) afterHit(sim, target, source, wd, u->hp.raw <= 0);   // crews, infection, eaters
     // creeps fight back as a camp
