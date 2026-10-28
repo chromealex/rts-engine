@@ -269,6 +269,11 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             for (uint16_t k : R.types[u.type].researches) {
                 if (int(eco.researched[k]) >= R.techs[k].levels || eco.researching[k] || !m.requirementsMet(sim, player_, R.techs[k].requires_) ||
                     !m.canAfford(sim, player_, m.techCost(sim, player_, k))) continue;
+                if (R.techs[k].requiresAnyCount > 0) {
+                    int have = 0;
+                    for (uint16_t ty : R.techs[k].requiresAny) if (eco.typeCount[ty] > 0) ++have;
+                    if (have < R.techs[k].requiresAnyCount) continue;
+                }
                 Command c; c.type = kCmdResearch; c.units = {e}; c.param = k; send(sim, c);
                 lastTechTick_ = sim.tick();
                 break;

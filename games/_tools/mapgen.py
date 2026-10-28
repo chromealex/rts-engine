@@ -321,11 +321,17 @@ def fourages():
     m = Map("Highland", 64, 48, duel())
     m.border()
     m.rect(30, 4, 4, 14, '~')
+    # AoE II start: town centre, 3 villagers, a scout; 6 berry bushes, 7 gold and 5 stone tiles near the base
     m.ent("town_center", 1, [10, 24])
-    for i in range(4):
-        m.ent("villager", 1, [14, 21 + i])
-    m.ent("gold_pile", 0, [8.5, 16.5]); m.ent("stone_pile", 0, [16.5, 31.5])
-    m.ent("berry_bush", 0, [16.5, 18.5]); m.ent("berry_bush", 0, [17.5, 19.5])
+    for i in range(3):
+        m.ent("villager", 1, [14, 22 + i])
+    m.ent("scout", 1, [15, 26])
+    for (x, y) in [(7, 15), (8, 15), (9, 15), (7, 16), (8, 16), (9, 16), (8, 17)]:
+        m.ent("gold_pile", 0, [x + 0.5, y + 0.5])
+    for (x, y) in [(16, 31), (17, 31), (16, 32), (17, 32), (18, 31)]:
+        m.ent("stone_pile", 0, [x + 0.5, y + 0.5])
+    for (x, y) in [(16, 17), (17, 17), (18, 17), (16, 18), (17, 18), (18, 18)]:
+        m.ent("berry_bush", 0, [x + 0.5, y + 0.5])
     for y in range(28, 44):
         for x in range(2, 6):
             m.ent("oak", 0, [x + 0.5, y + 0.5])
