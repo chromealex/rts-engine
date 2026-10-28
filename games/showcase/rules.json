@@ -29,7 +29,13 @@
       "cost": { "gold": 75, "time": 12, "supply": 1 },
       "gather": { "gold": { "carry": 10, "time": 2.0 }, "wood": { "carry": 10, "time": 3.0 } },
       "builds": ["townhall", "farm", "barracks", "workshop", "tower"],
-      "view": { "shape": "worker", "scale": 0.8 }
+      "view": {
+        "shape": "worker", "scale": 0.8,
+        "attach": [
+          { "node": "body", "model": "models/sack.glb", "offset": [-0.2, 0.3, 0], "carry": "gold" },
+          { "node": "body", "model": "models/logs.glb", "offset": [-0.18, 0.42, 0], "rotate": [0, 90, 0], "carry": "wood" }
+        ]
+      }
     },
     "footman": {
       "name": "Footman",
@@ -40,8 +46,16 @@
       "cost": { "gold": 135, "time": 15, "supply": 2 },
       "view": {
         "model": "models/golem.glb", "height": 1.15,
-        "animations": { "idle": "Idle", "move": { "clip": "Walk", "speedRef": 2.0 }, "attack": "Attack", "die": "Death" },
-        "procedural": [ { "type": "lean" }, { "type": "shake", "node": "spine" } ]
+        "animations": {
+          "idle": "Idle",
+          "move": { "blend": [{ "clip": "Walk", "speed": 1.4 }, { "clip": "Run", "speed": 3.0 }], "events": { "0.0": "step", "0.5": "step" } },
+          "attack": { "clip": "Attack", "events": { "0.35": "swing" } },
+          "die": "Death"
+        },
+        "attach": [ { "node": "arm.R", "model": "models/sword.glb", "offset": [0, -0.7, 0.08], "rotate": [-90, 0, 0] } ],
+        "additive": [ { "clip": "Breathe", "when": "idle" } ],
+        "procedural": [ { "type": "lean" }, { "type": "shake", "node": "spine" } ],
+        "dissolveDeath": true
       }
     },
     "archer": {
@@ -52,7 +66,19 @@
       "weapons": [ { "id": "bow", "range": 5.5, "damage": 16, "cooldown": 1.5, "projectileSpeed": 14,
                      "targets": ["ground", "air"], "damageType": "pierce" } ],
       "cost": { "gold": 130, "wood": 10, "time": 16, "supply": 2 },
-      "view": { "shape": "ranged", "scale": 0.95 }
+      "view": {
+        "model": "models/golem.glb", "height": 0.95, "color": [0.75, 0.95, 0.75],
+        "skinning": "baked",
+        "lod": [ { "model": "models/golem_lod.glb", "distance": 28 } ],
+        "animations": {
+          "idle": "Idle",
+          "move": { "blend": [{ "clip": "Walk", "speed": 1.4 }, { "clip": "Run", "speed": 3.0 }] },
+          "attack": { "clip": "Attack", "events": { "0.3": "release" } },
+          "die": "Death"
+        },
+        "muzzle": { "node": "arm.R", "offset": [0, -0.7, 0] },
+        "dissolveSpawn": true
+      }
     },
     "catapult": {
       "name": "Catapult",
@@ -65,7 +91,10 @@
       "view": {
         "model": "models/tank.glb", "height": 0.9, "variant": "desert",
         "materials": { "Hull": { "teamMask": "models/tank_team.png" }, "HullDesert": { "teamMask": "models/tank_team.png" } },
+        "muzzle": { "node": "Barrel", "offset": [0, 0, 0.7] },
+        "fx": [ { "effect": "exhaust", "node": "Hull", "offset": [0, 0.5, -0.7], "when": "moving" } ],
         "procedural": [
+          { "type": "align" },
           { "type": "aim", "node": "Turret" },
           { "type": "recoil", "node": "Barrel", "axis": [0, 0, -1], "amp": 0.2 },
           { "type": "wheel", "node": "Wheel0", "radius": 0.2, "axis": [1, 0, 0] },
@@ -86,7 +115,11 @@
                      "targets": ["ground", "air"] } ],
       "cost": { "gold": 260, "wood": 40, "time": 28, "supply": 4 },
       "requires": ["tower"],
-      "view": { "shape": "flyer", "scale": 1.1 }
+      "view": {
+        "model": "models/slime.glb", "height": 0.8, "flyHeight": 1.8,
+        "animations": { "idle": "Wobble", "move": { "clip": "Wobble", "speed": 1.6 }, "attack": "Wobble" },
+        "procedural": [ { "type": "hover" }, { "type": "lunge", "amp": 0.3 }, { "type": "fall", "amp": 30 }, { "type": "sink", "amp": 1.8, "duration": 1.2 } ]
+      }
     },
 
     "townhall": {
@@ -108,7 +141,13 @@
       "supply": 6,
       "view": {
         "model": "models/windmill.gltf", "height": 2.6,
-        "procedural": [ { "type": "spin", "node": "Sails", "axis": [0, 0, 1], "spin": 60 }, { "type": "sink", "amp": 1.5 } ]
+        "procedural": [ { "type": "spin", "node": "Sails", "axis": [0, 0, 1], "spin": 60, "when": ["idle", "producing"] }, { "type": "sink", "amp": 1.5 } ],
+        "stages": [
+          { "build": 0, "model": "models/scaffold.glb" },
+          { "build": 0.6 },
+          { "hp": 0.5, "variant": "burnt" }
+        ],
+        "fx": [ { "effect": "smoke", "node": "Windmill", "offset": [0, 2.1, 0], "hpBelow": 0.5 } ]
       }
     },
     "barracks": {
@@ -138,8 +177,10 @@
       "cost": { "gold": 110, "wood": 80, "time": 30 },
       "view": {
         "model": "models/crystal.obj", "height": 1.8, "forward": "+x",
+        "construction": "dissolve",
         "materials": { "Crystal": { "team": "tint", "teamStrength": 0.6 } },
-        "procedural": [ { "type": "pulse", "amp": 0.03, "freq": 0.5 }, { "type": "squash", "amp": 0.08 }, { "type": "sink", "amp": 2 } ]
+        "procedural": [ { "type": "pulse", "amp": 0.03, "freq": 0.5 }, { "type": "squash", "amp": 0.08 }, { "type": "sink", "amp": 2 } ],
+        "fx": [ { "effect": "sparkle", "offset": [0, 1.9, 0], "when": "attacking" } ]
       }
     },
 

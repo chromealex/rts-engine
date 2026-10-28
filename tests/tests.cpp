@@ -2339,7 +2339,7 @@ TEST(models_gltf_readable_errors) {
     catch (const std::exception& e) { threw = std::string(e.what()).find("missing.glb") != std::string::npos; }
     CHECK(threw);
     threw = false;
-    try { loadModel("x.fbx", mapReader({{"x.fbx", "data"}}), nullptr); }
+    try { loadModel("x.blend", mapReader({{"x.blend", "data"}}), nullptr); }
     catch (const std::exception& e) { threw = std::string(e.what()).find("unsupported model format") != std::string::npos; }
     CHECK(threw);
     // accessor pointing past its buffer view
@@ -2430,7 +2430,7 @@ TEST(models_sample_assets_load) {
     const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
     std::vector<std::string> warn;
     auto golem = loadModel(dir + "golem.glb", diskReader(), &warn);
-    CHECK(golem->clips.size() == 4 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
+    CHECK(golem->clips.size() == 6 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
     CHECK(golem->findClip("Death") >= 0 && golem->images.size() == 3);
     auto tank = loadModel(dir + "tank.glb", diskReader(), &warn);
     CHECK(tank->variants.size() == 2 && tank->findNode("Turret") >= 0 && tank->findVariant("winter") == 1);
@@ -2538,7 +2538,7 @@ public:
     void setTexture(int, rts::gfx::TextureHandle) override {}
     void setUniforms(int, const void*, size_t) override {}
     void draw(uint32_t, uint32_t) override {}
-    void drawIndexed(uint32_t, uint32_t, int32_t) override {}
+    void drawIndexed(uint32_t, uint32_t, int32_t, uint32_t) override {}
 };
 } // namespace
 
@@ -4227,6 +4227,466 @@ TEST(terrain_view_grid_corner_from_levels) {
     CHECK(std::fabs(game::terrain::gridCorner(g, 1.0f, 1, 2) - 0.0f) < 1e-5f);
     CHECK(std::fabs(game::terrain::gridCorner(g, 1.0f, 3, 2) - 2.0f) < 1e-5f);
     CHECK(std::fabs(game::terrain::gridCorner(g, 1.0f, 2, 2) - 1.0f) < 1e-5f);
+}
+
+// ---------------------------------------------------------------------------------------------
+// GPU-compressed textures: KTX2 container and CPU block decoders (models agent)
+// ---------------------------------------------------------------------------------------------
+#include "engine/render/TextureCodec.h"
+#include "engine/render/Model.h"
+#include "third_party/zstd/zstd.h"
+#include <cstring>
+
+using namespace rts::render;
+
+namespace ktxtest {
+std::vector<uint8_t> be64(uint32_t hi, uint32_t lo) {
+    std::vector<uint8_t> b(8);
+    for (int i = 0; i < 4; ++i) { b[size_t(i)] = uint8_t(hi >> (24 - 8 * i)); b[size_t(4 + i)] = uint8_t(lo >> (24 - 8 * i)); }
+    return b;
+}
+// EAC block: base, multiplier, table, 3-bit indices in column-major order (i = x * 4 + y).
+std::vector<uint8_t> eac(int base, int mul, int table, const int idx[16]) {
+    uint64_t bits = 0;
+    for (int i = 0; i < 16; ++i) bits |= uint64_t(idx[i]) << (45 - 3 * i);
+    std::vector<uint8_t> b{uint8_t(base), uint8_t(mul << 4 | table)};
+    for (int i = 5; i >= 0; --i) b.push_back(uint8_t(bits >> (8 * i)));
+    return b;
+}
+bool px(const uint8_t* out, int x, int y, int r, int g, int b, int a) {
+    const uint8_t* p = out + (y * 4 + x) * 4;
+    return p[0] == r && p[1] == g && p[2] == b && p[3] == a;
+}
+void put32(std::string& s, size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) s[at + size_t(i)] = char(v >> (8 * i)); }
+void put64(std::string& s, size_t at, uint64_t v) { put32(s, at, uint32_t(v)); put32(s, at + 4, uint32_t(v >> 32)); }
+// Minimal KTX2 writer: 2D, one layer/face, levels given largest first, optional zstd per level.
+std::string makeKtx2(uint32_t vkFormat, uint32_t w, uint32_t h, const std::vector<std::vector<uint8_t>>& levels, bool zstd) {
+    const uint8_t id[12] = {0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, '\r', '\n', 0x1A, '\n'};
+    std::string s(80 + 24 * levels.size(), '\0');
+    std::memcpy(s.data(), id, 12);
+    put32(s, 12, vkFormat); put32(s, 16, 1); put32(s, 20, w); put32(s, 24, h);
+    put32(s, 36, 1); put32(s, 40, uint32_t(levels.size())); put32(s, 44, zstd ? 2 : 0);
+    for (size_t l = levels.size(); l-- > 0;) {   // smallest level first in the file, as the spec suggests
+        std::string data(levels[l].begin(), levels[l].end());
+        if (zstd) {
+            std::string c(ZSTD_compressBound(data.size()), '\0');
+            c.resize(ZSTD_compress(c.data(), c.size(), data.data(), data.size(), 19));
+            data = c;
+        }
+        while (s.size() % 8) s.push_back('\0');
+        put64(s, 80 + 24 * l, s.size()); put64(s, 88 + 24 * l, data.size()); put64(s, 96 + 24 * l, levels[l].size());
+        s += data;
+    }
+    return s;
+}
+// ETC1 individual-mode block: left half (136,136,136) table 0, right half (68,68,68) table 7.
+// Pixel (0,0) uses index 01 (+8), pixel (3,0) index 11 (-183), the rest index 00.
+const std::vector<uint8_t> kEtcIndividual = be64(0x8484841Cu, 0x10001001u);
+} // namespace ktxtest
+
+TEST(etc_blocks_decode_per_spec) {
+    using namespace ktxtest;
+    uint8_t out[64];
+    CHECK(decodeBlock(BlockFormat::ETC2_RGB8, kEtcIndividual.data(), out));
+    CHECK(px(out, 0, 0, 144, 144, 144, 255) && px(out, 1, 1, 138, 138, 138, 255));
+    CHECK(px(out, 2, 0, 115, 115, 115, 255) && px(out, 3, 0, 0, 0, 0, 255) && px(out, 3, 3, 115, 115, 115, 255));
+    // Differential, flipped: base (16,8,0) + delta (+3,-4,0); top table 1 (+5), bottom table 2 (+9).
+    auto diff = be64(0x8344002Bu, 0);
+    decodeBlock(BlockFormat::ETC2_RGB8, diff.data(), out);
+    CHECK(px(out, 3, 1, 137, 71, 5, 255) && px(out, 0, 2, 165, 42, 9, 255));
+    // T mode (R overflows): C1 = (187,34,51), C2 = 136 grey, distance 32; row 0 uses paint colours 0..3.
+    auto tmode = be64(0xF323888Bu, 0x11001010u);
+    decodeBlock(BlockFormat::ETC2_RGB8, tmode.data(), out);
+    CHECK(px(out, 0, 0, 187, 34, 51, 255) && px(out, 1, 0, 168, 168, 168, 255));
+    CHECK(px(out, 2, 0, 136, 136, 136, 255) && px(out, 3, 0, 104, 104, 104, 255) && px(out, 2, 2, 187, 34, 51, 255));
+    // H mode (G + dG < 0): C1 = (136,34,68) < C2 = 136 grey, so the ordering bit is 0.
+    // R1=8 G1=2 B1=4, R2=8 G2=8 B2=8, da=1 db=0 -> distance index 4 (23); paints C1+-23, C2+-23.
+    {
+        uint32_t hi = 0;
+        hi |= 8u << 27;                        // R1 (bits 62..59)
+        hi |= (2u >> 1) << 24 | (2u & 1) << 20;   // G1 = bits 58..56 + bit 52
+        hi |= (4u >> 3) << 19 | (4u & 7) << 15;   // B1 = bit 51 + bits 49..47
+        hi |= 8u << 11 | 8u << 7 | 8u << 3;    // R2 G2 B2
+        hi |= 1u << 2 | 1u << 1;               // da, diff
+        hi |= 1u << 18;                        // unused bit 50: dG = 0b110 = -2 with G = 0
+        uint32_t lo = 1u << 4 | 1u << 24 | 1u << 28 | 1u << 12;   // row 0: indices 0,1,2,3
+        auto h = be64(hi, lo);
+        decodeBlock(BlockFormat::ETC2_RGB8, h.data(), out);
+        CHECK(px(out, 0, 0, 159, 57, 91, 255) && px(out, 1, 0, 113, 11, 45, 255));
+        CHECK(px(out, 2, 0, 159, 159, 159, 255) && px(out, 3, 0, 113, 113, 113, 255));
+    }
+    // Planar (B overflows) with O = H = V: constant (130, 0, 239).
+    auto planar = be64(0x4001F9C2u, 0x01DC003Bu);
+    decodeBlock(BlockFormat::ETC2_RGB8, planar.data(), out);
+    CHECK(px(out, 0, 0, 130, 0, 239, 255) && px(out, 3, 3, 130, 0, 239, 255));
+    // EAC alpha in ETC2_RGBA8: base 100, multiplier 2, table 13 (-1 -2 -3 -10 0 1 2 9).
+    int idx[16]; for (int& i : idx) i = 4;
+    idx[0] = 7; idx[4] = 3;   // (0,0) -> +9*2, (1,0) -> -10*2
+    auto rgba8 = eac(100, 2, 13, idx);
+    rgba8.insert(rgba8.end(), kEtcIndividual.begin(), kEtcIndividual.end());
+    decodeBlock(BlockFormat::ETC2_RGBA8, rgba8.data(), out);
+    CHECK(px(out, 0, 0, 144, 144, 144, 118) && px(out, 1, 0, 138, 138, 138, 80) && px(out, 2, 2, 115, 115, 115, 100));
+    // EAC R11: multiplier 0 adds the raw modifier to base*8+4; otherwise modifier*multiplier*8.
+    int ridx[16] = {}; ridx[4] = 7;
+    auto r11 = eac(128, 0, 0, ridx);
+    decodeBlock(BlockFormat::EAC_R11, r11.data(), out);
+    CHECK(px(out, 0, 0, 128, 0, 0, 255) && px(out, 1, 0, 130, 0, 0, 255));   // 1025, 1042 of 2047
+    ridx[4] = 3;
+    r11 = eac(128, 1, 0, ridx);
+    decodeBlock(BlockFormat::EAC_R11, r11.data(), out);
+    CHECK(px(out, 1, 0, 113, 0, 0, 255));   // 1028 - 15*8 = 908
+}
+
+TEST(bc_blocks_decode_per_spec) {
+    using namespace ktxtest;
+    uint8_t out[64];
+    // BC1 four-colour: red / blue endpoints, row 0 indices 0,1,2,3.
+    const uint8_t bc1[8] = {0x00, 0xF8, 0x1F, 0x00, 0xE4, 0, 0, 0};
+    CHECK(decodeBlock(BlockFormat::BC1, bc1, out));
+    CHECK(px(out, 0, 0, 255, 0, 0, 255) && px(out, 1, 0, 0, 0, 255, 255) && px(out, 2, 0, 170, 0, 85, 255));
+    CHECK(px(out, 3, 0, 85, 0, 170, 255) && px(out, 2, 3, 255, 0, 0, 255));
+    // BC1 three-colour (c0 <= c1): index 2 = midpoint, index 3 = transparent black.
+    const uint8_t bc1t[8] = {0x1F, 0x00, 0x00, 0xF8, 0xE4, 0, 0, 0};
+    decodeBlock(BlockFormat::BC1, bc1t, out);
+    CHECK(px(out, 0, 0, 0, 0, 255, 255) && px(out, 2, 0, 127, 0, 127, 255) && px(out, 3, 0, 0, 0, 0, 0));
+    // BC3: 8-value alpha (255..0) then the BC1 colour block (always four-colour, even when c0 <= c1).
+    uint8_t bc3[16] = {255, 0, 0x3A, 0, 0, 0, 0, 0};
+    std::memcpy(bc3 + 8, bc1t, 8);
+    decodeBlock(BlockFormat::BC3, bc3, out);
+    CHECK(px(out, 0, 0, 0, 0, 255, 218) && px(out, 1, 0, 255, 0, 0, 36) && px(out, 3, 0, 170, 0, 85, 255));
+    // BC4 six-value mode (a0 <= a1): 51 for index 2, 0 and 255 for indices 6 and 7.
+    const uint8_t bc4[8] = {0, 255, 2 | 6 << 3 | (7 << 6 & 0xFF), 7 >> 2, 0, 0, 0, 0};
+    decodeBlock(BlockFormat::BC4, bc4, out);
+    CHECK(px(out, 0, 0, 51, 0, 0, 255) && px(out, 1, 0, 0, 0, 0, 255) && px(out, 2, 0, 255, 0, 0, 255) && px(out, 3, 0, 0, 0, 0, 255));
+    // BC7 mode 6: R 127..0, A 127..127, P-bits 1 / 0 (applied to every channel of the endpoint);
+    // row 0 indices 0, 15, 8.
+    uint8_t bc7[16] = {};
+    int pos = 0;
+    auto bits = [&](uint32_t v, int n) { for (int i = 0; i < n; ++i, ++pos) bc7[pos >> 3] |= uint8_t((v >> i & 1) << (pos & 7)); };
+    bits(1u << 6, 7);
+    bits(127, 7); bits(0, 7); bits(0, 7); bits(0, 7); bits(0, 7); bits(0, 7); bits(127, 7); bits(127, 7);
+    bits(1, 1); bits(0, 1);
+    bits(0, 3); bits(15, 4); bits(8, 4);
+    CHECK(decodeBlock(BlockFormat::BC7, bc7, out));
+    CHECK(px(out, 0, 0, 255, 1, 1, 255) && px(out, 1, 0, 0, 0, 0, 254) && px(out, 2, 0, 120, 0, 0, 254) && px(out, 3, 3, 255, 1, 1, 255));
+    CHECK(!decodeBlock(BlockFormat::ASTC_4x4, bc7, out));
+}
+
+TEST(ktx2_parse_and_decode_image) {
+    using namespace ktxtest;
+    // 8x4 ETC2 sRGB, two levels (8x4 = 2 blocks, 4x2 = 1 block), with and without zstd.
+    std::vector<uint8_t> l0 = kEtcIndividual, planar = be64(0x4001F9C2u, 0x01DC003Bu);
+    l0.insert(l0.end(), planar.begin(), planar.end());
+    for (bool zstd : {false, true}) {
+        const std::string file = makeKtx2(148, 8, 4, {l0, planar}, zstd);
+        CompressedImage ci;
+        std::string err;
+        CHECK(isKtx2(file) && parseKtx2(file, ci, err));
+        CHECK(ci.format == BlockFormat::ETC2_RGB8 && ci.srgb && ci.width == 8 && ci.height == 4 && ci.levels.size() == 2);
+        CHECK(ci.levels.size() == 2 && ci.levels[0] == l0 && ci.levels[1] == planar);
+        std::vector<uint8_t> mip1;
+        CHECK(decodeBlocks(ci, 1, mip1) && mip1.size() == 4 * 2 * 4 && mip1[0] == 130 && mip1[2] == 239);
+        Image img;
+        CHECK(decodeImage(file, img) && img.width == 8 && img.height == 4 && img.rgba.size() == 8 * 4 * 4);
+        CHECK(img.compressed && img.compressed->levels.size() == 2);
+        if (img.rgba.size() == 128) {
+            CHECK(img.rgba[0] == 144 && img.rgba[3 * 4] == 0 && img.rgba[4 * 4] == 130 && img.rgba[4 * 4 + 2] == 239);
+            CHECK(img.rgba[(3 * 8 + 7) * 4 + 2] == 239);   // bottom-right pixel comes from the second block
+        }
+        Image copy = img;   // stays copyable, shares the block data
+        CHECK(copy.compressed == img.compressed);
+    }
+    // Uncompressed RGBA8 passthrough and BC1 with a size that is not a multiple of 4 (crop).
+    {
+        std::vector<uint8_t> rgba = {1, 2, 3, 4, 5, 6, 7, 8};
+        Image img;
+        CHECK(decodeImage(makeKtx2(37, 2, 1, {rgba}, true), img) && img.rgba == rgba && img.compressed && !img.compressed->srgb);
+        const std::vector<uint8_t> bc1 = {0x00, 0xF8, 0x1F, 0x00, 0xE4, 0, 0, 0, 0x1F, 0x00, 0x00, 0xF8, 0xE4, 0, 0, 0};
+        CompressedImage ci;
+        std::string err;
+        CHECK(parseKtx2(makeKtx2(131, 5, 3, {bc1}, false), ci, err) && ci.format == BlockFormat::BC1);
+        std::vector<uint8_t> out;
+        CHECK(decodeBlocks(ci, 0, out) && out.size() == 5 * 3 * 4);
+        if (out.size() == 60) CHECK(out[4 * 4 + 2] == 255 && out[4 * 4 + 3] == 255);   // pixel (4,0) = blue of block 2
+        ci.vkFormat = 131;
+        const uint8_t three[8] = {0x1F, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF};   // all index 3
+        ci.levels[0].assign(three, three + 8); ci.levels[0].insert(ci.levels[0].end(), three, three + 8);
+        CHECK(decodeBlocks(ci, 0, out) && out[3] == 255 && out[0] == 0);   // BC1_RGB: opaque black
+        CHECK(parseKtx2(makeKtx2(157, 4, 4, {std::vector<uint8_t>(16)}, false), ci, err) && ci.format == BlockFormat::ASTC_4x4);
+        CHECK(!decodeBlocks(ci, 0, out));   // no CPU ASTC decoder
+    }
+}
+
+TEST(ktx2_rejects_bad_files) {
+    using namespace ktxtest;
+    CompressedImage ci;
+    std::string err;
+    std::vector<uint8_t> l0 = kEtcIndividual;
+    const std::string good = makeKtx2(147, 4, 4, {l0}, false), goodZ = makeKtx2(147, 4, 4, {l0}, true);
+    CHECK(parseKtx2(good, ci, err) && parseKtx2(goodZ, ci, err));
+    std::string basis = good;
+    put32(basis, 44, 1);
+    CHECK(!parseKtx2(basis, ci, err) && err.find("transcoder") != std::string::npos);
+    std::string uastc = good;
+    put32(uastc, 12, 0);
+    CHECK(!parseKtx2(uastc, ci, err) && err.find("BasisLZ/UASTC") != std::string::npos);
+    std::string odd = good;
+    put32(odd, 12, 1000);
+    CHECK(!parseKtx2(odd, ci, err) && err.find("vkFormat") != std::string::npos);
+    // Every truncation fails cleanly; so do wild offsets, sizes, level counts and corrupt zstd data.
+    for (const std::string* f : {&good, &goodZ}) {
+        bool allFail = true;
+        for (size_t n = 0; n < f->size(); ++n) allFail = allFail && !parseKtx2(f->substr(0, n), ci, err);
+        CHECK(allFail);
+    }
+    std::string bad = good;
+    put64(bad, 80, ~0ull);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = good; put64(bad, 88, ~0ull - 4);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = good; put32(bad, 40, 200);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = good; put32(bad, 20, 0x7fffffff);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = goodZ; put64(bad, 96, 1ull << 40);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = goodZ; bad[bad.size() - 3] ^= 0x5A; bad[bad.size() - 6] ^= 0x33;
+    CHECK(!parseKtx2(bad, ci, err) || ci.levels.size() == 1);   // corrupt payload never crashes
+    uint32_t seed = 12345;
+    bool garbageFails = true;
+    for (int i = 0; i < 200; ++i) {
+        std::string g = good;
+        for (size_t k = 12; k < g.size(); ++k) { seed = seed * 1664525u + 1013904223u; if ((seed >> 28) == 0) g[k] = char(seed >> 16); }
+        if (parseKtx2(g, ci, err)) { std::vector<uint8_t> out; decodeBlocks(ci, 0, out); }
+        garbageFails = garbageFails && !parseKtx2(std::string(64 + size_t(i), char(i)), ci, err);
+    }
+    CHECK(garbageFails);
+    Image img;
+    CHECK(!decodeImage(basis, img) && !decodeImage(good.substr(0, 90), img));
+}
+
+// ---------------- models (models agent): FBX loader ----------------
+TEST(models_fbx_skinned_cube) {
+    using namespace modeltest;
+    std::vector<std::string> warn;
+    const std::string path = std::string(RTS_SOURCE_DIR) + "/tests/data/models/cube.fbx";
+    auto m = loadModel(path, diskReader(), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    CHECK(m->nodes.size() == 3 && m->meshes.size() == 1 && m->skins.size() == 1 && m->clips.size() == 1);
+    const int box = m->findNode("Box"), root = m->findNode("Root"), top = m->findNode("Top");
+    CHECK(box >= 0 && root >= 0 && top >= 0);
+    if (box < 0 || root < 0 || top < 0) return;
+    CHECK(m->nodes[size_t(top)].parent == root && m->nodes[size_t(box)].mesh == 0 && m->nodes[size_t(box)].skin == 0);
+    CHECK(near(m->nodes[size_t(top)].t.y, 1.0f));                       // 100 cm -> 1 m
+    // one primitive per material, 6 quads -> 12 triangles
+    const MeshDef& md = m->meshes[0];
+    CHECK(md.primitives.size() == 2);
+    uint32_t tris = 0;
+    for (auto& p : md.primitives) tris += p.indexCount / 3;
+    CHECK(tris == 12);
+    const int crate = m->findMaterial("Crate"), glass = m->findMaterial("Glass");
+    CHECK(crate >= 0 && glass >= 0);
+    if (crate >= 0) CHECK(near(m->materials[size_t(crate)].baseColor.x, 0.8f) && m->materials[size_t(crate)].alpha == AlphaMode::Opaque);
+    if (glass >= 0) {
+        const Material& g = m->materials[size_t(glass)];
+        CHECK(g.alpha == AlphaMode::Blend && g.baseColor.w < 0.99f && g.emissive.z > 0.1f);
+    }
+    // bounds in metres, Y up
+    CHECK(near(m->boundsMin.x, -0.5f) && near(m->boundsMax.x, 0.5f) && near(m->boundsMin.y, 0) && near(m->boundsMax.y, 2));
+    // skin: weights normalized, bind pose palette = identity
+    for (auto& p : md.primitives) {
+        CHECK(!p.jointPalette.empty() && p.jointPalette.size() <= 2);
+        std::vector<mat4> pal;
+        paletteMatrices(*m, m->skins[0], p, m->bindWorld, pal);
+        bool identity = true;
+        for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        CHECK(identity);
+        for (uint32_t i = 0; i < p.indexCount; ++i) {
+            const ModelVertex& v = m->vertices[m->indices[p.firstIndex + i]];
+            const int sum = v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3];
+            CHECK(sum >= 254 && sum <= 256);
+        }
+    }
+    // animation: Root moves 1 m along X, Top turns 90 degrees about Y over one second
+    const AnimClip& clip = m->clips[0];
+    CHECK(clip.name == "Bend" && near(clip.duration, 1, 0.02f));
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(clip, 1.0f, pose);
+    const quat e = quat::axisAngle({0, 1, 0}, 1.5707963f);
+    CHECK(near(pose[size_t(root)].t.x, 1, 0.01f));
+    CHECK(near(std::fabs(pose[size_t(top)].r.y), e.y, 0.01f) && near(std::fabs(pose[size_t(top)].r.w), e.w, 0.01f));
+    sampleClip(clip, 0.5f, pose);
+    CHECK(near(pose[size_t(root)].t.x, 0.5f, 0.01f));
+}
+
+TEST(models_fbx_readable_errors) {
+    using namespace modeltest;
+    bool threw = false;
+    try { loadModel("units/broken.fbx", mapReader({{"units/broken.fbx", "this is not an FBX file at all"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("units/broken.fbx") != std::string::npos; std::printf("  (expected) %s\n", e.what()); }
+    CHECK(threw);
+    threw = false;
+    try { loadModel("units/thing.xyz", mapReader({{"units/thing.xyz", "x"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find(".fbx") != std::string::npos; }
+    CHECK(threw);
+}
+
+
+// ---------------- models (models agent): IK, additive, blend space, morph targets, baking ----------------
+#include "engine/gfx/Gfx.h"
+namespace modeltest {
+// Records textures so baking / uploads can be checked without a GPU.
+class NullDevice final : public rts::gfx::Device {
+public:
+    struct Tex { rts::gfx::TextureDesc desc; std::vector<float> data; };
+    std::vector<Tex> textures;
+    const rts::gfx::DeviceInfo& info() const override { return info_; }
+    rts::gfx::BufferHandle createBuffer(const rts::gfx::BufferDesc&) override { return {++next_}; }
+    void updateBuffer(rts::gfx::BufferHandle, const void*, size_t, size_t) override {}
+    void destroyBuffer(rts::gfx::BufferHandle) override {}
+    rts::gfx::TextureHandle createTexture(const rts::gfx::TextureDesc& d) override {
+        Tex t; t.desc = d;
+        if (d.format == rts::gfx::PixelFormat::RGBA32F && d.data) {
+            const float* f = static_cast<const float*>(d.data);
+            t.data.assign(f, f + size_t(d.width) * size_t(d.height) * 4);
+        }
+        textures.push_back(std::move(t));
+        return {uint32_t(textures.size())};
+    }
+    void updateTexture(rts::gfx::TextureHandle, int, int, int, int, const void*, int) override {}
+    void destroyTexture(rts::gfx::TextureHandle) override {}
+    rts::gfx::ShaderHandle createShader(const rts::gfx::ShaderDesc&) override { return {++next_}; }
+    void destroyShader(rts::gfx::ShaderHandle) override {}
+    rts::gfx::PipelineHandle createPipeline(const rts::gfx::PipelineDesc&) override { return {++next_}; }
+    void destroyPipeline(rts::gfx::PipelineHandle) override {}
+    const std::string& lastError() const override { return err_; }
+    void beginFrame(int, int) override {}
+    void endFrame() override {}
+    void beginPass(const rts::gfx::PassDesc&) override {}
+    void endPass() override {}
+    void setViewport(const rts::gfx::Rect&) override {}
+    void setScissor(const rts::gfx::Rect&) override {}
+    void setPipeline(rts::gfx::PipelineHandle) override {}
+    void setVertexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setIndexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setTexture(int, rts::gfx::TextureHandle) override {}
+    void setUniforms(int, const void*, size_t) override {}
+    void draw(uint32_t, uint32_t) override {}
+    void drawIndexed(uint32_t, uint32_t, int32_t, uint32_t) override {}
+private:
+    rts::gfx::DeviceInfo info_;
+    std::string err_;
+    uint32_t next_ = 0;
+};
+// Three-joint chain along +Y: a (0,0,0) -> b (0,1,0) -> c (0,2,0).
+inline std::unique_ptr<Model> chainModel() {
+    auto m = std::make_unique<Model>();
+    Node a; a.name = "a"; Node b; b.name = "b"; b.parent = 0; b.t = {0, 1, 0}; Node c; c.name = "c"; c.parent = 1; c.t = {0, 1, 0};
+    m->nodes = {a, b, c};
+    m->finalize();
+    return m;
+}
+} // namespace modeltest
+
+TEST(models_two_bone_ik_reaches_target) {
+    using namespace modeltest;
+    auto m = chainModel();
+    Pose pose;
+    bindPose(*m, pose);
+    std::vector<mat4> world;
+    worldMatrices(*m, pose, world);
+    const float3 target{0.8f, 1.2f, 0};
+    solveTwoBoneIK(*m, pose, world, 0, 1, 2, target, {1, 1, 0});
+    std::vector<mat4> check;
+    worldMatrices(*m, pose, check);               // the returned world matches a fresh evaluation
+    float3 c{check[2].at(0, 3), check[2].at(1, 3), check[2].at(2, 3)};
+    CHECK(near(c.x, target.x, 2e-3f) && near(c.y, target.y, 2e-3f) && near(c.z, 0, 2e-3f));
+    CHECK(near(world[2].at(0, 3), c.x) && near(world[2].at(1, 3), c.y));
+    float3 b{check[1].at(0, 3), check[1].at(1, 3), check[1].at(2, 3)};
+    CHECK(near(length(b), 1, 1e-3f) && near(length(c - b), 1, 1e-3f));   // bone lengths kept
+    CHECK(b.x > 0.0f);                                                      // bends towards the pole
+    // unreachable target: chain stretches straight towards it
+    solveTwoBoneIK(*m, pose, world, 0, 1, 2, {0, 0, 5}, {0, 1, 1});
+    CHECK(near(world[2].at(2, 3), 2, 1e-2f));
+}
+
+TEST(models_additive_and_blend_space) {
+    using namespace modeltest;
+    auto m = chainModel();
+    AnimClip walk, run, nod;
+    AnimChannel ch; ch.node = 1; ch.path = AnimChannel::Translation;
+    walk.name = "Walk"; walk.duration = 1; ch.times = {0, 1}; ch.values = {0, 1, 0, 0, 1, 0}; walk.channels.push_back(ch);
+    run.name = "Run"; run.duration = 0.5f; ch.values = {0, 3, 0, 0, 3, 0}; run.channels.push_back(ch);
+    nod.name = "Nod"; nod.duration = 1; ch.node = 2; ch.values = {0, 1, 0, 0.5f, 1, 0}; nod.channels.push_back(ch);
+    m->clips = {walk, run, nod};
+    Animator a;
+    a.setModel(m.get());
+    Animator::Play p; p.fade = 0;
+    a.play(0, 0, p);
+    a.setBlend(0, 1, 0.5f);
+    Pose pose;
+    a.evaluate(pose);
+    CHECK(near(pose[1].t.y, 2));                  // halfway between Walk (1) and Run (3)
+    a.update(0.375f);                             // mixed cycle = 0.75 s: half a cycle
+    CHECK(near(a.time(0), 0.5f));
+    auto bs = a.baseSample();
+    CHECK(bs.clipA == 0 && bs.clipB == 1 && near(bs.w, 0.5f) && near(bs.timeB, 0.25f));
+    a.setAdditive(0, 2, 1, 0);                    // additive: adds clip(t) - clip(0)
+    a.update(0.5f);
+    a.evaluate(pose);
+    CHECK(near(pose[2].t.x, 0.25f, 1e-3f) && near(pose[2].t.y, 1));
+}
+
+TEST(models_morph_targets_and_weights) {
+    using namespace modeltest;
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    auto m = loadModel(dir + "slime.glb", diskReader(), nullptr);
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(p.morphTargets == 2 && p.vertexCount > 0 && p.morphDeltas.size() == size_t(2) * p.vertexCount * 6);
+    CHECK(m->clips.size() == 1 && m->clips[0].channels[0].path == AnimChannel::Weights && m->clips[0].channels[0].comps == 2);
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.375f, pose);        // between (0.8, 0) and (0, 0.6)
+    CHECK(near(pose[0].w[0], 0.4f) && near(pose[0].w[1], 0.3f));
+    NullDevice dev;
+    uploadModel(dev, *m);
+    CHECK(m->morphTex.valid() && m->morphTexWidth == 2048);
+    const auto& tex = dev.textures[m->morphTex.id - 1];
+    const size_t texel = p.morphTexel + 2 * 5;    // target 0, vertex 5: position delta
+    CHECK(tex.desc.format == rts::gfx::PixelFormat::RGBA32F && tex.data.size() > texel * 4 + 2);
+}
+
+TEST(models_baked_clips_match_the_pose) {
+    using namespace modeltest;
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    auto m = loadModel(dir + "golem.glb", diskReader(), nullptr);
+    NullDevice dev;
+    CHECK(bakeAnimations(dev, *m, 30));
+    const auto& b = m->baked;
+    CHECK(b.tex.valid() && b.joints == 8 && b.clips.size() == m->clips.size() && b.rows > 1);
+    const auto& tex = dev.textures[b.tex.id - 1];
+    CHECK(tex.desc.width == 8 * 3 && tex.desc.height == b.rows);
+    // row of Walk at 0.5 s holds world * inverse bind of every joint
+    const int walk = m->findClip("Walk");
+    const int row = bakedRow(*m, walk, 0.5f);
+    CHECK(row == b.clips[size_t(walk)].firstRow + 15);
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[size_t(walk)], 0.5f, pose);
+    std::vector<mat4> world;
+    worldMatrices(*m, pose, world);
+    const auto& sk = m->skins[size_t(b.skin)];
+    bool same = true;
+    for (int j = 0; j < b.joints; ++j) {
+        const mat4 jm = world[size_t(sk.joints[size_t(j)])] * sk.inverseBind[size_t(j)];
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c) same &= near(tex.data[(size_t(row) * 24 + size_t(j) * 3 + size_t(r)) * 4 + size_t(c)], jm.at(r, c), 1e-4f);
+    }
+    CHECK(same);
+    CHECK(bakedRow(*m, -1, 0) == 0);               // bind pose row
+    CHECK(bakedRow(*m, walk, 1.0f) == b.clips[size_t(walk)].firstRow); // loop wraps to frame 0
 }
 
 int main() {

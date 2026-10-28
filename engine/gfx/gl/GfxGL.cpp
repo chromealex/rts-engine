@@ -2,6 +2,7 @@
 #include "../Gfx.h"
 #include "GLApi.h"
 
+#include <algorithm>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -23,6 +24,21 @@ bool loadGLFunctions() {
 
 namespace rts::gfx {
 namespace {
+
+// compressed formats (may be missing from older headers)
+constexpr GLenum kGL_ETC2_RGB8 = 0x9274, kGL_ETC2_RGBA8 = 0x9278, kGL_DXT1_RGBA = 0x83F1, kGL_DXT5 = 0x83F3,
+                 kGL_BPTC_UNORM = 0x8E8C, kGL_ASTC_4x4 = 0x93B0;
+GLenum compressedEnum(PixelFormat f) {
+    switch (f) {
+        case PixelFormat::ETC2_RGB8: return kGL_ETC2_RGB8;
+        case PixelFormat::ETC2_RGBA8: return kGL_ETC2_RGBA8;
+        case PixelFormat::BC1: return kGL_DXT1_RGBA;
+        case PixelFormat::BC3: return kGL_DXT5;
+        case PixelFormat::BC7: return kGL_BPTC_UNORM;
+        case PixelFormat::ASTC_4x4: return kGL_ASTC_4x4;
+        default: return 0;
+    }
+}
 
 template <class T> class Pool {
 public:
@@ -61,6 +77,28 @@ public:
         glGenBuffers(1, &ubo_);
         glBindBuffer(GL_UNIFORM_BUFFER, ubo_);
         glBufferData(GL_UNIFORM_BUFFER, kUniformRingSize, nullptr, GL_STREAM_DRAW);
+        // compressed formats: ETC2 is core in ES 3.0 (not in desktop GL 3.3, not guaranteed on WebGL2)
+        std::string ext;
+        if (const char* e = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS))) ext = e;
+        auto has = [&](const char* name) { return ext.find(name) != std::string::npos; };
+#if defined(__EMSCRIPTEN__)
+        etc2_ = has("compressed_texture_etc");
+#else
+        etc2_ = flavor != Backend::GL33 || has("ES3_compatibility");
+#endif
+        s3tc_ = has("texture_compression_s3tc") || has("compressed_texture_s3tc");
+        bptc_ = has("texture_compression_bptc");
+        if (ext.empty() && flavor == Backend::GL33) s3tc_ = true; // core profiles hide the list; every desktop GPU has DXT
+        astc_ = has("texture_compression_astc");
+    }
+    bool supports(PixelFormat f) const override {
+        switch (f) {
+            case PixelFormat::ETC2_RGB8: case PixelFormat::ETC2_RGBA8: return etc2_;
+            case PixelFormat::BC1: case PixelFormat::BC3: return s3tc_;
+            case PixelFormat::BC7: return bptc_;
+            case PixelFormat::ASTC_4x4: return astc_;
+            default: return true;
+        }
     }
     ~GLDevice() override {
         glDeleteBuffers(1, &ubo_);
@@ -105,6 +143,20 @@ public:
         glGenTextures(1, &t.id);
         glBindTexture(GL_TEXTURE_2D, t.id);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        if (const GLenum ce = compressedEnum(d.format)) {
+            for (int l = 0; l < d.levelCount; ++l)
+                glCompressedTexImage2D(GL_TEXTURE_2D, l, ce, std::max(1, d.width >> l), std::max(1, d.height >> l), 0,
+                                       GLsizei(d.levelSize[l]), d.levelData[l]);
+            t.mips = false;
+            const GLint mf = d.levelCount > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, std::max(0, d.levelCount - 1));
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, d.filter == Filter::Linear ? mf : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, d.filter == Filter::Linear ? GL_LINEAR : GL_NEAREST);
+            GLint wrap = d.repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+            return {textures_.add(t)};
+        }
         if (d.format == PixelFormat::Depth) {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, d.width, d.height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
             if (d.compare) {
@@ -112,8 +164,9 @@ public:
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
             }
         } else if (d.format == PixelFormat::R8) glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, d.width, d.height, 0, GL_RED, GL_UNSIGNED_BYTE, d.data);
+        else if (d.format == PixelFormat::RGBA32F) { t.mips = false; glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, d.width, d.height, 0, GL_RGBA, GL_FLOAT, d.data); }
         else glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, d.width, d.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, d.data);
-        GLint f = d.filter == Filter::Linear ? GL_LINEAR : GL_NEAREST;
+        GLint f = d.filter == Filter::Linear && d.format != PixelFormat::RGBA32F ? GL_LINEAR : GL_NEAREST; // float textures are not filterable on ES3
         if (t.mips) {
             if (d.data) glGenerateMipmap(GL_TEXTURE_2D);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, d.filter == Filter::Linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST);
@@ -129,13 +182,14 @@ public:
         if (!t) return;
         glBindTexture(GL_TEXTURE_2D, t->id);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        const int bpp = t->fmt == PixelFormat::R8 ? 1 : 4;
+        const int bpp = t->fmt == PixelFormat::R8 ? 1 : t->fmt == PixelFormat::RGBA32F ? 16 : 4;
         const GLenum fmt = t->fmt == PixelFormat::R8 ? GL_RED : GL_RGBA;
+        const GLenum type = t->fmt == PixelFormat::RGBA32F ? GL_FLOAT : GL_UNSIGNED_BYTE;
         if (rowPitch == w * bpp) {
-            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, hh, fmt, GL_UNSIGNED_BYTE, pixels);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, hh, fmt, type, pixels);
         } else { // GL_UNPACK_ROW_LENGTH exists in ES3 but upload row by row for maximum portability
             for (int r = 0; r < hh; ++r)
-                glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + r, w, 1, fmt, GL_UNSIGNED_BYTE, static_cast<const uint8_t*>(pixels) + size_t(r) * rowPitch);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + r, w, 1, fmt, type, static_cast<const uint8_t*>(pixels) + size_t(r) * rowPitch);
         }
         if (t->mips) glGenerateMipmap(GL_TEXTURE_2D);
     }
@@ -384,14 +438,15 @@ public:
         applyAttribs(0);
         glDrawArrays(prim(), GLint(first), GLsizei(count));
     }
-    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex) override {
+    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
         auto* pl = pipelines_.get(pipelineId_);
         if (!pl || !buffers_.get(ibId_)) return;
         // ES 3.0 / WebGL2 lack glDrawElementsBaseVertex: emulate by offsetting attribute pointers.
         applyAttribs(baseVertex);
         const bool u32 = pl->desc.indexType == IndexType::UInt32;
         const size_t off = ibOffset_ + size_t(firstIndex) * (u32 ? 4 : 2);
-        glDrawElements(prim(), GLsizei(count), u32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(off));
+        if (instances > 1) glDrawElementsInstanced(prim(), GLsizei(count), u32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(off), GLsizei(instances));
+        else glDrawElements(prim(), GLsizei(count), u32 ? GL_UNSIGNED_INT : GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(off));
     }
 
 private:
@@ -399,6 +454,7 @@ private:
     std::string error_;
     GLuint vao_ = 0, ubo_ = 0, currentProgram_ = 0;
     size_t uboAlign_ = 256, uboOffset_ = 0;
+    bool etc2_ = false, s3tc_ = false, bptc_ = false, astc_ = false;
     std::vector<uint8_t> slotData_[kMaxUniformSlots]; // last data per slot, re-uploaded when the ring is orphaned
     int passW_ = 0, passH_ = 0;
     std::vector<GLFramebuffer> fbos_;
