@@ -206,6 +206,13 @@ void LightSystem::renderMap() {
     dev_->endPass();
 }
 
+void LightSystem::setClouds(float coverage, float strength, float scale, float offsetX, float offsetZ) {
+    const float k = 0.11f * std::max(scale, 0.05f);   // ~1/9 rad per unit: clouds 20-40 units across
+    u_.cloud[0] = offsetX * k; u_.cloud[1] = offsetZ * k; u_.cloud[2] = k;
+    u_.cloud[3] = std::clamp(coverage, 0.0f, 1.0f);
+    u_.sky[0] = coverage > 0.0f ? std::clamp(strength, 0.0f, 1.0f) : 0.0f;
+}
+
 void LightSystem::bind(int uniformSlot, int textureSlot) {
     if (!dev_) return;
     const bool useMap = mapReady_ && mapHasLights_ && quality_ != LightQuality::Off;

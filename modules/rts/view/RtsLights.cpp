@@ -82,6 +82,17 @@ void RtsLights::configure(const Json& game, const Json& map) {
     dayLength_ = std::max(pick("dayLength", 0.0f), 0.0f);
     nightLevel_ = std::clamp(pick("nightLevel", 1.0f), 0.0f, 1.0f);
     forcedNight_ = -1;
+    clouds_ = std::clamp(pick("clouds", 0.0f), 0.0f, 1.0f);
+    cloudStrength_ = std::clamp(pick("cloudStrength", 0.45f), 0.0f, 1.0f);
+    cloudScale_ = std::max(pick("cloudScale", 1.0f), 0.05f);
+    storm_ = std::clamp(pick("storm", 0.0f), 0.0f, 1.0f);
+    {
+        const Json& w = map["wind"].size() >= 2 ? map["wind"] : game["wind"];
+        windX_ = w.size() >= 2 ? float(w[0].fx().toDouble()) : 1.2f;
+        windZ_ = w.size() >= 2 ? float(w[1].fx().toDouble()) : 0.5f;
+    }
+    if (const char* c = std::getenv("RTS_CLOUDS")) { clouds_ = std::clamp(float(std::atof(c)), 0.0f, 1.0f); cycle_ = true; }
+    if (const char* st = std::getenv("RTS_STORM")) { storm_ = std::clamp(float(std::atof(st)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* t = std::getenv("RTS_TIME_OF_DAY")) { startTime_ = float(std::atof(t)); cycle_ = true; }
     if (const char* n = std::getenv("RTS_NIGHT")) { forcedNight_ = std::clamp(float(std::atof(n)), 0.0f, 1.0f); cycle_ = true; }
 }
@@ -118,6 +129,34 @@ void RtsLights::updateSky(Lighting& l, double seconds) {
     l.skyColor = mix(mix(base_.skyColor, duskSky, d), {0.13f, 0.17f, 0.30f}, n);
     l.groundColor = mix(mix(base_.groundColor, base_.groundColor * 0.8f, d), {0.06f, 0.06f, 0.08f}, n);
     l.fogColor = mix(mix(base_.fogColor, duskFog, d), {0.07f, 0.09f, 0.15f}, n);
+
+    // Storm: overcast (weaker, greyer sun) and lightning. A flash may start in each game second
+    // with probability ~ storm; a hash of the second index keeps it identical in replays.
+    lightning_ = 0;
+    if (storm_ > 0) {
+        l.sunIntensity *= 1.0f - 0.45f * storm_;
+        l.sunColor = mix(l.sunColor, {0.75f, 0.78f, 0.85f}, 0.5f * storm_);
+        l.fogColor = mix(l.fogColor, l.fogColor * 0.6f, storm_);
+        const double sec = std::floor(seconds);
+        for (int back = 0; back < 2; ++back) { // a flash started in this or the previous second
+            uint32_t h = uint32_t(int64_t(sec) - back) * 2654435761u;
+            h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+            if (float(h & 0xffff) / 65535.0f > storm_ * 0.16f) continue;
+            const float start = float(sec - back) + float((h >> 16) & 0xff) / 255.0f;
+            const float age = float(seconds) - start;
+            if (age < 0 || age > 0.45f) continue;
+            // double strike: a bright pulse, a short gap, a weaker one
+            const float f = std::exp(-age * 30.0f) + (age > 0.12f ? 0.6f * std::exp(-(age - 0.12f) * 22.0f) : 0.0f);
+            lightning_ = std::max(lightning_, std::min(f, 1.0f));
+        }
+        if (lightning_ > 0) {
+            const float k = lightning_;
+            l.sunIntensity += 1.6f * k;
+            l.sunColor = mix(l.sunColor, {0.85f, 0.9f, 1.0f}, k);
+            l.skyColor = mix(l.skyColor, {0.7f, 0.76f, 0.95f}, 0.8f * k);
+            l.groundColor = mix(l.groundColor, {0.45f, 0.45f, 0.5f}, 0.5f * k);
+        }
+    }
 }
 
 void RtsLights::consumeEvents(const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
@@ -176,6 +215,11 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
     updateSky(r.lighting, s.seconds);
     LightSystem& ls = r.lights;
     ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
+    {   // clouds drift with the wind in game time; a storm covers the sky
+        const float cover = cycle_ ? std::max(clouds_, storm_ * 0.85f) : 0.0f;
+        const float t = float(s.seconds);
+        ls.setClouds(cover, std::min(cloudStrength_ + storm_ * 0.3f, 0.9f), cloudScale_, -windX_ * t, -windZ_ * t);
+    }
     if (ls.quality() == LightQuality::Off) { active_.clear(); lastTick_ = s.tick; return; }
     consumeEvents(s, time, vision, grid, view);
     const float tt = float(time);
