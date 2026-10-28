@@ -1082,6 +1082,47 @@ neighbour lookups always use a one-cell grid (results identical to the spatial-h
 - Belts are ordinary structures (blocking, destructible); a packet on a destroyed belt is lost. The AI does not lay
   belts yet. MCP state: a belt's `dir` and `carries`, a crafter's `input` / `output`.
 
+## Turns, strategic map, 3D flight (agent-mech stage 5)
+
+Tested in `tests/tests_mech.inc` (`mech_turns`, `mech_strategic`, `mech_space_flight`).
+
+### Turn-based mode (Heroes, XCOM, Advance Wars battles)
+
+`"turns": {"moveSeconds": 4, "attacks": 1, "timeLimit": 0}`: players act one after another on the same simulation.
+During a turn only the active player's units move (at most type speed x `moveSeconds` cells) and shoot (`attacks`
+shots per weapon); the others stand still and don't return fire; commands of other players are ignored. Command
+`end_turn` (or `timeLimit` seconds) passes the turn to the next living player; event `turn` (player, turn number).
+Bots send their fighters at the nearest enemy once per turn and end the turn when they stop moving.
+
+### Strategic map (Total War campaign, Company of Heroes 3, Empire at War)
+
+`modules/strategic/Strategic.h`: provinces and armies on top of the game's `rules.json`; battles are auto-resolved
+(Lanchester square law on hp x dps) or simulated on the RTS simulation with bots, and the survivors return to the map.
+
+```json
+{"players": [{"name": "Red"}, {"name": "Blue"}], "start": {"gold": 100}, "movesPerTurn": 1,
+ "recruit": {"spear": {}, "archer": {"gold": 40}},
+ "battle": {"mode": "simulate", "seconds": 240, "size": [48, 32]},
+ "provinces": [{"id": "a", "owner": 1, "income": {"gold": 40}, "adj": ["b"], "pos": [0, 0], "terrain": {"rows": [...]}},
+               {"id": "b", "adj": ["c"]}, {"id": "c", "owner": 2}],
+ "armies": [{"owner": 1, "at": "a", "units": {"spear": 12}}, {"owner": 2, "at": "c", "units": {"spear": 6}}]}
+```
+
+- Adjacency is symmetric. `recruit` with `{}` uses the type's `cost`. Moving into a province with an enemy army
+  fights a battle; an empty enemy or neutral province is taken. Own armies in one province merge.
+- Income of owned provinces comes at the start of the owner's turn; a player with no provinces and no armies is out;
+  the last one standing wins.
+- MCP: `strategic_load` (`file` in the project or `def`), `strategic_state`, `strategic_order`
+  (`move` / `recruit` / `end_turn`), `strategic_bots` (bots play N turns; `battle`: auto | simulate),
+  `strategic_battle_map` (the RTS map of a battle, to play by hand), `strategic_save`.
+
+### Free 3D flight (Homeworld)
+
+`"altitude": {"min": 0, "max": 30, "climb": 3, "start": 10}` on an air type: the unit keeps its own height, climbs or
+dives to the `y` of its move orders (MCP `{"cmd": "move", "x", "z", "y"}`), follows the height of the target it
+attacks, and weapon ranges to and from it are measured in 3D. Paths and avoidance stay 2D. The view does not draw the
+altitude yet.
+
 ## Save states (agent-mech)
 
 `Simulation::serialize()` returns the whole dynamic state as bytes (versioned, little-endian, identical on every
