@@ -2664,6 +2664,8 @@ TEST(terrain_line_of_sight_behind_ridge) {
     run(*sim2, 1);
     CHECK(mod(*sim2).state(*sim2).vision[1][size_t(gs.grid.index(17, 4))] == 2);
     CHECK(!mod(*sim2).state(*sim2).grid.hf);
+}
+
 TEST(audio_3d_distance_models_and_pose) {
     audio::DistanceDef d;
     d.minDistance = 10; d.maxDistance = 50;
