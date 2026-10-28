@@ -6312,6 +6312,346 @@ TEST(models_voxel_broken_files) {
         try { loadModel(p, modeltest::mapReader({{p, v}}), &w); ++loaded; } catch (const std::exception&) {}
     }
     CHECK(loaded > 0);
+// ---------------- models (MDX agent): Warcraft III .mdx / .mdl, BLP textures ----------------
+namespace mdxtest {
+using namespace rts::render;
+using modeltest::put;
+inline std::string cstr(const std::string& s, size_t n) { std::string r = s; r.resize(n, '\0'); return r; }
+inline std::string u32s(std::initializer_list<uint32_t> v) { std::string b; put<uint32_t>(b, v); return b; }
+inline std::string f32s(std::initializer_list<float> v) { std::string b; put<float>(b, v); return b; }
+inline std::string chunk(const char* tag, const std::string& data) { return std::string(tag, 4) + u32s({uint32_t(data.size())}) + data; }
+inline std::string sized(const std::string& body) { return u32s({uint32_t(body.size() + 4)}) + body; }
+// track: tag, interpolation, global sequence, keys (frame + comps values [+ in / out tangents])
+inline std::string track(const char* tag, uint32_t interp, int32_t gseq, const std::vector<std::pair<int32_t, std::vector<float>>>& keys) {
+    std::string b(tag, 4);
+    b += u32s({uint32_t(interp > 1 ? keys.size() / 3 : keys.size()), interp, uint32_t(gseq)});
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (interp <= 1 || i % 3 == 0) put<int32_t>(b, {keys[i].first});
+        for (float f : keys[i].second) put<float>(b, {f});
+    }
+    return b;
+}
+inline std::string node(const std::string& name, int32_t id, int32_t parent, uint32_t flags, const std::string& tracks) {
+    std::string body = cstr(name, 80);
+    put<int32_t>(body, {id, parent});
+    body += u32s({flags}) + tracks;
+    return sized(body);
+}
+// Pixels: red opaque, green transparent, red half, green opaque.
+inline std::string paletted2x2() {
+    std::string b = "BLP1" + u32s({1, 8, 2, 2, 4, 0});
+    b += u32s({156 + 1024}) + std::string(15 * 4, '\0') + u32s({8}) + std::string(15 * 4, '\0');
+    std::string pal(1024, '\0');
+    pal[2] = char(255); pal[5] = char(255);   // 0 = red (B, G, R, x), 1 = green
+    b += pal;
+    put<uint8_t>(b, {0, 1, 0, 1, 255, 0, 128, 255});
+    return b;
+}
+inline const float kS = 0.70710678f;
+// One geoset (6 vertices, 3 triangles), bones Root (0) and Arm (1), attachment "Hand Right Ref" (2),
+// sequences Stand / Walk, one global sequence, team colour under an alpha-tested texture.
+inline std::string mdx() {
+    std::string d = "MDLX" + chunk("VERS", u32s({800}));
+    d += chunk("MODL", std::string(372, '\0'));
+    std::string seqs;
+    for (auto [name, s, e] : {std::tuple<const char*, uint32_t, uint32_t>{"Stand", 0, 1000}, {"Walk", 2000, 3000}})
+        seqs += cstr(name, 80) + u32s({s, e}) + f32s({0}) + u32s({0}) + f32s({0}) + u32s({0}) + std::string(28, '\0');
+    d += chunk("SEQS", seqs);
+    d += chunk("GLBS", u32s({500}));
+    std::string lays = u32s({28, 0, 0, 1}) + u32s({0xffffffffu, 0}) + f32s({1}) + u32s({28, 1, 0x10, 0}) + u32s({0xffffffffu, 0}) + f32s({1});
+    const std::string mat = u32s({0, 0}) + "LAYS" + u32s({2}) + lays;
+    d += chunk("MTLS", sized(mat));
+    d += chunk("TEXS", u32s({0}) + cstr("Textures\\Guy.blp", 260) + u32s({3}) + u32s({1}) + cstr("", 260) + u32s({0}));
+    std::string g = "VRTX" + u32s({6}) + f32s({-8, -16, 0, -8, 16, 0, -8, 0, 64, 0, -32, 64, 0, -32, 96, 32, 0, 32});
+    g += "NRMS" + u32s({6}) + f32s({1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0});
+    g += "PTYP" + u32s({1, 4}) + "PCNT" + u32s({1, 9}) + "PVTX" + u32s({9});
+    put<uint16_t>(g, {0, 1, 2, 2, 4, 3, 0, 1, 5});
+    g += "GNDX" + u32s({6});
+    put<uint8_t>(g, {0, 0, 1, 2, 2, 0});
+    g += "MTGC" + u32s({3, 1, 2, 1}) + "MATS" + u32s({4, 0, 0, 1, 1});
+    g += u32s({0, 0, 0}) + std::string(28, '\0') + u32s({0});
+    g += "UVAS" + u32s({1}) + "UVBS" + u32s({6}) + f32s({0, 0, 1, 0, 0, 1, 1, 1, 0.5f, 0.5f, 0.25f, 0.75f});
+    d += chunk("GEOS", sized(g));
+    const std::string rootT = track("KGTR", 1, -1, {{0, {0, 0, 0}}, {500, {0, 0, 10}}, {1000, {0, 0, 0}}});
+    const std::string armR = track("KGRT", 1, -1, {{2250, {0, 0, 0, 1}}, {2750, {0, 0, kS, kS}}});
+    const std::string armS = track("KGSC", 2, -1, {{0, {1, 1, 1}}, {0, {0, 0, 0}}, {0, {0, 0, 0}}, {1000, {2, 2, 2}}, {1000, {0, 0, 0}}, {1000, {0, 0, 0}}});
+    std::string bones = node("Root", 0, -1, 256, rootT) + u32s({0, 0xffffffffu}) + node("Arm", 1, 0, 256, armR + armS) + u32s({0, 0xffffffffu});
+    d += chunk("BONE", bones);
+    const std::string handT = track("KGTR", 1, 0, {{0, {0, 0, 0}}, {500, {0, 0, 128}}});
+    d += chunk("ATCH", sized(node("Hand Right Ref", 2, 1, 2048, handT) + cstr("", 260) + u32s({0})));
+    d += chunk("PIVT", f32s({0, 0, 0, 0, 0, 64, 0, -32, 64}));
+    d += chunk("CAMS", std::string(16, 'x'));   // unknown / unsupported chunks are skipped
+    return d;
+}
+inline const char* kMdl = R"(// the same model as mdx() in text form
+Version { FormatVersion 800, }
+Model "Guy" { BlendTime 150, }
+Sequences 2 {
+    Anim "Stand" { Interval { 0, 1000 }, }
+    Anim "Walk" { Interval { 2000, 3000 }, MoveSpeed 200, }
+}
+GlobalSequences 1 { Duration 500, }
+Textures 2 {
+    Bitmap { Image "Textures\Guy.blp", WrapWidth, WrapHeight, }
+    Bitmap { Image "", ReplaceableId 1, }
+}
+Materials 1 {
+    Material {
+        Layer { FilterMode None, static TextureID 1, }
+        Layer { FilterMode Transparent, TwoSided, static TextureID 0, }
+    }
+}
+Geoset {
+    Vertices 6 { { -8, -16, 0 }, { -8, 16, 0 }, { -8, 0, 64 }, { 0, -32, 64 }, { 0, -32, 96 }, { 32, 0, 32 }, }
+    Normals 6 { { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, }
+    TVertices 6 { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 }, { 0.5, 0.5 }, { 0.25, 0.75 }, }
+    VertexGroup { 0, 0, 1, 2, 2, 0, }
+    Faces 1 9 { Triangles { { 0, 1, 2, 2, 4, 3, 0, 1, 5 }, } }
+    Groups 3 4 { Matrices { 0 }, Matrices { 0, 1 }, Matrices { 1 }, }
+    MinimumExtent { -8, -32, 0 },
+    MaterialID 0,
+    SelectionGroup 0,
+}
+Bone "Root" {
+    ObjectId 0,
+    GeosetId 0,
+    GeosetAnimId None,
+    Translation 3 { Linear, 0: { 0, 0, 0 }, 500: { 0, 0, 10 }, 1000: { 0, 0, 0 }, }
+}
+Bone "Arm" {
+    ObjectId 1,
+    Parent 0,
+    Rotation 2 { Linear, 2250: { 0, 0, 0, 1 }, 2750: { 0, 0, 0.70710678, 0.70710678 }, }
+    Scaling 2 {
+        Hermite,
+        0: { 1, 1, 1 },
+            InTan { 0, 0, 0 },
+            OutTan { 0, 0, 0 },
+        1000: { 2, 2, 2 },
+            InTan { 0, 0, 0 },
+            OutTan { 0, 0, 0 },
+    }
+}
+Attachment "Hand Right Ref" {
+    ObjectId 2,
+    Parent 1,
+    AttachmentID 0,
+    Translation 2 { Linear, GlobalSeqId 0, 0: { 0, 0, 0 }, 500: { 0, 0, 128 }, }
+}
+PivotPoints 3 { { 0, 0, 0 }, { 0, 0, 64 }, { 0, -32, 64 }, }
+Camera "unused" { Position { 0, 0, 0 }, }
+)";
+inline FileReader files() { return modeltest::mapReader({{"units/Textures/Guy.blp", paletted2x2()}}); }
+inline int vertexAt(const Model& m, float3 p) {
+    for (size_t i = 0; i < m.vertices.size(); ++i) if (length(m.vertices[i].pos - p) < 1e-4f) return int(i);
+    return -1;
+}
+} // namespace mdxtest
+
+TEST(models_mdx_skeleton_skin_clips_team) {
+    using namespace mdxtest;
+    using modeltest::near;
+    std::vector<std::string> warn;
+    auto m = loadModel("units/guy/guy.mdx", modeltest::mapReader({{"units/guy/guy.mdx", mdx()}, {"units/Textures/Guy.blp", paletted2x2()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    // nodes: root, Root, Arm, Hand Right Ref, mesh
+    CHECK(m->nodes.size() == 5 && m->skins.size() == 1 && m->meshes.size() == 1);
+    const int root = m->findNode("Root"), arm = m->findNode("Arm"), hand = m->findNode("Hand Right Ref");
+    CHECK(root > 0 && arm > 0 && hand > 0);
+    if (root <= 0 || arm <= 0 || hand <= 0) return;
+    CHECK(m->nodes[size_t(arm)].parent == root && m->nodes[size_t(hand)].parent == arm && m->nodes[size_t(root)].parent == 0);
+    // pivot (0, 0, 64) -> Y up, metres = 128 units; pivot-relative bind translations
+    CHECK(near(m->nodes[size_t(arm)].t.y, 0.5f) && near(m->nodes[size_t(arm)].t.x, 0) && near(m->nodes[size_t(arm)].t.z, 0));
+    CHECK(near(m->nodes[size_t(hand)].t.x, -0.25f) && near(m->nodes[size_t(hand)].t.y, 0));
+    // facing: the nose vertex (WC3 +X forward) is at engine +Z
+    CHECK(vertexAt(*m, {0, 0.25f, 0.25f}) >= 0);
+    CHECK(near(m->boundsMax.z, 0.25f) && near(m->boundsMin.y, 0) && near(m->boundsMax.y, 0.75f));
+    // skin: bind palette = identity, matrix group {Root, Arm} averaged
+    const Skin& sk = m->skins[0];
+    for (auto& p : m->meshes[0].primitives) {
+        std::vector<mat4> pal;
+        paletteMatrices(*m, sk, p, m->bindWorld, pal);
+        bool identity = true;
+        for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        CHECK(identity && p.jointPalette.size() <= size_t(kMaxPaletteJoints));
+    }
+    const int v2 = vertexAt(*m, {0, 0.5f, -0.0625f});
+    CHECK(v2 >= 0);
+    if (v2 >= 0) {
+        const ModelVertex& v = m->vertices[size_t(v2)];
+        CHECK(v.weights[0] + v.weights[1] == 255 && v.weights[0] >= 127 && v.weights[1] >= 127 && v.joints[0] != v.joints[1]);
+    }
+    // material: team colour under the texture -> BaseAlpha, opaque, two-sided, texture from the parent directory
+    const Material& mat = m->materials[size_t(m->meshes[0].primitives[0].material)];
+    CHECK(mat.team == TeamMode::BaseAlpha && mat.alpha == AlphaMode::Opaque && mat.doubleSided && mat.baseTex >= 0);
+    if (mat.baseTex >= 0) {
+        const Image& img = m->images[size_t(mat.baseTex)];
+        CHECK(img.width == 2 && img.height == 2 && img.repeat && img.rgba[0] == 255 && img.rgba[7] == 0);
+    }
+    // clips
+    CHECK(m->clips.size() == 2 && m->findClip("Stand") == 0 && m->findClip("walk") == 1);
+    if (m->clips.size() != 2) return;
+    CHECK(near(m->clips[0].duration, 1) && near(m->clips[1].duration, 1));
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.5f, pose);
+    CHECK(near(pose[size_t(root)].t.y, 10.0f / 128));                  // KGTR (0,0,10) -> +Y
+    CHECK(near(pose[size_t(arm)].s.x, 1.5f, 0.01f));                   // Hermite, flat tangents
+    sampleClip(m->clips[0], 0.25f, pose);                                // global sequence: 2 periods of 0.5 s
+    CHECK(near(pose[size_t(hand)].t.y, 0.5f, 0.01f));
+    sampleClip(m->clips[0], 0.75f, pose);
+    CHECK(near(pose[size_t(hand)].t.y, 0.5f, 0.01f));
+    // Walk: keys at 0.25 s (identity) and 0.75 s (90 degrees about up); the loop seam gets 45 degrees
+    bindPose(*m, pose);
+    sampleClip(m->clips[1], 0.0f, pose);
+    const quat q45 = quat::axisAngle({0, 1, 0}, 0.785398f);
+    CHECK(near(std::fabs(dot(pose[size_t(arm)].r, q45)), 1, 1e-3f));
+    sampleClip(m->clips[1], 1.0f, pose);
+    CHECK(near(std::fabs(dot(pose[size_t(arm)].r, q45)), 1, 1e-3f));
+    // rotation happens around the pivot: hand vertex (0,-32,64) turns to (32,0,64) -> engine (0, 0.5, 0.25)
+    sampleClip(m->clips[1], 0.75f, pose);
+    std::vector<mat4> world;
+    worldMatrices(*m, pose, world);
+    int j = -1;
+    for (size_t k = 0; k < sk.joints.size(); ++k) if (sk.joints[k] == arm) j = int(k);
+    CHECK(j >= 0);
+    if (j >= 0) {
+        const float3 p = (world[size_t(arm)] * sk.inverseBind[size_t(j)]).transformPoint({-0.25f, 0.5f, 0});
+        CHECK(near(p.x, 0) && near(p.y, 0.5f) && near(p.z, 0.25f));
+    }
+}
+
+TEST(models_mdl_matches_mdx) {
+    using namespace mdxtest;
+    using modeltest::near;
+    std::vector<std::string> wx, wl;
+    auto a = loadMdx("units/guy/guy.mdx", mdx(), files(), &wx);
+    auto b = loadModel("units/guy/guy.mdl", modeltest::mapReader({{"units/guy/guy.mdl", kMdl}, {"units/Textures/Guy.blp", paletted2x2()}}), &wl);
+    for (auto& w : wl) std::printf("  warning: %s\n", w.c_str());
+    CHECK(wl.empty());
+    CHECK(a->nodes.size() == b->nodes.size() && a->vertices.size() == b->vertices.size() && a->indices == b->indices);
+    CHECK(a->materials.size() == b->materials.size() && a->images.size() == b->images.size() && a->clips.size() == b->clips.size());
+    if (a->nodes.size() != b->nodes.size() || a->vertices.size() != b->vertices.size() || a->clips.size() != b->clips.size()) return;
+    for (size_t i = 0; i < a->nodes.size(); ++i)
+        CHECK(a->nodes[i].name == b->nodes[i].name && a->nodes[i].parent == b->nodes[i].parent && length(a->nodes[i].t - b->nodes[i].t) < 1e-5f);
+    bool same = true;
+    for (size_t i = 0; i < a->vertices.size(); ++i) {
+        const ModelVertex &x = a->vertices[i], &y = b->vertices[i];
+        same &= length(x.pos - y.pos) < 1e-5f && std::memcmp(x.weights, y.weights, 4) == 0 && std::memcmp(x.joints, y.joints, 4) == 0 && near(x.uv.y, y.uv.y);
+    }
+    CHECK(same);
+    const Material &ma = a->materials[0], &mb = b->materials[0];
+    CHECK(ma.team == mb.team && ma.alpha == mb.alpha && ma.doubleSided == mb.doubleSided && (ma.baseTex >= 0) == (mb.baseTex >= 0));
+    for (size_t c = 0; c < a->clips.size(); ++c) {
+        const AnimClip &x = a->clips[c], &y = b->clips[c];
+        CHECK(x.name == y.name && near(x.duration, y.duration) && x.channels.size() == y.channels.size());
+        if (x.channels.size() != y.channels.size()) continue;
+        for (size_t k = 0; k < x.channels.size(); ++k) {
+            CHECK(x.channels[k].node == y.channels[k].node && x.channels[k].interp == y.channels[k].interp && x.channels[k].times == y.channels[k].times);
+            bool vals = x.channels[k].values.size() == y.channels[k].values.size();
+            for (size_t i = 0; vals && i < x.channels[k].values.size(); ++i) vals = near(x.channels[k].values[i], y.channels[k].values[i], 1e-5f);
+            CHECK(vals);
+        }
+    }
+}
+
+TEST(models_mdx_mdl_malformed_input) {
+    using namespace mdxtest;
+    const std::string good = mdx();
+    int threw = 0, loaded = 0;
+    for (size_t len = 0; len < good.size(); ++len) {   // every truncation: an exception or a model, never a crash
+        try { loadMdx("cut.mdx", good.substr(0, len), files(), nullptr); ++loaded; }
+        catch (const std::runtime_error& e) { ++threw; if (len == 100) std::printf("  (expected) %s\n", e.what()); }
+    }
+    CHECK(threw > int(good.size()) * 9 / 10 && threw + loaded == int(good.size()));
+    uint32_t rng = 12345;
+    for (int iter = 0; iter < 3000; ++iter) {          // random corruption
+        std::string bad = good;
+        for (int k = 0; k < 1 + iter % 8; ++k) {
+            rng = rng * 1664525u + 1013904223u;
+            const size_t at = (rng >> 8) % bad.size();
+            rng = rng * 1664525u + 1013904223u;
+            bad[at] = char(rng >> 24);
+        }
+        try { loadMdx("bad.mdx", bad, files(), nullptr); } catch (const std::runtime_error&) {}
+    }
+    const std::string text = kMdl;
+    threw = 0;
+    for (size_t len = 0; len < text.size(); len += 7) {
+        try { loadMdl("cut.mdl", text.substr(0, len), files(), nullptr); } catch (const std::runtime_error&) { ++threw; }
+    }
+    CHECK(threw > 0);
+    for (int iter = 0; iter < 500; ++iter) {
+        std::string bad = text;
+        rng = rng * 1664525u + 1013904223u;
+        bad[(rng >> 8) % bad.size()] = "{},:\"0-x\n"[(rng >> 4) % 9];
+        try { loadMdl("bad.mdl", bad, files(), nullptr); } catch (const std::runtime_error&) {}
+    }
+    bool msg = false;
+    try { loadMdl("deep.mdl", std::string(5000, '{'), files(), nullptr); }
+    catch (const std::runtime_error& e) { msg = std::string(e.what()).find("deep.mdl") != std::string::npos; }
+    CHECK(msg);
+    msg = false;
+    try { loadModel("u/x.mdx", modeltest::mapReader({{"u/x.mdx", "MDLX"}}), nullptr); }
+    catch (const std::runtime_error& e) { msg = std::string(e.what()).find("u/x.mdx: no geosets") != std::string::npos; }
+    CHECK(msg);
+}
+
+TEST(models_blp_decode) {
+    using namespace mdxtest;
+    // BLP1 paletted, 8-bit alpha
+    Image img;
+    CHECK(decodeImage(paletted2x2(), img) && img.width == 2 && img.height == 2);
+    if (img.rgba.size() == 16) {
+        CHECK(img.rgba[0] == 255 && img.rgba[1] == 0 && img.rgba[3] == 255);    // red, opaque
+        CHECK(img.rgba[5] == 255 && img.rgba[7] == 0);                          // green, transparent
+        CHECK(img.rgba[11] == 128 && img.rgba[15] == 255);
+    }
+    // BLP1 JPEG: 4 components stored as B, G, R, A without colour transform (16x16, made with PIL)
+    auto hex = [](const char* h) { std::string b; for (; h[0] && h[1]; h += 2) b += char(std::stoi(std::string(h, 2), nullptr, 16)); return b; };
+    const std::string jh = hex("ffd8ffee000e41646f626500640000000000ffdb00430001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101ffc000140800100010044311004d11005911004b1100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9fa");
+    const std::string jm = hex("ffda000e0443004d0059004b00003f00fe902be1fafe27ebfbf8aff2afa28afe20ff00e0e45ff83917fe19ff00fe13dff827a7fc13d3c7bff1901ff132f07fed2ffb4bf83f52ff00937fff005b61af7c1df83baf584bff002701febf4cf885f10b4c9ffe31ff00fd2bc2be15baff008680fed6d5bf67ff00f550a2bfd9028ff83917fe0e45ff00867fff0084f7fe09e9ff0004f4f1effc6407fc4cbc1ffb4bfed2fe0fd4bfe4dfff00d6d86bdf077e0eebd612ff00c9c07fafd33e217c42d327ff008c7fff004af0af856ebfe1a03fb5b56fd9ff00fcabe8a2bfce0ebfffd9");
+    std::string jb = "BLP1" + u32s({0, 8, 16, 16, 4, 0}) + u32s({uint32_t(160 + jh.size())}) + std::string(60, '\0') + u32s({uint32_t(jm.size())}) + std::string(60, '\0');
+    jb += u32s({uint32_t(jh.size())}) + jh + jm;
+    Image ji;
+    CHECK(decodeImage(jb, ji) && ji.width == 16 && ji.height == 16);
+    if (ji.rgba.size() == 16 * 16 * 4) {
+        auto px = [&](int x, int y, int c) { return int(ji.rgba[size_t(y * 16 + x) * 4 + size_t(c)]); };
+        auto close = [](int a, int b) { return std::abs(a - b) <= 3; };
+        CHECK(close(px(0, 0, 0), 20) && close(px(0, 0, 1), 100) && close(px(0, 0, 2), 200) && close(px(0, 0, 3), 255));
+        CHECK(close(px(12, 12, 0), 220) && close(px(12, 12, 2), 30) && close(px(12, 12, 3), 0));
+    }
+    // BLP2: uncompressed BGRA and DXT3 (explicit alpha)
+    auto blp2 = [&](uint8_t enc, uint8_t depth, uint8_t type, uint32_t w, uint32_t h, const std::string& data) {
+        std::string b = "BLP2" + u32s({1});
+        put<uint8_t>(b, {enc, depth, type, 0});
+        b += u32s({w, h, uint32_t(148 + 1024)}) + std::string(60, '\0') + u32s({uint32_t(data.size())}) + std::string(60, '\0') + std::string(1024, '\0') + data;
+        return b;
+    };
+    std::string bgra;
+    put<uint8_t>(bgra, {10, 20, 30, 40, 50, 60, 70, 80});
+    Image u;
+    CHECK(decodeImage(blp2(3, 8, 0, 2, 1, bgra), u) && u.width == 2 && u.rgba.size() == 8 && u.rgba[0] == 30 && u.rgba[2] == 10 && u.rgba[3] == 40 && u.rgba[7] == 80);
+    std::string dxt3;
+    put<uint8_t>(dxt3, {0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});      // pixel 0 alpha 0, others 15
+    put<uint16_t>(dxt3, {0xF800, 0x001F});                                       // red, blue
+    put<uint8_t>(dxt3, {0, 0, 0, 0});
+    Image d3;
+    CHECK(decodeImage(blp2(2, 8, 1, 4, 4, dxt3), d3) && d3.width == 4 && d3.rgba.size() == 64);
+    if (d3.rgba.size() == 64) CHECK(d3.rgba[0] == 255 && d3.rgba[2] == 0 && d3.rgba[3] == 0 && d3.rgba[7] == 255);
+    // broken files: false, never a crash
+    int ok = 0;
+    for (const std::string& f : {paletted2x2(), jb, blp2(2, 8, 1, 4, 4, dxt3)})
+        for (size_t len = 0; len < f.size(); ++len) { Image t; ok += decodeImage(f.substr(0, len), t); }
+    CHECK(ok == 0);
+    uint32_t rng = 7;
+    for (int iter = 0; iter < 2000; ++iter) {
+        std::string bad = jb;
+        for (int k = 0; k < 4; ++k) { rng = rng * 1664525u + 1013904223u; bad[160 + (rng >> 8) % (bad.size() - 160)] = char(rng >> 24); }
+        Image t;
+        decodeImage(bad, t);
+    }
 }
 
 int main() {
