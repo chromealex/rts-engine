@@ -34,7 +34,7 @@ float3 jsonColor(const Json& j, float3 def) {
     return {float(j[0].toDouble()), float(j[1].toDouble()), float(j[2].toDouble())};
 }
 
-struct TU0 { float lod[4], mode[4], scale[4], cliff[4], fog[4], tint[4][4], cliffTint[4]; };
+struct TU0 { float lod[4], mode[4], scale[4], cliff[4], fog[4], tint[4][4], cliffTint[4], fogColor[4], fogGrid[4]; };
 
 const char* kKindNames[] = {"grass", "sand", "ramp", "rock", "blocked", "lakebed", "shallows", "dug"};
 } // namespace
@@ -623,7 +623,7 @@ void TerrainRenderer::updateCellTextures(gfx::Device& dev, const MapGrid& g, boo
         td.data = dynPx_.data(); td.label = "terrain dynamic"; dynTex_ = dev.createTexture(td);
         td.filter = gfx::Filter::Linear;
         td.data = splatPx_.data(); td.label = "terrain splat"; splatTex_ = dev.createTexture(td);
-        td.format = gfx::PixelFormat::R8; td.filter = gfx::Filter::Nearest;
+        td.format = gfx::PixelFormat::R8; td.filter = gfx::Filter::Linear;   // smooth fog edges (cells: snapped in the shader)
         td.data = visionPx_.data(); td.label = "terrain vision"; visionTex_ = dev.createTexture(td);
         visionInit_ = false;
     }
@@ -737,7 +737,11 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
     gfx::Device& dev = *dev_;
     updateDynamic(dev, g, false);
     const bool fog = heightfield_ && vision && !vision->empty();
-    if (fog) updateVision(dev, *vision);
+    if (fog) {
+        if (fogField_ && fogField_->size() == visionPx_.size()) { if (fogFieldChanged_) { visionPx_ = *fogField_; dev.updateTexture(visionTex_, 0, 0, texW_, texH_, visionPx_.data(), texW_); visionInit_ = true; } }
+        else updateVision(dev, *vision);
+        fogFieldChanged_ = false;
+    }
     // frustum: left/right/bottom/top planes of the view-projection (independent of the clip depth range)
     const mat4& vp = r.viewProj();
     float4 planes[4];
@@ -795,6 +799,14 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
     u.cliffTint[0] = look_.cliffTint.x; u.cliffTint[1] = look_.cliffTint.y; u.cliffTint[2] = look_.cliffTint.z;
     u.cliffTint[3] = cliffNrm_.valid() ? 1.0f : 0.0f;
     u.fog[0] = 120.0f / 255.0f; u.fog[1] = 235.0f / 255.0f;
+    u.fogColor[0] = 8.0f / 255.0f; u.fogColor[1] = 10.0f / 255.0f; u.fogColor[2] = 14.0f / 255.0f;
+    if (fogField_) { // look from RtsFog (rules / game.json "fogOfWar")
+        u.fog[0] = fogLook_.explored; u.fog[1] = fogLook_.unexplored; u.fog[2] = fogLook_.gridEverywhere ? 1.0f : 0.0f;
+        for (int i = 0; i < 3; ++i) { u.fogColor[i] = fogLook_.color[i]; u.fogGrid[i] = fogLook_.gridColor[i]; }
+        u.fogColor[3] = fogLook_.style == FogLook::Cells || fogLook_.style == FogLook::Grid ? 1.0f : 0.0f;
+        u.fogGrid[3] = fogLook_.gridAlpha + (fogLook_.style == FogLook::Grid ? 0.18f : 0.0f);
+        if (!fogLook_.show) u.mode[3] = 0.0f;
+    }
     const Lod* apron = apron_.indexCount ? &apron_ : nullptr;
     r.drawCustomOpaque([this, &r, items, u, pipe, apron](gfx::Device& d) {
         d.setPipeline(pipe);

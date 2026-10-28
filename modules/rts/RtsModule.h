@@ -331,6 +331,7 @@ struct GameState {
     bool roadsOnly = false;
     std::vector<std::vector<uint8_t>> vision; // per player per cell: 0 unexplored, 1 explored, 2 visible
     std::vector<std::vector<int32_t>> visibleCells; // per player: cells at 2 (derived, so fog reset is O(visible))
+    uint8_t fogMode = 0;                            // FogMode of this match (rules, map override)
     // regions
     int regionCount = 0;
     std::vector<uint8_t> regionOwner;
