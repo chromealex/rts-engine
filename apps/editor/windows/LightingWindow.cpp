@@ -69,6 +69,16 @@ public:
         } else {
             Json b = lb;
             bool changed = false;
+            {
+                const char* presets[] = {"(нет)", "desert", "snow", "volcanic", "overcast", "cave"};
+                int cur = 0;
+                for (int i = 1; i < 6; ++i) if (b.getStr("preset") == presets[i]) cur = i;
+                if (ImGui::Combo("Пресет", &cur, presets, 6)) {
+                    if (cur == 0) b.erase("preset"); else b.set("preset", Json::string(presets[cur]));
+                    changed = true;
+                }
+                ui::help("desert, snow, volcanic, overcast — палитры дня и ночи; cave — подземелье: вечная ночь, свет только от источников.");
+            }
             changed |= field(b, "time", "Время старта", 0, 1);
             changed |= field(b, "dayLength", "Длина суток, с", 0, 3600);
             changed |= field(b, "nightLevel", "Темнота ночи", 0, 1, 1);

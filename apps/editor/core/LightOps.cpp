@@ -84,10 +84,12 @@ void registerLightOps(Workspace& ws) {
         });
     add("lighting_set", "Set the map's 'lighting' block (overrides game.json 'lighting', which set_manifest edits): time 0..1 "
         "(0 midnight, 0.25 dawn, 0.5 noon, 0.75 dusk), dayLength = game seconds per day (0 = time stays), nightLevel 0..1, "
-        "clouds 0..1, cloudStrength, cloudScale, wind [x,z] cells/s, storm 0..1 (overcast + lightning). Omitted fields are kept; remove=true deletes the block.",
+        "clouds 0..1, cloudStrength, cloudScale, wind [x,z] cells/s, storm 0..1 (overcast + lightning), preset desert | snow | volcanic | "
+        "overcast | cave (cave = underground: permanent night, only lights). Omitted fields are kept; remove=true deletes the block.",
         R"({"properties": {"time": {"type": "number"}, "dayLength": {"type": "number"}, "nightLevel": {"type": "number"}, "clouds": {"type": "number"},
             "cloudStrength": {"type": "number"}, "cloudScale": {"type": "number"}, "wind": {"type": "array", "items": {"type": "number"}},
-            "storm": {"type": "number"}, "remove": {"type": "boolean"}}})", [w](const Json& p) {
+            "storm": {"type": "number"}, "preset": {"type": "string", "enum": ["desert", "snow", "volcanic", "overcast", "cave"]},
+            "remove": {"type": "boolean"}}})", [w](const Json& p) {
             Json& extra = w->map.data.extra;
             w->map.beginEdit();
             if (p.getBool("remove")) extra.erase("lighting");

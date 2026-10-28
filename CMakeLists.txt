@@ -267,6 +267,7 @@ set(RTS_RUNTIME_SRC
     engine/render/Renderer3D.cpp
     engine/render/Renderer3DModels.cpp
     engine/render/Lights.cpp
+    engine/render/QualityGovernor.cpp
     engine/render/ImGuiLayer.cpp)
 
 if(RTS_PLATFORM STREQUAL "macos")
@@ -313,7 +314,7 @@ endif()
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
-    modules/rts/view/RtsLights.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp)
+    modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
@@ -576,4 +577,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
 endif()
 if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
     target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
+endif()
+if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
+    target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)
 endif()
