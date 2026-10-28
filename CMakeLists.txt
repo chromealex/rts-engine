@@ -583,3 +583,14 @@ endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)
 endif()
+
+# ---------------------------------------------------------------------------
+# VFX tools (vfx tools agent): Unity particle importer tests (Python, stdlib only) and the fx_* editor
+# operations (list / get / set / delete / templates / import_unity / bind; fx_preview in the editor GUI).
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME unity_vfx_importer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/importers/unity_vfx/test_import.py)
+    endif()
+endif()

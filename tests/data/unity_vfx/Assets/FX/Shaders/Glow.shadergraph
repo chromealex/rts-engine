@@ -1,0 +1,16 @@
+{
+    "m_SGVersion": 3,
+    "m_Type": "UnityEditor.ShaderGraph.GraphData",
+    "m_ObjectId": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "m_Properties": [],
+    "m_Nodes": []
+}
+
+{
+    "m_SGVersion": 0,
+    "m_Type": "UnityEditor.Rendering.Universal.ShaderGraph.UniversalUnlitSubTarget",
+    "m_ObjectId": "1a2b3c4d5e6f708192a3b4c5d6e7f809",
+    "m_SurfaceType": 1,
+    "m_AlphaMode": 2,
+    "m_TwoSided": true
+}
