@@ -38,8 +38,8 @@ struct Reg { Reg(const char* n, std::function<void()> f) { registry().push_back(
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
 #endif
-static const std::string kSkirmish = std::string(RTS_SOURCE_DIR) + "/games/skirmish";
-static const std::string kMushrooms = std::string(RTS_SOURCE_DIR) + "/games/mushrooms";
+static const std::string kSkirmish = std::string(RTS_SOURCE_DIR) + "/templates/skirmish";
+static const std::string kMushrooms = std::string(RTS_SOURCE_DIR) + "/templates/mushrooms";
 
 static std::unique_ptr<Simulation> makeSim(const std::string& game, const std::string& map, uint64_t seed) {
     SimConfig cfg; cfg.seed = seed;
@@ -579,7 +579,7 @@ TEST(net_crashing_out_still_costs_rating) {
 
 TEST(net_server_verdict_matches_offline_on_a_tile_map) {
     // The server's re-simulation must load maps exactly like the game: 2D tile maps get their tileset.
-    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/tiles2d";
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/tiles2d";
     Json manifest = Json::parseFile(dir + "/game.json");
     const std::string mapFile = manifest["maps"][size_t(0)].getStr("file");
     auto data = netgame::loadMatchData(dir, mapFile);

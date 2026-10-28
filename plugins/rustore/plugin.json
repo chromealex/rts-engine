@@ -1,0 +1,21 @@
+{
+  "name": "rustore",
+  "description": "RuStore Pay SDK (payments in RuStore, Russia). Protocol: store (docs/plugins.md). Config: consoleAppId (RuStore Console → app id), scheme (deep link scheme for returning from the payment app, ASCII).",
+  "provides": ["store"],
+  "android": {
+    "java": "android/java",
+    "classes": { "rustore": "com.rtsengine.plugins.RuStorePayPlugin" },
+    "repositories": ["https://nexus-external.rustore.ru/repository/maven-rustore-exposed"],
+    "platformDependencies": ["ru.rustore.sdk:bom:2026.10.01"],
+    "dependencies": ["ru.rustore.sdk:pay"],
+    "manifest": {
+      "application": [
+        "<meta-data android:name=\"console_app_id_value\" android:value=\"${consoleAppId}\" />",
+        "<meta-data android:name=\"sdk_pay_scheme_value\" android:value=\"${scheme}\" />"
+      ],
+      "activity": [
+        "<intent-filter><action android:name=\"android.intent.action.VIEW\" /><category android:name=\"android.intent.category.DEFAULT\" /><category android:name=\"android.intent.category.BROWSABLE\" /><data android:scheme=\"${scheme}\" /></intent-filter>"
+      ]
+    }
+  }
+}

@@ -23,7 +23,7 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
 - Maps up to 1024x1024 (and larger): chunk culling + CDLOD-style LOD with geomorphing on large maps.
 - Quality tiers for weak Android (vertex colours / splat / splat + normals + triplanar), shaders in GLSL and MSL with
   `RTS_*_SHADOW` and `RTS_*_LIGHTS`. Textures via `TextureCache::resolve(path)`; tiling splat textures are kept out of atlases.
-- 2D tile maps (`RtsTileView`) are drawn separately and must not change: check `games/tiles2d` and `games/km2d`.
+- 2D tile maps (`RtsTileView`) are drawn separately and must not change: check `templates/tiles2d` and `templates/km2d`.
 
 ## Rules for the simulation (`model: "heightfield"`) — implemented (agent-terrain-sim)
 - Data keys: rules `terrain.{model, maxSlope (number or {ground, sand}), buildSlope, uphillSpeed, downhillSpeed,
