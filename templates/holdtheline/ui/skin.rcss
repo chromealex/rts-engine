@@ -46,6 +46,14 @@ input.text:focus { border-color: #e3d48c; }
 #kb .key:active { border-color: #e3d48c; }
 #kb .key.on { border-color: #e3d48c; color: #fff3b0; }
 
+/* the game's own screens (ui/screens, screens.rcss) */
+.screen { decorator: vertical-gradient(#515940ff #171912ff); }
+.screen-title { color: #e3d48c; }
+.currency { color: #d9cc87; }
+.badge, .avatar, .progress-fill { background-color: #e3d48c; }
+.card, .list-row, .stat { border-color: #ffffff18; }
+.stat-value { color: #e3d48c; }
+
 button { text-transform: uppercase; font-size: 13dp; }
 /* tickets are the score: make them stand out */
 #topbar .item { font-size: 16dp; }

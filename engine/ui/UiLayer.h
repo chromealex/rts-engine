@@ -18,6 +18,8 @@
 
 namespace Rml { class Context; class ElementDocument; }
 
+typedef struct lua_State lua_State;
+
 namespace rts::ui {
 
 class UiLayer {
@@ -59,6 +61,10 @@ public:
     void setOnScreenKeyboard(OnScreenKeyboard mode);
     void setKeyboardLanguage(const std::string& tag);  // layout that opens first (UI language)
     bool keyboardVisible() const;
+
+    // Lua in documents (<script>, onclick="...", rmlui.*; engine/ui/UiLua.h): call after init() and before
+    // loading documents. The caller owns the state and closes it after shutdown().
+    void attachLua(lua_State* L);
 
     float dpRatio() const;              // framebuffer pixels per dp
     bool textInputFocused() const;

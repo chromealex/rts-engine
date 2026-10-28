@@ -1,0 +1,51 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        -- XP needed for the next level: 100 per level
+        function Profile_info()
+            local lvl, xp = profile.get("level", 1), profile.get("xp", 0)
+            local need = lvl * 100
+            local name = profile.get("name", "")
+            return {initial = utf8.char(utf8.codepoint(name ~= "" and name or "?", 1)), need = need,
+                    fill = "width: " .. math.floor(math.min(1, xp / need) * 100) .. "%;"}
+        end
+        function Profile_rename(el)
+            local v = el:GetAttribute("value") or ""
+            if v ~= "" then profile.set("name", v); ui.set("info", Profile_info()) end
+        end
+        ui.screen("$NAME", { open = function() ui.set("info", Profile_info()) end })
+        ui.set("info", Profile_info())
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-header">
+            <button class="back" onclick="ui.back()">@meta.back</button>
+            <div class="screen-title">$TITLE</div>
+        </div>
+        <div class="screen-body">
+            <div class="row">
+                <div class="avatar">{{info.initial}}</div>
+                <div class="grow">
+                    <input class="text name" type="text" maxlength="20" data-attr-value="profile.name" onchange="Profile_rename(element)"/>
+                    <div class="spacer"></div>
+                    <div><span>@meta.level</span> {{profile.level}} <span class="muted">({{profile.xp}} / {{info.need}})</span></div>
+                    <div class="progress-bar"><div class="progress-fill" data-attr-style="info.fill"></div></div>
+                </div>
+            </div>
+            <div class="spacer"></div>
+            <div class="stats">
+                <div class="stat"><span class="stat-value">{{profile.stats.matches}}</span><span class="stat-label">@meta.matches</span></div>
+                <div class="stat"><span class="stat-value">{{profile.stats.wins}}</span><span class="stat-label">@meta.wins</span></div>
+                <div class="stat"><span class="stat-value">{{profile.gold}}</span><span class="stat-label">@currency.gold</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</rml>
