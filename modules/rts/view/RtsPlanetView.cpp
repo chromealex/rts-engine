@@ -27,6 +27,33 @@ void RtsView::setWorld(const Json& map) {
     planetCam_.reset(planets_.world(), w.start, planets_.surface(w.start), 0);
 }
 
+void RtsView::updateWorld(const Json& map) {
+    PlanetWorld w = loadPlanetWorld(map);
+    const PlanetWorld& cur = planets_.world();
+    bool same = w.bodies.size() == cur.bodies.size() && !w.empty();
+    for (size_t i = 0; same && i < w.bodies.size(); ++i) {
+        const PlanetBody &a = w.bodies[i], &b = cur.bodies[i];
+        same = a.id == b.id && a.kind == b.kind && a.faceSize == b.faceSize && a.radius == b.radius && a.seaLevel == b.seaLevel &&
+               a.parent == b.parent && a.orbitRadius == b.orbitRadius && a.period == b.period && a.phase == b.phase && a.atmosphere == b.atmosphere;
+    }
+    if (!same) {
+        const int body = planetCam_.body();
+        const float3 dir = planetCam_.dir();
+        const float dist = planetCam_.distance;
+        setWorld(map);
+        if (planets_.active() && body < int(planets_.world().bodies.size())) { // keep the view while editing
+            planetCam_.reset(planets_.world(), body, planets_.surface(body), planetSeconds_, dir);
+            planetCam_.distance = dist;
+        }
+        return;
+    }
+    for (size_t i = 0; i < w.bodies.size(); ++i) {
+        if (!w.bodies[i].surface()) continue;
+        planets_.updateFlags(int(i), w.bodies[i].flags);
+        planets_.updateHeights(int(i), w.bodies[i].corners);
+    }
+}
+
 bool RtsView::flatToBody(float3 flat, int& body, float3& local) const {
     const PlanetSurface* s = planets_.surface(demoBody_);
     if (!s) return false;

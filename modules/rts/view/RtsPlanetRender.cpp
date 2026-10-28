@@ -9,6 +9,7 @@
 #include <cstring>
 #include "../../../engine/platform/Platform.h"
 #include "../RtsMap.h"
+#include "../RtsSphere.h"
 #include "RtsPlanetShaders.h"
 
 namespace rts::game {
@@ -110,9 +111,27 @@ void PlanetRenderer::setWorld(const PlanetWorld& w) {
 
 // Quadtree topology + bounds (cheap: corner samples only); meshes are built lazily.
 void PlanetRenderer::buildTree(Body& b, int idx) {
+    computeBounds(b, b.chunks[size_t(idx)]);
+    {
+        const Chunk& c = b.chunks[size_t(idx)];
+        if (c.level == 0 || c.size <= kGrid) return;
+    }
+    const int first = int(b.chunks.size());
+    const Chunk parent = b.chunks[size_t(idx)];
+    const int half = parent.size / 2;
+    for (int k = 0; k < 4; ++k) {
+        Chunk ch;
+        ch.face = parent.face; ch.size = half; ch.level = parent.level - 1;
+        ch.x0 = parent.x0 + (k & 1) * half; ch.y0 = parent.y0 + (k >> 1) * half;
+        b.chunks.push_back(ch);
+    }
+    b.chunks[size_t(idx)].child = first;
+    for (int k = 0; k < 4; ++k) buildTree(b, first + k);
+}
+
+void PlanetRenderer::computeBounds(Body& b, Chunk& c) {
     const PlanetSurface& s = *b.surf;
     {
-        Chunk& c = b.chunks[size_t(idx)];
         const int x1 = std::min(c.x0 + c.size, s.faceSize()), y1 = std::min(c.y0 + c.size, s.faceSize());
         float3 sum{};
         int cnt = 0;
@@ -135,19 +154,7 @@ void PlanetRenderer::buildTree(Body& b, int idx) {
         c.center = c.dir * (0.5f * (c.minR + c.maxR));
         const float sinA = std::sqrt(std::max(0.0f, 1 - cosA * cosA));
         c.boundR = std::max(c.maxR * sinA, 0.0f) + (c.maxR - c.minR * cosA) + 0.5f;
-        if (c.level == 0 || c.size <= kGrid) return;
     }
-    const int first = int(b.chunks.size());
-    const Chunk parent = b.chunks[size_t(idx)];
-    const int half = parent.size / 2;
-    for (int k = 0; k < 4; ++k) {
-        Chunk ch;
-        ch.face = parent.face; ch.size = half; ch.level = parent.level - 1;
-        ch.x0 = parent.x0 + (k & 1) * half; ch.y0 = parent.y0 + (k >> 1) * half;
-        b.chunks.push_back(ch);
-    }
-    b.chunks[size_t(idx)].child = first;
-    for (int k = 0; k < 4; ++k) buildTree(b, first + k);
 }
 
 float3 PlanetRenderer::cornerColor(const PlanetBody& pb, const PlanetSurface& s, int face, int i, int j, uint32_t& splat) const {
@@ -278,12 +285,62 @@ void PlanetRenderer::buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b,
 void PlanetRenderer::updateHeights(int body, const std::vector<int16_t>& corners) {
     if (body < 0 || size_t(body) >= bodies_.size() || !bodies_[size_t(body)].surf || !dev_) return;
     PlanetBody& pb = world_.bodies[size_t(body)];
-    pb.corners = corners;
+    if (corners.size() != pb.corners.size()) return;
     Body& b = bodies_[size_t(body)];
-    b.surf->init(pb);
-    for (size_t i = 0; i < b.chunks.size(); ++i) freeChunk(*dev_, b.chunks[i]);
-    for (int f = 0; f < 6; ++f) { b.chunks.resize(6); b.chunks[size_t(f)].child = -1; }
-    for (int f = 0; f < 6; ++f) buildTree(b, f);
+    const int N = pb.faceSize;
+    PlanetSurface::Rect rect[6];
+    bool any = false;
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                const size_t k = size_t((f * (N + 1) + j) * (N + 1) + i);
+                if (corners[k] == pb.corners[k]) continue;
+                PlanetSurface::Rect& r = rect[f];
+                if (r.x1 < r.x0) r = {i, j, i, j};
+                else { r.x0 = std::min(r.x0, i); r.y0 = std::min(r.y0, j); r.x1 = std::max(r.x1, i); r.y1 = std::max(r.y1, j); }
+                any = true;
+            }
+    if (!any) return;
+    pb.corners = corners;
+    // seams: a changed corner on a face edge changes its duplicates on the neighbour faces too
+    CubeSphere cs(N);
+    PlanetSurface::Rect grown[6];
+    for (int f = 0; f < 6; ++f) grown[f] = rect[f];
+    for (int f = 0; f < 6; ++f) {
+        const PlanetSurface::Rect r = rect[f];
+        if (r.x1 < r.x0) continue;
+        for (int j = r.y0; j <= r.y1; ++j)
+            for (int i = r.x0; i <= r.x1; ++i) {
+                if (i != 0 && j != 0 && i != N && j != N) continue;
+                int dup[3];
+                const int cnt = cs.cornerDuplicates(f, i, j, dup);
+                for (int d = 0; d < cnt; ++d) {
+                    const int g = dup[d] / ((N + 1) * (N + 1)), jj = (dup[d] % ((N + 1) * (N + 1))) / (N + 1), ii = dup[d] % (N + 1);
+                    PlanetSurface::Rect& q = grown[g];
+                    if (q.x1 < q.x0) q = {ii, jj, ii, jj};
+                    else { q.x0 = std::min(q.x0, ii); q.y0 = std::min(q.y0, jj); q.x1 = std::max(q.x1, ii); q.y1 = std::max(q.y1, jj); }
+                }
+            }
+    }
+    b.surf->updateHeights(pb, grown);
+    // chunks over the changed corners (+1 for normals) rebuild on demand; their bounds are refreshed
+    for (auto& c : b.chunks) {
+        const PlanetSurface::Rect& r = grown[c.face];
+        if (r.x1 < r.x0) continue;
+        if (c.x0 > r.x1 + 1 || c.y0 > r.y1 + 1 || c.x0 + c.size < r.x0 - 1 || c.y0 + c.size < r.y0 - 1) continue;
+        freeChunk(*dev_, c);
+        computeBounds(b, c);
+    }
+}
+
+void PlanetRenderer::updateFlags(int body, const std::vector<uint8_t>& flags) {
+    if (body < 0 || size_t(body) >= bodies_.size() || !bodies_[size_t(body)].surf || !dev_) return;
+    PlanetBody& pb = world_.bodies[size_t(body)];
+    if (flags == pb.flags) return;
+    pb.flags = flags;
+    Body& b = bodies_[size_t(body)];
+    b.surf->init(pb);   // flags live in the surface (cheap compared to the mesh rebuild)
+    for (auto& c : b.chunks) freeChunk(*dev_, c);
 }
 
 void PlanetRenderer::setVision(int body, const std::vector<uint8_t>* field, const FogLook& look) {

@@ -52,6 +52,10 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings 
 class PlanetSurface {
 public:
     void init(const PlanetBody& b);
+    // New corner heights of the same body: heights everywhere, normals only inside the per-face corner
+    // rects [x0, x1] x [y0, y1] (grown by one corner). rect[f].x1 < x0 = face unchanged.
+    struct Rect { int x0 = 0, y0 = 0, x1 = -1, y1 = -1; };
+    void updateHeights(const PlanetBody& b, const Rect (&rect)[6]);
     int faceSize() const { return n_; }
     float radius() const { return radius_; }
     float minHeight() const { return minH_; }
