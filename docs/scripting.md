@@ -165,7 +165,7 @@ Handlers are registered at the top level of a file (while it loads):
 | `on("start", fn)` / `function on_start()` | once, first tick | — |
 | `on("tick", fn)` / `on_tick` | every tick | tick |
 | `every(seconds, fn)` | every N seconds (seconds: integer or fx) | tick |
-| `on("unit_died", fn)` / `on_unit_died` | a unit or structure died | `e.unit` (dead handle), `e.owner`, `e.unit_type`, `e.x`, `e.z` |
+| `on("unit_died", fn)` / `on_unit_died` | a unit or structure died | `e.unit` (dead handle), `e.owner`, `e.unit_type`, `e.x`, `e.z`, `e.killer` (last damage source, may be dead too), `e.killer_owner` (when the killer lives) |
 | `on("spawned" \| "built" \| "trained" \| "upgraded", fn)` | created / construction done / trained / upgraded | `e.unit`, `e.owner`, `e.unit_type` (`trained`: `e.producer`) |
 | `on("researched", fn)` | a tech finished | `e.player`, `e.tech`, `e.producer` |
 | `on("captured", fn)` | changed owner | `e.unit`, `e.owner`, `e.old_owner`, `e.by` |
@@ -201,9 +201,16 @@ Queries (simulation and view scripts):
 | `game.map_size()` → w, h, `game.passable(x, z [, "ground"\|"air"\|"naval"])`, `game.level(x, z)`, `game.height(x, z)`, `game.area(name)` | map |
 | `game.var(name)` | trigger variable (fx) |
 | `game.data(h)`, `game.has_data(h, key)` | the entity's own persistent table (view: read-only copy) / does it have the key |
+| `game.orders(h)`, `game.current_order(h)` | the order queue / its first order: `{order, x, z, target, param, state}` (`order`: `move attack_move attack patrol gather return build repair enter cast dig claim_cell need haul board unload follow rearm trade pick_item merge`) |
+| `game.target(h)`, `game.idle(h)` | weapon target (else the current order's target) / no orders, not moving, not fighting, nothing in production |
+| `game.facing(h)` → dx, dz, `game.velocity(h)` → vx, vz, `game.path(h)`, `game.energy(h)` → energy, max | `path`: remaining waypoints `{{x, z}, ...}` ending at the goal |
 | `game.log(...)`, `print(...)` | script log |
 
-Filter: `{owner = 2, type = "footman", tag = "mechanical", kind = "unit" | "structure", area = "gate", x = 10, z = 12, radius = 6, has = "morale", limit = 5}` (all optional; `has`: the entity's `game.data` table has that key).
+Filter: `{owner = 2, type = "footman", tag = "mechanical", kind = "unit" | "structure", area = "gate", x = 10, z = 12, radius = 6, has = "morale", sort = "id" | "dist", limit = 5}` (all optional; `has`: the entity's `game.data` table has that key; `sort = "dist"`: nearest to x, z first, ties by handle).
+Radius queries use a bucket grid of the living units, built on the first radius query and kept while
+the script only reads (any action, or C++ running in between, drops it): many `game.units{x, z, radius}`
+calls in one handler cost one pass over the units plus the buckets they touch. Results are exactly
+those of a full scan (same order).
 
 Actions (simulation scripts only):
 
@@ -211,10 +218,16 @@ Actions (simulation scripts only):
 |---|---|
 | `game.give(p, res, amount)`, `game.take(p, res, amount)` → taken | resources |
 | `game.spawn(type, owner, x, z)` → handle or nil | owner 0 = neutral, 255 = hostile creeps |
-| `game.kill(h [, silent])`, `game.damage(h, amount [, source [, damageType]])`, `game.heal(h, amount)`, `game.set_owner(h, p)` | |
+| `game.kill(h [, silent])`, `game.damage(h, amount [, source [, damageType]])`, `game.heal(h, amount)` | |
+| `game.set_owner(h, p)` | ownership change: per-type counts move, production / orders / target are cleared, `captured` fires |
+| `game.set_pos(h, x, z [, exact])` (alias `game.teleport`) | mobile units only: the nearest passable cell (unless `exact` or flying), path dropped; false when it can't be placed |
+| `game.set_facing(h, dx, dz)`, `game.impulse(h, dx, dz)`, `game.knockback(h, x, z, distance)` | turn; push by a vector / away from a point (negative: towards), stopped by terrain in 8 steps |
+| `game.set_hp(h, hp)`, `game.set_energy(h, e)` | clamped to [0, max]; hp 0 = a normal death |
+| `game.set_stat_base(h, stat, value \| nil)` | replaces the type's base value of a stat (`maxHp speed armor sight range ...`) for this unit; techs, levels, buffs apply on top; `maxHp` keeps the hp fraction; nil restores |
+| `game.transform(h, type)` | the unit becomes another type in place (same handle, `game.data`, hp fraction); unit ↔ structure is refused |
 | `game.add_status(h, "status" [, seconds [, caster]])`, `game.buff(h, stat, add, mul [, seconds])` | statuses of rules `"statuses"`; stat modifiers |
 | `game.order(units, "move"\|"attack"\|"patrol"\|"stop"\|"hold", x, z \| target)` | through the normal command path |
-| `game.command(p, {type = "train", units = {h}, param = "footman", x =, z =, target =, queue =})` | any player command (`move attack stop hold patrol gather build train cancel rally smart send research place sell deploy ability reinforce claim auto_build upgrade surrender player_ability`), validated like network input |
+| `game.command(p, {type = "train", units = {h}, param = "footman", x =, z =, target =, queue =})` | any player command, validated like network input (see below) |
 | `game.cast(h, ability, target \| x, z)`, `game.player_ability(p, id, x, z [, free])` | abilities |
 | `game.set_var(name, v)`, `game.add_var(name, v)` | trigger variables, shared with rules triggers |
 | `game.message(p, text [, x, z])` | a notice (p = 0: everyone) |
@@ -222,6 +235,17 @@ Actions (simulation scripts only):
 | `game.clear_data(h)` | forget the entity's `game.data` table |
 | `game.research(p, tech)`, `game.enable_type(p, type, on)`, `game.add_score(p, n)`, `game.enable_trigger(id, on)` | |
 | `game.random(n)`, `game.random(a, b)` | simulation RNG |
+
+`game.command` types (all player commands of the engine): `move attack stop hold patrol gather build
+train cancel rally smart send research place sell deploy ability reinforce claim auto_build upgrade
+surrender player_ability dig paint_room pick_up drop slap possess direct build_road connect_road transit
+stance retreat load unload guard follow formation build_line merge split trade trade_route tribute
+diplomacy buy_item use_item drop_item pick_item learn bounty rotate lock end_turn`. `param` is a number
+or a name: a type (`train build upgrade build_line`), a tech (`research`), a player ability, a stance
+(`aggressive defensive hold passive`) or a formation (`line box wedge loose none`). Packed params can
+be given by field instead: rect commands (`dig paint_room build_road`) `w, h, extra`; `build_line`
+`end_x, end_z` (cells); `trade` `resource, sell`; `tribute` `resource, to, amount`; `diplomacy`
+`other, ally`; `bounty` `resource, reward`.
 
 Not available yet: fog reveal from scripts (use a `reveal` effect in an ability).
 

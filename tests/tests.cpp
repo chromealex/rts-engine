@@ -9923,6 +9923,87 @@ TEST(ui_lua_meta_and_templates) {
     lua_close(L);
 }
 
+TEST(script_g4_unit_control) {   // direct control, state queries, all commands, killer, radius grid
+    const char* src = R"(
+        local function ok(name, v) game.set_var(name, v and 1 or 0) end
+        function on_start()
+          local hall = game.units{owner = 1, type = "townhall"}[1]
+          local x, z = game.pos(hall)
+          local f = game.spawn("footman", 1, x + 4, z)
+          state.f, state.hx, state.hz = f, x, z
+          ok("setpos", game.set_pos(f, x + 6, z + 6))
+          local nx, nz = game.pos(f)
+          ok("setpos_at", nx == x + 6 and nz == z + 6)
+          ok("structure_stays", not game.set_pos(hall, x + 10, z))
+          game.set_facing(f, 0, 3)
+          local dx, dz = game.facing(f)
+          ok("facing", dx == fx(0) and dz == fx(1))
+          game.set_hp(f, 10)
+          ok("hp", game.hp(f) == fx(10))
+          local hp0, mx0 = game.hp(f)
+          game.set_stat_base(f, "maxHp", mx0 * 2)
+          local hp1, mx1 = game.hp(f)
+          ok("stat_base", mx1 == mx0 * 2 and hp1 == fx(20))
+          game.set_stat_base(f, "maxHp", nil)
+          ok("stat_restored", select(2, game.hp(f)) == mx0)
+          ok("transform", game.transform(f, "archer") and game.type_of(f) == "archer")
+          ok("idle", game.idle(f))
+          game.order(f, "move", x + 12, z + 12)
+          local o = game.current_order(f)
+          ok("order", o and o.order == "move" and o.x == x + 12 and #game.orders(f) == 1 and not game.idle(f))
+          game.command(1, {type = "stop", units = {f}})
+          game.command(1, {type = "stance", units = {f}, param = "defensive"})
+          game.command(1, {type = "formation", units = {f}, param = "wedge"})
+          game.command(1, {type = "tribute", resource = "gold", to = 2, amount = 5})
+          game.command(1, {type = "end_turn"})
+          local px, pz = game.pos(f)
+          game.impulse(f, 2, 0)
+          ok("impulse", (game.pos(f)) == px + 2)
+          game.knockback(f, px, pz, 4)
+          ok("knockback", (game.pos(f)) == px + 6)
+          -- radius queries (grid) == the full scan, sorted by handle; sort = "dist"
+          local all, same = game.units{}, true
+          for _, r in ipairs({0, 3, 7, 15, 40}) do
+            local want = {}
+            for _, h in ipairs(all) do
+              local ux, uz = game.pos(h)
+              if fx.sqrt((ux - x) * (ux - x) + (uz - z) * (uz - z)) <= r then want[#want + 1] = h end
+            end
+            local got = game.units{x = x, z = z, radius = r}
+            if #got ~= #want then same = false end
+            for i = 1, #got do if got[i] ~= want[i] then same = false end end
+          end
+          ok("grid", same)
+          local near = game.units{x = x, z = z, radius = 40, sort = "dist"}
+          ok("near_first", near[1] == hall)
+          local g = game.spawn("footman", 2, px + 4, pz)
+          state.g = g
+          ok("owner", game.set_owner(g, 1) and game.owner(g) == 1)
+          game.set_owner(g, 2)
+        end
+        on("unit_died", function(e) if e.unit == state.g then ok("killer", e.killer == state.f) end end)
+        on("captured", function(e) if e.unit == state.g then game.add_var("captured", 1) end end)
+        every(1, function() if not state.hit then state.hit = true; for i = 1, 40 do game.damage(state.g, 50, state.f) end end end)
+    )";
+    auto a = scriptSim({{"scripts/c.lua", src}});
+    auto b = scriptSim({{"scripts/c.lua", src}});
+    for (int i = 0; i < 60; ++i) { a->step(); b->step(); }
+    CHECK(a->checksum() == b->checksum());
+    auto& vars = mod(*a).state(*a).trig.vars;
+    for (const char* k : {"setpos", "setpos_at", "structure_stays", "facing", "hp", "stat_base", "stat_restored", "transform", "idle",
+                          "order", "impulse", "knockback", "grid", "near_first", "owner", "killer"}) {
+        if (vars[k] != Fixed::fromInt(1)) std::printf("  g4: %s failed\n", k);
+        CHECK(vars[k] == Fixed::fromInt(1));
+    }
+    CHECK(vars["captured"] == Fixed::fromInt(2));
+    for (auto& e : mod(*a).scripts()->log()) if (e.error) std::printf("  log: %s\n", e.text.c_str());
+    CHECK(mod(*a).scripts()->errorCount() == 0);
+    // ScriptStats is saved / restored
+    std::string bytes = a->serialize(), err;
+    auto c = scriptSim({{"scripts/c.lua", src}});
+    CHECK(c->deserialize(bytes, &err) && c->checksum() == a->checksum());
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

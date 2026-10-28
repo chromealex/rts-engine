@@ -636,6 +636,9 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
         case Stat::Armor2: base = t.armor2; break;
         default: break;
     }
+    if (script_ && script_->hasUserScripts())   // game.set_stat_base overrides
+        if (auto* ss = w.tryGet<ScriptStats>(e))
+            for (auto& x : ss->list) if (x.stat == uint8_t(s)) base = x.base;
     uint8_t owner = w.get<Owner>(e).player;
     Fixed add{}, mul = kOne;
     if (auto* gs = w.resource<GameState>(); owner < gs->players.size() && !gs->players[owner].mods.empty()) {
@@ -1383,7 +1386,8 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     h.u32(gs.nextWaveTick);
     if (script_) script_->flush(sim);                         // lazily persisted Lua state (RtsScriptEngine.cpp)
     if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
-    if (w.count<ScriptData>()) w.each<ScriptData>([&](Entity e, ScriptData& d) { h.u64(e.packed()); h.u64(d.hash); });   // game.data
+    if (w.count<ScriptData>()) w.each<ScriptData>([&](Entity e, ScriptData& d) { h.u64(e.packed()); h.u64(d.hash); });
+    if (w.count<ScriptStats>()) w.each<ScriptStats>([&](Entity e, ScriptStats& d) { h.u64(e.packed()); for (auto& x : d.list) { h.u32(x.stat); h.fx(x.base); } });   // game.data
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);

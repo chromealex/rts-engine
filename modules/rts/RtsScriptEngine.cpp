@@ -153,7 +153,7 @@ struct ScriptEngine::Impl {
     }
     // Before any script code runs in a tick: world replaced? per-tick budget, epoch stamp.
     void enter(Simulation& sim) {
-        vm.sim = &sim;
+        vm.sim = &sim; vm.spatialOk = false;
         ScriptStore& st = store(sim);
         if (st.serial != lastEpoch) resetFromWorld(sim);
         if (budgetTick != sim.tick()) {
@@ -255,6 +255,10 @@ struct ScriptEngine::Impl {
         case EvUnitDied: case EvSpawned: case EvBuilt: case EvTrained: case EvUpgraded:
             setEnt(L, "unit", ev.a); setInt(L, "owner", ev.player); setStr(L, "unit_type", typeName(ev.value));
             if (kind == EvTrained) setEnt(L, "producer", ev.b);
+            if (kind == EvUnitDied && ev.b.valid()) {   // the last damage source (it may be dead too)
+                setEnt(L, "killer", ev.b);
+                if (sim.world().alive(ev.b) && sim.world().has<Owner>(ev.b)) setInt(L, "killer_owner", sim.world().get<Owner>(ev.b).player);
+            }
             break;
         case EvResearched:
             setEnt(L, "producer", ev.a);
@@ -413,7 +417,7 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     vm.log = [&im](bool e, const std::string& t) { im.logLine(e, t); };
     vm.owner = &im;
     vm.module = &im.m;
-    vm.sim = &sim;
+    vm.sim = &sim; vm.spatialOk = false;
     ScriptStore& st = sim.world().setResource<ScriptStore>();
     if (!vm.open(Mode::Sim, size_t(256) << 20)) { im.logLine(true, "cannot create the Lua state"); return; }
     lua_State* L = vm.L;

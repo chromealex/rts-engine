@@ -102,7 +102,7 @@ bool ViewScripts::load(Simulation& sim, const Json& rules, const Json& map, uint
     Vm& vm = im.vm;
     vm.owner = &im;
     vm.module = static_cast<RtsModule*>(&sim.module());
-    vm.sim = &sim;
+    vm.sim = &sim; vm.spatialOk = false;
     vm.log = [&im](bool e, const std::string& t) { im.logLine(e, t); };
     if (!vm.open(Mode::View, size_t(64) << 20)) return false;
     vm.budget = 5000000;
@@ -142,7 +142,7 @@ void ViewScripts::update(Simulation& sim, float dt) {
     Impl& im = *impl_;
     if (!im.vm.L) return;
     lua_State* L = im.vm.L;
-    im.vm.sim = &sim;
+    im.vm.sim = &sim; im.vm.spatialOk = false;
     im.vm.used = 0;
     im.vm.exceeded = false;
     if (im.collector) {
@@ -162,6 +162,7 @@ void ViewScripts::update(Simulation& sim, float dt) {
                 lua_pushinteger(L, ev.player); lua_setfield(L, -2, "owner");
                 if (ev.a.valid()) { pushEntity(L, ev.a); lua_setfield(L, -2, "unit"); }
                 if (ev.b.valid()) { pushEntity(L, ev.b); lua_setfield(L, -2, "other"); }
+                if (ev.b.valid() && ev.type == kEvDied) { pushEntity(L, ev.b); lua_setfield(L, -2, "killer"); }
                 lua_pushinteger(L, ev.value); lua_setfield(L, -2, "value");
                 lua_pushnumber(L, ev.pos.x.toDouble()); lua_setfield(L, -2, "x");
                 lua_pushnumber(L, ev.pos.z.toDouble()); lua_setfield(L, -2, "z");

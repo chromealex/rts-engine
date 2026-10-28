@@ -73,6 +73,13 @@ struct ScriptData {
     uint64_t serial = 0;   // VM write stamp (not saved, not hashed): the VM's cached table is current when equal
 };
 
+// Base stat overrides set by game.set_stat_base(h, stat, value): replace the unit type's base value
+// before techs / levels / buffs apply (RtsModule::stat). Saved and hashed; only games with scripts read it.
+struct ScriptStats {
+    struct Entry { uint8_t stat = 0; Fixed base{}; };
+    std::vector<Entry> list;
+};
+
 struct ScriptLogEntry {
     bool error = false;
     uint32_t tick = 0;

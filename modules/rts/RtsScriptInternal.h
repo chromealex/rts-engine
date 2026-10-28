@@ -45,6 +45,11 @@ struct Vm {
     // per-entity data (game.data), provided by the simulation engine; view VMs read the stored copy
     std::function<void(Entity)> pushData;
     std::function<bool(Entity, const char*)> dataHas;
+    // radius queries: a bucket grid of the living units, built on first use and dropped whenever C++ may
+    // have moved / spawned / killed something (every entry into the VM and every non-query binding)
+    struct Spatial { int cell = 8, w = 0, h = 0; std::vector<std::vector<Entity>> buckets; std::vector<int32_t> used; };
+    Spatial spatial;
+    bool spatialOk = false;
 
     ~Vm();
     bool open(Mode m, size_t memLimit);     // new state + sandbox
@@ -53,9 +58,11 @@ struct Vm {
 
 Vm& vmOf(lua_State* L);
 
-template <int (*F)(lua_State*, Vm&)>
+// bind: any binding (it may change the world); bindQ: a pure query (keeps the radius-query grid)
+template <int (*F)(lua_State*, Vm&), bool kQuery = false>
 int bind(lua_State* L) {
     Vm& vm = vmOf(L);
+    if constexpr (!kQuery) vm.spatialOk = false;
     int n = F(L, vm);
     if (n >= 0) return n;
     luaL_where(L, 1);
@@ -64,6 +71,7 @@ int bind(lua_State* L) {
     lua_concat(L, 2);
     return lua_error(L);
 }
+template <int (*F)(lua_State*, Vm&)> int bindQ(lua_State* L) { return bind<F, true>(L); }
 inline int fail(Vm& vm, std::string msg) { vm.err = std::move(msg); return -1; }
 
 // ---- fx numbers

@@ -6,6 +6,7 @@
 --   4 order  every second: every unit gets a move order to a random point (C++ pathing included)
 --   5 field  every tick: a 64x64 integer grid in `state` updated with a diffusion step (fire / fluid)
 --   6 data   every tick: the same per-unit record as `state`, kept in game.data(h) (per-entity, G3)
+--   7 near   every tick: 100 units each count their neighbours within 3 (radius queries, G4 grid)
 local FIELD = 64
 
 on("start", function()
@@ -59,6 +60,15 @@ on("tick", function(tick)
       local d = game.data(h)
       d.x, d.z, d.hp = x, z, game.hp(h)
     end
+  elseif mode == 7 then
+    local c, i = 0, 0
+    for _, h in ipairs(game.units{kind = "unit"}) do
+      i = i + 1
+      if i > 100 then break end
+      local x, z = game.pos(h)
+      c = c + game.count{x = x, z = z, radius = 3}
+    end
+    state.sum = fx(c)
   elseif mode == 4 then
     if tick % 20 == 0 then
       local w, hh = game.map_size()

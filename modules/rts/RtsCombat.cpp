@@ -88,6 +88,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     }
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
+    if (source.valid()) u->lastHitBy = source;
     if ((rules_.mech.veterancy || rules_.mech.infection || rules_.mech.morale) && w.alive(source)) mechOnHit(sim, target, source, fin);   // agent-mech: last hitter, morale
     sim.emit({kEvHit, sourceOwner, target, source, fin.raw, w.get<Transform>(target).pos});
     if (rules_.originals) afterHit(sim, target, source, wd, u->hp.raw <= 0);   // crews, infection, eaters
@@ -587,7 +588,7 @@ void RtsModule::sysDeath(Simulation& sim) {
             }
             grantKill(sim, e, u.lastAttacker);
             if (!t.wreck.empty() && wreckType >= 0) leftovers.push_back({uint16_t(wreckType), pos, int16_t(t.wreck[0].res), t.wreck[0].value});
-            sim.emit({kEvDied, owner, e, kNullEntity, u.type, pos});
+            sim.emit({kEvDied, owner, e, u.lastHitBy, u.type, pos});
         }
         if (rules_.originals) onDeathOriginals(sim, e, owner, pos, silent);   // explosions, infection, dead heroes
         if (rules_.fidelity && !silent) deathFidelity(sim, e);                // the foundation goes with the structure

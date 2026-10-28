@@ -12,7 +12,7 @@ inline void io(Archive& a, Owner& x) { a(x.player); }
 
 namespace rts::game {
 
-void io(Archive& a, Unit& x) { a(x.type, x.hp, x.flags, x.lastAttacker, x.facing, x.energy); }
+void io(Archive& a, Unit& x) { a(x.type, x.hp, x.flags, x.lastAttacker, x.facing, x.energy, x.lastHitBy); }
 void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer, x.flow); }
 void io(Archive& a, Orders& x) { a(x.queue); }
 void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck); }
@@ -105,6 +105,8 @@ void io(Archive& a, RoomZone& x) { a(x.type, x.owner, x.cells, x.center); }
 void io(Archive& a, PlayerAbilityState& x) { a(x.readyAt, x.charges, x.rearm, x.owned, x.level, x.stolenUntil, x.pendingAt, x.pendingPoint, x.pendingTarget, x.nextAuto); }
 void io(Archive& a, VictoryRules& x) { a(x.mode, x.tickets, x.ticketDrain, x.surviveSeconds, x.keyLoses, x.share); }
 void io(Archive& a, ScriptData& x) { a(x.blob, x.hash); x.serial = 0; }   // scripting: game.data (serial: VM-side only)
+void io(Archive& a, ScriptStats::Entry& x) { a(x.stat, x.base); }   // scripting: game.set_stat_base
+void io(Archive& a, ScriptStats& x) { a(x.list); }
 void io(Archive& a, ScriptStore::Timer& x) { a(x.tick, x.seq, x.fn, x.arg); }   // scripting (RtsScript.h)
 void io(Archive& a, ScriptStore& x) { a(x.state, x.started, x.disabled, x.disabledFns, x.inside, x.timers, x.timerSeq); }
 void io(Archive& a, TriggerState& x) { a(x.enabled, x.fired, x.inside, x.edge, x.vars, x.messages, x.started); }
@@ -194,7 +196,7 @@ using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, P
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
                         Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Eater, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
                         Suppression, Turret, GrowState, Morale,
-                        Weathering, TrapState, TeleportBack, Belt, Crafter, TurnBudget, Altitude, ScriptData>;
+                        Weathering, TrapState, TeleportBack, Belt, Crafter, TurnBudget, Altitude, ScriptData, ScriptStats>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {

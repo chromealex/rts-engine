@@ -168,6 +168,7 @@ struct Unit {
     uint8_t lastAttacker = 0;   // owner slot of the last damage source (xp / bounty)
     Vec3 facing{Fixed::fromInt(1), Fixed{}, Fixed{}};
     Fixed energy{};
+    Entity lastHitBy = kNullEntity;   // last damage source entity (unit_died.killer; not hashed)
 };
 
 enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Return, Build, Repair, Enter, Cast,
