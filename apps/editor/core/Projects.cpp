@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include "engine/data/Json.h"
+#include "engine/pack/FileCopy.h"
 
 namespace fs = std::filesystem;
 
@@ -176,7 +177,7 @@ std::string createProject(const std::string& engineDir, const std::string& templ
                 if (skipped(rel)) { if (it->is_directory()) it.disable_recursion_pending(); continue; }
                 const fs::path to = dst / rel;
                 if (it->is_directory()) fs::create_directories(to);
-                else fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing);
+                else rts::pack::copyFileReplaceOrThrow(it->path(), to);
             }
         } else {
             writeFile(dst / "rules.json", kEmptyRules);

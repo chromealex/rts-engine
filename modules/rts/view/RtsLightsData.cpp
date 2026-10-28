@@ -145,7 +145,30 @@ RtsLights::Glow RtsLights::parseGlow(const Json& j) {
     // a shaft shows from searchlights up high (dust, haze); low lamps and headlights don't get one
     g.beam = std::clamp(num(j, "beam", g.height >= 1.5f ? g.beam : 0.0f), 0.0f, 1.0f);
     if (const Json& o = j["offset"]; o.size() >= 2) { g.forward = float(o[0].fx().toDouble()); g.side = float(o[1].fx().toDouble()); }
+    const std::string pat = j.getStr("pattern", "steady");
+    g.pattern = pat == "pulse" ? Glow::Pattern::Pulse : pat == "strobe" ? Glow::Pattern::Strobe : pat == "beacon" ? Glow::Pattern::Beacon : Glow::Pattern::Steady;
+    g.rate = std::clamp(num(j, "rate", g.pattern == Glow::Pattern::Strobe ? 1.5f : g.pattern == Glow::Pattern::Beacon ? 0.5f : 0.6f), 0.01f, 30.0f);
+    g.electric = j.getBool("electric", g.spot);
+    g.nightOnly = j.getBool("nightOnly", false);
     return g;
+}
+
+float RtsLights::glowLevel(const Glow& g, float t, float phase, float hp, bool powered, float night) {
+    auto hash = [](float x) { float h = std::sin(x * 12.9898f) * 43758.5453f; return h - std::floor(h); };
+    float lvl = 1;
+    const float cyc = t * g.rate + phase * 0.159f;
+    switch (g.pattern) {
+    case Glow::Pattern::Pulse: lvl = 0.55f + 0.45f * std::sin(cyc * kTau); break;
+    case Glow::Pattern::Strobe: lvl = cyc - std::floor(cyc) < 0.12f ? 1.0f : 0.0f; break;
+    case Glow::Pattern::Beacon: if (!g.spot) { float s = 0.5f + 0.5f * std::sin(cyc * kTau); lvl = s * s * s * s; } break;   // spots rotate instead
+    default: break;
+    }
+    if (g.nightOnly) lvl *= smooth(0.15f, 0.5f, night);
+    if (g.electric) {
+        if (!powered) lvl *= hash(std::floor(t * 7.0f) + phase) > 0.75f ? 0.7f : 0.2f;   // brown-out: dim, stuttering
+        if (hp < 0.4f && hash(std::floor(t * 11.0f) + phase * 3.1f) < (0.4f - hp) * 1.8f) lvl *= 0.1f;   // sparking, failing
+    }
+    return lvl;
 }
 
 render::PointLight RtsLights::glowLight(const Glow& g, float3 ground, float yaw, float scale, float t, float phase) {
@@ -161,7 +184,8 @@ render::PointLight RtsLights::glowLight(const Glow& g, float3 ground, float yaw,
     if (g.spot) {
         constexpr float kDeg = 0.0174532925f;
         // searchlight swing: amplitude `sweep`, peak angular speed `sweepSpeed`
-        const float swing = g.sweep > 0 ? g.sweep * std::sin(t * g.sweepSpeed / g.sweep + phase) : 0.0f;
+        float swing = g.sweep > 0 ? g.sweep * std::sin(t * g.sweepSpeed / g.sweep + phase) : 0.0f;
+        if (g.pattern == Glow::Pattern::Beacon) swing = std::fmod(t * g.rate * 360.0f + phase * 57.3f, 360.0f);   // rotating beacon
         const float a = yaw + (g.yaw + swing) * kDeg, pitch = g.pitch * kDeg;
         l.makeSpot({std::cos(a) * std::cos(pitch), -std::sin(pitch), std::sin(a) * std::cos(pitch)}, g.angle, g.softness);
     }
@@ -205,6 +229,7 @@ void RtsLights::configure(const Json& game, const Json& map, const Json& lights)
     };
     cycle_ = game.isObject() || map.isObject();
     waterRefl_ = map["waterReflections"].boolean(game["waterReflections"].boolean(true));
+    combatFlashes_ = map["combatFlashes"].boolean(game["combatFlashes"].boolean(true));
     startTime_ = pick("time", pr ? pr->time : -1, 0.5f);
     dayLength_ = std::max(pick("dayLength", pr ? pr->dayLength : -1, 0.0f), 0.0f);
     nightLevel_ = std::clamp(pick("nightLevel", pr ? pr->nightLevel : -1, 1.0f), 0.0f, 1.0f);
@@ -225,6 +250,8 @@ void RtsLights::configure(const Json& game, const Json& map, const Json& lights)
         sunDirSet_ = d.size() >= 3;
         if (sunDirSet_) sunDir_ = normalize(float3{float(d[0].fx().toDouble()), std::max(float(d[1].fx().toDouble()), 0.2f), float(d[2].fx().toDouble())});
     }
+    shadowSoftness_ = pick("shadowSoftness", -1, -1.0f);
+    if (shadowSoftness_ >= 0) shadowSoftness_ = std::clamp(shadowSoftness_, 0.02f, 1.0f);
     if (const char* c = std::getenv("RTS_CLOUDS")) { clouds_ = std::clamp(float(std::atof(c)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* st = std::getenv("RTS_STORM")) { storm_ = std::clamp(float(std::atof(st)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* t = std::getenv("RTS_TIME_OF_DAY")) { startTime_ = float(std::atof(t)); cycle_ = true; }
@@ -249,17 +276,19 @@ float RtsLights::lightningAt(double seconds, float storm) {
     return out;
 }
 
-void RtsLights::updateSky(Lighting& l, double seconds) {
+void RtsLights::updateSky(Lighting& l, double seconds, float cycle) {
     if (!haveBase_) { base_ = l; haveBase_ = true; }
     if (sunDirSet_) base_.sunDir = sunDir_;
-    const bool cycle = cycle_ || preview_;
-    if (!cycle) {
+    // penumbra radius: the game / map value, else the renderer default (nothing else sets it)
+    base_.shadowSoftness = l.shadowSoftness = shadowSoftness_ >= 0 ? shadowSoftness_ : render::Lighting{}.shadowSoftness;
+    const bool active = cycle_ || preview_ || cycle >= 0;
+    if (!active) {
         night_ = dusk_ = 0;
         if (touched_) { l = base_; touched_ = false; }
         return;
     }
     touched_ = true;
-    float t = preview_ ? previewTime_ : startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
+    float t = preview_ ? previewTime_ : cycle >= 0 ? cycle : startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
     t -= std::floor(t);
     timeOfDay_ = t;
     // sun elevation: +1 noon, 0 dawn/dusk, -1 midnight
