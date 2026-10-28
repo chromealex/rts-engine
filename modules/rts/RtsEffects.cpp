@@ -651,6 +651,9 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
     case EffectKind::Resource: case EffectKind::PlayerStatus: case EffectKind::EqualizeResource: case EffectKind::StealSkill: case EffectKind::Cooldown:
         effectPlayer(sim, e, ctx);
         break;
+    case EffectKind::AddCharges: case EffectKind::TeleportGroup:
+        effectFidelity(sim, e, ctx);   // RtsFidelity.cpp
+        break;
     }
     if (list >= 0 && (e.kind == EffectKind::Damage || e.kind == EffectKind::Heal || e.kind == EffectKind::Status))
         sim.emit({kEvImpact, ctx.owner, ctx.target, ctx.caster, list, ctx.point});

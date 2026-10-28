@@ -94,6 +94,7 @@ struct MapGrid {
     std::vector<uint8_t> digMark;   // bit (slot-1): marked for digging by that player
     std::vector<uint8_t> territory; // owner slot of the cell (0: nobody) - DK floor, territory-war front
     std::vector<int16_t> room;      // painted room type on the cell, -1 none (owner = territory)
+    std::vector<uint8_t> foundation; // owner slot of the concrete on the cell (0: bare); empty without rules "foundation"
     // pathing helpers (not part of the hashed state: derived from it)
     std::vector<uint8_t> clearance; // ground cells: Chebyshev distance to the nearest non-walkable cell (capped)
     bool clearanceDirty = true;

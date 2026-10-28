@@ -323,6 +323,7 @@ void RtsModule::sysConstruction(Simulation& sim) {
             else w.remove<Inventory>(e);
         }
         sim.emit({kEvBuildDone, w.get<Owner>(e).player, e, kNullEntity, u.type, w.get<Transform>(e).pos});
+        if (rules_.fidelity) builtFidelity(sim, e);   // slabs pave, the foundation caps hp (RtsFidelity.cpp)
     }
 }
 

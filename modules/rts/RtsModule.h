@@ -108,6 +108,9 @@ enum GameEvent : uint16_t {
     kEvCrewed,        // a = vehicle, player = new owner
     kEvInfected,      // a = victim, value = spawned type
     kEvSubmerged,     // a = eater (sandworm) leaving; kEvSpawned marks its return
+    kEvTrapFired,     // a = trap, b = victim, pos = victim
+    kEvGroupTeleport, // a = unit moved, b = caster (may be null), pos = arrival, value = 1 when it is a return trip
+    kEvPaved,         // a = slab (removed), value = cells paved, pos = slab centre
 };
 
 // ---------------------------------------------------------------- components
@@ -219,6 +222,9 @@ struct Projectile {
 struct Hero { int level = 1; Fixed xp{}; uint8_t skill[8] = {}; uint8_t points = 0; };   // skill / points: rules heroes.skills
 struct Shield { Fixed value{}; uint32_t lastHit = 0; };       // StarCraft shields (health.shields)
 struct Eater { int kills = 0; };                              // neutral eats (sandworm)
+struct Weathering { Fixed bare{}; };                          // share of the footprint off the owner's foundation (Dune II)
+struct TrapState { int charges = 0; uint32_t readyAt = 0; };  // traps (RtsFidelity.cpp)
+struct TeleportBack { Vec3 home{}; uint32_t at = 0; Entity caster = kNullEntity; }; // group teleport with a return trip
 // Interplanetary transfer (kCmdTransit): leaves the shell of `from` at depart, arrives on the shell of `to`.
 // from/to world positions are the shell points at departure (body positions at that tick), for the view.
 struct Transit { int16_t from = 0, to = 0; uint32_t depart = 0, arrive = 0; Vec3 fromWorld{}, toWorld{}; Vec3 arrival{}; };
@@ -310,6 +316,7 @@ struct PlayerEconomy {
     struct DeadHero { uint16_t type; int level; Fixed xp; uint8_t skill[8]; };
     std::vector<DeadHero> deadHeroes;          // revive keeps the level and skills
     std::vector<uint8_t> fieldCells;           // derived: cells covered by own power fields (needsField)
+    Vec3 point2{};                             // second point of the last pointPair player ability (RtsFidelity.cpp)
 };
 
 struct WaveDef {
@@ -618,6 +625,20 @@ private:
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
+    // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
+    void sysFidelity(Simulation& sim);
+    void hashFidelity(Simulation& sim, Hasher& h);
+    void spawnFidelity(Simulation& sim, Entity e, bool underConstruction);   // slabs pave, weathering, hidden traps
+    void builtFidelity(Simulation& sim, Entity e);                           // construction finished
+    void deathFidelity(Simulation& sim, Entity e);                           // foundation under a destroyed structure
+    void effectFidelity(Simulation& sim, const EffectDef& e, EffectCtx& ctx);
+    void takePoint2(Simulation& sim, uint8_t player, int64_t param);
+public:
+    // pointPair player abilities: kCmdPlayerAbility param = index | packPoint2(second point)
+    static int64_t packPoint2(Vec3 p);
+    bool pairTarget(Simulation& sim, uint8_t player, int payload, Vec3& from, Vec3& to);   // AI: own group -> enemy base
+    Fixed spotScoreFidelity(Simulation& sim, uint8_t player, uint16_t type, int x0, int y0, Vec2 d, Vec2 away);   // findAutoSpot: slabs, pads, traps (>= 1<<19: skip)
+    int bareCells(Simulation& sim, uint8_t player, int x0, int y0, int w, int h) const;
 };
 
 } // namespace rts::game

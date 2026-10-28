@@ -32,7 +32,10 @@
     "sight_of_evil": {"name": "Око зла", "cost": {"research": 20, "time": 10}},
     "lightning": {"name": "Удар молнии", "cost": {"research": 60, "time": 20}},
     "heal_spell": {"name": "Исцеление", "cost": {"research": 90, "time": 25}},
-    "dark_arts": {"name": "Тёмные искусства", "cost": {"research": 120, "time": 30}, "levels": 3, "costGrowth": 1, "effects": [{"tags": ["creature"], "stat": "damage", "mul": 1.15}]}
+    "dark_arts": {"name": "Тёмные искусства", "cost": {"research": 120, "time": 30}, "levels": 3, "costGrowth": 1, "effects": [{"tags": ["creature"], "stat": "damage", "mul": 1.15}]},
+    "gas_traps": {"name": "Ловушки с газом", "cost": {"research": 40, "time": 15}},
+    "lightning_traps": {"name": "Ловушки-молнии", "cost": {"research": 80, "time": 20}, "requires": ["gas_traps"]},
+    "word_of_power": {"name": "Слово силы", "cost": {"research": 140, "time": 30}, "requires": ["lightning_traps"]}
   },
   "playerAbilities": [
     {"id": "sight_of_evil", "name": "Око зла", "cost": {"mana": 150}, "cooldown": 15, "target": "point", "requires": ["sight_of_evil"], "effects": [{"type": "reveal", "radius": 6, "duration": 20}]},
@@ -40,8 +43,22 @@
     {"id": "heal", "name": "Исцеление", "cost": {"mana": 500}, "cooldown": 6, "target": "point", "requires": ["heal_spell"], "effects": [{"type": "heal", "amount": 300, "radius": 2, "affects": "own"}]}
   ],
   "types": {
-    "dungeon_heart": {"name": "Сердце подземелья", "key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 6000, "armor": 2}, "sight": 10, "income": {"mana": 3}, "storage": {"gold": 3000}, "produces": ["imp"], "researches": ["sight_of_evil", "lightning", "heal_spell", "dark_arts"], "supply": 4, "weapons": [{"range": 4, "damage": 15, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "heart"}},
+    "dungeon_heart": {"name": "Сердце подземелья", "key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 6000, "armor": 2}, "sight": 10, "income": {"mana": 3}, "storage": {"gold": 3000}, "produces": ["imp", "gas_trap", "lightning_trap", "power_trap"], "researches": ["sight_of_evil", "lightning", "heal_spell", "dark_arts", "gas_traps", "lightning_traps", "word_of_power"], "supply": 4, "weapons": [{"range": 4, "damage": 15, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "heart"}},
     "imp": {"name": "Бес", "worker": true, "health": {"max": 80}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 6, "cost": {"mana": 150, "time": 4, "growth": 0.5}, "digs": {"rate": 3}, "claimer": {"time": 0.6}, "weapons": [{"range": 0.4, "damage": 2, "cooldown": 1}], "view": {"shape": "imp"}},
+    // traps (placed on own claimed floor, hidden from heroes until they go off)
+    "gas_trap": {"name": "Ловушка с ядовитым газом", "tags": ["trap"], "structure": {"footprint": [1, 1]}, "health": {"max": 200, "armor": 2},
+                 "cost": {"gold": 200, "time": 8}, "requires": ["gas_traps"], "countsForVictory": false,
+                 "trap": {"radius": 0.8, "charges": 5, "rearm": 8, "revealFor": 4,
+                          "effects": [{"type": "area", "radius": 2, "lifetime": 5, "trigger": "periodic", "interval": 1, "effects": [{"type": "damage", "amount": 18, "radius": 2, "damageType": "magic"}]}]},
+                 "view": {"shape": "rock", "scale": 0.4}},
+    "lightning_trap": {"name": "Ловушка-молния", "tags": ["trap"], "structure": {"footprint": [1, 1]}, "health": {"max": 250, "armor": 3},
+                       "cost": {"gold": 350, "time": 10}, "requires": ["lightning_traps"], "countsForVictory": false,
+                       "trap": {"radius": 1.5, "rearm": 6, "revealFor": 3, "effects": [{"type": "damage", "amount": 120, "damageType": "magic"}]},
+                       "view": {"shape": "rock", "scale": 0.4}},
+    "power_trap": {"name": "Ловушка «Слово силы»", "tags": ["trap"], "structure": {"footprint": [1, 1]}, "health": {"max": 300, "armor": 3},
+                   "cost": {"gold": 600, "time": 14}, "requires": ["word_of_power"], "countsForVictory": false,
+                   "trap": {"radius": 1.2, "charges": 3, "rearm": 12, "revealFor": 3, "effects": [{"type": "damage", "amount": 150, "radius": 3, "falloff": 0.5, "damageType": "magic"}]},
+                   "view": {"shape": "rock", "scale": 0.5}},
     "portal": {"name": "Портал", "structure": {"footprint": [2, 2]}, "invulnerable": true, "claimedByTerritory": true, "portal": {"interval": 15}, "view": {"shape": "portal"}},
     "goblin": {"name": "Гоблин", "tags": ["creature"], "health": {"max": 220, "armor": 1}, "move": {"speed": 2.8, "radius": 0.4}, "sight": 7, "weapons": [{"range": 0.5, "damage": 14, "cooldown": 1}], "cost": {"supply": 1}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 22}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1}, "weight": 3}, "needs": {"hunger": {"interval": 90, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 20}}, "works": ["training"]}, "view": {"shape": "goblin"}},
     "fly": {"name": "Муха", "tags": ["creature"], "health": {"max": 80, "armor": 0}, "move": {"speed": 4.0, "radius": 0.3, "layer": "air"}, "sight": 10, "weapons": [{"range": 0.5, "damage": 5, "cooldown": 0.8}], "cost": {"supply": 1}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 8}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1}, "weight": 2}, "needs": {"hunger": {"interval": 120, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 5}}, "works": ["training"]}, "view": {"shape": "flyer", "scale": 0.5}},

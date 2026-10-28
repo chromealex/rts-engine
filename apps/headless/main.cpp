@@ -63,7 +63,13 @@ static void dumpTypes(Simulation& sim) {
         std::printf("\n    income:");
         for (size_t r = 0; r < m->rules().resources.size(); ++r)
             std::printf(" %s=%.2f/s", m->rules().resources[r].id.c_str(), m->state(sim).players[p.slot].income[r].toDouble());
-        std::printf("  supply %d/%d\n", int(m->state(sim).players[p.slot].supplyUsed.toInt()), int(m->state(sim).players[p.slot].supplyCap.toInt()));
+        std::printf("  supply %d/%d", int(m->state(sim).players[p.slot].supplyUsed.toInt()), int(m->state(sim).players[p.slot].supplyCap.toInt()));
+        if (!m->state(sim).grid.foundation.empty()) {
+            int paved = 0;
+            for (auto f : m->state(sim).grid.foundation) if (f == p.slot) ++paved;
+            std::printf("  concrete %d", paved);
+        }
+        std::printf("\n");
         sim.world().each<game::Unit, Owner, game::Footprint>([&](Entity, game::Unit& u, Owner& o, game::Footprint& f) {
             if (o.player == p.slot) std::printf("    %s [%d,%d %dx%d]\n", m->rules().types[u.type].id.c_str(), f.x, f.y, f.w, f.h);
         });

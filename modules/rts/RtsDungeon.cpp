@@ -533,7 +533,9 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
         return;
     }
     case kCmdPlayerAbility: {
-        int idx = int(cmd.param);
+        int idx = int(cmd.param & 0xFFFF);
+        if (rules_.fidelity) takePoint2(sim, pl, cmd.param);   // pointPair abilities carry their second point
+        else if (cmd.param >> 16) return;
         if (rules_.advancedEffects) { castPlayerAbility(sim, pl, idx, cmd.point, cmd.target); return; }
         if (!canUsePlayerAbility(sim, pl, idx)) return;
         const PlayerAbilityDef& a = rules_.playerAbilities[size_t(idx)];

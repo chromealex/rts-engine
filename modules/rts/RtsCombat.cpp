@@ -589,6 +589,7 @@ void RtsModule::sysDeath(Simulation& sim) {
             sim.emit({kEvDied, owner, e, kNullEntity, u.type, pos});
         }
         if (rules_.originals) onDeathOriginals(sim, e, owner, pos, silent);   // explosions, infection, dead heroes
+        if (rules_.fidelity && !silent) deathFidelity(sim, e);                // the foundation goes with the structure
         w.destroyLater(e);
     }
     if (!dead.empty()) w.flush(); // free footprints/ids before leftovers are placed
