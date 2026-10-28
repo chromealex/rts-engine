@@ -964,6 +964,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
             Vec3 spot = freeSpotNear(sim, r.from, ut.pathLayer);
             Entity n = spawn(sim, r.type, r.owner, spot);
             sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, spot});
+            if (!rules_.types[w.get<Unit>(r.from).type].autoTrainAdvance) continue;   // births stay home
             w.add<Advancer>(n);
             Vec3 goal;
             auto* prod = w.tryGet<Production>(r.from);

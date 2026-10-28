@@ -626,6 +626,13 @@ bool RtsModule::canClaim(Simulation& sim, uint8_t player, int region, std::vecto
         int x = gs->grid.cellX(c.x), y = gs->grid.cellY(c.z);
         if (gs->grid.inside(x, y) && gs->vision[player][size_t(gs->grid.index(x, y))] == 0) return false;   // never scouted
     }
+    if (rules_.regions.clearFirst) {
+        bool guarded = false;
+        sim.world().each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& t) {
+            if (!guarded && o.player == kHostileNeutral && u.hp.raw > 0 && !rules_.types[u.type].structure && regionAt(sim, t.pos) == region) guarded = true;
+        });
+        if (guarded) return false;
+    }
     std::vector<Amount> cost = rules_.regions.claimCost;
     int owned = 0;
     for (auto o : gs->regionOwner) if (o == player) ++owned;
