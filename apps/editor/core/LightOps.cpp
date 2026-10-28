@@ -7,10 +7,13 @@ namespace rts::editor {
 namespace {
 Json n3(double v) { return Json::number(v, 3); }
 Json okJson() { Json r = Json::object(); r.set("ok", Json::fromBool(true)); return r; }
-const char* kLightProps = R"("x": {"type": "number"}, "z": {"type": "number"}, "height": {"type": "number", "description": "above the ground"},
+const char* kLightProps = R"J("x": {"type": "number"}, "z": {"type": "number"}, "height": {"type": "number", "description": "above the ground"},
     "color": {"type": "array", "items": {"type": "number"}, "description": "[r, g, b] 0..1"}, "radius": {"type": "number", "description": "cells"},
     "intensity": {"type": "number"}, "flicker": {"type": "number", "description": "0..1, fire"}, "halo": {"type": "number", "description": "glow sprite size, 0 = none"},
-    "name": {"type": "string"})";
+    "name": {"type": "string"}, "type": {"type": "string", "enum": ["point", "spot"], "description": "spot = searchlight / lamp cone"},
+    "angle": {"type": "number", "description": "spot cone, degrees (default 40)"}, "softness": {"type": "number", "description": "spot edge 0..1"},
+    "pitch": {"type": "number", "description": "spot: degrees below the horizon (default 35)"}, "yaw": {"type": "number", "description": "spot: direction, degrees (0 = +x, 90 = +z)"},
+    "sweep": {"type": "number", "description": "spot: swing amplitude, degrees (searchlight)"}, "sweepSpeed": {"type": "number", "description": "degrees per second"})J";
 } // namespace
 
 Json& mapLightsMut(MapDoc& doc) {
@@ -20,7 +23,7 @@ Json& mapLightsMut(MapDoc& doc) {
 }
 
 void applyLightParams(Json& l, const Json& p) {
-    for (const char* k : {"x", "z", "height", "radius", "intensity", "flicker"})
+    for (const char* k : {"x", "z", "height", "radius", "intensity", "flicker", "angle", "softness", "pitch", "yaw", "sweep", "sweepSpeed"})
         if (p[k].isNumber()) l.set(k, n3(p[k].toDouble()));
     if (p["halo"].isNumber()) l.set("halo", n3(p["halo"].toDouble()));
     else if (p.has("halo")) l.set("halo", Json::fromBool(p["halo"].boolean(true)));
@@ -30,6 +33,10 @@ void applyLightParams(Json& l, const Json& p) {
         l.set("color", a);
     }
     if (p.has("name")) l.set("name", Json::string(p.getStr("name")));
+    if (p.has("type")) {
+        if (p.getStr("type") == "spot") l.set("type", Json::string("spot"));
+        else { l.erase("type"); for (const char* k : {"angle", "softness", "pitch", "yaw", "sweep", "sweepSpeed"}) l.erase(k); }
+    }
     if (p.has("x") || p.has("z")) l.erase("pos");
 }
 
@@ -48,7 +55,8 @@ void registerLightOps(Workspace& ws) {
         });
     add("light_add", "Add a decorative point light to the map (lantern, campfire, lava glow): x, z in cells; height above "
         "ground (default 1); color [r,g,b] 0..1; radius in cells (default 4); intensity (default 1.5); flicker 0..1 for fire; "
-        "halo = glow sprite size. Shown once the cell is explored. Cheap on every quality tier, including old Android.",
+        "halo = glow sprite size. type 'spot' makes a searchlight / lamp cone: angle, pitch, yaw (0 = +x, 90 = +z), sweep for a swinging "
+        "searchlight. Shown once the cell is explored. Cheap on every quality tier, including old Android.",
         std::string(R"({"properties": {)") + kLightProps + R"(}, "required": ["x", "z"]})", [w](const Json& p) {
             w->map.beginEdit();
             Json l = Json::object();

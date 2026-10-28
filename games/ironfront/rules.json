@@ -28,7 +28,7 @@
                     "cost": {"credits": 1500, "time": 25}, "requires": ["refinery"], "consumes": {"power": 30}, "produces": ["light_tank", "heavy_tank", "mcv"], "view": {"shape": "workshop"}},
     "turret": {"name": "Турель", "tags": ["defense"], "structure": {"footprint": [1, 1]}, "health": {"max": 400, "armor": 2, "armorType": "building"}, "sight": 8,
                "cost": {"credits": 600, "time": 12}, "requires": ["barracks"], "consumes": {"power": 25},
-               "weapons": [{"range": 6, "damage": 30, "cooldown": 1.5, "damageType": "shell", "projectileSpeed": 18}], "view": {"shape": "tower"}},
+               "weapons": [{"range": 6, "damage": 30, "cooldown": 1.5, "damageType": "shell", "projectileSpeed": 18}], "view": {"shape": "tower", "light": {"type": "spot", "height": 2.2, "pitch": 28, "angle": 26, "radius": 13, "intensity": 2.6, "sweep": 70, "sweepSpeed": 22, "halo": 0.5}}},
     "harvester": {"name": "Харвестер", "health": {"max": 600, "armor": 2, "armorType": "vehicle"}, "move": {"speed": 2.4, "radius": 0.7}, "sight": 5,
                   "cost": {"credits": 800, "time": 18}, "gather": {"ore": {"carry": 100, "time": 6}}, "view": {"shape": "vehicle"}},
     "rifleman": {"name": "Стрелок", "health": {"max": 50, "armorType": "infantry"}, "move": {"speed": 2.2, "radius": 0.25}, "sight": 7,
@@ -37,9 +37,9 @@
                   "weapons": [{"range": 5, "damage": 35, "cooldown": 2.5, "damageType": "shell", "projectileSpeed": 12, "targets": ["ground", "air"]}],
                   "cost": {"credits": 300, "time": 8}, "view": {"shape": "ranged", "scale": 0.7}},
     "light_tank": {"name": "Лёгкий танк", "health": {"max": 300, "armor": 2, "armorType": "vehicle"}, "move": {"speed": 3.0, "radius": 0.6}, "sight": 7,
-                   "weapons": [{"range": 4.5, "damage": 25, "cooldown": 1.2, "damageType": "shell", "projectileSpeed": 16}], "cost": {"credits": 700, "time": 12}, "view": {"shape": "vehicle"}},
+                   "weapons": [{"range": 4.5, "damage": 25, "cooldown": 1.2, "damageType": "shell", "projectileSpeed": 16}], "cost": {"credits": 700, "time": 12}, "view": {"shape": "vehicle", "light": [{"type": "spot", "offset": [0.55, 0.22], "height": 0.45, "pitch": 16, "angle": 46, "radius": 6, "intensity": 1.6, "color": [1.0, 0.95, 0.82], "halo": 0.25}, {"type": "spot", "offset": [0.55, -0.22], "height": 0.45, "pitch": 16, "angle": 46, "radius": 6, "intensity": 1.6, "color": [1.0, 0.95, 0.82], "halo": 0.25}]}},
     "heavy_tank": {"name": "Тяжёлый танк", "health": {"max": 600, "armor": 4, "armorType": "vehicle"}, "move": {"speed": 2.2, "radius": 0.7}, "sight": 7,
-                   "weapons": [{"range": 5, "damage": 45, "cooldown": 1.6, "damageType": "shell", "projectileSpeed": 16}], "cost": {"credits": 1150, "time": 18}, "view": {"shape": "vehicle", "scale": 1.2}},
+                   "weapons": [{"range": 5, "damage": 45, "cooldown": 1.6, "damageType": "shell", "projectileSpeed": 16}], "cost": {"credits": 1150, "time": 18}, "view": {"shape": "vehicle", "scale": 1.2, "light": [{"type": "spot", "offset": [0.55, 0.22], "height": 0.45, "pitch": 16, "angle": 46, "radius": 6, "intensity": 1.6, "color": [1.0, 0.95, 0.82], "halo": 0.25}, {"type": "spot", "offset": [0.55, -0.22], "height": 0.45, "pitch": 16, "angle": 46, "radius": 6, "intensity": 1.6, "color": [1.0, 0.95, 0.82], "halo": 0.25}]}},
     "ore_mine": {"name": "Рудная жила", "structure": {"footprint": [1, 1]}, "invulnerable": true, "fieldSpawner": {"resource": "ore", "rate": 30, "radius": 4}, "view": {"shape": "mine"}}
   },
   "triggers": [

@@ -35,7 +35,9 @@ bool LightSystem::init(gfx::Device& dev) {
     pd.attrs[0] = {0, gfx::VertexFormat::Float2, 0};
     pd.attrs[1] = {1, gfx::VertexFormat::Float2, 8};
     pd.attrs[2] = {2, gfx::VertexFormat::Float4, 16};
-    pd.attrCount = 3; pd.stride = sizeof(MapVertex);
+    pd.attrs[3] = {3, gfx::VertexFormat::Float4, 32};
+    pd.attrs[4] = {4, gfx::VertexFormat::Float4, 48};
+    pd.attrCount = 5; pd.stride = sizeof(MapVertex);
     pd.indexType = gfx::IndexType::None;
     pd.cull = gfx::CullMode::None;
     pd.blend = gfx::BlendMode::Additive;
@@ -147,7 +149,8 @@ void LightSystem::begin(const RTSCamera& cam, float aspect) {
         minX = std::min(minX, g.x); maxX = std::max(maxX, g.x);
         minZ = std::min(minZ, g.z); maxZ = std::max(maxZ, g.z);
     }
-    extent_ = std::clamp(std::max(maxX - minX, maxZ - minZ) + 6.0f, 16.0f, 256.0f);
+    // margin: lights (and long spot beams) just off screen still reach into view; the soft edge stays off screen
+    extent_ = std::clamp(std::max(maxX - minX, maxZ - minZ) * 1.15f + 12.0f, 16.0f, 256.0f);
     // texel snapping keeps the blobs from shimmering while the camera pans
     const float texel = extent_ / float(std::max(mapSize_, 16));
     originX_ = std::floor(((minX + maxX) * 0.5f - extent_ * 0.5f) / texel) * texel;
@@ -170,7 +173,8 @@ void LightSystem::pickPixelLights() {
             const PointLight& l = lights_[i];
             float dx = l.pos.x - focus_.x, dz = l.pos.z - focus_.z;
             float lum = l.color.x * 0.3f + l.color.y * 0.55f + l.color.z * 0.15f;
-            score.push_back({lum * l.intensity * l.radius * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
+            const float spotK = l.spot() ? 1.5f : 1.0f;   // beams show their cone best on the precise path
+            score.push_back({lum * l.intensity * l.radius * spotK * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
         }
         n = std::min<int>(kMaxPixelLights, int(score.size()));
         std::partial_sort(score.begin(), score.begin() + n, score.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
@@ -178,7 +182,8 @@ void LightSystem::pickPixelLights() {
             const PointLight& l = lights_[score[size_t(k)].second];
             perPixel_[score[size_t(k)].second] = 1;
             u_.pos[k][0] = l.pos.x; u_.pos[k][1] = l.pos.y; u_.pos[k][2] = l.pos.z; u_.pos[k][3] = l.radius;
-            u_.col[k][0] = l.color.x * l.intensity; u_.col[k][1] = l.color.y * l.intensity; u_.col[k][2] = l.color.z * l.intensity; u_.col[k][3] = 0;
+            u_.col[k][0] = l.color.x * l.intensity; u_.col[k][1] = l.color.y * l.intensity; u_.col[k][2] = l.color.z * l.intensity; u_.col[k][3] = l.cosInner;
+            u_.spot[k][0] = l.dir.x; u_.spot[k][1] = l.dir.y; u_.spot[k][2] = l.dir.z; u_.spot[k][3] = l.spot() ? l.cosOuter : -2.0f;
         }
     }
     u_.info[0] = float(n);
@@ -188,7 +193,11 @@ void LightSystem::renderMap() {
     pickPixelLights();
     if (quality_ == LightQuality::Off || !map_.valid() || !pipe_.valid()) { mapReady_ = false; return; }
     // Low: refresh every other frame; the old map stays valid because it is world-aligned.
-    if (quality_ == LightQuality::Low && (++mapFrame_ & 1u) && mapReady_) return;
+    // Only when the map already covers this view's area: two views a frame (editor) differ.
+    const float texel = extent_ / float(std::max(mapSize_, 16));
+    const bool sameArea = std::fabs(originX_ - mapX_) < texel * 0.5f && std::fabs(originZ_ - mapZ_) < texel * 0.5f &&
+                          std::fabs(extent_ - mapExtent_) < texel * 0.5f;
+    if (quality_ == LightQuality::Low && (++mapFrame_ & 1u) && mapReady_ && sameArea) return;
     verts_.clear();
     const float inv = 2.0f / extent_, k = 1.0f / kMapRange;
     for (size_t i = 0; i < lights_.size(); ++i) {
@@ -198,8 +207,12 @@ void LightSystem::renderMap() {
         if (cx + r < -1 || cx - r > 1 || cy + r < -1 || cy - r > 1) continue;
         const float cr = std::min(l.color.x * l.intensity * k, 1.0f), cg = std::min(l.color.y * l.intensity * k, 1.0f),
                     cb = std::min(l.color.z * l.intensity * k, 1.0f);
-        const MapVertex a{cx - r, cy - r, -1, -1, cr, cg, cb, 1}, b{cx + r, cy - r, 1, -1, cr, cg, cb, 1},
-                        c{cx + r, cy + r, 1, 1, cr, cg, cb, 1}, d{cx - r, cy + r, -1, 1, cr, cg, cb, 1};
+        const float h = std::max(l.pos.y - (l.groundY > -1e8f ? l.groundY : l.pos.y - 1.0f), 0.1f);
+        const float co = l.spot() ? l.cosOuter : -2.0f;
+        const MapVertex a{cx - r, cy - r, -1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
+                        b{cx + r, cy - r, 1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
+                        c{cx + r, cy + r, 1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
+                        d{cx - r, cy + r, -1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0};
         verts_.insert(verts_.end(), {a, b, c, a, c, d});
     }
     mapReady_ = true;
