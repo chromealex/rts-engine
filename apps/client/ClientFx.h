@@ -18,6 +18,8 @@ public:
     // After Renderer3D::beginScene (needs its viewProj); dt = 0 while paused.
     void update(Simulation& sim, const game::RtsScene& scene, const render::RTSCamera& cam, const render::mat4& viewProj,
                 int fbW, int fbH, float dt);
+    // After update(), before Renderer3D::render(): lights carried by particles ("light" module).
+    void addLights(render::LightSystem& lights);
     // After Renderer3D::render(): draws into the still open main pass.
     void render(const render::Lighting& lighting);
 
@@ -30,6 +32,7 @@ private:
     game::RtsFx bridge_;
     render::TextureCache textures_;   // sprite textures of effects: the same loader (and atlas) as sprites
     bool attached_ = false;
+    std::vector<fx::FxPointLight> lightBuf_;
 };
 
 } // namespace rts::client

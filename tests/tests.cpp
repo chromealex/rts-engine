@@ -4989,6 +4989,355 @@ TEST(lighting_quality_governor) {
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
 }
 
+
+// ---------------- overlays (data-driven helper elements; overlays agent) ----------------
+#include "engine/platform/Platform.h"
+#include "modules/rts/view/RtsOverlayData.h"
+#include "modules/rts/view/RtsView.h"
+
+static game::Rules skirmishRules() { return game::loadRules(Json::parseFile(kSkirmish + "/rules.json")); }
+static std::string overlayError(const game::Rules& R, const char* json) {
+    try { game::parseOverlay(R, Json::parse(json)); } catch (const std::exception& e) { return e.what(); }
+    return "";
+}
+static bool hasText(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
+
+TEST(overlay_builtins_are_data) {
+    game::Rules R = skirmishRules();
+    game::OverlaySet set = game::loadOverlaySet(R, Json(), Json());
+    CHECK(set.warnings.empty());
+    std::vector<std::string> ids;
+    for (auto& d : set.defs) { ids.push_back(d.id); CHECK(d.builtin); CHECK(d.enabled); }
+    CHECK((ids == std::vector<std::string>{"selection", "hover", "move_markers", "placement", "garrison_count", "health_bars", "build_progress"}));
+    const game::OverlayDef& sel = set.defs[0];
+    CHECK(sel.anchor == game::OvAnchor::Selected && sel.shape == game::OvShape::Ring && sel.radiusFrom == game::OvRadius::Selection);
+    CHECK(sel.style.ground == game::OvGround::Flat && sel.style.segments == 32 && sel.style.thickness == 0);
+    // exact old colours: rgba(120, 255, 120, 230) and the neutral rgba(255, 255, 160, 230)
+    CHECK(render::rgbaf(sel.style.color) == render::rgba(120, 255, 120, 230));
+    CHECK(render::rgbaf(sel.style.colors[game::kColNeutral]) == render::rgba(255, 255, 160, 230));
+    const game::OverlayDef& hp = set.defs[5];
+    CHECK(hp.shape == game::OvShape::Bar && hp.style.space == game::OvSpace::Screen && hp.barW == 26 && hp.barWStructure == 46);
+    CHECK(hp.style.stops.size() == 3 && hp.style.stops[0].first < hp.style.stops[1].first);
+    CHECK(hp.anchorFilter.flagsOff == (game::kOvInvulnerable | game::kOvGarrison));
+}
+
+TEST(overlay_override_and_merge_by_id) {
+    game::Rules R = skirmishRules();
+    Json rules = Json::parse(R"([
+        {"id": "health_bars", "enabled": false},
+        {"id": "selection", "style": {"thickness": 0.06}},
+        {"id": "grid", "when": "placing", "anchor": "ghost", "shape": {"type": "grid", "radius": 3, "predicate": "buildable"}}])");
+    Json game = Json::parse(R"([{"id": "grid", "shape": {"radius": 5}}, {"id": "hover", "replace": true, "anchor": "hovered", "shape": "ring"}])");
+    game::OverlaySet set = game::loadOverlaySet(R, rules, game);
+    CHECK(set.warnings.empty());
+    const game::OverlayDef* hp = nullptr; const game::OverlayDef* sel = nullptr; const game::OverlayDef* grid = nullptr; const game::OverlayDef* hov = nullptr;
+    for (auto& d : set.defs) {
+        if (d.id == "health_bars") hp = &d;
+        if (d.id == "selection") sel = &d;
+        if (d.id == "grid") grid = &d;
+        if (d.id == "hover") hov = &d;
+    }
+    CHECK(hp && !hp->enabled && hp->builtin);
+    CHECK(sel && sel->style.thickness > 0.05f && render::rgbaf(sel->style.color) == render::rgba(120, 255, 120, 230)); // colour kept
+    CHECK(grid && grid->shape == game::OvShape::Grid && grid->radius == 5 && grid->pred == game::OvPred::Buildable);  // game.json wins
+    CHECK(hov && hov->radiusFrom == game::OvRadius::Fixed && !hov->builtin);   // replaced entirely
+    CHECK(set.defs.size() == 8);
+}
+
+TEST(overlay_validation_errors) {
+    game::Rules R = skirmishRules();
+    CHECK(overlayError(R, R"({"id": "a", "shape": "ring", "anchor": {"type": "entities", "types": ["dragon"]}})") ==
+          "overlay 'a'.anchor.types: unknown type 'dragon'");
+    CHECK(hasText(overlayError(R, R"({"id": "b", "shape": "hexagon"})"), "unknown shape 'hexagon'"));
+    CHECK(hasText(overlayError(R, R"({"id": "c", "anchor": "cursor", "shape": {"type": "bar"}})"), "a bar needs an entity anchor"));
+    CHECK(hasText(overlayError(R, R"({"id": "d", "shape": "ring", "colour": "red"})"), "unknown key 'colour'"));
+    CHECK(hasText(overlayError(R, R"({"id": "e", "shape": "ring", "style": {"color": "#12"}})"), "bad hex colour"));
+    CHECK(hasText(overlayError(R, R"({"id": "f", "shape": "ring", "when": {"key": "Hyper"}})"), "unknown key 'Hyper'"));
+    CHECK(hasText(overlayError(R, R"({"id": "g", "shape": "ring", "when": {"selected": {"owner": "friend"}}})"), "unknown owner 'friend'"));
+    CHECK(hasText(overlayError(R, R"({"id": "h", "shape": "ring", "anchor": "cursor", "when": {"flags": ["shiny"]}})"), "unknown flag 'shiny'"));
+    CHECK(hasText(overlayError(R, R"({"id": "i", "shape": "text", "event": {"on": "explode"}})"), "unknown event 'explode'"));
+    CHECK(hasText(overlayError(R, R"({"id": "j", "shape": "line", "anchor": "selected"})"), "needs \"to\""));
+    CHECK(hasText(overlayError(R, R"({"id": "k", "shape": "ring", "when": {"status": "frozen"}})"), "unknown status 'frozen'"));
+    CHECK(hasText(overlayError(R, R"({"shape": "ring"})"), "missing \"id\""));
+    CHECK(overlayError(R, R"({"id": "ok", "shape": {"type": "ring", "radius": "range:0"}, "anchor": {"type": "selected", "owner": "own"},
+                              "when": {"any": [{"key": "Alt"}, {"zoom": [0, 40]}]}, "style": {"color": [1, 0.5, 0.2, 0.8], "dash": [0.5, 0.3]}})").empty());
+    bool dup = false;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "x", "shape": "ring"}, {"id": "x", "shape": "circle"}])")); }
+    catch (const std::exception& e) { dup = hasText(e.what(), "duplicate id"); }
+    CHECK(dup);
+    // partial overrides of built-ins are valid lists (checked merged over the default)
+    bool partialOk = true;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "selection", "style": {"thickness": 0.07}}, {"id": "health_bars", "enabled": false}])")); }
+    catch (const std::exception&) { partialOk = false; }
+    CHECK(partialOk);
+    bool partialBad = false;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "selection", "style": {"colr": 1}}])")); }
+    catch (const std::exception& e) { partialBad = hasText(e.what(), "unknown key 'colr'"); }
+    CHECK(partialBad);
+    // a broken entry in game data is skipped with a warning; the rest still loads
+    game::OverlaySet set = game::loadOverlaySet(R, Json::parse(R"([{"id": "bad", "shape": "nope"}])"), Json());
+    CHECK(set.warnings.size() == 1 && set.defs.size() == 7);
+}
+
+TEST(overlay_templates_are_valid) {
+    game::Rules R = skirmishRules();
+    Json tpl = game::overlayTemplates();
+    CHECK(tpl.size() >= 10);
+    for (auto& t : tpl.items()) {
+        std::string err;
+        try { game::parseOverlay(R, t["overlay"]); } catch (const std::exception& e) { err = e.what(); }
+        if (!err.empty()) std::printf("  template %s: %s\n", t.getStr("id").c_str(), err.c_str());
+        CHECK(err.empty());
+    }
+}
+
+TEST(overlay_conditions_on_sim_state) {
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 1);
+    for (int i = 0; i < 20; ++i) sim->step();
+    game::RtsModule& m = mod(*sim);
+    const game::Rules& R = m.rules();
+    game::RtsScene scene;   // like sceneFromSim (RtsView.cpp needs the renderer, not linked here)
+    sim->world().each<game::Unit, Owner, Transform>([&](Entity e, game::Unit& u, Owner& ow, Transform& tr) {
+        game::SceneObject so;
+        so.entity = e; so.type = u.type; so.owner = ow.player;
+        so.pos = {float(tr.pos.x.toDouble()), 0, float(tr.pos.z.toDouble())};
+        so.hp = float((u.hp / R.types[u.type].maxHp).toDouble());
+        scene.objects.push_back(so);
+    });
+    scene.tick = sim->tick();
+    int own = -1, enemy = -1, worker = -1;
+    for (size_t i = 0; i < scene.objects.size(); ++i) {
+        auto& o = scene.objects[i];
+        if (o.isProjectile) continue;
+        if (o.owner == 1 && own < 0 && !R.types[o.type].structure) own = int(i);
+        if (o.owner == 1 && R.types[o.type].id == "peasant") worker = int(i);
+        if (o.owner == 2 && enemy < 0) enemy = int(i);
+    }
+    CHECK(own >= 0 && enemy >= 0);
+    if (own < 0 || enemy < 0) return;
+    scene.objects[size_t(own)].selected = true;
+    scene.objects[size_t(enemy)].visible = true;
+    game::RtsOverlays ov;
+    Json extra = Json::parse(R"([{"id": "hits", "event": {"on": "hit", "owner": "own"}, "shape": {"type": "text", "text": "-{value}"}},
+                                 {"id": "enemyHits", "event": {"on": "hit", "owner": "enemy"}, "shape": {"type": "text", "text": "x"}}])");
+    ov.init(R, extra, Json(), "");
+    CHECK(ov.set().warnings.empty());
+    bool keys[int(platform::Key::Count)] = {};
+    keys[int(platform::Key::LeftShift)] = true;
+    game::OverlayContext ctx;
+    ctx.sim = sim.get(); ctx.player = 1; ctx.keys = keys; ctx.keyCount = int(platform::Key::Count);
+    ctx.placeType = R.findType("barracks");
+    ov.setContext(ctx);
+    auto& gs = m.state(*sim);
+    gs.trig.vars["alarm"] = Fixed::fromInt(3);
+    ov.prepare(scene, 1.0, &gs.vision[1], gs.grid, 30);
+    auto cond = [&](const char* when) {
+        Json e = Json::parse(std::string(R"({"id": "t", "shape": "ring", "anchor": "cursor", "when": )") + when + "}");
+        return game::parseOverlay(R, e).when;
+    };
+    const game::SceneObject& o = scene.objects[size_t(own)];
+    const game::SceneObject& en = scene.objects[size_t(enemy)];
+    CHECK(ov.relation(1) == game::kRelOwn && ov.relation(2) == game::kRelEnemy && ov.relation(0) == game::kRelNeutral);
+    CHECK(ov.test(cond(R"({"selected": {"owner": "own"}})"), nullptr));      // something own is selected
+    CHECK(!ov.test(cond(R"({"selected": {"owner": "enemy"}})"), nullptr));
+    CHECK(ov.test(cond(R"("selected")"), &o) && !ov.test(cond(R"("selected")"), &en));   // per entity
+    CHECK(ov.test(cond(R"({"selected": false})"), &en));
+    CHECK(ov.test(cond(R"({"owner": "enemy"})"), &en) && !ov.test(cond(R"({"owner": "enemy"})"), &o));
+    CHECK(ov.test(cond(R"({"flags": ["unit", "!structure"]})"), &o));
+    if (worker >= 0) CHECK(ov.test(cond(R"({"types": ["peasant"]})"), &scene.objects[size_t(worker)]));
+    CHECK(ov.test(cond(R"("placing")"), nullptr) && ov.test(cond(R"({"placing": ["barracks", "farm"]})"), nullptr));
+    CHECK(!ov.test(cond(R"({"placing": "tower"})"), nullptr));
+    CHECK(ov.test(cond(R"({"key": "Shift"})"), nullptr) && !ov.test(cond(R"({"key": ["Shift", "Q"]})"), nullptr));
+    CHECK(ov.test(cond(R"({"state": "playing"})"), nullptr) && !ov.test(cond(R"("paused")"), nullptr));
+    CHECK(ov.test(cond(R"({"var": {"name": "alarm", ">=": 3}})"), nullptr) && !ov.test(cond(R"({"flag": "quiet"})"), nullptr));
+    CHECK(ov.test(cond(R"({"zoom": [10, 40]})"), nullptr) && !ov.test(cond(R"({"zoom": [50, 90]})"), nullptr));
+    CHECK(ov.test(cond(R"({"any": [{"key": "Q"}, {"not": "paused"}]})"), nullptr));
+    CHECK(ov.test(cond(R"({"hp": [0.5, 2]})"), &o) && !ov.test(cond(R"({"hp": [0, 0.5]})"), &o));
+    // cell predicates read the grid / fog of the local player
+    const int cx = int(std::floor(o.pos.x)), cz = int(std::floor(o.pos.z));
+    CHECK(ov.cellTest(game::OvPred::Visible, cx, cz));
+    CHECK(ov.cellTest(game::OvPred::Buildable, cx, cz) == (gs.grid.areaBuildable(cx, cz, 1, 1)));
+    CHECK(ov.cellTest(game::OvPred::Blocked, -5, -5) == false);
+    // events become popups: a hit on the own unit, filtered by the owner of the entity hit
+    scene.events.push_back({uint16_t(game::kEvHit), 2, o.entity, en.entity, Fixed::fromInt(7).raw, sim->world().get<Transform>(o.entity).pos});
+    scene.tick += 1;
+    ov.prepare(scene, 1.1, &gs.vision[1], gs.grid, 30);
+    CHECK(ov.popupCount() == 1);
+    ov.prepare(scene, 1.2, &gs.vision[1], gs.grid, 30);   // same tick: not spawned twice
+    CHECK(ov.popupCount() == 1);
+    ov.prepare(scene, 5.0, &gs.vision[1], gs.grid, 30);   // expired after its lifetime
+    CHECK(ov.popupCount() == 0);
+}
+
+// ---------------- particle modules for richer effects / Unity imports (vfx tools) ----------------
+TEST(fx_modules_parse_round_trip_and_errors) {
+    std::vector<std::string> errs;
+    fx::EffectDef d = fxParse(R"({"emitters": [{ "texture": "fx/t.png", "blend": "premultiplied", "align": "upright", "aspect": [1, 2],
+        "offset": [0, 1, 0], "bursts": [[0, 5], { "time": 0.2, "count": [2, 4], "cycles": 3, "interval": 0.1 }],
+        "startColor": ["#ff0000", "#0000ff"], "space": "local", "maxParticles": 40, "velocity": [0, 2, 0], "speedLimit": 4,
+        "colorBySpeed": { "speed": [0, 3], "color": [[0, "#ffffff"], [1, "#ff0000"]] }, "sizeBySpeed": { "speed": [0, 3], "size": [[0, 1], [1, 2]] },
+        "noise": { "strength": 1, "frequency": 0.5, "scroll": 0.2 }, "frames": [2, 2], "cycles": 2, "startFrame": [0, 3],
+        "shape": "cone", "arc": 180, "thickness": 0.5, "radial": -0.5, "radius": 1, "hidden": false,
+        "collision": { "height": 0.1, "bounce": 0.3, "dampen": 0.2, "lifeLoss": 0.1, "minKillSpeed": 0.5 },
+        "subEmitters": [{ "on": "death", "effect": "pop", "chance": 0.5, "inheritColor": true }],
+        "trail": { "time": 0.4, "width": [[0, 1], [1, 0]], "color": "#ffffff80", "blend": "alpha", "inheritColor": false },
+        "light": { "color": "#ff8000", "radius": 2, "intensity": 1.5, "ratio": 0.5, "max": 3, "sizeAffectsRadius": true } }]})", &errs);
+    for (auto& e : errs) std::printf("    %s\n", e.c_str());
+    CHECK(errs.empty() && d.emitters.size() == 1);
+    const auto& e = d.emitters[0];
+    CHECK(e.blend == fx::FxBlend::Premultiplied && e.align == fx::FxAlign::Upright && e.shape == fx::FxShape::Cone);
+    CHECK(e.bursts.size() == 2 && e.bursts[1].cycles == 3 && e.bursts[1].count.max == 4 && e.startColorPair && e.localSpace);
+    CHECK(e.maxParticles == 40 && e.velocity.y == 2 && e.speedLimit == 4 && e.colorBySpeed.size() == 2 && e.sizeBySpeed.size() == 2);
+    CHECK(e.noise.strength == 1 && e.cycles == 2 && e.startFrame.max == 3 && e.arc == 180 && e.radial == -0.5f);
+    CHECK(e.collision.enabled && e.collision.bounce > 0.29f && e.subEmitters.size() == 1 && e.subEmitters[0].on == fx::FxSubEvent::Death);
+    CHECK(e.trail.enabled && e.trail.blend == fx::FxBlend::Alpha && !e.trail.inheritColor && e.light.enabled && e.light.max == 3);
+    CHECK(d.lifetime() > 0.4f && !d.looping());
+    fx::EffectDef back;
+    std::vector<std::string> e2;
+    CHECK(fx::parseEffect(fx::effectToJson(d), "t.json", back, e2) && e2.empty());   // the editor's save keeps every module
+    const auto& b = back.emitters[0];
+    CHECK(b.bursts.size() == 2 && b.bursts[1].interval > 0.09f && b.startColorPair && b.localSpace && b.trail == e.trail);
+    CHECK(b.subEmitters.size() == 1 && b.subEmitters[0].effect == "pop" && b.light.sizeAffectsRadius && b.collision.minKillSpeed > 0.49f);
+    CHECK(b.noise.scroll > 0.19f && b.colorSpeed.max == 3 && b.aspect.max == 2 && b.offset.y == 1 && b.thickness == 0.5f);
+    // an old effect writes none of the new keys
+    fx::EffectDef plain = fxParse(R"({"emitters": [{ "burst": 3 }]})");
+    std::string text = fx::effectToJson(plain).dump(-1);
+    for (const char* k : {"bursts", "trail", "light", "noise", "space", "aspect", "subEmitters", "collision", "radial"})
+        CHECK(text.find(k) == std::string::npos);
+    // readable errors inside modules
+    fxParse(R"({"emitters": [{ "burst": 1, "trail": { "tme": 1 }, "radial": 2, "subEmitters": [{ "on": "spawn", "effect": "x" }] }]})", &errs);
+    CHECK(errs.size() == 3);
+    bool trailKey = false;
+    for (auto& x : errs) trailKey |= x.find("trail.tme: unknown field") != std::string::npos;
+    CHECK(trailKey);
+    fxParse(R"({"emitters": [{ "bursts": [[0, 2]], "loop": true }]})", &errs);
+    CHECK(errs.size() == 1 && errs[0].find("duration") != std::string::npos);
+}
+
+TEST(fx_modules_simulate_bursts_limits_subs_collision_lights) {
+    auto make = [] { auto ps = std::make_unique<fx::ParticleSystem>(); ps->setQuality(fx::FxQuality::High); ps->init(nullptr); return ps; };
+    {   // timed bursts with cycles
+        auto ps = make();
+        int id = ps->define("b", fxParse(R"({"emitters": [{ "bursts": [[0, 5], { "time": 0.1, "count": 3, "cycles": 2, "interval": 0.05 }], "life": 5 }]})"));
+        ps->play(id, {0, 0, 0});
+        ps->update(0.05f);
+        CHECK(ps->stats().particles == 5);
+        for (int i = 0; i < 4; ++i) ps->update(0.05f);
+        CHECK(ps->stats().particles == 11);
+    }
+    {   // looping bursts repeat every duration; per-emitter cap
+        auto ps = make();
+        int id = ps->define("l", fxParse(R"({"emitters": [{ "bursts": [[0, 2]], "loop": true, "duration": 0.5, "life": 10 },
+                                                          { "burst": 50, "maxParticles": 7, "life": 10 }]})"));
+        fx::FxHandle h = ps->play(id, {0, 0, 0});
+        for (int i = 0; i < 25; ++i) ps->update(0.05f);   // t = 1.25: bursts at 0, 0.5, 1.0
+        CHECK(ps->stats().particles == 6 + 7);
+        CHECK(ps->playing(h));
+    }
+    {   // death sub-emitter plays another effect where the particle died
+        auto ps = make();
+        ps->define("pop", fxParse(R"({"emitters": [{ "burst": 2, "life": 1, "speed": 0 }]})"));
+        int id = ps->define("p", fxParse(R"({"emitters": [{ "burst": 3, "life": 0.1, "speed": 0, "subEmitters": [{ "on": "death", "effect": "pop" }] }]})"));
+        ps->play(id, {0, 0, 0});
+        for (int i = 0; i < 8; ++i) ps->update(0.02f);
+        CHECK(ps->stats().particles == 6);
+        int self = ps->define("self", fxParse(R"({"emitters": [{ "burst": 1, "life": 0.05, "subEmitters": [{ "on": "death", "effect": "self" }] }]})"));
+        ps->clear();
+        ps->play(self, {0, 0, 0});
+        for (int i = 0; i < 40; ++i) ps->update(0.02f);
+        CHECK(ps->stats().particles == 0 && ps->stats().instances == 0);   // recursion stops at the depth limit
+    }
+    {   // ground collision: falling particles stay above the ground height function
+        auto ps = make();
+        ps->setGroundHeight([](float, float) { return 0.5f; });
+        int id = ps->define("c", fxParse(R"({"emitters": [{ "burst": 20, "life": 3, "speed": [0, 1], "gravity": [0, -10, 0],
+            "collision": { "bounce": 0 } }]})"));
+        ps->play(id, {0, 2, 0});
+        for (int i = 0; i < 100; ++i) ps->update(0.02f);
+        CHECK(ps->stats().particles == 20);
+        std::vector<fx::FxPointLight> none;
+        ps->collectLights(none);
+        CHECK(none.empty());
+    }
+    {   // particle lights: ratio, max per effect, quality off
+        auto ps = make();
+        int id = ps->define("li", fxParse(R"({"emitters": [{ "burst": 30, "life": 2, "color": "#ffffffff",
+            "light": { "color": "#ff8000", "radius": 2, "max": 4 } }]})"));
+        ps->play(id, {0, 0, 0});
+        ps->play(id, {5, 0, 0});
+        ps->update(0.02f);
+        std::vector<fx::FxPointLight> lights;
+        ps->collectLights(lights);
+        CHECK(lights.size() == 8 && lights[0].radius > 1.9f && lights[0].color.y < 0.6f);
+        lights.clear();
+        ps->collectLights(lights, 3);
+        CHECK(lights.size() == 3);
+        ps->setQuality(fx::FxQuality::Off);
+        lights.clear();
+        ps->collectLights(lights);
+        CHECK(lights.empty());
+    }
+    {   // local space follows the moving effect, world space stays behind (positions read through particle lights)
+        auto ps = make();
+        auto at = [&](const char* space) {
+            ps->clear();
+            int id = ps->define(space, fxParse((std::string(R"({"emitters": [{ "burst": 1, "rate": 0.01, "loop": true, "life": 5, "speed": 0, "space": ")") +
+                                               space + R"(", "color": "#ffffffff", "light": { "radius": 1 } }]})").c_str()));
+            fx::FxHandle h = ps->play(id, {0, 0, 0});
+            ps->update(0.02f);
+            ps->move(h, {3, 0, 0});
+            ps->update(0.02f);
+            std::vector<fx::FxPointLight> l;
+            ps->collectLights(l);
+            return l.empty() ? -1.0f : l[0].pos.x;
+        };
+        CHECK(std::fabs(at("local") - 3) < 1e-3f);
+        CHECK(std::fabs(at("world")) < 1e-3f);
+    }
+}
+
+TEST(fx_unity_importer_output_is_valid) {
+    // Runs tools/importers/unity_vfx on the synthetic Unity project and loads every effect it wrote.
+    if (std::system("python3 -c \"import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)\" > /dev/null 2>&1") != 0) {
+        std::printf("    (skipped: python3 not found)\n");
+        return;
+    }
+    const std::string src = std::string(RTS_SOURCE_DIR);
+    const std::string out = (std::filesystem::temp_directory_path() / "rts_unity_vfx_test").string();
+    std::filesystem::remove_all(out);
+    std::filesystem::create_directories(out);
+    const std::string cmd = "python3 \"" + src + "/tools/importers/unity_vfx/import.py\" --source \"" + src +
+                            "/tests/data/unity_vfx/Assets/FX\" --game \"" + out + "\" --json > \"" + out + "/report.json\"";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile(out + "/report.json");
+    CHECK(rep["effects"].size() == 3);
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    ps.setFileReader([&](const std::string& p, std::string& text) {
+        std::ifstream f(out + "/" + p, std::ios::binary);
+        if (!f) return false;
+        text.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    });
+    for (auto& e : rep["effects"].items()) {
+        int id = ps.effect(e.getStr("name"));
+        CHECK(id >= 0);
+        if (id >= 0) { ps.play(id, {0, 0, 0}); for (int i = 0; i < 60; ++i) ps.update(1 / 30.0f); }
+    }
+    for (auto& e : ps.errors()) std::printf("    %s\n", e.c_str());
+    CHECK(ps.errors().empty());
+    const fx::EffectDef* ex = ps.def(ps.effect("explosion"));
+    CHECK(ex && ex->emitters.size() == 4);
+    if (ex && ex->emitters.size() == 4) {
+        CHECK(ex->emitters[2].trail.enabled && ex->emitters[2].light.enabled && ex->emitters[2].collision.enabled);
+        CHECK(ex->emitters[2].subEmitters.size() == 1 && ex->emitters[2].align == fx::FxAlign::Velocity);
+        CHECK(ex->emitters[1].bursts.size() == 2 && ex->emitters[1].noise.strength > 0);
+    }
+    CHECK(std::filesystem::exists(out + "/fx/textures/smoke.png"));
+    std::filesystem::remove_all(out);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;
@@ -5107,6 +5456,62 @@ TEST(sphere_great_circle_steps) {
     CubeSphere::faceTangents(2, s.cellCenterDir(s.cellId(2, 5, 5)), e, so);
     CHECK(fxAbs(e.dot(s.cellCenterDir(s.cellId(2, 5, 5)))) < Fixed::fromRatio(1, 100));
     CHECK(fxAbs(e.length() - Fixed::fromInt(1)) < Fixed::fromRatio(1, 100));
+}
+
+// ---- planet view (agent-planet-render): float cube-sphere surface of RtsPlanet.h
+#include "modules/rts/view/RtsPlanet.h"
+TEST(planet_view_surface_seams_and_picking) {
+    using namespace rts::render;
+    rts::game::PlanetBody b;
+    b.radius = 40; b.faceSize = 16;
+    const int N = 16, S = (N + 1) * (N + 1);
+    b.corners.assign(size_t(6 * S), 0);
+    rts::game::CubeSphere cs(N);
+    // heights as a function of the corner direction: duplicates on seams get equal values
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                const Vec3 d = cs.cornerDir(f, i, j);
+                b.corners[size_t(cs.cornerId(f, i, j))] = int16_t((d.x.toDouble() * 3 + d.y.toDouble() * 2) * 16);
+            }
+    rts::game::PlanetSurface s;
+    s.init(b);
+    bool seamsShared = true;   // every duplicated corner has the same position on all its faces
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                int dup[3];
+                const int n = cs.cornerDuplicates(f, i, j, dup);
+                for (int k = 0; k < n; ++k) {
+                    const int g = dup[k] / S, jj = (dup[k] % S) / (N + 1), ii = dup[k] % (N + 1);
+                    const float3 a = s.cornerPos(f, i, j), c = s.cornerPos(g, ii, jj);
+                    if (a.x != c.x || a.y != c.y || a.z != c.z) seamsShared = false;
+                }
+            }
+    CHECK(seamsShared);
+    // float face mapping round-trips and agrees with the corner table
+    int f; float fa, fb;
+    s.faceFromDir(s.dirFromFace(4, 3.25f, 11.5f), f, fa, fb);
+    CHECK(f == 4 && std::fabs(fa - 3.25f) < 1e-3f && std::fabs(fb - 11.5f) < 1e-3f);
+    const float3 cd = s.cornerDir(2, 5, 7), fd = s.dirFromFace(2, 5, 7);
+    CHECK(length(cd - fd) < 1e-4f);   // Q16 vs float
+    // height at a corner direction = that corner's height; ray from outside hits the surface there
+    CHECK(std::fabs(s.heightAt(cd) - s.cornerHeight(2, 5, 7)) < 1e-3f);
+    float3 hit;
+    const float3 target = s.surfacePoint(cd);
+    CHECK(s.raycast(cd * 200.0f, cd * -1.0f, hit));
+    CHECK(length(hit - target) < 0.05f);
+    CHECK(!s.raycast(cd * 200.0f, cd, hit));   // pointing away: no hit
+    // map world block: bodies, orbit parents, start
+    Json map = Json::parse(R"({"world": {"bodies": [{"id": "sun", "kind": "star", "radius": 10},
+        {"id": "p", "kind": "planet", "radius": 20, "faceSize": 4, "orbit": {"around": "sun", "radius": 100, "period": 10, "phase": 0.25}}],
+        "start": "p"}})");
+    std::vector<std::string> warn;
+    rts::game::PlanetWorld w = rts::game::loadPlanetWorld(map, &warn);
+    CHECK(w.bodies.size() == 2 && w.start == 1 && w.bodies[1].parent == 0 && warn.empty()); // no corners: a smooth sphere
+    const float3 c0 = w.center(1, 0), c5 = w.center(1, 5);   // quarter turn, then half a period later
+    CHECK(std::fabs(c0.x) < 1e-3f && std::fabs(c0.z - 100) < 1e-3f && std::fabs(c5.z + 100) < 1e-2f);
+    CHECK(rts::game::loadPlanetWorld(Json::parse("{}")).empty());
 }
 
 // ---------------- Sound groups and steal modes ----------------
@@ -5253,6 +5658,176 @@ TEST(audio_group_errors) {
     CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"group":3}}})", &err) && err.find("\"group\" must be") != std::string::npos);
     CHECK(loadBank(*a, R"({"groups":{"g":{"maxx":2}},"sounds":{"x":{"synth":{},"group":["g","nope"]}}})", &err));
     CHECK(a->warnings().size() == 3);   // unknown key 'maxx', a group that limits nothing, unknown group 'nope'
+}
+
+// ------------------------------------------------------------------ splash & icons (splash agent)
+#include "engine/splash/SplashData.h"
+#include "tools/branding/Icons.h"
+#include "tools/branding/Splash.h"
+
+TEST(splash_parse_and_timeline) {
+    Json j = Json::parse(R"({"background": "#102030", "image": "bg.png",
+        "logos": [{"image": "a.png", "start": 0, "duration": 2, "scale": 0.5, "animation": {"fadeIn": 0.5, "fadeOut": 0.5}},
+                  {"sheet": "s.png", "frame": [64, 32], "count": 6, "fps": 10, "start": 1.5,
+                   "animation": [{"t": 0, "opacity": 0, "scale": 0.5}, {"t": 1, "opacity": 1, "scale": 1, "ease": "out"}]}],
+        "minSeconds": 1, "maxSeconds": 4, "loop": true,
+        "progress": {"color": "#ff0000", "position": "top", "width": 0.5, "height": 4}})");
+    std::vector<std::string> warn;
+    splash::Spec s = splash::parseSpec(j, &warn);
+    CHECK(s.enabled && s.layers.size() == 3);
+    CHECK(std::abs(s.background.r - 16.0f / 255) < 1e-4f && std::abs(s.background.b - 48.0f / 255) < 1e-4f);
+    CHECK(s.layers[0].fit == splash::Fit::Cover && s.layers[1].fit == splash::Fit::Contain);
+    CHECK(s.layers[2].frames() == 6 && s.layers[2].frameW == 64);
+    CHECK(std::abs(s.sequenceLength() - 2.0f) < 1e-4f && std::abs(s.minimumTime() - 1.0f) < 1e-4f);
+    CHECK(s.images().size() == 3);
+    float st[splash::kPropCount];
+    splash::layerState(s.layers[1], 0.25f, st);
+    CHECK(std::abs(st[splash::kOpacity] - 0.5f) < 1e-3f);           // half way through fadeIn
+    splash::layerState(s.layers[1], 1.75f, st);
+    CHECK(std::abs(st[splash::kOpacity] - 0.5f) < 1e-3f);           // half way through fadeOut
+    splash::layerState(s.layers[2], 0.5f, st);
+    CHECK(st[splash::kOpacity] > 0.5f && st[splash::kScale] > 0.75f); // eased out: ahead of linear
+    std::vector<splash::ImageSize> sizes = {{1920, 1080}, {400, 200}, {64, 32}};
+    auto items = splash::evaluate(s, sizes, 1.0f, 1280, 720);
+    CHECK(items.size() == 2);                                         // bg + logo a, the sheet starts at 1.5
+    CHECK(std::abs(items[0].w - 1280) < 1 && std::abs(items[1].w - 640) < 1 && std::abs(items[1].h - 320) < 1);
+    items = splash::evaluate(s, sizes, 1.5f + 0.35f, 1280, 720);
+    CHECK(items.back().layer == 2 && items.back().frame == 3);       // 0.35 s at 10 fps
+    // looping while loading wraps the timeline, the real time keeps counting
+    CHECK(splash::advanceTimeline(s, 1.9f, 0.2f, true) < 0.2f);
+    CHECK(splash::advanceTimeline(s, 1.9f, 0.2f, false) > 2.0f);
+    CHECK(!splash::readyToLeave(s, 0.5f, true, false) && splash::readyToLeave(s, 0.5f, true, true) && !splash::readyToLeave(s, 9, false, true));
+    float x, y, w, h;
+    CHECK(splash::progressRect(s, 1000, 500, 2, x, y, w, h) && w == 500 && h == 8 && x == 250);
+    bool threw = false;
+    try { splash::parseSpec(Json::parse(R"({"logos": [{"image": "a.png", "fit": "squash"}]})")); } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("logos[0]") != std::string::npos;
+    }
+    CHECK(threw);
+    CHECK(!splash::parseSpec(Json()).enabled);
+    splash::Color c;
+    CHECK(splash::parseColor(std::string("#fff8"), c) && std::abs(c.a - 0x88 / 255.0f) < 1e-4f && !splash::parseColor(std::string("red"), c));
+}
+
+TEST(icons_resize_and_render) {
+    branding::Image src = branding::makeImage(64, 64, {1, 0, 0, 1});
+    for (int y = 0; y < 32; ++y) for (int x = 0; x < 64; ++x) src.px(x, y)[3] = 0;   // top half transparent
+    branding::Image half = branding::resize(src, 32, 32);
+    CHECK(half.width == 32 && half.height == 32);
+    CHECK(half.px(10, 25)[0] == 255 && half.px(10, 25)[3] == 255 && half.px(10, 5)[3] == 0);
+    // transparent pixels don't darken the colour of the edge (premultiplied resampling)
+    branding::Image tiny = branding::resize(src, 1, 1);
+    CHECK(tiny.px(0, 0)[0] == 255 && std::abs(int(tiny.px(0, 0)[3]) - 128) <= 1);
+    branding::Image up = branding::resize(src, 200, 100);
+    CHECK(up.width == 200 && up.height == 100);
+    // iOS look: opaque, flattened on the background
+    branding::IconLook ios;
+    ios.opaque = true;
+    ios.hasBackground = true;
+    ios.background = {0, 0, 1, 1};
+    branding::Image i = branding::renderIcon(src, 40, ios);
+    CHECK(!branding::hasAlpha(i) && i.px(20, 5)[2] == 255 && i.px(20, 35)[0] == 255);
+    branding::IconLook mac;
+    mac.margin = 0.1f;
+    mac.cornerRadius = 0.25f;
+    branding::Image m = branding::renderIcon(branding::makeImage(16, 16, {0, 1, 0, 1}), 100, mac);
+    CHECK(m.px(2, 50)[3] == 0 && m.px(50, 50)[3] == 255 && m.px(11, 11)[3] == 0);   // margin, body, rounded corner
+}
+
+TEST(icons_ico_icns_png_writers) {
+    std::vector<branding::Image> imgs;
+    for (int s : branding::windowsIcoSizes()) imgs.push_back(branding::makeImage(s, s, {0.5f, 0.5f, 0.5f, 1}));
+    std::string ico = branding::encodeIco(imgs);
+    auto u16 = [&](size_t o) { return unsigned(uint8_t(ico[o])) | unsigned(uint8_t(ico[o + 1])) << 8; };
+    auto u32 = [&](size_t o) { return u16(o) | u16(o + 2) << 16; };
+    CHECK(u16(0) == 0 && u16(2) == 1 && u16(4) == imgs.size());
+    size_t end = 0;
+    for (size_t k = 0; k < imgs.size(); ++k) {
+        size_t e = 6 + 16 * k;
+        int w = uint8_t(ico[e]) == 0 ? 256 : uint8_t(ico[e]);
+        CHECK(w == imgs[k].width && u16(e + 6) == 32);
+        size_t size = u32(e + 8), off = u32(e + 12);
+        if (w == 256) CHECK(ico.compare(off + 1, 3, "PNG") == 0);
+        else CHECK(u32(off) == 40 && u32(off + 4) == unsigned(w) && u32(off + 8) == unsigned(w * 2) && size == size_t(40 + w * w * 4 + ((w + 31) / 32) * 4 * w));
+        end = std::max(end, off + size);
+    }
+    CHECK(end == ico.size());
+    std::string icns = branding::encodeIcns({{"ic07", branding::makeImage(128, 128)}, {"ic10", branding::makeImage(1024, 1024)}});
+    auto be32 = [&](size_t o) { return unsigned(uint8_t(icns[o])) << 24 | unsigned(uint8_t(icns[o + 1])) << 16 | unsigned(uint8_t(icns[o + 2])) << 8 | unsigned(uint8_t(icns[o + 3])); };
+    CHECK(icns.compare(0, 4, "icns") == 0 && be32(4) == icns.size() && icns.compare(8, 4, "ic07") == 0);
+    CHECK(icns.compare(8 + be32(12), 4, "ic10") == 0);
+    std::string png = branding::encodePng(branding::makeImage(3, 2, {1, 1, 1, 1}));
+    atlas::Image back;
+    CHECK(atlas::decodeImageFile(png, back) && back.width == 3 && back.height == 2);
+}
+
+TEST(icons_generate_platform_sets) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "rts_icons_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "game");
+    branding::Image master = branding::makeImage(512, 384, {0.9f, 0.6f, 0.1f, 0.5f});   // too small, not square, alpha
+    CHECK(branding::writePng((dir / "game" / "m.png").string(), master));
+    Json game = Json::parse(R"({"name": "Test Game", "icons": {"default": "m.png", "background": "#203040",
+        "android": {"background": "#112233", "monochrome": "m.png"}},
+        "splash": {"background": "#000000", "logos": [{"image": "m.png", "duration": 1}]}})");
+    branding::IconSpec s = branding::parseIcons(game);
+    auto warnings = branding::validateIcons(s, (dir / "game").string());
+    auto has = [&](const char* w) { for (auto& x : warnings) if (x.find(w) != std::string::npos) return true; return false; };
+    CHECK(has("square") && has("at least 1024") && has("transparency"));
+    branding::Generated g;
+    branding::generateIOS(s, (dir / "game").string(), (dir / "ios" / "Assets.xcassets").string(), g);
+    Json contents = Json::parseFile((dir / "ios" / "Assets.xcassets" / "AppIcon.appiconset" / "Contents.json").string());
+    CHECK(contents["images"].size() == branding::iosIconSet().size());
+    for (auto& im : contents["images"].items()) CHECK(fs::exists(dir / "ios" / "Assets.xcassets" / "AppIcon.appiconset" / im.getStr("filename")));
+    branding::Image i180;
+    CHECK(branding::loadImageFile((dir / "ios" / "Assets.xcassets" / "AppIcon.appiconset" / "icon_180.png").string(), i180) && i180.width == 180 && !branding::hasAlpha(i180));
+    branding::generateAndroid(s, (dir / "game").string(), (dir / "res").string(), (dir / "play.png").string(), g);
+    for (const char* d : {"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}) {
+        CHECK(fs::exists(dir / "res" / (std::string("mipmap-") + d) / "ic_launcher.png"));
+        CHECK(fs::exists(dir / "res" / (std::string("mipmap-") + d) / "ic_launcher_round.png"));
+        CHECK(fs::exists(dir / "res" / (std::string("mipmap-") + d) / "ic_launcher_monochrome.png"));
+    }
+    branding::Image fg;
+    CHECK(branding::loadImageFile((dir / "res" / "mipmap-xxxhdpi" / "ic_launcher_foreground.png").string(), fg) && fg.width == 432);
+    std::ifstream ax(dir / "res" / "mipmap-anydpi-v26" / "ic_launcher.xml");
+    std::string axml((std::istreambuf_iterator<char>(ax)), {});
+    CHECK(axml.find("@color/ic_launcher_background") != std::string::npos && axml.find("monochrome") != std::string::npos);
+    branding::Image play;
+    CHECK(branding::loadImageFile((dir / "play.png").string(), play) && play.width == 512 && !branding::hasAlpha(play));
+    branding::generateWindows(s, (dir / "game").string(), (dir / "win").string(), g);
+    CHECK(fs::file_size(dir / "win" / "app.ico") > 1000 && fs::exists(dir / "win" / "app.rc"));
+    branding::GameMeta meta;
+    meta.name = "Test Game"; meta.exe = "Test_Game"; meta.backgroundColor = "#000000";
+    branding::generateWeb(s, (dir / "game").string(), (dir / "web").string(), meta, g);
+    Json man = Json::parseFile((dir / "web" / "manifest.webmanifest").string());
+    CHECK(man.getStr("name") == "Test Game" && man["icons"].size() == 4 && man["icons"][size_t(1)].getStr("purpose") == "maskable");
+    for (auto& ic : man["icons"].items()) CHECK(fs::exists(dir / "web" / ic.getStr("src")));
+    CHECK(fs::exists(dir / "web" / "favicon.ico") && fs::exists(dir / "web" / "apple-touch-icon.png"));
+    branding::generateLinux(s, (dir / "game").string(), (dir / "linux").string(), meta, g);
+    CHECK(fs::exists(dir / "linux" / "share" / "icons" / "hicolor" / "256x256" / "apps" / "Test_Game.png"));
+    CHECK(fs::exists(dir / "linux" / "share" / "applications" / "Test_Game.desktop"));
+    branding::generateMac(s, (dir / "game").string(), (dir / "mac").string(), g);
+    CHECK(fs::exists(dir / "mac" / "AppIcon.iconset" / "icon_512x512@2x.png") && fs::file_size(dir / "mac" / "AppIcon.icns") > 1000);
+    // launch screens
+    branding::NativeSplash n = branding::nativeSplash(game);
+    CHECK(n.enabled && n.image == "m.png");
+    branding::generateIOSLaunch(n, (dir / "game").string(), (dir / "ios" / "Assets.xcassets").string(), (dir / "ios").string(), g);
+    CHECK(fs::exists(dir / "ios" / "LaunchScreen.storyboard") && fs::exists(dir / "ios" / "Assets.xcassets" / "LaunchImage.imageset" / "launch@3x.png"));
+    branding::generateAndroidLaunch(n, (dir / "game").string(), (dir / "res").string(), g);
+    std::ifstream tv31(dir / "res" / "values-v31" / "rts_themes.xml");
+    std::string themes((std::istreambuf_iterator<char>(tv31)), {});
+    CHECK(themes.find("windowSplashScreenBackground") != std::string::npos && themes.find("rts_splash_icon") != std::string::npos);
+    CHECK(fs::exists(dir / "res" / "drawable" / "rts_launch.xml") && fs::exists(dir / "res" / "drawable-xxhdpi" / "rts_splash_logo.png"));
+    CHECK(branding::splashBaseFiles(game).size() == 1);
+    CHECK(g.warnings.empty());
+    // previews render (agents look at them through MCP)
+    std::vector<std::string> pw;
+    branding::Image sheet = branding::iconsContactSheet(s, (dir / "game").string(), &pw);
+    CHECK(sheet.width > 600 && sheet.height > 400);
+    branding::Image strip = branding::splashStrip(splash::parseSpec(game["splash"]), (dir / "game").string(), {0, 0.5f}, 160, 90, &pw);
+    CHECK(strip.width > 320 && strip.height > 90);
+    fs::remove_all(dir);
 }
 
 int main() {

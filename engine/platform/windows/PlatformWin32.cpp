@@ -233,6 +233,8 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     wc.cbSize = sizeof wc; wc.style = CS_OWNDC | CS_HREDRAW | CS_VREDRAW; wc.lpfnWndProc = wndProc;
     wc.hInstance = inst; wc.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512) /* IDC_ARROW */); wc.lpszClassName = L"RTSEngineWindow";
     wc.hIcon = LoadIconW(inst, MAKEINTRESOURCEW(1));
+    // painted until the first frame is presented (games: the splash background, see AppConfig::clearColor)
+    wc.hbrBackground = CreateSolidBrush(RGB(int(cfg.clearColor[0] * 255), int(cfg.clearColor[1] * 255), int(cfg.clearColor[2] * 255)));
     RegisterClassExW(&wc);
     RECT r{0, 0, cfg.width, cfg.height};
     AdjustWindowRect(&r, WS_OVERLAPPEDWINDOW, FALSE);
