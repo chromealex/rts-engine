@@ -196,6 +196,9 @@ private:
     // ------------------------------------------------------------ left column
     void settings(Editor& ed) {
         Json& m = manifest(ed);
+        ImGui::SeparatorText("Иконки и заставка");
+        if (ImGui::Button("Открыть: иконки и заставка")) if (auto* w = ed.window("branding")) w->open = true;
+        ui::help("Иконки всех размеров для каждой платформы и экран загрузки (game.json \"icons\", \"splash\") — окно «Иконки и заставка».");
         ImGui::SeparatorText("Сжатие пака");
         int level = int(m["packaging"]["level"].integer(19));
         ImGui::SetNextItemWidth(180);
