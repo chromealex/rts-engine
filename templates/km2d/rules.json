@@ -94,14 +94,14 @@
       "structure": { "footprint": [2, 2] },
       "invulnerable": true,
       "resourceNode": { "resource": "gold", "amount": 10000 },
-      "sprite": { "sheet": "sprites/goldmine.png", "pixelsPerCell": 32, "team": "none", "castHeight": 0.9 }
+      "sprite": { "sheet": "sprites/goldmine.png", "frame": [64, 57], "pixelsPerCell": 32, "team": "none", "castHeight": 0.9 }
     },
     "tree": {
       "name": "Tree",
       "structure": { "footprint": [1, 1] },
       "invulnerable": true,
       "resourceNode": { "resource": "wood", "amount": 100 },
-      "sprite": { "sheet": "sprites/tree.png", "pixelsPerCell": 32, "team": "none", "offset": [0, 0.15], "shadow": { "mode": "cast", "size": [1.6, 1.1], "alpha": 0.3 } }
+      "sprite": { "sheet": "sprites/tree.png", "frame": [32, 51], "pixelsPerCell": 32, "team": "none", "offset": [0, 0.15], "shadow": { "mode": "cast", "size": [1.6, 1.1], "alpha": 0.3 } }
     }
   },
   "factions": {

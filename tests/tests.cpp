@@ -6489,6 +6489,20 @@ TEST(planet_mapdoc_round_trip_and_validate) {
 }
 #endif
 
+TEST(sprite_shadow_lighting_sun_dir_and_softness) {
+    const game::Rules rules = game::loadRules(Json::parseFile(kSkirmish + "/rules.json"));
+    game::RtsLights L;
+    L.init(rules);
+    L.configure(Json::parse(R"({"sunDir": [-1.0, 1.2, 0.45], "shadowSoftness": 0.07})"), Json{}, Json{});
+    render::Lighting l;
+    L.updateSky(l, 0);   // time 0.5 = noon: the sun stands at the given azimuth
+    CHECK(l.sunDir.x < -0.5f && l.sunDir.z > 0.1f && l.sunDir.y > 0.5f);
+    CHECK(std::fabs(l.shadowSoftness - 0.07f) < 1e-4f);
+    L.configure(Json::parse("{}"), Json{}, Json{});   // another game: back to the renderer default
+    L.updateSky(l, 0);
+    CHECK(std::fabs(l.shadowSoftness - render::Lighting{}.shadowSoftness) < 1e-5f);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
