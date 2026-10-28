@@ -6028,6 +6028,253 @@ TEST(icons_generate_platform_sets) {
     fs::remove_all(dir);
 }
 
+#include <array>
+// ---------------- models: voxels (.vox MagicaVoxel, .vxl/.hva Westwood) ----------------
+namespace voxtest {
+using namespace rts::render;
+using Kv = std::vector<std::pair<std::string, std::string>>;
+inline void i32(std::string& b, int32_t v) { b.append(reinterpret_cast<const char*>(&v), 4); }
+inline void f32(std::string& b, float v) { b.append(reinterpret_cast<const char*>(&v), 4); }
+inline std::string vstr(const std::string& s) { std::string b; i32(b, int32_t(s.size())); return b + s; }
+inline std::string vdict(const Kv& d) {
+    std::string b; i32(b, int32_t(d.size()));
+    for (auto& [k, v] : d) b += vstr(k) + vstr(v);
+    return b;
+}
+inline std::string chunk(const char* id, const std::string& content, const std::string& kids = "") {
+    std::string b(id, 4); i32(b, int32_t(content.size())); i32(b, int32_t(kids.size()));
+    return b + content + kids;
+}
+inline std::string model(int sx, int sy, int sz, const std::vector<std::array<uint8_t, 4>>& vox) {
+    std::string s; i32(s, sx); i32(s, sy); i32(s, sz);
+    std::string x; i32(x, int32_t(vox.size()));
+    for (auto& v : vox) x.append(reinterpret_cast<const char*>(v.data()), 4);
+    return chunk("SIZE", s) + chunk("XYZI", x);
+}
+inline std::string trn(int id, int child, const std::string& name, const Kv& frame) {
+    std::string b; i32(b, id); b += vdict(name.empty() ? Kv{} : Kv{{"_name", name}});
+    i32(b, child); i32(b, -1); i32(b, 0); i32(b, 1); b += vdict(frame);
+    return chunk("nTRN", b);
+}
+inline std::string grp(int id, const std::vector<int>& kids) {
+    std::string b; i32(b, id); b += vdict({}); i32(b, int32_t(kids.size()));
+    for (int k : kids) i32(b, k);
+    return chunk("nGRP", b);
+}
+inline std::string shp(int id, const std::vector<std::pair<int, int>>& models) {  // (model, frame)
+    std::string b; i32(b, id); b += vdict({}); i32(b, int32_t(models.size()));
+    for (auto& [m, f] : models) { i32(b, m); b += vdict({{"_f", std::to_string(f)}}); }
+    return chunk("nSHP", b);
+}
+// 2x1x1 red box (shared by "Body" and the rotated "Body2"), a 1-voxel team flag, a 2-frame "Anim"
+inline std::string sampleVox() {
+    std::string kids = model(2, 1, 1, {{0, 0, 0, 1}, {1, 0, 0, 1}}) + model(1, 1, 1, {{0, 0, 0, 250}});
+    kids += trn(0, 1, "", {}) + grp(1, {2, 4, 6, 8});
+    kids += trn(2, 3, "Body", {{"_t", "0 0 5"}}) + shp(3, {{0, 0}});
+    kids += trn(4, 5, "Flag", {}) + shp(5, {{1, 0}});
+    kids += trn(6, 7, "Body2", {{"_r", "17"}}) + shp(7, {{0, 0}});
+    kids += trn(8, 9, "Anim", {}) + shp(9, {{0, 0}, {1, 1}});
+    std::string pal;
+    for (int i = 0; i < 256; ++i) {
+        const uint8_t c[4] = {uint8_t(i == 0 ? 255 : 128), 0, uint8_t(i == 0 ? 0 : 128), 255};  // entry 0 = colour index 1
+        pal.append(reinterpret_cast<const char*>(c), 4);
+    }
+    kids += chunk("RGBA", pal);
+    std::string matl; i32(matl, 1); matl += vdict({{"_type", "_emit"}, {"_emit", "0.5"}});
+    kids += chunk("MATL", matl);
+    std::string f = "VOX "; i32(f, 150);
+    return f + chunk("MAIN", "", kids);
+}
+struct VxlSec { std::string name; int sx, sy, sz; std::vector<std::array<int, 4>> vox; float scale; };  // x, y, z, colour
+inline std::string sampleVxl(const std::vector<VxlSec>& secs, bool withPalette) {
+    std::string body, tails;
+    for (const auto& s : secs) {
+        std::vector<int32_t> starts(size_t(s.sx * s.sy), -1), ends(size_t(s.sx * s.sy), -1);
+        std::string data;
+        for (int y = 0; y < s.sy; ++y)
+            for (int x = 0; x < s.sx; ++x) {
+                std::vector<int> col(size_t(s.sz), -1);
+                for (auto& v : s.vox) if (v[0] == x && v[1] == y) col[size_t(v[2])] = v[3];
+                bool any = false;
+                for (int c : col) any = any || c >= 0;
+                if (!any) continue;
+                starts[size_t(y * s.sx + x)] = int32_t(data.size());
+                int z = 0;
+                while (z < s.sz) {  // one span per run: skip, count, (colour, normal) x count, count
+                    int skip = 0;
+                    while (z < s.sz && col[size_t(z)] < 0) { ++z; ++skip; }
+                    std::string run;
+                    while (z < s.sz && col[size_t(z)] >= 0) { run += char(col[size_t(z)]); run += char(0); ++z; }
+                    data += char(skip); data += char(run.size() / 2); data += run; data += char(run.size() / 2);
+                }
+                ends[size_t(y * s.sx + x)] = int32_t(data.size()) - 1;
+            }
+        const uint32_t s0 = uint32_t(body.size());
+        for (int32_t v : starts) i32(body, v);
+        const uint32_t e0 = uint32_t(body.size());
+        for (int32_t v : ends) i32(body, v);
+        const uint32_t d0 = uint32_t(body.size());
+        body += data;
+        i32(tails, int32_t(s0)); i32(tails, int32_t(e0)); i32(tails, int32_t(d0)); f32(tails, s.scale);
+        const float id[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        for (float v : id) f32(tails, v);
+        for (float v : {0.0f, 0.0f, 0.0f, float(s.sx), float(s.sy), float(s.sz)}) f32(tails, v);
+        tails += char(s.sx); tails += char(s.sy); tails += char(s.sz); tails += char(4);
+    }
+    std::string f("Voxel Animation\0", 16);
+    i32(f, 1); i32(f, int32_t(secs.size())); i32(f, int32_t(secs.size())); i32(f, int32_t(body.size()));
+    f += char(16); f += char(31);
+    std::string pal(768, '\0');
+    if (withPalette) { pal[64 * 3] = char(255); pal[20 * 3 + 1] = char(200); }
+    f += pal;
+    for (size_t i = 0; i < secs.size(); ++i) {
+        std::string n = secs[i].name; n.resize(16, '\0');
+        f += n; i32(f, int32_t(i)); i32(f, 1); i32(f, 0);
+    }
+    return f + body + tails;
+}
+inline std::string sampleHva(const std::vector<std::string>& names, const std::vector<std::vector<std::array<float, 12>>>& frames) {
+    std::string f("test");
+    f.resize(16, '\0');
+    i32(f, int32_t(frames.size())); i32(f, int32_t(names.size()));
+    for (auto n : names) { n.resize(16, '\0'); f += n; }
+    for (auto& fr : frames) for (auto& mx : fr) for (float v : mx) f32(f, v);
+    return f;
+}
+// every triangle winds counter-clockwise around its stored normal, and normals point outwards
+inline bool facesConsistent(const Model& m, int mesh) {
+    if (mesh < 0) return false;
+    for (const auto& p : m.meshes[size_t(mesh)].primitives) {
+        float3 c{};
+        for (uint32_t i = 0; i < p.vertexCount; ++i) c += m.vertices[p.firstVertex + i].pos;
+        c = c * (1.0f / float(p.vertexCount));
+        for (uint32_t i = p.firstIndex; i + 2 < p.firstIndex + p.indexCount; i += 3) {
+            const ModelVertex &a = m.vertices[m.indices[i]], &b = m.vertices[m.indices[i + 1]], &d = m.vertices[m.indices[i + 2]];
+            if (dot(cross(b.pos - a.pos, d.pos - a.pos), a.nrm) <= 0) return false;
+            if (dot(a.nrm, a.pos - c) <= 0) return false;
+        }
+    }
+    return true;
+}
+inline size_t meshVerts(const Model& m, int mesh) { size_t n = 0; if (mesh >= 0) for (auto& p : m.meshes[size_t(mesh)].primitives) n += p.vertexCount; return n; }
+inline size_t meshIdx(const Model& m, int mesh) { size_t n = 0; if (mesh >= 0) for (auto& p : m.meshes[size_t(mesh)].primitives) n += p.indexCount; return n; }
+} // namespace voxtest
+
+TEST(models_vox_greedy_scene_team) {
+    using namespace voxtest;
+    using modeltest::near;
+    std::vector<std::string> warn;
+    auto m = loadModel("units/t.vox", modeltest::mapReader({{"units/t.vox", sampleVox()}}), &warn);
+    const int body = m->findNode("Body"), body2 = m->findNode("Body2"), flag = m->findNode("Flag"), anim = m->findNode("Anim");
+    CHECK(body >= 0 && body2 >= 0 && flag >= 0 && anim >= 0);
+    if (body < 0 || body2 < 0 || flag < 0 || anim < 0) return;
+    const Node &b = m->nodes[size_t(body)], &b2 = m->nodes[size_t(body2)], &fl = m->nodes[size_t(flag)];
+    CHECK(b.mesh >= 0 && b.mesh == b2.mesh);                              // a model used twice shares its mesh
+    CHECK(meshVerts(*m, b.mesh) == 24 && meshIdx(*m, b.mesh) == 36);     // 2x1x1 box = 6 merged quads
+    CHECK(facesConsistent(*m, b.mesh) && facesConsistent(*m, fl.mesh));
+    CHECK(near(b.t.x, 0) && near(b.t.y, 5) && near(b.t.z, 0));           // MagicaVoxel z up -> y up
+    const float3 rx = b2.r.rotate({1, 0, 0});                             // 90 degrees about z -> about y
+    CHECK(near(rx.x, 0) && near(rx.y, 0) && near(rx.z, -1));
+    if (b.mesh < 0 || fl.mesh < 0) return;
+    const auto& bp = m->meshes[size_t(b.mesh)].primitives[0];
+    CHECK(m->vertices[bp.firstVertex].color == 0xff0000ffu);              // palette red, linear
+    CHECK(m->materials[size_t(bp.material)].emissive.x > 0.5f && near(m->materials[size_t(bp.material)].emissiveStrength, 0.5f));
+    const auto& fp = m->meshes[size_t(fl.mesh)].primitives[0];
+    const uint32_t team = m->vertices[fp.firstVertex].color;
+    CHECK((team >> 24) == 0 && (team & 255) == 55);                       // team slot: alpha 0, sRGB 128 -> linear 55
+    CHECK(m->materials[size_t(fp.material)].team == TeamMode::VertexAlpha);
+    // two-frame shape -> clip Idle toggling child scales
+    const int ci = m->findClip("Idle");
+    CHECK(ci >= 0);
+    if (ci >= 0) {
+        const AnimClip& c = m->clips[size_t(ci)];
+        CHECK(c.channels.size() == 2 && near(c.duration, 0.2f));
+        CHECK(c.channels[0].interp == AnimChannel::Step && c.channels[0].path == AnimChannel::Scale && c.channels[0].times.size() == 2);
+    }
+    CHECK(m->nodes[size_t(anim)].children.size() == 2);
+    CHECK(warn.empty());
+    // the generated showcase sample loads with its scene graph
+    std::vector<std::string> w2;
+    auto tank = loadModel(std::string(RTS_SOURCE_DIR) + "/games/showcase/models/voxel_tank.vox", modeltest::diskReader(), &w2);
+    const int turret = tank->findNode("Turret"), barrel = tank->findNode("Barrel");
+    CHECK(turret >= 0 && barrel >= 0 && tank->findNode("Hull") >= 0 && w2.empty());
+    if (barrel >= 0) CHECK(tank->nodes[size_t(barrel)].parent == turret);
+}
+
+TEST(models_vxl_hva_sections) {
+    using namespace voxtest;
+    using modeltest::near;
+    std::vector<VxlSec> secs = {{"Body", 2, 1, 1, {{0, 0, 0, 64}, {1, 0, 0, 20}}, 1.0f}, {"Turret", 1, 1, 1, {{0, 0, 0, 64}}, 1.0f}};
+    const std::array<float, 12> ident = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    std::vector<std::vector<std::array<float, 12>>> frames;
+    for (int f = 0; f < 3; ++f)  // turret: 90 degrees about z (voxel space), lifted by 24, moved forward by 12
+        frames.push_back({ident, {0, -1, 0, 12, 1, 0, 0, 0, 0, 0, 1, 24.0f + float(f)}});
+    std::vector<std::string> warn;
+    auto m = loadModel("units/tank.vxl", modeltest::mapReader({{"units/tank.vxl", sampleVxl(secs, true)}, {"units/tank.hva", sampleHva({"Body", "Turret"}, frames)}}), &warn);
+    const int body = m->findNode("Body"), tur = m->findNode("Turret");
+    CHECK(body >= 0 && tur >= 0 && warn.empty());
+    if (body < 0 || tur < 0) return;
+    const Node &b = m->nodes[size_t(body)], &t = m->nodes[size_t(tur)];
+    CHECK(meshVerts(*m, b.mesh) == 10 * 4 && facesConsistent(*m, b.mesh));  // 2 colours: 4 sides split in two + 2 caps
+    CHECK(near(t.t.x, 0) && near(t.t.y, 24) && near(t.t.z, 12));          // (x, y, z) voxel -> (y, z, x) engine
+    const float3 fwd = t.r.rotate({0, 0, 1});                             // voxel +x (forward) turned to voxel +y
+    CHECK(near(fwd.x, 1) && near(fwd.y, 0) && near(fwd.z, 0));
+    bool teamV = false, own = false;
+    if (b.mesh >= 0)
+        for (auto& p : m->meshes[size_t(b.mesh)].primitives)
+            for (uint32_t i = 0; i < p.vertexCount; ++i) {
+                const uint32_t c = m->vertices[p.firstVertex + i].color;
+                if ((c >> 24) == 0) teamV = true;
+                if (c == 0xff0000ffu) own = true;                             // palette 64 = red
+            }
+    CHECK(teamV && own && m->materials[0].team == TeamMode::VertexAlpha);
+    const int ci = m->findClip("Idle");
+    CHECK(ci >= 0);
+    if (ci >= 0) {
+        CHECK(near(m->clips[size_t(ci)].duration, 3.0f / 15.0f) && m->clips[size_t(ci)].channels.size() == 6);
+        CHECK(m->clips[size_t(ci)].channels[3].times.size() == 3);
+    }
+    // no .hva: warning, no clip; empty palette: unittem.pal next to it (6-bit)
+    std::string pal(768, '\0');
+    pal[64 * 3 + 2] = char(63);
+    warn.clear();
+    auto m2 = loadModel("units/tank.vxl", modeltest::mapReader({{"units/tank.vxl", sampleVxl(secs, false)}, {"units/unittem.pal", pal}}), &warn);
+    CHECK(m2->clips.empty() && warn.size() == 1);
+    const int b2 = m2->findNode("Body");
+    bool blue = false;
+    if (b2 >= 0 && m2->nodes[size_t(b2)].mesh >= 0)
+        for (auto& p : m2->meshes[size_t(m2->nodes[size_t(b2)].mesh)].primitives)
+            for (uint32_t i = 0; i < p.vertexCount; ++i) blue = blue || m2->vertices[p.firstVertex + i].color == 0xffff0000u;
+    CHECK(blue);
+}
+
+TEST(models_voxel_broken_files) {
+    using namespace voxtest;
+    auto expectThrow = [](const std::string& path, const std::string& bytes) {
+        try { loadModel(path, modeltest::mapReader({{path, bytes}}), nullptr); }
+        catch (const std::exception& e) { return std::string(e.what()).find(path) != std::string::npos; }
+        return false;
+    };
+    CHECK(expectThrow("a/x.vox", "VOX junk"));
+    CHECK(expectThrow("a/x.vxl", "Voxel Anim"));
+    CHECK(expectThrow("a/x.vox", sampleVox().substr(0, 60)));
+    // truncations and byte flips never crash (the loader either throws or returns a model)
+    const std::string vox = sampleVox();
+    const std::string vxl = sampleVxl({{"Body", 3, 2, 4, {{0, 0, 0, 64}, {1, 1, 2, 20}, {2, 0, 3, 5}}, 1.0f}}, true);
+    uint32_t rng = 12345;
+    int loaded = 0;
+    for (int i = 0; i < 400; ++i) {
+        std::string v = i % 2 ? vox : vxl;
+        rng = rng * 1664525u + 1013904223u;
+        if (i % 4 < 2) v.resize(rng % v.size());
+        else for (int k = 0; k < 4; ++k) { rng = rng * 1664525u + 1013904223u; v[rng % v.size()] = char(rng >> 24); }
+        const std::string p = i % 2 ? "f.vox" : "f.vxl";
+        std::vector<std::string> w;
+        try { loadModel(p, modeltest::mapReader({{p, v}}), &w); ++loaded; } catch (const std::exception&) {}
+    }
+    CHECK(loaded > 0);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
