@@ -612,7 +612,6 @@ public:
     void mechTickTactics(Simulation& sim);     // suppression decay, turrets, crush
     void mechTickSociety(Simulation& sim);     // growth, autonomy, rounds
     void mechTacticsDeath(Simulation& sim, Entity e);   // ruins, infection
-    bool mechRecrew(Simulation& sim, const Command& cmd);
     bool mechSwitchedOff(Simulation& sim, Entity e) const;   // unpowered / unstaffed structures
     Fixed mechIncomeMult(Simulation& sim, Entity e) const;
     bool mechPowered(Simulation& sim, uint8_t player, Vec3 at) const;

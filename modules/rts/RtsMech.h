@@ -33,7 +33,6 @@ struct GroundItem { Vec3 pos{}; uint16_t item = 0; int charges = 0; };
 // ---- stage 3
 struct Suppression { Fixed value{}; };                    // 0..100: suppressed / pinned thresholds in rules
 struct Turret { Vec3 dir[4] = {}; bool init = false; };   // per weapon aim direction (turnRate)
-struct Abandoned { uint8_t formerOwner = 0; };            // crew killed: neutral until infantry re-crews it
 struct GrowState { Fixed timer{}; };
 struct Bounty { Vec3 pos{}; Entity target = kNullEntity; uint8_t player = 0; int16_t res = -1; Fixed reward{}; };
 struct RoundUnit { uint8_t owner = 0; uint16_t type = 0; Vec3 pos{}; };

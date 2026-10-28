@@ -685,11 +685,11 @@ TEST(mech_tactics) {
     CHECK(mod(*sim).stat(*sim, rifle, game::Stat::Speed).raw == 0);
     // the sniper kills the tank crew: it turns neutral; a rifleman re-crews it
     run(*sim, 3);
-    CHECK(w.get<Owner>(tank).player == 0 && w.has<game::Abandoned>(tank));
+    CHECK(w.get<Owner>(tank).player == 0 && mod(*sim).canCrew(*sim, covered, tank));   // empty: the rifleman may man it
     sim->submit(mechCmd(2, game::kCmdMove, {unitNear(*sim, 27, 15)}, kNullEntity, at(39, 19)));   // the sniper leaves
     sim->submit(mechCmd(1, game::kCmdSmart, {covered}, tank));
     run(*sim, 12);
-    CHECK(w.get<Owner>(tank).player == 1 && !w.has<game::Abandoned>(tank));
+    CHECK(w.get<Owner>(tank).player == 1 && !mod(*sim).canCrew(*sim, covered, tank));
     // an APC runs over infantry
     Entity apc = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("apc")), 2, at(25, 9));
     Entity victim = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("rifle")), 1, at(30, 9));

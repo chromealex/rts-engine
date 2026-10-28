@@ -84,7 +84,7 @@ struct MechType {
     // stage 3
     uint8_t givesCover = 0;                // structure: cover level for units next to it
     bool arcs = false; Fixed arcSide = Fixed::fromInt(1), arcRear = Fixed::fromInt(1);   // directional armor (damage multipliers)
-    std::vector<Fixed> suppress, turretRate, killsCrew, crater;   // per weapon
+    std::vector<Fixed> suppress, turretRate, crater;   // per weapon
     std::vector<uint16_t> infect;          // per weapon: kills rise as this type (0xFFFF none)
     uint16_t ruins = 0xFFFF;               // leaves this type when destroyed
     Fixed crushDamage{}; uint64_t crushTags = 0;
@@ -93,7 +93,6 @@ struct MechType {
     bool autonomous = false;               // acts on its own (Majesty heroes): bounties, enemies, exploring
     Fixed powerField{};                    // pylon: powers own structures within this radius
     bool needsPower = false;               // works and can be built only in a power field
-    bool crew = false; uint64_t crewTags = 0;   // vehicle with a crew; crewless it is neutral until re-crewed
     uint16_t infectSpawn = 0xFFFF; int infectCount = 0;   // structure overrun by an infecting attacker spawns these
     int upgradeGarrison = 0;               // upgrading INTO this type costs garrison units (Mushroom Wars 2)
 };
@@ -143,7 +142,7 @@ struct MechRules {
     Fixed supSpeed = Fixed::fromRatio(1, 2), supAttack = Fixed::fromRatio(3, 4);
     uint64_t supTags = 0;
     bool combat3 = false;                  // arcs / turrets / crew / infect / craters / crush present
-    bool staffing = false, growth = false, autonomy = false, power = false, crews = false, infection = false, ruinsAny = false;
+    bool staffing = false, growth = false, autonomy = false, power = false, infection = false, ruinsAny = false;
     bool rounds = false;
     Fixed prepareTime = Fixed::fromInt(30), fightTime = Fixed::fromInt(60);
     int roundCount = 10;

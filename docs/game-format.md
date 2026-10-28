@@ -968,9 +968,11 @@ Optional blocks; a game without them loads, plays and hashes as before. Tested i
 
 ### Crews, crushing, ruins, infection (Z, Men of War, C&C, They Are Billions)
 
-- Weapon `"killsCrew": 1` (chance per hit) against a type with `"crew": {"accepts": ["infantry"]}`: the vehicle is left
-  empty and neutral (`Abandoned`). A unit with an accepted tag right-clicks it (smart / `load`) and becomes its crew:
-  the vehicle changes owner, the soldier is removed.
+- Crews are one mechanic with the fidelity `crew` / `crews` / `killsCrew` keys (see [Fidelity mechanics](#fidelity-mechanics-play-like-the-original)):
+  `"crew": {"accepts": ["infantry"]}` (or `true`: any mobile unit) is a crewed vehicle that any unit with an accepted
+  tag may man, without `"crews": true`. Weapon `"killsCrew": 1` (chance per non-lethal hit) leaves it empty and neutral
+  (owner 0); a unit that may man it right-clicks it (smart / `load`), walks up and becomes its crew: the vehicle
+  changes owner, the soldier is removed.
 - `"crush": {"damage": 500, "tags": ["infantry"]}`: a moving unit damages hostile mobile units with those tags it touches.
 - `"ruins": "rubble"`: a type spawned (neutral) where this one died.
 - Weapon `"infect": "zombie"`: a unit it kills rises as that type for the killer's owner. A structure with
@@ -1558,7 +1560,7 @@ uses none of them keeps its exact checksums.
 | `clash` | type | units in transit fight hostile units they meet |
 | `playerMods` | type | `{"max": 4, "mods": [{"tags": [...], "stat": "damage", "mul": 1.08}]}` — every completed one modifies the owner's types (forges) |
 | resource `gain`, `perUnit`, `min` | rules | `"gain": {"kill": 1, "capture": 0.3, "captured": -0.4, "upgrade": 0.2, "lost": 0.45, "defended": 0.01}`; `"perUnit": [{"tags": [...], "stat": "damage", "mul": 1.06}]` per whole unit held (morale suns) |
-| `crew` / `crews` / weapon `killsCrew` | type | vehicles and guns need a driver of that type; `killsCrew` (chance) empties them (owner 0); units with `crews` man any empty one (Z) |
+| `crew` / `crews` / weapon `killsCrew` | type | `"crew": "grunt"` (or `{"unit": "grunt"}`): vehicles and guns with a driver; `killsCrew` (chance per non-lethal hit) empties them (owner 0); units with `crews` man any empty one (Z). `"crew": {"accepts": [tags]}` / `true` (agent-mech alias): units with one of the tags (any mobile unit) may man it too |
 | `infect` | type | `{"by": ["infected"], "spawn": "walker", "count": 3}` — killed by a unit with the tag: rises as the spawn type for the killer (They Are Billions) |
 | `neutral.eats`, `neutral.resurface` | type | an eater submerges after that many kills and comes back somewhere on its layer later (Dune sandworm) |
 | `crush` | type | `{"tags": ["infantry"]}` — moving over such units kills them (tanks over infantry, units over spice blooms) |

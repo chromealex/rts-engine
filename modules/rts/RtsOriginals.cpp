@@ -111,7 +111,7 @@ void RtsModule::afterHit(Simulation& sim, Entity target, Entity source, const We
     Unit& u = w.get<Unit>(target);
     const UnitType& t = rules_.types[u.type];
     const bool src = w.alive(source) && w.has<Unit>(source);
-    if (!killed && wd && wd->killsCrew.raw > 0 && t.crew != kNoType) {
+    if (!killed && wd && wd->killsCrew.raw > 0 && t.crewed) {
         Owner& o = w.get<Owner>(target);
         if (o.player != 0 && sim.rng().unit() < wd->killsCrew) {
             GameState& gs = state(sim);
@@ -464,7 +464,9 @@ bool RtsModule::canCrew(Simulation& sim, Entity unit, Entity vehicle) const {
     if (!w.alive(unit) || !w.alive(vehicle) || unit == vehicle || !w.has<Unit>(vehicle)) return false;
     const UnitType& ut = rules_.types[w.get<Unit>(unit).type];
     const UnitType& vt = rules_.types[w.get<Unit>(vehicle).type];
-    return ut.crews && vt.crew != kNoType && w.get<Owner>(vehicle).player == 0 && w.get<Unit>(vehicle).hp.raw > 0;
+    if (!vt.crewed || w.get<Owner>(vehicle).player != 0 || w.get<Unit>(vehicle).hp.raw <= 0) return false;
+    if (ut.crews) return true;
+    return vt.crewOpen && !ut.structure && !ut.crewed && w.has<Mobile>(unit) && (!vt.crewAccepts || (ut.tags & vt.crewAccepts));
 }
 
 bool RtsModule::crewEnter(Simulation& sim, Entity unit, Entity vehicle) {

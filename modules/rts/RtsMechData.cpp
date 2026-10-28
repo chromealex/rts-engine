@@ -230,7 +230,7 @@ static void loadMechStage2(Rules& r, const Json& j) {
     }
 }
 
-// stage 3: cover, suppression, arcs, turrets, ruins, crush, craters, staff, growth, autonomy, power fields, crews,
+// stage 3: cover, suppression, arcs, turrets, ruins, crush, craters, staff, growth, autonomy, power fields,
 // infection, garrison-paid upgrades, rounds
 static void loadMechStage3(Rules& r, const Json& j) {
     MechRules& m = r.mech;
@@ -278,10 +278,8 @@ static void loadMechStage3(Rules& r, const Json& j) {
         };
         perWeapon("suppress", mt.suppress);
         for (size_t wi = 0; wi < nw; ++wi) if (ws[wi].has("turret")) { mt.turretRate.resize(nw); mt.turretRate[wi] = ws[wi]["turret"].getFx("turnRate", Fixed::fromInt(180)); m.any = m.combat3 = true; }
-        perWeapon("killsCrew", mt.killsCrew);
         for (size_t wi = 0; wi < nw; ++wi) if (ws[wi].has("crater")) { mt.crater.resize(nw); mt.crater[wi] = ws[wi]["crater"].isObject() ? ws[wi]["crater"].getFx("radius", kOneFx()) : ws[wi].getFx("crater"); m.any = m.combat3 = true; }
         for (size_t wi = 0; wi < nw; ++wi) if (ws[wi].has("infect")) { mt.infect.resize(nw, 0xFFFF); mt.infect[wi] = typeRef(r, where + " weapon infect", ws[wi].getStr("infect")); m.any = m.infection = m.combat3 = true; }
-        if (!mt.killsCrew.empty()) m.combat3 = m.crews = true;
         if (tj.has("ruins")) { mt.ruins = typeRef(r, where + " ruins", tj.getStr("ruins")); m.any = m.ruinsAny = true; }
         if (const Json& cr = tj["crush"]; cr.isObject()) { mt.crushDamage = cr.getFx("damage", Fixed::fromInt(1000)); mt.crushTags = tagsOf(r, where + " crush.tags", cr["tags"]); m.any = m.combat3 = true; }
         if (const Json& st = tj["staff"]; st.isObject()) {
@@ -299,7 +297,6 @@ static void loadMechStage3(Rules& r, const Json& j) {
         if (tj.getBool("autonomous", false)) { mt.autonomous = true; m.any = m.autonomy = true; }
         if (tj.has("powerField")) { mt.powerField = tj.getFx("powerField"); m.any = m.power = true; }
         if (tj.getBool("needsPower", false)) { mt.needsPower = true; m.any = m.power = true; }
-        if (const Json& cw = tj["crew"]; cw.isObject() || cw.boolean()) { mt.crew = true; mt.crewTags = tagsOf(r, where + " crew.accepts", cw["accepts"]); m.any = m.crews = true; }
         if (const Json& inf = tj["infectable"]; inf.isObject()) { mt.infectSpawn = typeRef(r, where + " infectable.spawns", inf.getStr("spawns")); mt.infectCount = int(inf.getInt("count", 1)); m.any = m.infection = true; }
         mt.upgradeGarrison = int(tj.getInt("upgradeGarrison", 0));
         if (mt.upgradeGarrison > 0) m.any = true;

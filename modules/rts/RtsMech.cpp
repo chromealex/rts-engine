@@ -70,7 +70,19 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         return true;
     }
     case kCmdLoad: {
-        if (rules_.mech.crews && mechRecrew(sim, cmd)) return true;
+        // an empty crewed vehicle (Z, killsCrew): the first selected unit that may man it goes in (RtsOriginals.cpp)
+        if (rules_.originals && w.alive(cmd.target) && w.has<Unit>(cmd.target) && rules_.types[w.get<Unit>(cmd.target).type].crewed &&
+            w.get<Owner>(cmd.target).player == 0) {
+            for (Entity p : cmd.units) {
+                if (!own(sim, p, cmd.player) || !canCrew(sim, p, cmd.target)) continue;
+                Order o;
+                o.type = OrderType::Enter;
+                o.target = cmd.target;
+                issue(sim, p, o, false);
+                break;
+            }
+            return true;
+        }
         if (!rules_.mech.transports) return true;
         std::vector<Entity> passengers = cmd.units;
         Entity carrier = cmd.target;
@@ -111,7 +123,6 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         return true;
     }
     case kCmdSmart: {
-        if (rules_.mech.crews && mechRecrew(sim, cmd)) return true;   // infantry right-clicks an abandoned vehicle
         // right click on an own transport with room: board it
         if (!rules_.mech.transports || !own(sim, cmd.target, cmd.player) || cmd.units.empty()) return false;
         if (rules_.types[w.get<Unit>(cmd.target).type].mech.transport.slots == 0) return false;
@@ -209,19 +220,6 @@ void RtsModule::unloadOne(Simulation& sim, Entity carrier, size_t index) {
 
 bool RtsModule::runBoard(Simulation& sim, Entity e, Order& o) {
     World& w = sim.world();
-    if (rules_.mech.crews && w.alive(o.target) && w.has<Abandoned>(o.target)) {   // Z: a soldier takes over an empty vehicle
-        if (contactDistance(sim, e, o.target) > Fixed::fromRatio(3, 2)) {
-            if (auto* m = w.tryGet<Mobile>(e); m && (!m->moving || (sim.tick() + e.index) % 20 == 0)) moveTo(sim, e, w.get<Transform>(o.target).pos, kOne);
-            return false;
-        }
-        w.get<Owner>(o.target).player = w.get<Owner>(e).player;
-        w.remove<Abandoned>(o.target);
-        Unit& pu = w.get<Unit>(e);
-        pu.hp = Fixed{};
-        pu.flags |= kUnitSilent;   // the soldier is now the crew
-        sim.emit({kEvCaptured, w.get<Owner>(o.target).player, o.target, e, 0, w.get<Transform>(o.target).pos});
-        return true;
-    }
     if (!accepts(sim, o.target, e)) return true;
     const Fixed range = rules_.types[w.get<Unit>(o.target).type].mech.transport.loadRange;
     if (contactDistance(sim, e, o.target) <= range) { board(sim, e, o.target); return true; }
@@ -458,7 +456,6 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* inv = w.tryGet<ItemBag>(e)) { h.u32(0x1A7E); for (size_t k = 0; k < inv->items.size(); ++k) { h.i32(inv->items[k]); h.i32(inv->charges[k]); } }
     if (auto* mg = w.tryGet<Merging>(e)) { h.u32(0x3E26); h.u64(mg->partner.packed()); }
     if (auto* sp = w.tryGet<Suppression>(e)) { h.u32(0x5A99); h.fx(sp->value); }
-    if (auto* ab = w.tryGet<Abandoned>(e)) { h.u32(0xAB4D); h.u32(ab->formerOwner); }
 }
 
 } // namespace rts::game

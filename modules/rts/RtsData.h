@@ -291,7 +291,10 @@ struct UnitType {
     Fixed fieldRadius{};
     int16_t needsField = -1;                   // structure works / may be placed only inside an own field
     int queueSlots = 1;                        // items produced in parallel (reactor)
-    uint16_t crew = kNoType;                   // vehicle / gun manned by this unit type (Z drivers)
+    bool crewed = false;                       // vehicle / gun with a crew: killsCrew empties it (owner 0) until manned again
+    uint16_t crew = kNoType;                   // ... manned by this unit type (Z drivers; informational)
+    bool crewOpen = false;                     // "crew": {"accepts": tags} / true: units with these tags (any mobile unit
+    uint64_t crewAccepts = 0;                  //   without tags) man it even without "crews"
     bool crews = false;                        // this unit can man empty crewed vehicles
     uint64_t infectBy = 0;                     // killed by a unit with any of these tags: becomes `infectSpawn`
     uint16_t infectSpawn = kNoType;

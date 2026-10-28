@@ -216,11 +216,16 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
         }
         if (const Json& s = tj["structure"]; s.isObject() && s.has("needsField")) { any = true; t.needsField = int16_t(s.getInt("needsField", 0)); }
         t.queueSlots = std::max<int>(1, int(tj.getInt("queueSlots", 1)));
-        // "crew": "type" / {"unit": type} = the crew this vehicle carries (originals); {"accepts": tags} / true
-        // is agent-mech's crewable vehicle (RtsMechData.cpp)
-        if (const Json& c = tj["crew"]; c.isString() || (c.isObject() && c.has("unit"))) {
+        // "crew": "type" / {"unit": type}: manned by units with "crews"; {"accepts": tags} / true (agent-mech alias):
+        // manned by any mobile unit with one of the tags (any without tags)
+        if (const Json& c = tj["crew"]; c.isString() || c.isObject() || c.boolean()) {
             any = true;
-            t.crew = typeId(r, where + " crew", c.isString() ? c.str() : c.getStr("unit"));
+            t.crewed = true;
+            if (c.isString() || c.has("unit")) t.crew = typeId(r, where + " crew", c.isString() ? c.str() : c.getStr("unit"));
+            if (!c.isString() && (c.boolean() || c.has("accepts") || !c.has("unit"))) {
+                t.crewOpen = true;
+                t.crewAccepts = tagsOf(r, where + " crew.accepts", c["accepts"]);
+            }
         }
         t.crews = tj.getBool("crews", false);
         if (const Json& inf = tj["infect"]; inf.isObject()) {
