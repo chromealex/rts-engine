@@ -208,6 +208,10 @@ void UiLayer::setOnScreenKeyboard(OnScreenKeyboard mode) {
 void UiLayer::setKeyboardLanguage(const std::string& tag) { if (impl_) impl_->keyboard.setLanguage(tag); }
 bool UiLayer::keyboardVisible() const { return impl_ && impl_->keyboard.visible(); }
 
+void UiLayer::setImageSource(ImageSource source) {
+    if (impl_) impl_->renderer.setImageSource(std::move(source));
+}
+
 float UiLayer::dpRatio() const { return context() ? impl_->context->GetDensityIndependentPixelRatio() : 1.0f; }
 
 bool UiLayer::textInputFocused() const {

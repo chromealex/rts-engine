@@ -175,7 +175,20 @@ Rml::TextureHandle UiRenderer::LoadTexture(Rml::Vector2i& dims, const Rml::Strin
         return put(texs_, freeTexs_, t);
     }
     std::string file;
-    if (!Rml::GetFileInterface()->LoadFile(source, file) || file.empty()) return 0;
+    if (!Rml::GetFileInterface()->LoadFile(source, file) || file.empty()) {
+        // Not a plain file: maybe packed into a texture atlas (same engine/ui <-> ui lookup as files).
+        std::vector<unsigned char> rgba;
+        int w = 0, h = 0;
+        static const std::string kEngine = "engine/ui/", kGame = "ui/";
+        bool ok = imageSource_ && ((source.rfind(kEngine, 0) == 0 && imageSource_(kGame + source.substr(kEngine.size()), w, h, rgba)) ||
+                                   imageSource_(source, w, h, rgba) ||
+                                   (source.rfind(kGame, 0) == 0 && imageSource_(kEngine + source.substr(kGame.size()), w, h, rgba)));
+        if (!ok || size_t(w) * size_t(h) * 4 != rgba.size()) return 0;
+        for (size_t i = 0; i < rgba.size(); i += 4)
+            for (int c = 0; c < 3; ++c) rgba[i + size_t(c)] = static_cast<unsigned char>((rgba[i + size_t(c)] * rgba[i + 3] + 127) / 255);
+        dims = {w, h};
+        return GenerateTexture({reinterpret_cast<const Rml::byte*>(rgba.data()), rgba.size()}, dims);
+    }
     int w = 0, h = 0, n = 0;
     unsigned char* px = stbi_load_from_memory(reinterpret_cast<const unsigned char*>(file.data()), int(file.size()), &w, &h, &n, 4);
     if (!px) { Rml::Log::Message(Rml::Log::LT_WARNING, "ui: cannot decode image '%s'", source.c_str()); return 0; }

@@ -10,6 +10,7 @@
 #include "GameClient.h"
 #include "engine/net/NetLocalize.h"
 #include "modules/rts/RtsLocalize.h"
+#include "engine/atlas/AtlasFormat.h"
 
 namespace rts::client {
 
@@ -61,6 +62,15 @@ private:
 void GameClient::initUi() {
     if (!ui_.init(*dev_, "fonts/ui.ttf")) { error_ = "ui: init failed"; return; }
     ui_.setKeyboardLanguage(loc_.language());
+    // UI images the build packed into texture atlases are no longer plain files.
+    auto atlasImages = std::make_shared<atlas::ImageSource>([](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, atlas::decodeImageFile);
+    if (!atlasImages->manifest().empty())
+        ui_.setImageSource([atlasImages](const std::string& path, int& w, int& h, std::vector<unsigned char>& rgba) {
+            atlas::Image img;
+            if (!atlasImages->load(path, img)) return false;
+            w = img.width; h = img.height; rgba = std::move(img.rgba);
+            return true;
+        });
     Rml::DataModelConstructor c = ui_.context()->CreateDataModel("game");
     if (!c) return;
     if (auto h = c.RegisterStruct<UiItem>()) {
