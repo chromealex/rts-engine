@@ -94,6 +94,12 @@ public:
 
     size_t size() const { return inputs_.size(); }
 
+    // Build steps that transform content before write() (texture atlases): list the inputs
+    // (pack paths, insertion order), read one input's bytes, drop inputs by pack path.
+    std::vector<std::string> paths() const;
+    bool readInput(const std::string& packPath, std::string& out) const;
+    size_t remove(const std::vector<std::string>& packPaths);
+
 private:
     bool build(std::string& out, std::vector<std::string>& chunks, const WriteOptions& opt, const SplitOptions* split,
                WriteStats* stats, SplitResult* result, std::string* error);

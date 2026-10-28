@@ -375,7 +375,7 @@ endif()
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
     add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
-    apps/editor/core/DataOps.cpp)
+    apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
@@ -490,4 +490,31 @@ target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts
 target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
+endif()
+
+# ---------------------------------------------------------------------------
+# Texture atlases (atlas agent). rts_atlas: runtime manifest/page reader, CPU image source and
+# the GPU texture lookup (TextureLibrary, through gfx::Device only). rts_atlas_builder: host-only
+# packer used by rtsbuild/assetpipe at build time.
+# ---------------------------------------------------------------------------
+add_library(rts_atlas STATIC engine/atlas/AtlasFormat.cpp engine/atlas/ImageDecode.cpp engine/atlas/TextureLibrary.cpp)
+target_include_directories(rts_atlas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
+target_link_libraries(rts_atlas PUBLIC rts_engine)
+foreach(t rts_client main)
+    if(TARGET ${t})
+        target_link_libraries(${t} PRIVATE rts_atlas)
+    endif()
+endforeach()
+if(TARGET rts_render2d)
+    target_link_libraries(rts_render2d PUBLIC rts_atlas)  # TextureCache resolves atlased sprites
+endif()
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_atlas_builder STATIC tools/atlas/AtlasPacker.cpp tools/atlas/AtlasBuild.cpp)
+    target_include_directories(rts_atlas_builder PRIVATE third_party/stb_image_write)
+    target_link_libraries(rts_atlas_builder PUBLIC rts_atlas rts_pack_writer)
+    foreach(t rtsbuild assetpipe rts_tests)
+        if(TARGET ${t})
+            target_link_libraries(${t} PRIVATE rts_atlas_builder)
+        endif()
+    endforeach()
 endif()

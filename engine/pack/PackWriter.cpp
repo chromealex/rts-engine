@@ -134,6 +134,29 @@ bool PackWriter::addData(const std::string& packPath, std::string data, std::str
     return true;
 }
 
+std::vector<std::string> PackWriter::paths() const {
+    std::vector<std::string> v;
+    v.reserve(inputs_.size());
+    for (const Input& in : inputs_) v.push_back(in.path);
+    return v;
+}
+
+bool PackWriter::readInput(const std::string& packPath, std::string& out) const {
+    std::string p = normalizePath(packPath);
+    for (const Input& in : inputs_)
+        if (in.path == p) { if (in.inMemory) { out = in.data; return true; } return readAll(in.disk, out); }
+    return false;
+}
+
+size_t PackWriter::remove(const std::vector<std::string>& packPaths) {
+    std::vector<std::string> drop;
+    for (auto& p : packPaths) drop.push_back(normalizePath(p));
+    std::sort(drop.begin(), drop.end());
+    size_t before = inputs_.size();
+    inputs_.erase(std::remove_if(inputs_.begin(), inputs_.end(), [&](const Input& in) { return std::binary_search(drop.begin(), drop.end(), in.path); }), inputs_.end());
+    return before - inputs_.size();
+}
+
 int PackWriter::addDirectory(const std::string& dir, const std::string& prefix, const IgnoreRules& base, std::string* error,
                              bool followSymlinks) {
     std::error_code ec;
