@@ -4816,6 +4816,202 @@ TEST(fog_line_of_sight_3d_blockers) {
     CHECK(!vis(*smoke, 16) && vis(*smoke, 8));
 }
 
+// Vision (agent-vision): the cached / incremental passes give exactly the brute-force reference's cells (vision,
+// visibleCells order, LOS heights) on random maps: cliff levels, line of sight with blockers / smoke / undug rock,
+// heightfields, planets (seams, cube corners, horizon), moving and parked units, terrain / level / dig changes,
+// destroyed blockers, snapshot rollback and loading a save into the running simulation.
+namespace {
+struct VisionLcg { uint64_t s; uint32_t next() { s = s * 6364136223846793005ull + 1442695040888963407ull; return uint32_t(s >> 33); } int below(int n) { return int(next() % uint32_t(n)); } };
+bool sameVision(Simulation& a, Simulation& b) {
+    auto& x = mod(a).state(a); auto& y = mod(b).state(b);
+    return x.vision == y.vision && x.visibleCells == y.visibleCells && x.visionBase == y.visionBase && x.visionOcc == y.visionOcc;
+}
+// A = fast, B = reference; same random orders and the same world changes in both; true when every pass matched
+bool visionMatches(const std::function<std::unique_ptr<Simulation>()>& mk, const std::function<Vec3(Simulation&, VisionLcg&)>& randomPoint,
+                   const std::function<void(Simulation&, VisionLcg&)>& mutate, int ticks, uint64_t seed, int* passes) {
+    auto A = mk(), B = mk();
+    mod(*B).setVisionReference(true);
+    VisionLcg ra{seed}, rb{seed};
+    SimSnapshot sa, sb;
+    std::string save;
+    for (int t = 0; t < ticks; ++t) {
+        if (t % 15 == 0) {
+            std::vector<Entity> movers;
+            A->world().each<game::Unit, Owner, game::Mobile>([&](Entity e, game::Unit&, Owner& o, game::Mobile&) { if (o.player) movers.push_back(e); });
+            for (Entity e : movers) {
+                const int roll = ra.below(3); rb.below(3);
+                if (roll == 0) continue;   // some stay parked (cached lists replayed)
+                Command c; c.player = A->world().get<Owner>(e).player; c.type = game::kCmdMove; c.units = {e};
+                c.point = randomPoint(*A, ra); randomPoint(*B, rb);
+                A->submit(c); B->submit(c);
+            }
+        }
+        if (t % 40 == 20) { mutate(*A, ra); mutate(*B, rb); }
+        if (t == 100) { A->saveState(sa); B->saveState(sb); }
+        if (t == 160) { A->loadState(sa); B->loadState(sb); }        // rollback: caches must start over
+        if (t == 200) save = A->serialize();
+        if (t == 260) { if (!A->deserialize(save) || !B->deserialize(save)) return false; }   // load a save into the running sims
+        A->step(); B->step();
+        if (A->tick() % 5 == 1) {
+            if (!sameVision(*A, *B)) {
+                auto& x = mod(*A).state(*A); auto& y = mod(*B).state(*B);
+                std::fprintf(stderr, "vision mismatch seed %llu tick %u: vision %d cells %d base %d occ %d\n", (unsigned long long)seed, A->tick(),
+                             int(x.vision != y.vision), int(x.visibleCells != y.visibleCells), int(x.visionBase != y.visionBase), int(x.visionOcc != y.visionOcc));
+                return false;
+            }
+            ++*passes;
+        }
+    }
+    return true;
+}
+} // namespace
+
+TEST(vision_fast_equals_reference_flat) {
+    const char* rulesLos = R"({
+      "fogOfWar": {"lineOfSight": true, "rockHeight": 2},
+      "victory": {"mode": "survive", "seconds": 900},
+      "diggable": {"D": {"hardness": 2}},
+      "types": {
+        "scout": {"move": {"speed": 3}, "sight": 9},
+        "tower": {"move": {"speed": 2}, "sight": 11, "vision": {"eye": 4}},
+        "drone": {"move": {"speed": 3}, "sight": 8, "vision": {"seesOver": true}},
+        "flyer": {"move": {"speed": 4, "layer": "air"}, "sight": 7},
+        "wall": {"structure": {"footprint": [1, 4]}, "health": {"max": 500}, "vision": {"blocks": 3}},
+        "post": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "sight": 6},
+        "smoker": {"move": {"speed": 2}, "sight": 3, "abilities": [
+          {"id": "smoke", "target": "point", "range": 60, "cooldown": 1, "autocast": false,
+           "delivery": {"type": "area", "radius": 2, "lifetime": 4, "blocksVision": 4}, "effects": [{"type": "damage", "amount": 0}]}]}
+      }})";
+    const char* rulesLevels = R"({"victory": {"mode": "survive", "seconds": 900},
+      "types": {"scout": {"move": {"speed": 3}, "sight": 9}, "flyer": {"move": {"speed": 4, "layer": "air"}, "sight": 7},
+                "post": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "sight": 6}}})";
+    const char* rulesHf = R"({"terrain": {"model": "heightfield"}, "victory": {"mode": "survive", "seconds": 900},
+      "types": {"scout": {"move": {"speed": 3}, "sight": 10}, "tower": {"move": {"speed": 2}, "sight": 12, "vision": {"eye": 3}},
+                "flyer": {"move": {"speed": 4, "layer": "air"}, "sight": 7},
+                "wall": {"structure": {"footprint": [1, 4]}, "health": {"max": 500}, "vision": {"blocks": 3}},
+                "post": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "sight": 6}}})";
+    const int W = 56, H = 40;
+    auto entities = [&](VisionLcg& r, bool los) {
+        const char* kinds[] = {"scout", "tower", "drone", "flyer", "smoker"};
+        std::string e = ",\"entities\":[";
+        for (int i = 0; i < 26; ++i) {
+            const char* k = los ? kinds[r.below(5)] : (r.below(2) ? "scout" : "flyer");
+            e += std::string(i ? "," : "") + "{\"type\":\"" + k + "\",\"owner\":" + std::to_string(1 + i % 3) + ",\"pos\":[" +
+                 std::to_string(2 + r.below(W - 4)) + ".5," + std::to_string(2 + r.below(H - 4)) + ".5]}";
+        }
+        for (int i = 0; i < 6; ++i) e += std::string(",{\"type\":\"") + (los && i % 2 ? "wall" : "post") + "\",\"owner\":" + std::to_string(i % 3) +
+                                         ",\"pos\":[" + std::to_string(6 + r.below(W - 12)) + "," + std::to_string(6 + r.below(H - 12)) + "]}";
+        return e + "]";
+    };
+    auto map = [&](VisionLcg& r, bool dig, bool los, bool hf = false) {
+        std::string rows, corners;
+        if (hf) for (int i = 0; i < (W + 1) * (H + 1); ++i) corners += std::string(i ? "," : "") + std::to_string(r.below(33));
+        for (int y = 0; y < H; ++y) {
+            std::string row(size_t(W), '.');
+            if (dig) for (int x = 0; x < W; ++x) if (r.below(9) == 0) row[size_t(x)] = 'D';
+            rows += std::string(y ? "," : "") + "\"" + row + "\"";
+        }
+        return "{\"size\":[" + std::to_string(W) + "," + std::to_string(H) + "],\"players\":[{\"name\":\"A\",\"team\":1},{\"name\":\"B\",\"team\":1},{\"name\":\"C\",\"team\":2}],"
+               "\"terrain\":{\"rows\":[" + rows + "]" + (hf ? ",\"corners\":[" + corners + "]" : std::string()) + "}" + entities(r, los) + "}";
+    };
+    auto randomLevels = [&](Simulation& s, VisionLcg& r, int n) {   // a few random cliff blocks
+        auto& g = mod(s).state(s).grid;
+        for (int k = 0; k < n; ++k) {
+            const int x0 = r.below(W - 6), y0 = r.below(H - 6), lv = r.below(3);
+            for (int y = y0; y < y0 + 1 + r.below(5); ++y) for (int x = x0; x < x0 + 1 + r.below(5); ++x) g.level[size_t(g.index(x, y))] = int8_t(lv);
+        }
+    };
+    auto randomCorners = [&](Simulation& s, VisionLcg& r, int n) {   // hills: raise / lower corner blocks
+        auto& g = mod(s).state(s).grid;
+        for (int k = 0; k < n; ++k) {
+            const int x0 = r.below(W - 6), y0 = r.below(H - 6), dh = r.below(97) - 48;
+            for (int y = y0; y < y0 + 2 + r.below(6); ++y) for (int x = x0; x < x0 + 2 + r.below(6); ++x) g.corner[size_t(g.cornerIndex(x, y))] = int16_t(g.corner[size_t(g.cornerIndex(x, y))] + dh);
+        }
+    };
+    auto pt = [&](Simulation&, VisionLcg& r) { return P(1.5 + r.below(W - 3), 1.5 + r.below(H - 3)); };
+    int passes = 0;
+    for (uint64_t seed = 1; seed <= 3; ++seed) {
+        // cliff levels + 3D line of sight with walls, smoke, undug rock (dug out over time), destroyed walls
+        VisionLcg r0{seed * 77};
+        const std::string mLos = map(r0, true, true);
+        auto mkLos = [&] { auto s = makeSimJson(rulesLos, mLos, seed); VisionLcg rr{seed}; randomLevels(*s, rr, 30); return s; };
+        CHECK(visionMatches(mkLos, pt, [&](Simulation& s, VisionLcg& r) {
+            auto& g = mod(s).state(s).grid;
+            for (int k = 0; k < 40; ++k) { const size_t i = size_t(r.below(W * H)); if (i < g.dig.size()) g.dig[i] = 0; }   // dug out
+            randomLevels(s, r, 2);
+            std::vector<Entity> walls, smokers;
+            const int wall = mod(s).rules().findType("wall"), smoker = mod(s).rules().findType("smoker");
+            s.world().each<game::Unit>([&](Entity e, game::Unit& u) { if (u.type == wall && u.hp.raw > 0) walls.push_back(e); if (u.type == smoker) smokers.push_back(e); });
+            if (!walls.empty() && r.below(2)) s.world().get<game::Unit>(walls[size_t(r.below(int(walls.size())))]).hp = Fixed{};
+            for (Entity e : smokers) castAbility(s, e, 0, kNullEntity, pt(s, r));
+        }, 420, seed, &passes));
+        // plain cliff levels (no line of sight), level changes
+        VisionLcg r1{seed * 91};
+        const std::string mLv = map(r1, false, false);
+        auto mkLv = [&] { auto s = makeSimJson(rulesLevels, mLv, seed); VisionLcg rr{seed}; randomLevels(*s, rr, 30); return s; };
+        CHECK(visionMatches(mkLv, pt, [&](Simulation& s, VisionLcg& r) { randomLevels(s, r, 3); }, 300, seed, &passes));
+        // heightfield line of sight, sculpted while units watch
+        VisionLcg r2{seed * 13};
+        std::string mHf = map(r2, false, false, true);
+        auto mkHf = [&] { auto s = makeSimJson(rulesHf, mHf, seed); VisionLcg rr{seed}; randomCorners(*s, rr, 40); return s; };
+        CHECK(visionMatches(mkHf, pt, [&](Simulation& s, VisionLcg& r) { randomCorners(s, r, 3); }, 300, seed, &passes));
+    }
+    CHECK(passes > 400);
+}
+
+TEST(vision_fast_equals_reference_planet) {
+    // small planet: 6 faces of 10 x 10, random hills (the horizon), rock to dig on two faces, blocking structures,
+    // units on seams and next to cube corners
+    const int N = 10;
+    const std::string rules = R"J({"fogOfWar": {"lineOfSight": true, "rockHeight": 1.5}, "victory": {"mode": "survive", "seconds": 900},
+      "diggable": {"D": {"hardness": 2}},
+      "types": {"scout": {"move": {"speed": 3, "radius": 0.3}, "sight": 6},
+                "tower": {"move": {"speed": 2, "radius": 0.3}, "sight": 8, "vision": {"eye": 2}},
+                "flyer": {"move": {"speed": 3, "layer": "air", "radius": 0.3}, "sight": 5},
+                "seer": {"move": {"speed": 2, "radius": 0.3}, "sight": 30},
+                "wall": {"structure": {"footprint": [1, 3]}, "health": {"max": 500}, "vision": {"blocks": 2}}}})J";
+    for (uint64_t seed = 1; seed <= 3; ++seed) {
+        VisionLcg r{seed * 5};
+        std::string corners;
+        for (int i = 0; i < 6 * (N + 1) * (N + 1); ++i) corners += std::string(i ? "," : "") + std::to_string(r.below(49) - 16);
+        auto face = [&](bool dig) {
+            std::string rows;
+            for (int y = 0; y < N; ++y) { std::string row(size_t(N), '.'); if (dig) for (int x = 0; x < N; ++x) if (r.below(4) == 0) row[size_t(x)] = 'D'; rows += std::string(y ? "," : "") + "\"" + row + "\""; }
+            return "{\"rows\":[" + rows + "]}";
+        };
+        std::string faces;
+        for (int f = 0; f < 6; ++f) faces += std::string(f ? "," : "") + face(f == 1 || f == 2);
+        const char* kinds[] = {"scout", "tower", "flyer", "scout", "seer"};
+        std::string ents;
+        for (int i = 0; i < 18; ++i) {
+            const int f = r.below(6);
+            const int x = i % 3 == 0 ? (r.below(2) ? 0 : N - 1) : r.below(N), y = i % 3 == 0 ? (r.below(2) ? 0 : N - 1) : r.below(N);   // cube corners / seams
+            ents += std::string(i ? "," : "") + "{\"type\":\"" + kinds[i % 5] + "\",\"owner\":" + std::to_string(1 + i % 3) +
+                    ",\"at\":{\"body\":\"p\",\"face\":" + std::to_string(f) + ",\"x\":" + std::to_string(x) + ".5,\"y\":" + std::to_string(y) + ".5}}";
+        }
+        for (int i = 0; i < 4; ++i) ents += ",{\"type\":\"wall\",\"owner\":0,\"at\":{\"body\":\"p\",\"face\":" + std::to_string(i) + ",\"x\":5,\"y\":5}}";
+        const std::string map = R"J({"players": [{"name":"A","team":1,"start": {"body": "p", "face": 4, "x": 4, "y": 4}}, {"name":"B","team":1,"start": {"body": "p", "face": 0, "x": 4, "y": 4}}, {"name":"C","team":2,"start": {"body": "p", "face": 5, "x": 4, "y": 4}}],
+          "world": {"start": "p", "bodies": [{"id": "p", "kind": "planet", "radius": 14, "faceSize": 10, "terrain": {"faces": [)J" + faces + "], \"corners\": [" + corners + "]}}]},\"entities\": [" + ents + "]}";
+        auto mk = [&] { return makeSimJson(rules, map, seed); };
+        auto pt = [&](Simulation& s, VisionLcg& rr) { const game::Surface* S = mod(s).surface(s); return S->cellCenter(S->gridCell(0, rr.below(6), rr.below(N), rr.below(N))); };
+        int passes = 0;
+        { auto s0 = mk(); CHECK(mod(*s0).surface(*s0) != nullptr); }
+        CHECK(visionMatches(mk, pt, [&](Simulation& s, VisionLcg& rr) {
+            auto& g = mod(s).state(s).grid;
+            for (int k = 0; k < 12; ++k) { const size_t i = size_t(rr.below(int(g.dig.size()))); if (i < g.dig.size()) g.dig[i] = 0; }
+            std::vector<Entity> walls;
+            const int wall = mod(s).rules().findType("wall");
+            s.world().each<game::Unit>([&](Entity e, game::Unit& u) { if (u.type == wall && u.hp.raw > 0) walls.push_back(e); });
+            if (!walls.empty() && rr.below(3) == 0) s.world().get<game::Unit>(walls[size_t(rr.below(int(walls.size())))]).hp = Fixed{};
+        }, 420, seed, &passes));
+        CHECK(passes > 60);
+        // and the shipped planet maps over a stretch of a match
+        auto big = [&] { return makeSim(std::string(RTS_SOURCE_DIR) + "/templates/planets", "maps/two_worlds.json", seed); };
+        auto ptBig = [&](Simulation& s, VisionLcg& rr) { const game::Surface* S = mod(s).surface(s); const int b = S->startBody, M = S->bodies[size_t(b)].faceSize; return S->cellCenter(S->gridCell(b, rr.below(6), rr.below(M), rr.below(M))); };
+        if (seed == 1) CHECK(visionMatches(big, ptBig, [](Simulation&, VisionLcg&) {}, 300, seed, &passes));
+    }
+}
+
 // ---------------- Lighting (lighting agent): GPU-free logic ----------------
 #include "modules/rts/view/RtsLights.h"
 #include "engine/render/QualityGovernor.h"
@@ -9266,8 +9462,9 @@ TEST(terrain_detail_codec_roundtrip) {
     CHECK(e.k == 2 && e.hgt == d.hgt && splat.empty());
 }
 
-int main() {
+int main(int argc, char** argv) {
     for (auto& [name, fn] : registry()) {
+        if (argc > 1 && std::string(name).find(argv[1]) == std::string::npos) continue;   // rts_tests [name filter]
         int before = g_failed;
         fn();
         std::printf("%s %s\n", g_failed == before ? "[ OK ]" : "[FAIL]", name);
