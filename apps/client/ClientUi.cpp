@@ -59,6 +59,7 @@ private:
 
 void GameClient::initUi() {
     if (!ui_.init(*dev_, "fonts/ui.ttf")) { error_ = "ui: init failed"; return; }
+    ui_.setKeyboardLanguage(loc_.language());
     Rml::DataModelConstructor c = ui_.context()->CreateDataModel("game");
     if (!c) return;
     if (auto h = c.RegisterStruct<UiItem>()) {

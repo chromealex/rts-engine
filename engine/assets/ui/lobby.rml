@@ -66,7 +66,7 @@
                     <div class="grow">
                         <span>{{sl.label}}</span>
                         <span class="sub" data-if="sl.hotkey != ''">({{sl.hotkey}})</span>
-                        <div class="sub">{{sl.cost}} <span class="ok" data-if="sl.tip != ''">✓ {{sl.tip}}</span></div>
+                        <div class="sub">{{sl.cost}} <span class="ok" data-if="sl.tip != ''">{{sl.tip}}</span></div>
                     </div>
                     <button class="small" data-if="sl.enabled" data-event-click="act(sl.id)">@lobby.take</button>
                     <button class="small" data-if="sl.alt >= 0" data-event-click="act(sl.alt)">{{sl.altLabel}}</button>
