@@ -39,6 +39,7 @@ void RtsAI::update(Simulation& sim) {
     if (!m) return;
     applyRulesConfig(*m);
     auto* gs = sim.world().resource<GameState>();
+    if (m->rules().mech.turns && !mechTurnAI(sim, *m)) return;   // agent-mech TB: act only on its own turn
     if (std::find(gs->wavePlayers.begin(), gs->wavePlayers.end(), player_) != gs->wavePlayers.end()) return; // scripted side
     bool hasGarrisons = false, hasOther = false;
     sim.world().each<Unit, Owner>([&](Entity e, Unit& u, Owner& o) {

@@ -36,11 +36,6 @@ struct VeterancyTable {
     bool set = false;
 };
 
-enum class ArmorModel : uint8_t { Subtract = 0, Percent = 1, Classes = 2 };
-constexpr uint16_t kDamagePure = 0xFFFF;   // damage type: armor already applied (class model), no table / armor
-
-struct ClassAttack { uint16_t cls = 0; Fixed amount{}; };
-
 struct ItemDef {
     std::string id, name;
     std::vector<Amount> cost;
@@ -70,12 +65,6 @@ struct MechType {
     int veterancy = -1;                    // -1: rules table, 0: none, 1: own table below
     VeterancyTable vetTable;
     Fixed killXp{};                        // xp its killer gets: explicit "xp", else its cost x veterancy.fromCost
-    // combat models
-    std::vector<std::vector<ClassAttack>> attacks;   // per weapon: class attacks (AoE: melee 6, cavalry +15)
-    std::vector<Fixed> armors;             // per armor class (class model); size = classes, missing = 0
-    uint64_t armorClassMask = 0;           // classes it has (bonus classes apply only when present)
-    Fixed shieldMax{}, shieldRegen{}, shieldDelay = Fixed::fromInt(10), shieldArmor{};   // StarCraft shields
-    int maxWorkers = 0;                    // resource node: at most N gathering at once (WC3 mine, SC saturation)
     // stage 2
     bool wall = false;                     // built in lines (kCmdBuildLine)
     uint8_t gate = 0;                      // 1: lets its owner through, 2: owner and allies
@@ -95,7 +84,7 @@ struct MechType {
     // stage 3
     uint8_t givesCover = 0;                // structure: cover level for units next to it
     bool arcs = false; Fixed arcSide = Fixed::fromInt(1), arcRear = Fixed::fromInt(1);   // directional armor (damage multipliers)
-    std::vector<Fixed> suppress, turretRate, killsCrew, crater;   // per weapon
+    std::vector<Fixed> suppress, turretRate, crater;   // per weapon
     std::vector<uint16_t> infect;          // per weapon: kills rise as this type (0xFFFF none)
     uint16_t ruins = 0xFFFF;               // leaves this type when destroyed
     Fixed crushDamage{}; uint64_t crushTags = 0;
@@ -104,13 +93,18 @@ struct MechType {
     bool autonomous = false;               // acts on its own (Majesty heroes): bounties, enemies, exploring
     Fixed powerField{};                    // pylon: powers own structures within this radius
     bool needsPower = false;               // works and can be built only in a power field
-    bool crew = false; uint64_t crewTags = 0;   // vehicle with a crew; crewless it is neutral until re-crewed
     uint16_t infectSpawn = 0xFFFF; int infectCount = 0;   // structure overrun by an infecting attacker spawns these
-    int upgradeGarrison = 0;               // upgrading INTO this type costs garrison units (Mushroom Wars 2)
     // stage 4
     Fixed moraleMax{};                     // 0: rules morale.max
     Fixed chargeBonus{}, chargeRun{}, chargeShock{}, chargeCooldown{};   // charge: run-up (cells), first-hit damage multiplier
     Fixed supplyRadius{};                  // depot: supplies own units within this radius
+    // logistics (Mindustry, Factorio): belts, producers, crafters, belt inputs
+    Fixed beltSpeed{};                     // conveyor piece: cells per second
+    uint64_t beltAccepts = 0;              // resources taken from belts into the owner's stock (bit per resource)
+    int16_t outRes = -1; Fixed outAmount{}, outInterval{};   // producer: puts packets on adjacent belts
+    std::vector<Amount> craftIn, craftOut; Fixed craftTime{};  // crafter: inputs from belts -> outputs to belts
+    // free 3D flight (Homeworld): altitude band, climb rate, start altitude; ranges are measured in 3D
+    Fixed altMin{}, altMax{}, altClimb{}, altStart{};
 };
 
 struct MechRules {
@@ -129,16 +123,6 @@ struct MechRules {
     VeterancyTable vet;                    // rules "veterancy"
     bool vetHeal = true;                   // rank up heals fully
     Fixed vetFromCost = Fixed::fromInt(1); // xp for a kill without "xp": victim cost x this
-    // combat / economy models (templates audit)
-    ArmorModel armorModel = ArmorModel::Subtract;
-    Fixed minDamageFraction = Fixed::fromRatio(1, 5);   // subtract: at least this share of the raw damage
-    Fixed minDamage{};                     // ... and at least this much (AoE: 1)
-    Fixed percentFactor = Fixed::fromRatio(6, 100);    // percent: reduction = a*f / (1 + a*f) (Warcraft III)
-    std::vector<std::string> armorClasses; // class model: names; the first `baseClasses` always apply
-    int baseClasses = 0;
-    bool shields = false;
-    uint32_t upkeepMask = 0;               // resources upkeep applies to (0 = all gathering)
-    bool workerCaps = false;
     // stage 2
     bool walls = false, gates = false, bridges = false, tunnels = false, ammo = false, merge = false;
     std::vector<std::string> tunnelNets;   // tunnel network names (MechType::tunnel indexes this)
@@ -168,7 +152,7 @@ struct MechRules {
     Fixed supSpeed = Fixed::fromRatio(1, 2), supAttack = Fixed::fromRatio(3, 4);
     uint64_t supTags = 0;
     bool combat3 = false;                  // arcs / turrets / crew / infect / craters / crush present
-    bool staffing = false, growth = false, autonomy = false, power = false, crews = false, infection = false, ruinsAny = false;
+    bool staffing = false, growth = false, autonomy = false, power = false, infection = false, ruinsAny = false;
     bool rounds = false;
     Fixed prepareTime = Fixed::fromInt(30), fightTime = Fixed::fromInt(60);
     int roundCount = 10;
@@ -192,6 +176,14 @@ struct MechRules {
     uint64_t supplyTags = 0;
     Fixed supplyAttrition = Fixed::fromRatio(1, 100), supplySpeed = Fixed::fromRatio(4, 5), supplyAttack = Fixed::fromRatio(4, 5);
     bool battle() const { return morale || fatigue || charge || supply; }
+    bool armyBlock = false;                // rules "flowFields": attack-move groups of more than 24 form a block of rows
+    bool conveyors = false;
+    // turn-based mode (TB): players act in turns on the same simulation (Heroes / XCOM style battles)
+    bool altitude = false;   // some type flies in 3D (SP)
+    bool turns = false;
+    Fixed turnMoveSeconds = Fixed::fromInt(4);   // move budget per turn = type speed x this
+    int turnAttacks = 1;                         // shots per weapon per turn
+    Fixed turnTimeLimit{};                       // >0: the turn ends by itself after this many seconds   // BA: big armies share flow fields
     int findItem(const std::string& id) const { for (size_t i = 0; i < items.size(); ++i) if (items[i].id == id) return int(i); return -1; }
 };
 

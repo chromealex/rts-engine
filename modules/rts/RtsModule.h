@@ -7,6 +7,7 @@
 //   RtsWorld.cpp     vision (with heights), creep, control points, regions, waves, neutrals, victory
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../../engine/sim/CommonComponents.h"
@@ -14,6 +15,7 @@
 #include "RtsData.h"
 #include "RtsMap.h"
 #include "RtsTriggers.h"
+#include "RtsScript.h"
 #include "RtsMech.h"
 #include <memory>
 
@@ -76,6 +78,9 @@ enum CommandType : uint16_t {
     kCmdPickItem,     // units[0]; point = where the ground item lies
     kCmdLearn,        // heroes (rules heroes.skills): param = ability index to learn / raise with a skill point
     kCmdBounty,       // point or target; param = resource | reward << 8 (autonomous heroes go for it)
+    kCmdRotate,       // conveyor pieces: param 1..4 = east, south, west, north; 0 = turn clockwise
+    kCmdLock,         // gates / doors: param 1 lock (closed for everyone), 2 unlock, 0 toggle
+    kCmdEndTurn,      // turn-based mode: the active player ends the turn
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -145,6 +150,7 @@ enum GameEvent : uint16_t {
     kEvGroupTeleport, // a = unit moved, b = caster (may be null), pos = arrival, value = 1 when it is a return trip
     kEvPaved,         // a = slab (removed), value = cells paved, pos = slab centre
     kEvMorale,          // a = unit, value = 0 steady / 1 wavering / 2 routing (stage 4)
+    kEvTurn,            // turn-based mode: player = whose turn starts, value = turn number
 };
 
 // ---------------------------------------------------------------- components
@@ -203,7 +209,12 @@ struct Mobile {
     // flow field following (RtsFlowField.cpp): the field is keyed by (goal cell, radius, path layer, clearance)
     bool flow = false;
     uint8_t flowRadius = 0;
-    uint8_t flowStuck = 0;       // stuck events while on the field: the first re-samples it, the second falls back to A*
+    uint8_t flowStuck = 0;       // stuck events while on the field: re-sample first, A* after repeated stalls
+    int32_t flowGoalCell = -1;   // goal cell of the field this unit follows / followed
+    Fixed flowArea{};            // goal area radius of the order (contagion reaches out to twice that)
+    uint16_t flowNear = 0;       // ticks spent near the settled crowd without settling (lets it settle farther out)
+    int32_t flowArrived = -1;    // goal cell this unit arrived at (stopped there): followers of the same goal that
+                                 // touch it arrive too ("arrival contagion"), so a crowd settles instead of jamming
 };
 
 struct Orders { std::vector<Order> queue; };
@@ -415,6 +426,7 @@ struct GameState {
     std::vector<std::vector<int32_t>> visibleCells; // per player: cells at 2 (derived, so fog reset is O(visible))
     uint8_t fogMode = 0;                            // FogMode of this match (rules, map override)
     std::vector<int64_t> visionBase, visionOcc;     // line of sight: ground / occluder heights (1/64 units, derived)
+    uint64_t visionToken = 0;                       // vision cache that last updated this state (RtsVision.cpp; not saved / hashed)
     // regions
     int regionCount = 0;
     std::vector<uint8_t> regionOwner;
@@ -460,8 +472,12 @@ struct GameState {
 };
 
 // ---------------------------------------------------------------- module
+struct VisionCache;   // RtsVision.cpp
+
 class RtsModule final : public GameModule {
 public:
+    RtsModule();
+    ~RtsModule() override;
     std::string name() const override { return "rts"; }
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
@@ -471,6 +487,7 @@ public:
 
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
+    ScriptEngine* scripts() const { return script_.get(); }   // the Lua VM (standard library + game scripts)
     // The map the simulation was set up from when the map had a "generate" block (nullptr otherwise):
     // presentation reads terrainMaterial / heights / regions from it (agent-terrain-gen).
     const Json* generatedMap() const { return generated_.isObject() ? &generated_ : nullptr; }
@@ -488,6 +505,9 @@ public:
     bool canTrain(Simulation& sim, uint8_t player, uint16_t type) const; // requirements + unique
     bool canAfford(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed supply = {}, int* missing = nullptr) const;
     bool isVisible(Simulation& sim, uint8_t player, Vec3 p) const;
+    // Tests / tools: run the brute-force reference vision instead of the cached one (results are identical;
+    // RTS_VISION=ref does the same, RTS_VISION=check runs both and aborts on a difference).
+    void setVisionReference(bool on);
     bool hostile(Simulation& sim, uint8_t a, uint8_t b) const;
     Fixed stat(Simulation& sim, Entity e, Stat s) const;          // effective stat with techs/levels/buffs
     Fixed typeStat(Simulation& sim, uint8_t player, uint16_t type, Stat s, Fixed base) const;
@@ -603,11 +623,6 @@ public:
     void mechTick(Simulation& sim);                                  // veterans, toggles
     void mechVeteranKill(Simulation& sim, Entity victim);
     // combat / economy models (RtsMechCombat.cpp)
-    void mechClassDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;
-    Fixed mechArmorDamage(Simulation& sim, Entity target, Fixed raw, uint16_t dmgType) const;   // armor model
-    Fixed mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg);                          // what is left for hp
-    bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
-    void mechTickCombat(Simulation& sim);                                                       // shields
     // stage 2 (RtsMechWorld.cpp, RtsMechEconomy.cpp, RtsMechGroups.cpp)
     bool applyMechCommand3(Simulation& sim, const Command& cmd);
     void mechTickWorld(Simulation& sim);          // gates, bridges, hazards, cycles, docks
@@ -634,13 +649,11 @@ public:
     void mechTickTactics(Simulation& sim);     // suppression decay, turrets, crush
     void mechTickSociety(Simulation& sim);     // growth, autonomy, rounds
     void mechTacticsDeath(Simulation& sim, Entity e);   // ruins, infection
-    bool mechRecrew(Simulation& sim, const Command& cmd);
     bool mechSwitchedOff(Simulation& sim, Entity e) const;   // unpowered / unstaffed structures
     Fixed mechIncomeMult(Simulation& sim, Entity e) const;
     bool mechPowered(Simulation& sim, uint8_t player, Vec3 at) const;
     Fixed staffFraction(Simulation& sim, Entity e) const;
     bool applyMechSocietyCommand(Simulation& sim, const Command& cmd);   // bounty, garrison-paid upgrades
-    bool inMechUpgrade_ = false;
     // stage 4 (RtsMechBattle.cpp): morale, rout, fatigue, charge, supply
     void mechTickBattle(Simulation& sim);
     void mechMoraleHit(Simulation& sim, Entity target, Entity source, Fixed dmg);
@@ -649,6 +662,28 @@ public:
     void mechBattleStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
     bool mechRouting(Simulation& sim, Entity e) const;
     Fixed moraleMaxOf(uint16_t type) const;
+    // logistics (RtsMechLogistics.cpp): belts, producers, crafters
+    void mechTickLogistics(Simulation& sim);
+    bool applyMechLogisticsCommand(Simulation& sim, const Command& cmd);
+    void mechLogisticsSetup(Simulation& sim, const Json& map);
+    void hashLogistics(Simulation& sim, Hasher& h);
+    // turn-based mode (RtsMechTurns.cpp)
+    void mechTickTurns(Simulation& sim);
+    bool mechTurnCommand(Simulation& sim, const Command& cmd);   // true: swallowed (not your turn) or handled (end turn)
+    bool mechTurnFire(Simulation& sim, Entity e);
+    void mechTurnStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
+    uint8_t turnPlayer(Simulation& sim) const;
+    // free 3D flight (RtsMechSpace.cpp)
+    void mechAltitudeCommand(Simulation& sim, const Command& cmd);
+    void mechTickAltitude(Simulation& sim);
+    Fixed mechContact3D(Simulation& sim, Entity a, Entity b);
+    bool genericSeparation = false;   // tests: compare the BA separation against the generic loop
+    // BA: separation of overlapping units with a per-cell grid and flat arrays (exactly the pushes of sysMovement)
+    void mechSeparation(Simulation& sim, const std::vector<Fixed>& weight, const std::vector<uint8_t>& anchored, Fixed deadZone, size_t,
+                        const std::function<void(Entity, Vec3)>& push);
+    // BA: a big attack-move group forms a block of rows facing the goal instead of one wide arc (RtsMechBattle.cpp)
+    void mechArmyBlock(Simulation& sim, const std::vector<Entity>& sortedByLateral, Vec3 target, Vec3 dir, Vec3 perp, Fixed spacing,
+                       std::vector<std::pair<Entity, Vec3>>& out);
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:
@@ -658,7 +693,13 @@ private:
     void setupWorld(Simulation& sim, const Json& map);               // world block -> Surface + stacked grid
     Vec3 mapPos(Simulation& sim, const Json& p) const;               // [x, z] / [x, y, z] or {"body", "face", "x", "y"}
     void moveSphere(Simulation& sim);                                // movement + separation on planet surfaces / shells
-    void visionSphere(Simulation& sim);
+    // vision (RtsVision.cpp): fast cached passes and the brute-force reference they must match exactly
+    void visionFlatFast(Simulation& sim);
+    void visionSphereFast(Simulation& sim);
+    void visionFlatRef(Simulation& sim);
+    void visionSphereRef(Simulation& sim);
+    std::shared_ptr<VisionCache> vcache_;   // derived, never state (see RtsVision.cpp)
+    bool visionRef_ = false;
     void sysTransit(Simulation& sim);
     void applyTransit(Simulation& sim, const Command& cmd);
     void hashWorld(Simulation& sim, Hasher& h);
@@ -679,9 +720,6 @@ private:
     void sysCapture(Simulation& sim);
     void sysCreep(Simulation& sim);
     void sysVision(Simulation& sim);
-    void sysWaves(Simulation& sim);
-    void sysVictory(Simulation& sim);
-    void sysTriggers(Simulation& sim);
     void sysDungeon(Simulation& sim);     // RtsDungeon.cpp: jobs, needs, portals, territory, possession
     void setupDungeon(Simulation& sim, const Json& map);
     void applyDungeonCommand(Simulation& sim, const Command& cmd);
@@ -723,14 +761,13 @@ private:
     bool runLaneWalk(Simulation& sim, Entity e, Order& o);
     bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
     void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
-    void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
-    bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
     // fidelity mechanics hooks (RtsOriginals.cpp)
     void sysOriginals(Simulation& sim);
     void hashOriginals(Simulation& sim, Hasher& h);
     void economyOriginals(Simulation& sim);                         // fields, upkeep per resource, territory income
-    Fixed mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, Entity source);
+    Fixed mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, uint16_t dmgType);   // the damage pipeline
+    void classDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;   // classes model
     void afterHit(Simulation& sim, Entity target, Entity source, const WeaponDef* wd, bool killed);
     void onDeathOriginals(Simulation& sim, Entity e, uint8_t owner, Vec3 pos, bool silent);
     void onHeroSpawn(Simulation& sim, Entity e, uint8_t owner);
@@ -756,6 +793,7 @@ private:
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
+    std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
     // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
     void sysFidelity(Simulation& sim);
     void hashFidelity(Simulation& sim, Hasher& h);

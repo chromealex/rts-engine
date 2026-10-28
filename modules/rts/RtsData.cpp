@@ -116,13 +116,14 @@ VictoryRules loadVictory(const Json& j, const VictoryRules& def) {
 void loadFlowFieldRules(const Json& ff, FlowFieldRules& fr, const std::string& where) {
     fr.minGroup = int(std::clamp<int64_t>(ff.getInt("minGroup", fr.minGroup), 0, 100000));
     fr.waves = ff.getBool("waves", fr.waves);
+    fr.minCells = int(std::clamp<int64_t>(ff.getInt("minCells", fr.minCells), 0, 100000));
     fr.spread = ff.getFx("spread", fr.spread);
     fr.maxFields = int(std::clamp<int64_t>(ff.getInt("maxFields", fr.maxFields), 1, 4096));
     fr.budgetMB = int(std::clamp<int64_t>(ff.getInt("budgetMB", fr.budgetMB), 1, 4096));
     if (fr.spread.raw < 0) fail(where + ".spread", "must be >= 0");
     for (auto& [k, v] : ff.members())
-        if (k != "minGroup" && k != "waves" && k != "spread" && k != "maxFields" && k != "budgetMB")
-            fail(where, "unknown key '" + k + "' (minGroup, waves, spread, maxFields, budgetMB)");
+        if (k != "minGroup" && k != "minCells" && k != "waves" && k != "spread" && k != "maxFields" && k != "budgetMB")
+            fail(where, "unknown key '" + k + "' (minGroup, minCells, waves, spread, maxFields, budgetMB)");
 }
 
 Rules loadRules(const Json& j) {
@@ -707,6 +708,11 @@ Rules loadRules(const Json& j) {
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
         r.movement.planetHpaCells = int(std::clamp<int64_t>(mv.getInt("planetHpaCells", r.movement.planetHpaCells), 0, int64_t(1) << 30));
+        if (mv.has("blockedGoals")) {
+            const std::string bg = mv.getStr("blockedGoals");
+            if (bg != "nearest" && bg != "search") fail("movement.blockedGoals", "expected 'nearest' or 'search', got '" + bg + "'");
+            r.movement.blockedGoalNearest = bg == "nearest";
+        }
         if (const Json& ff = mv["flowField"]; ff.isObject()) {
             loadFlowFieldRules(ff, r.movement.flow, "movement.flowField");
         } else if (mv.has("flowField")) fail("movement.flowField", "expected an object");
@@ -770,6 +776,7 @@ Rules loadRules(const Json& j) {
     r.dungeon = anyDungeonType || r.territory.enabled || !r.diggables.empty() || !r.rooms.empty() || r.hand.max > 0 ||
                 r.possession.enabled || !r.playerAbilities.empty();
     loadMechRules(r, j);
+    r.armor.plainFloor = !r.originals && !r.mech.any && !j.has("armor") && !j.has("armorModel");   // old games: damage - armor, at least raw / 5
     return r;
 }
 

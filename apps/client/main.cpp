@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "engine/render/TextureCache.h"
 #include "ClientSplash.h"
 #include "GameClient.h"
 #include "modules/rts/RtsLocalize.h"
@@ -81,6 +82,13 @@ void GameClient::initStep(gfx::Device& dev, int step) {
         r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
         r3d_.setMaterialQuality(Renderer3D::defaultMaterialQualityFor(dev, platform::isTouchDevice()));
         r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
+        postFx_.init(dev);
+        postFxBase_ = render::PostFx::defaultQualityFor(dev, platform::isTouchDevice());
+        postFx_.setQuality(postFxBase_);
+        postFx_.setImageLoader([](const std::string& path, int& w, int& h, std::vector<uint8_t>& rgba) {
+            std::string bytes;
+            return platform::readContentFile(path, bytes) && render::decodeImage(bytes, w, h, rgba);
+        });
         break;
     case 2: view_.init(dev, rules_); break;     // models, textures, atlases of every type
     case 3: fx_.init(dev, rules_); break;
@@ -182,6 +190,7 @@ void GameClient::applyLanguage(const std::string& tag, bool save) {
     }
     if (!netMaps_.empty()) describeNetMaps(); // localized titles
     ui_.setKeyboardLanguage(loc_.language());
+    luaEmit("language", Json::string(loc_.language()));
 }
 
 void GameClient::shutdown() {
@@ -190,10 +199,16 @@ void GameClient::shutdown() {
     sound_.detach();
     audio_.shutdown();
     view_.shutdown(*dev_);
+    postFx_.shutdown();
     r3d_.shutdown();
     shutdownUi();
     minimap_.release(*dev_);
     overlay_.shutdown();
+}
+
+void GameClient::configurePostFx(const Json& map) {
+    postFx_.configure(manifest_["postfx"], map["postfx"]);
+    postFx_.setQuality(postFxBase_);
 }
 
 void GameClient::startMatch(size_t idx) {
@@ -209,8 +224,12 @@ void GameClient::startMatch(size_t idx) {
         cfg.seed = uint64_t(std::time(nullptr));
         if (const char* sd = std::getenv("RTS_SEED")) cfg.seed = uint64_t(std::strtoull(sd, nullptr, 10));   // testing: reproducible matches
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
-        sim_->setup(rulesJson_, map);
+        Json rules = rulesJson_;
+        if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
+        sim_->setup(rules, map);
+        if (viewScripts_.load(*sim_, rules, map, uint8_t(spectator_ ? 0 : human_))) viewScripts_.attach(*sim_);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
+        configurePostFx(map);
         quality_.reset(int(r3d_.shadowQuality()), int(r3d_.lights.quality()));
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
@@ -407,7 +426,10 @@ void GameClient::event(const Event& e) {
     // mobile apps go quiet in the background; desktop keeps playing when the window loses focus
     if (e.type == EventType::FocusLost && platform::isTouchDevice()) audio_.setPaused(true);
     if (e.type == EventType::FocusGained) audio_.setPaused(false);
+    if (e.type == EventType::Resized) luaEmit("resize", Json());   // UI scripts: safe area, layout
     if (howtoOpen_ && e.type == EventType::KeyDown && e.key == Key::Escape) { howtoOpen_ = false; return; }
+    // the game's own screens (ui/lib/meta.lua): Esc / Android back goes through ui.back()
+    if (screen_ == Screen::Menu && !engineMenu_ && e.type == EventType::KeyDown && e.key == Key::Escape && !e.repeat) { luaEmit("back", Json()); return; }
     if (screen_ == Screen::Paused && e.type == EventType::KeyDown && e.key == Key::Escape && !uiWants) { setScreen(Screen::Playing); return; }
     if (screen_ != Screen::Playing || !sim_) return;
     if (planet() && planetCameraEvent(e, uiWants)) return;   // orbit camera (ClientPlanet.cpp)
@@ -642,6 +664,21 @@ void GameClient::processEvents() {
     }
 }
 
+// View scripts: presentation requests -> notices, particle effects, sounds (never into the sim).
+void GameClient::runViewScripts(float dt) {
+    if (!viewScripts_.active()) return;
+    viewScripts_.update(*sim_, dt);
+    for (auto& r : viewScripts_.takeRequests()) {
+        if (r.kind == game::ViewRequest::Notice) notice(r.text);
+        else if (r.kind == game::ViewRequest::Effect) fx_.particles().play(r.text, {r.x, 0.5f, r.z});
+        else {
+            audio::PlayParams pp;
+            pp.positional = r.positioned; pp.x = r.x; pp.z = r.z;
+            audio_.play(r.text, pp);
+        }
+    }
+}
+
 void GameClient::frame(gfx::Device& dev, double dt) {
     time_ += dt;
     float alpha = 0;
@@ -678,6 +715,9 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             r3d_.setShadowQuality(ShadowQuality(quality_.shadows()));
             r3d_.lights.setQuality(rts::render::LightQuality(quality_.lights()));
             shadowQuality_ = boundShadowQuality_ = quality_.shadows();
+            // post effects follow: one tier down per governor step, but keep the cheap look (low)
+            if (postFxBase_ != render::PostFxQuality::Off)
+                postFx_.setQuality(render::PostFxQuality(std::max(1, int(postFxBase_) - quality_.stepsDown())));
         }
 
         steerPossessed();
@@ -705,6 +745,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         markers_.erase(std::remove_if(markers_.begin(), markers_.end(), [&](auto& m) { return m.second < time_; }), markers_.end());
     }
 
+    luaTick(dt);   // game.on("update", fn) in UI scripts
     updateAudio(dt);
     overlay_.newFrame(dt);
     updateUi();
@@ -744,6 +785,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
                    screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
         fx_.addLights(r3d_.lights);   // particle lights ("light" module)
+        runViewScripts(screen_ == Screen::Playing ? float(dt) : 0.0f);
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
@@ -753,8 +795,9 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             }
         }
         drawToolPreview();
-        r3d_.render(pass);
+        r3d_.render(pass, &postFx_);
         fx_.render(r3d_.lighting);
+        r3d_.resolvePostFx();   // post effects (if any) under the HUD
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;
@@ -786,10 +829,16 @@ int rtsMain(int argc, char** argv) {
     cb.event = [](const Event& e) { boot.event(e); };
     cb.shutdown = [] { boot.shutdown(); };
     // --howto: open "How to play"; --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
+    std::string previewScreen, previewParams, previewProfile, previewLua;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
         if (a == "--howto") g_client->showHowto();
+        // --ui-screen name [--ui-params json] [--ui-profile json] [--ui-lua code]: one screen of the game (MCP ui_preview)
+        if (a == "--ui-screen" && i + 1 < argc) previewScreen = argv[++i];
+        if (a == "--ui-params" && i + 1 < argc) previewParams = argv[++i];
+        if (a == "--ui-profile" && i + 1 < argc) previewProfile = argv[++i];
+        if (a == "--ui-lua" && i + 1 < argc) previewLua = argv[++i];
         if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);
         // --size WxH: window size on desktops (e.g. 540x960 to look at a portrait game)
         if (a == "--size" && i + 1 < argc) {
@@ -798,12 +847,21 @@ int rtsMain(int argc, char** argv) {
         }
         if (a == "--map" && i + 1 < argc) autostartMap = size_t(std::stoul(argv[++i]));
     }
+    if (!previewScreen.empty()) {   // Lua long strings: the JSON goes in verbatim
+        auto lng = [](const std::string& t) { return "[==[" + t + "]==]"; };
+        std::string code;
+        if (!previewProfile.empty()) code += "profile.merge(assert(game.decode(" + lng(previewProfile) + ")))\n";
+        code += "ui.preview(" + lng(previewScreen) + ", " + (previewParams.empty() ? std::string("{}") : "assert(game.decode(" + lng(previewParams) + "))") + ")\n";
+        code += previewLua;
+        g_client->previewScreen(code);
+    }
     // RTS_SPLASH=off: load in the init callback (old behaviour); full: the whole splash even with --map
     ClientBoot::Mode mode = autostartMap != size_t(-1) ? ClientBoot::Mode::LoadingOnly : ClientBoot::Mode::Full;
     if (const char* s = std::getenv("RTS_SPLASH")) {
         if (std::string(s) == "off") mode = ClientBoot::Mode::Off;
         else if (std::string(s) == "full") mode = ClientBoot::Mode::Full;
     }
+    if (!previewScreen.empty()) mode = ClientBoot::Mode::Off;   // previews show the screen at once
     cb.init = [mode](gfx::Device& d) {
         boot.init(d, *g_client, mode, [] { if (autostartMap != size_t(-1)) g_client->autostart(autostartMap); });
     };

@@ -150,6 +150,7 @@ PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::v
 // ------------------------------------------------------------------ surface
 
 void PlanetSurface::init(const PlanetBody& b) {
+    k_ = 0; m_ = 0; ddirs_.clear(); dn_.clear(); dh_.clear(); dcanon_.clear();
     n_ = std::max(1, b.faceSize);
     radius_ = b.radius;
     const int N = n_, S = (N + 1) * (N + 1);
@@ -175,7 +176,7 @@ void PlanetSurface::init(const PlanetBody& b) {
     for (float h : heights_) { minH_ = std::min(minH_, h); maxH_ = std::max(maxH_, h); }
     flags_ = b.flags;
     normals_.assign(dirs_.size(), {});
-    for (size_t k = 0; k < dirs_.size(); ++k) normals_[k] = size_t(canon_[k]) < k ? normals_[size_t(canon_[k])] : normalAt(dirs_[k]);
+    for (size_t k = 0; k < dirs_.size(); ++k) normals_[k] = size_t(canon_[k]) < k ? normals_[size_t(canon_[k])] : coarseNormalAt(dirs_[k]);
 }
 
 void PlanetSurface::updateHeights(const PlanetBody& b, const Rect (&rect)[6]) {
@@ -196,13 +197,14 @@ void PlanetSurface::updateHeights(const PlanetBody& b, const Rect (&rect)[6]) {
     }
     minH_ = 1e9f; maxH_ = -1e9f;
     for (float h : heights_) { minH_ = std::min(minH_, h); maxH_ = std::max(maxH_, h); }
+    if (k_) detailRange();
     for (int f = 0; f < 6; ++f) {
         const Rect& r = rect[f];
         if (r.x1 < r.x0) continue;
         for (int j = std::max(0, r.y0 - 1); j <= std::min(N, r.y1 + 1); ++j)
             for (int i = std::max(0, r.x0 - 1); i <= std::min(N, r.x1 + 1); ++i) {
                 const size_t k = size_t(cornerIndex(f, i, j));
-                normals_[k] = normalAt(dirs_[k]);
+                normals_[k] = coarseNormalAt(dirs_[k]);
                 int dup[3];
                 const int cnt = cs.cornerDuplicates(f, i, j, dup);
                 for (int d = 0; d < cnt; ++d) normals_[size_t(dup[d])] = normals_[k];
@@ -234,6 +236,20 @@ void PlanetSurface::faceFromDir(float3 d, int& face, float& a, float& b) const {
 }
 
 float PlanetSurface::heightAt(float3 dir) const {
+    if (k_) { // the detail grid (exactly the drawn triangles)
+        int f; float a, b;
+        faceFromDir(dir, f, a, b);
+        a *= float(k_); b *= float(k_);
+        const int x = std::min(int(a), m_ - 1), y = std::min(int(b), m_ - 1);
+        const float fx = a - float(x), fz = b - float(y);
+        const float h00 = gridHeight(f, x, y), h10 = gridHeight(f, x + 1, y), h01 = gridHeight(f, x, y + 1), h11 = gridHeight(f, x + 1, y + 1);
+        if (fx >= fz) return h00 + (h10 - h00) * fx + (h11 - h10) * fz;
+        return h00 + (h11 - h01) * fx + (h01 - h00) * fz;
+    }
+    return coarseHeightAt(dir);
+}
+
+float PlanetSurface::coarseHeightAt(float3 dir) const {
     if (heights_.empty()) return 0;
     int f; float a, b;
     faceFromDir(dir, f, a, b);
@@ -249,10 +265,20 @@ float3 PlanetSurface::surfacePoint(float3 dir) const {
     return dir * (radius_ + heightAt(dir));
 }
 
+float3 PlanetSurface::coarseNormalAt(float3 dir) const {
+    dir = normalize(dir);
+    float3 t1 = normalize(cross(std::fabs(dir.y) < 0.9f ? float3{0, 1, 0} : float3{1, 0, 0}, dir)), t2 = cross(dir, t1);
+    const float e = 0.7f / float(n_);
+    auto sp = [&](float3 d) { d = normalize(d); return d * (radius_ + coarseHeightAt(d)); };
+    const float3 a = sp(dir + t1 * e), b = sp(dir - t1 * e), c = sp(dir + t2 * e), d = sp(dir - t2 * e);
+    float3 n = normalize(cross(a - b, c - d));
+    return dot(n, dir) < 0 ? -n : n;
+}
+
 float3 PlanetSurface::normalAt(float3 dir) const {
     dir = normalize(dir);
     float3 t1 = normalize(cross(std::fabs(dir.y) < 0.9f ? float3{0, 1, 0} : float3{1, 0, 0}, dir)), t2 = cross(dir, t1);
-    const float e = 0.7f / float(n_);   // ~ half a cell (a face spans ~pi/2)
+    const float e = 0.7f / float(gridSize());   // ~ half a cell / sample (a face spans ~pi/2)
     const float3 a = surfacePoint(dir + t1 * e), b = surfacePoint(dir - t1 * e), c = surfacePoint(dir + t2 * e), d = surfacePoint(dir - t2 * e);
     float3 n = normalize(cross(a - b, c - d));
     return dot(n, dir) < 0 ? -n : n;
@@ -273,7 +299,7 @@ bool PlanetSurface::raycast(float3 o, float3 d, float3& hit, float seaLevel) con
         float g = radius_ + std::max(heightAt(p), seaLevel);
         return r - g;
     };
-    const float step = std::max(radius_ * 1.2f / float(n_), 0.05f);
+    const float step = std::max(radius_ * 1.2f / float(gridSize()), 0.05f);
     float prev = t, fPrev = above(t);
     if (fPrev <= 0) { hit = o + d * t; return true; }
     for (float tt = t + step; prev < tEnd; tt += step) {

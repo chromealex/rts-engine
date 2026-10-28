@@ -20,6 +20,7 @@
 #include "engine/gfx/Gfx.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
+#include "engine/render/PostFx.h"
 #include "engine/render/Renderer3D.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
@@ -78,6 +79,8 @@ public:
     const game::Rules& rules() const { return ws_.project.rules; }
     gfx::Device& device() { return *dev_; }
     render::Renderer3D& renderer() { return r3d_; }
+    render::PostFx& postFx() { return postFx_; }   // post effects of Scene / Game views (PostFxWindow configures it)
+    bool postFxInScene = true;                     // false: only the Game view is post-processed
     game::RtsView& view() { return view_; }
     const game::MapGrid& editGrid() const { return grid_; }
     const Options& options() const { return opt_; }
@@ -206,6 +209,7 @@ private:
     gfx::Device* dev_ = nullptr;
     render::ImGuiLayer ui_;
     render::Renderer3D r3d_;
+    render::PostFx postFx_;
     game::RtsView view_;
     bool showPicker_ = false;
     bool resetLayout_ = false;

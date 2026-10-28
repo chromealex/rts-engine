@@ -54,6 +54,7 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `techs` | see below |
 | `factions` | see below |
 | `triggers` | see "Triggers" (also allowed in maps) |
+| `scripts`, `viewScripts`, `scriptBudget` | Lua scripts of the game (also allowed in maps): `["scripts/rules.lua"]` run in the deterministic simulation (integers and `fx` numbers, no floats), `viewScripts` only on the local machine (notices, effects, sounds); `scriptBudget` = VM instructions per tick (default 1000000). Effects and trigger actions/conditions `{"type": "script", "fn": "name"}` call script functions. See docs/scripting.md |
 | `diggable`, `rooms`, `territory`, `hand`, `possession` | see "Dungeon management and territory" |
 | `playerAbilities` | see "Player abilities" |
 | `storage` | `"player"` (default: one stock per player) or `"buildings"`: goods live in building inventories, see "Settlers economy" |
@@ -104,6 +105,7 @@ any tag in `deficitDisables`).
 
   ```jsonc
   "movement": {"flowField": {"minGroup": 12,     // move / attack-move / patrol / right-click orders of >= 12 units (0 = never)
+                             "minCells": 0,      // ... only for units at least this many cells from the goal (0 = all)
                              "waves": true,      // units released by map waves and lane waves march on fields
                              "spread": 0.4,      // goal area radius = 0.3 + spread * sqrt(units) (they arrive spread out)
                              "maxFields": 64, "budgetMB": 32}}   // cache: LRU of unreferenced fields beyond these
@@ -111,6 +113,10 @@ any tag in `deficitDisables`).
   A map may carry the same block (`"movement": {"flowField": {...}}` at the map's top level) to switch fields on for
   itself only (e.g. `templates/lastcolony/maps/horde_plain.json`, `templates/planets/maps/big_planet.json`).
   Fliers keep flying straight; units pushed off the field or stuck repeatedly fall back to their own A* path.
+  Followers settle around the goal from the inside out (arrival contagion) and don't block each other.
+- `movement.blockedGoals: "nearest"` (rules or map, default `"search"`): paths to a goal inside a structure or obstacle
+  (attacking a building) end at the free cell around it nearest to the unit - much cheaper for hordes; different cells
+  than the classic search, so it is opt-in (on in `templates/lastcolony/maps/horde_plain.json`).
 
 ## types — blocks
 
@@ -893,13 +899,16 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
   them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
 - **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
 
-### Combat and economy models (agent-mech)
+### Combat and economy models (agent-mech keys = aliases of the fidelity blocks)
+
+These keys come from agent-mech; they are parsed into the single implementation of each mechanic described in
+[Fidelity mechanics](#fidelity-mechanics-play-like-the-original) and mean the same there.
 
 ```json
-"armorModel": "percent",                                               // Warcraft III: armor a cuts a*0.06/(1+a*0.06); "factor" changes 0.06
-"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // default (StarCraft): damage - armor, at least 20%
-"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // Age of Empires II
-"upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
+"armorModel": "percent",                                               // = "armor": {"model": "percent", "negative": "exponential"}; "factor" = perPoint
+"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // = "armor": {"model": "subtract", "minShare": 0.2, "minDamage": 0}
+"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // = "armor": {"model": "classes", "base": [...], "minDamage": 1}
+"upkeepResources": ["gold"],                                            // = "resources" of every upkeep tier that names none (Warcraft III)
 "types": {
   "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
   "knight":   {"armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
@@ -908,14 +917,17 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
 }
 ```
 
-- **classes**: damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that class)); `base`
-  classes always count (a missing armor is 0, armor upgrades raise them), other classes only against types that list
-  them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first base class
-  with its `damage`. The damage table is not used in this model.
-- **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
-  regenerate `regen`/s after `delay` seconds without hits.
-- **maxWorkers**: further workers wait next to the node until a place is free.
-
+- **classes** (Age of Empires II): damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that
+  class)); `base` classes always count (a missing armor is 0, armor upgrades raise them), other classes only against
+  types that list them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first
+  base class with its `damage`. The damage table is not used in this model. Without `min` / `minFraction` the classes
+  model floors at 1 and has no share floor.
+- `armorModel` percent uses the exact Warcraft III curve for negative armor (`2 - (1 - k)^-a`); `"armor"` keeps the
+  linear `1 + min(-a·k, 0.71)` unless it says `"negative": "exponential"`.
+- type `"shields": {"max", "regen", "delay", "armor"}` = `health.shields` / `shieldRegen` / `shieldDelay` / `shieldArmor`
+  (same defaults: regen 2/s, delay 10 s); one shield component (`Shield`) for both spellings.
+- `resourceNode.maxWorkers` = `resourceNode.maxGatherers`: further workers wait next to the node or take a free node
+  of the same resource nearby.
 ### Genre mechanics (agent-mech stage 2)
 
 ```json
@@ -976,9 +988,11 @@ Optional blocks; a game without them loads, plays and hashes as before. Tested i
 
 ### Crews, crushing, ruins, infection (Z, Men of War, C&C, They Are Billions)
 
-- Weapon `"killsCrew": 1` (chance per hit) against a type with `"crew": {"accepts": ["infantry"]}`: the vehicle is left
-  empty and neutral (`Abandoned`). A unit with an accepted tag right-clicks it (smart / `load`) and becomes its crew:
-  the vehicle changes owner, the soldier is removed.
+- Crews are one mechanic with the fidelity `crew` / `crews` / `killsCrew` keys (see [Fidelity mechanics](#fidelity-mechanics-play-like-the-original)):
+  `"crew": {"accepts": ["infantry"]}` (or `true`: any mobile unit) is a crewed vehicle that any unit with an accepted
+  tag may man, without `"crews": true`. Weapon `"killsCrew": 1` (chance per non-lethal hit) leaves it empty and neutral
+  (owner 0); a unit that may man it right-clicks it (smart / `load`), walks up and becomes its crew: the vehicle
+  changes owner, the soldier is removed.
 - `"crush": {"damage": 500, "tags": ["infantry"]}`: a moving unit damages hostile mobile units with those tags it touches.
 - `"ruins": "rubble"`: a type spawned (neutral) where this one died.
 - Weapon `"infect": "zombie"`: a unit it kills rises as that type for the killer's owner. A structure with
@@ -1012,8 +1026,9 @@ ends: the side with most lives wins.
 
 ### Upgrades paid with garrison (Mushroom Wars 2)
 
-`"upgradeGarrison": 10` on the target type of an `upgrades` entry: the upgrade costs that many units of the building's
-garrison instead of resources (refused when the garrison is smaller).
+`"upgradeGarrison": 10` on the target type of an `upgrades` entry is an alias of the fidelity key `"cost": {"garrison": 10}`:
+the upgrade costs that many units of the building's garrison on top of its resource cost (refused when the garrison is
+smaller; the units are taken only when the upgrade is queued).
 
 ## Unit designs (agent-mech, UD)
 
@@ -1036,6 +1051,108 @@ Types can be assembled from a chassis and parts (Master of Orion, Galactic Civil
   `weapons`, `tags`, `abilities`, `upgrades` are appended, other keys are merged (objects) or replaced.
 - `slots`: a count, or a count per part `slot` kind; too many parts is a load error.
 - The type's own keys (besides `design`) are applied last.
+
+## Field battles, big armies, logistics (agent-mech stage 4)
+
+Tested in `tests/tests_mech.inc` (`mech_battle`, `mech_flow_fields`, `mech_logistics`; `RTS_BENCH_ARMY=1500` runs a
+3000-unit benchmark).
+
+### Morale, rout, fatigue, charge (Total War, Close Combat)
+
+```json
+"morale": {"max": 100, "regen": 2, "hitLoss": 100, "allyDeath": 6, "allyRadius": 6, "flankSide": 1.5, "flankRear": 2,
+           "waver": 40, "rout": 20, "rally": 60, "routSpeed": 1.25, "waverAttack": 0.85, "tags": ["soldier"],
+           "general": {"tags": ["general"], "radius": 10, "regen": 6, "death": 30}},
+"fatigue": {"run": 2, "fight": 4, "recover": 5, "tired": 50, "exhausted": 85, "tiredMul": 0.85, "exhaustedMul": 0.6}
+```
+
+- Morale (per unit, `"morale": 120` on a type overrides `max`) falls by `hitLoss` x the share of max hp a hit takes,
+  times `flankSide` / `flankRear` when the attacker is beside / behind the unit's facing; by `allyDeath` when an own unit
+  dies within `allyRadius` (`general.death` within twice `general.radius` when a general dies). It recovers by `regen`
+  per second, plus `general.regen` near an own general.
+- Below `waver` the unit wavers (attack speed x `waverAttack`); below `rout` it routs: drops its orders, runs away from
+  the nearest enemy (speed x `routSpeed`), does not fight and recovers only when no enemy is in sight, until `rally`.
+  Event `morale` (value 0 steady, 1 wavering, 2 routing). The AI walks idle generals to its shakiest soldiers.
+- Fatigue 0..100 grows by `run` per second moving and `fight` per second shooting, drops by `recover` when idle; above
+  `tired` / `exhausted` speed and attack speed are multiplied by `tiredMul` / `exhaustedMul`.
+- `"charge": {"bonus": 1.5, "run": 3, "shock": 15, "cooldown": 8}` on a type: after running `run` cells, the first blow
+  deals `bonus` x damage and costs the target `shock` morale.
+- MCP state shows `morale`, `moraleState`, `fatigue`, `supplied`.
+
+### Supply lines (Rise of Nations, Hearts of Iron)
+
+`"supply": {"tags": ["soldier"], "attrition": 0.01, "speed": 0.8, "attack": 0.8}` and `"supplyRadius": 12` on depot
+types: units farther than that from every finished own or allied depot lose `attrition` x max hp per second and move
+and attack slower.
+
+### Big armies (BA)
+
+`"flowFields": true` (or `{"minCells": 8, "cache": 16}`) is an alias of the one flow-field system
+(`movement.flowField`, see Movement): it means `{"minGroup": 1, "minCells": 8, "maxFields": 16}` — every ground move,
+attack-move, patrol or right-click order of a unit at least `minCells` cells from its goal follows the goal area's
+shared field (an explicit `movement.flowField` wins). In addition attack-move groups of more than 24 form a block of
+rows instead of one wide arc (each unit walks to its own row point with its own path). Separation and RVO neighbour
+lookups always use a one-cell grid (results identical to the spatial-hash version). Benchmark (ARM VM, -O3): 3000
+units fighting, about 13 ms per tick.
+
+### Conveyors, producers, crafters (Mindustry, Factorio)
+
+```json
+"belt":    {"structure": {"footprint": [1, 1]}, "conveyor": {"speed": 4}},
+"drill":   {"structure": {"footprint": [2, 2]}, "beltOutput": {"resource": "ore", "amount": 1, "interval": 0.5}},
+"smelter": {"structure": {"footprint": [2, 2]}, "craft": {"in": {"ore": 2}, "out": {"plate": 1}, "time": 1}},
+"core":    {"structure": {"footprint": [2, 2]}, "beltInput": ["plate"]}
+```
+
+- A conveyor piece carries one packet per cell at `speed` cells per second in its direction (east, south, west, north):
+  set by `build_line` (along the line's main axis), map entity `"dir": "e"`, or command `rotate`
+  (`{"cmd": "rotate", "units": [...], "dir": "n"}`; without `dir` it turns clockwise).
+- Producers put a packet on a free adjacent belt that does not point back into them every `interval`; crafters take
+  their inputs from belts (up to twice a batch), work `time` seconds (scaled by staff / power) and put outputs on belts.
+- A structure with `beltInput` (resource list or `"any"`) takes packets into its owner's stock (event `delivered`).
+- Belts are ordinary structures (blocking, destructible); a packet on a destroyed belt is lost. The AI does not lay
+  belts yet. MCP state: a belt's `dir` and `carries`, a crafter's `input` / `output`.
+
+## Turns, strategic map, 3D flight (agent-mech stage 5)
+
+Tested in `tests/tests_mech.inc` (`mech_turns`, `mech_strategic`, `mech_space_flight`).
+
+### Turn-based mode (Heroes, XCOM, Advance Wars battles)
+
+`"turns": {"moveSeconds": 4, "attacks": 1, "timeLimit": 0}`: players act one after another on the same simulation.
+During a turn only the active player's units move (at most type speed x `moveSeconds` cells) and shoot (`attacks`
+shots per weapon); the others stand still and don't return fire; commands of other players are ignored. Command
+`end_turn` (or `timeLimit` seconds) passes the turn to the next living player; event `turn` (player, turn number).
+Bots send their fighters at the nearest enemy once per turn and end the turn when they stop moving.
+
+### Strategic map (Total War campaign, Company of Heroes 3, Empire at War)
+
+`modules/strategic/Strategic.h`: provinces and armies on top of the game's `rules.json`; battles are auto-resolved
+(Lanchester square law on hp x dps) or simulated on the RTS simulation with bots, and the survivors return to the map.
+
+```json
+{"players": [{"name": "Red"}, {"name": "Blue"}], "start": {"gold": 100}, "movesPerTurn": 1,
+ "recruit": {"spear": {}, "archer": {"gold": 40}},
+ "battle": {"mode": "simulate", "seconds": 240, "size": [48, 32]},
+ "provinces": [{"id": "a", "owner": 1, "income": {"gold": 40}, "adj": ["b"], "pos": [0, 0], "terrain": {"rows": [...]}},
+               {"id": "b", "adj": ["c"]}, {"id": "c", "owner": 2}],
+ "armies": [{"owner": 1, "at": "a", "units": {"spear": 12}}, {"owner": 2, "at": "c", "units": {"spear": 6}}]}
+```
+
+- Adjacency is symmetric. `recruit` with `{}` uses the type's `cost`. Moving into a province with an enemy army
+  fights a battle; an empty enemy or neutral province is taken. Own armies in one province merge.
+- Income of owned provinces comes at the start of the owner's turn; a player with no provinces and no armies is out;
+  the last one standing wins.
+- MCP: `strategic_load` (`file` in the project or `def`), `strategic_state`, `strategic_order`
+  (`move` / `recruit` / `end_turn`), `strategic_bots` (bots play N turns; `battle`: auto | simulate),
+  `strategic_battle_map` (the RTS map of a battle, to play by hand), `strategic_save`.
+
+### Free 3D flight (Homeworld)
+
+`"altitude": {"min": 0, "max": 30, "climb": 3, "start": 10}` on an air type: the unit keeps its own height, climbs or
+dives to the `y` of its move orders (MCP `{"cmd": "move", "x", "z", "y"}`), follows the height of the target it
+attacks, and weapon ranges to and from it are measured in 3D. Paths and avoidance stay 2D. The view does not draw the
+altitude yet.
 
 ## Save states (agent-mech)
 
@@ -1583,25 +1700,27 @@ useTemplate, keepSize}`.
 ## Fidelity mechanics (play like the original)
 
 Optional blocks that make the sample games play like their originals (`modules/rts/RtsOriginals*.cpp`). A game that
-uses none of them keeps its exact checksums.
+uses none of them keeps its exact checksums. These blocks are the single implementation of their mechanic: the
+agent-mech spellings of the same mechanics (`armorModel`, type `shields`, `upkeepResources`, `resourceNode.maxWorkers`,
+`"crew": {"accepts"}`, `upgradeGarrison`) are aliases parsed into them (see the agent-mech sections above).
 
 | block | where | meaning |
 |---|---|---|
-| `armor` | rules | `{"model": "subtract" \| "percent", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2}` — `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `subtract`: StarCraft / AoE with a floor |
+| `armor` (alias `armorModel`) | rules | `{"model": "subtract" \| "percent" \| "classes", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2, "negative": "linear" \| "exponential", "base": ["melee", "pierce"]}` — the one damage pipeline of every game: weapon `bonus`, shields, then the model. `subtract`: StarCraft / AoE with a floor (no block at all: damage - armor, at least damage / 5); `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `classes`: AoE II class attacks / armors (type `armors`, weapon `attacks`, see the agent-mech aliases above) |
 | `health.armor` object | type | `{"melee": 1, "pierce": 2}` (or `health.pierceArmor`): two armors; weapons pick one with `"armorClass": "pierce"`; stat `pierceArmor` / `armor2` for techs |
 | weapon `bonus` | type | `{"cavalry": 15, "armored": 10}` extra damage vs types with the tag, added before armor (AoE / SC2 bonuses) |
-| `health.shields` | type | shields soak damage first (`shieldArmor`), recharge `shieldRegen` per second after `shieldDelay` seconds without hits (StarCraft) |
+| `health.shields` (alias type `shields: {max, regen, delay, armor}`) | type | shields soak damage first (after the damage table and weapon bonuses; minus `shieldArmor`, at least the armor floor), the share that breaks through goes on to armor and hp; they recharge `shieldRegen` per second (default 2) after `shieldDelay` seconds (default 10) without a hit on the shield (StarCraft) |
 | `heroes` | rules | `{"skills": true, "max": 3, "freeFirst": true, "tiers": ["hall", "keep", "castle"], "revive": {"costShare": 0.4, "perLevel": 0.1, "timeShare": 0.6, "maxTime": 110, "maxCost": {"gold": 700}}}` — skill points (one at start, one per level; command `kCmdLearn`), ability `"learnAt": [1, 3, 5]` (default) / `[6]` (ultimate); hero n needs a structure from `tiers[n-1..]`; a dead hero is trained again as a revive (its level and skills, cheaper) |
-| `upkeep[].resources`, `incomeMult` | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower) |
-| `resourceNode.maxGatherers` | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
+| `upkeep[].resources`, `incomeMult` (alias `upkeepResources`) | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower); rules `"upkeepResources": ["gold"]` is the default `resources` of every tier without its own |
+| `resourceNode.maxGatherers` (alias `maxWorkers`) | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
 | `powerField` / `structure.needsField` | type | `{"id": 0, "radius": 6.5}` on pylons; structures with `needsField` are placed and work only inside an own field |
 | `queueSlots` | type | items produced at once (reactor) |
-| `cost.garrison` | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |
+| `cost.garrison` (alias `upgradeGarrison`) | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |
 | `garrison.onCapture`, `garrison.keep` | type | type it drops to when captured (loses a level); units that always stay home when sending (State.io) |
 | `clash` | type | units in transit fight hostile units they meet |
 | `playerMods` | type | `{"max": 4, "mods": [{"tags": [...], "stat": "damage", "mul": 1.08}]}` — every completed one modifies the owner's types (forges) |
 | resource `gain`, `perUnit`, `min` | rules | `"gain": {"kill": 1, "capture": 0.3, "captured": -0.4, "upgrade": 0.2, "lost": 0.45, "defended": 0.01}`; `"perUnit": [{"tags": [...], "stat": "damage", "mul": 1.06}]` per whole unit held (morale suns) |
-| `crew` / `crews` / weapon `killsCrew` | type | vehicles and guns need a driver of that type; `killsCrew` (chance) empties them (owner 0); units with `crews` man any empty one (Z) |
+| `crew` / `crews` / weapon `killsCrew` | type | `"crew": "grunt"` (or `{"unit": "grunt"}`): vehicles and guns with a driver; `killsCrew` (chance per non-lethal hit) empties them (owner 0); units with `crews` man any empty one (Z). `"crew": {"accepts": [tags]}` / `true` (agent-mech alias): units with one of the tags (any mobile unit) may man it too |
 | `infect` | type | `{"by": ["infected"], "spawn": "walker", "count": 3}` — killed by a unit with the tag: rises as the spawn type for the killer (They Are Billions) |
 | `neutral.eats`, `neutral.resurface` | type | an eater submerges after that many kills and comes back somewhere on its layer later (Dune sandworm) |
 | `crush` | type | `{"tags": ["infantry"]}` — moving over such units kills them (tanks over infantry, units over spice blooms) |
@@ -2061,3 +2180,9 @@ The client gives the overlays its input state each frame (cursor, structure bein
 keys, input mode, pause); the editor's Scene view passes the Place tool's structure, so placement
 overlays can be checked while placing objects, and `overlay_preview` / the window's checkboxes draw
 any overlay regardless of its `when`.
+
+## Post effects (`postfx`)
+
+`game.json` and maps can have a `"postfx"` block: a list of full-screen effects (bloom, colour
+grading, LUT, vignette, tilt-shift, sun shafts, FXAA, grain, ...) with quality tiers and a frame-cost
+model. Format, parameters, tiers and MCP tools: `docs/postfx.md`.
