@@ -88,6 +88,15 @@ public:
     void setTextureLoader(TextureLoader l);
     // Ground height for "collision" (world y = 0 without it): RtsView::heightAt in the apps.
     void setGroundHeight(std::function<float(float x, float z)> fn);
+    // Curved worlds (planets), all optional; unset = the flat behaviour, unchanged:
+    //  - up(pos): local "up" at a position of the simulation space. Gravity / speed vectors of effects are
+    //    given with +Y up and get rotated onto it; ground-aligned / upright particles follow it.
+    //  - altitude(pos): height above the ground along up (collision instead of the ground height).
+    //  - view space: particles live in a stable space (planets: body-local of the camera's body) and are drawn
+    //    through `toView` (that space -> the renderer's world); setView() takes the renderer's camera.
+    void setUpFunction(std::function<float3(float3 pos)> fn);
+    void setAltitudeFunction(std::function<float(float3 pos)> fn);
+    void setViewSpace(const render::mat4* toView);
 
     // Effects by name: "explosion" loads "fx/explosion.json" through the file reader (once).
     // Returns -1 when missing or invalid; the reason is in errors().

@@ -64,6 +64,7 @@ void RtsView::shutdown(gfx::Device& dev) {
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
     groundFx_.shutdown(dev);
+    planetGroundFx_.shutdown(dev);
     planets_.shutdown(dev);
     overlays_.shutdown(dev);
 }

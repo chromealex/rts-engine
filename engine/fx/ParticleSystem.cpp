@@ -82,6 +82,15 @@ void basisFrom(float3 n, float3& t, float3& b) {
     t = render::normalize(render::cross(ref, n));
     b = render::cross(n, t);
 }
+// v given with +Y as up, rotated by the shortest rotation that takes +Y onto `up` (curved worlds)
+float3 upRotate(float3 up, float3 v) {
+    const float c = up.y;
+    if (c > 0.99999f) return v;
+    if (c < -0.99999f) return {v.x, -v.y, -v.z};
+    const float3 k = render::normalize(float3{up.z, 0, -up.x});   // axis = Y x up
+    const float sn = std::sqrt(std::max(0.0f, 1 - c * c));
+    return v * c + render::cross(k, v) * sn + k * (render::dot(k, v) * (1 - c));
+}
 
 } // namespace
 
@@ -205,6 +214,10 @@ struct ParticleSystem::Impl {
     std::vector<SubSpawn> pending;
     std::unordered_map<uint32_t, FxHandle> children;   // particle uid -> its birth sub-effect
     std::function<float(float, float)> ground;
+    std::function<float3(float3)> upFn;        // curved worlds (setUpFunction)
+    std::function<float(float3)> altFn;        // curved worlds (setAltitudeFunction)
+    bool haveSpace = false;                    // setViewSpace
+    mat4 space;
     uint32_t nextUid = 0;
     float clock = 0;
 
@@ -523,9 +536,13 @@ void ParticleSystem::shutdown() {
     }
     TextureLoader keep = std::move(I.loader);
     auto ground = std::move(I.ground);
+    auto upFn = std::move(I.upFn);
+    auto altFn = std::move(I.altFn);
     impl_ = std::make_unique<Impl>();
     impl_->loader = std::move(keep);
     impl_->ground = std::move(ground);
+    impl_->upFn = std::move(upFn);
+    impl_->altFn = std::move(altFn);
     impl_->quality = quality_;
     impl_->limits = limitsFor(quality_);
 }
@@ -540,6 +557,12 @@ void ParticleSystem::setQuality(FxQuality q) {
 }
 
 void ParticleSystem::setGroundHeight(std::function<float(float, float)> fn) { impl_->ground = std::move(fn); }
+void ParticleSystem::setUpFunction(std::function<float3(float3)> fn) { impl_->upFn = std::move(fn); }
+void ParticleSystem::setAltitudeFunction(std::function<float(float3)> fn) { impl_->altFn = std::move(fn); }
+void ParticleSystem::setViewSpace(const mat4* toView) {
+    impl_->haveSpace = toView != nullptr;
+    if (toView) impl_->space = *toView;
+}
 
 void ParticleSystem::setTextureLoader(TextureLoader l) {
     impl_->loader = std::move(l);
@@ -689,7 +712,15 @@ void ParticleSystem::setView(const RTSCamera& cam, const mat4& viewProj, int fbW
     I.viewProj = viewProj;
     I.eye = cam.eye();
     float3 f = render::normalize(cam.target - I.eye);
-    I.right = render::normalize(render::cross(f, {0, 1, 0}));
+    float3 worldUp{0, 1, 0};
+    if (I.haveSpace) { // particles live in their own space: camera into it, projection from it
+        const mat4 inv = I.space.inverse();
+        I.viewProj = viewProj * I.space;
+        I.eye = inv.transformPoint(I.eye);
+        f = render::normalize(inv.transformDir(f));
+        worldUp = render::normalize(inv.transformDir(worldUp));
+    }
+    I.right = render::normalize(render::cross(f, worldUp));
     I.up = render::cross(I.right, f);
     I.p11 = 1.0f / std::tan(cam.fovY * 0.5f);
     I.fbW = std::max(1, fbW);
@@ -763,7 +794,8 @@ void ParticleSystem::update(float dt) {
         if (p.age * p.invLife >= 1.0f) { I.die(i, true); continue; }
         const EmitterDef& d = I.effects[p.effect].def.emitters[p.emitter];
         const bool modules = I.effects[p.effect].em[p.emitter].modules;
-        p.vel += d.gravity * (dt * p.scale);
+        if (I.upFn) p.vel += upRotate(I.upFn(p.pos), d.gravity) * (dt * p.scale);   // curved worlds: gravity towards the local down
+        else p.vel += d.gravity * (dt * p.scale);
         if (d.drag > 0) p.vel = p.vel * (1.0f / (1.0f + d.drag * dt));
         if (modules) {
             if (d.speedLimit > 0) {
@@ -780,7 +812,19 @@ void ParticleSystem::update(float dt) {
         p.pos += p.vel * dt;
         p.rot += p.spin * dt;
         if (modules) {
-            if (d.collision.enabled) {
+            if (d.collision.enabled && I.altFn && I.upFn) { // curved worlds: the ground along the local up
+                const float3 n = I.upFn(p.pos);
+                const float below = d.collision.height * p.scale - I.altFn(p.pos);
+                const float vn = render::dot(p.vel, n);
+                if (below > 0 && vn < 0) {
+                    p.pos += n * below;
+                    const float3 vt = (p.vel - n * vn) * (1 - d.collision.dampen);
+                    p.vel = vt - n * (vn * d.collision.bounce);
+                    p.age += d.collision.lifeLoss / p.invLife;
+                    I.queueSub(p, FxSubEvent::Collision, p.pos);
+                    if (render::length(p.vel) < d.collision.minKillSpeed * p.scale || p.age * p.invLife >= 1.0f) { I.die(i, true); continue; }
+                }
+            } else if (d.collision.enabled) {
                 float plane = (I.ground ? I.ground(p.pos.x, p.pos.z) : 0.0f) + d.collision.height * p.scale;
                 if (p.pos.y < plane && p.vel.y < 0) {
                     p.pos.y = plane;
@@ -942,6 +986,18 @@ void ParticleSystem::render(const FxFog& fog) {
             side = sl > 1e-4f ? side * (1.0f / sl) : I.right;
             ax = side * h;
             ay = axis * (hl + d.stretch * sp * 0.5f);
+        } else if (d.align == FxAlign::Ground && I.upFn) { // curved worlds: flat on the local ground
+            float3 t, b;
+            basisFrom(I.upFn(p.pos), t, b);
+            float cs = std::cos(p.rot), sn = std::sin(p.rot);
+            ax = (t * cs + b * sn) * h;
+            ay = (b * cs - t * sn) * hl;
+        } else if (d.align == FxAlign::Upright && I.upFn) {
+            const float3 u = I.upFn(p.pos);
+            float3 rx = I.right - u * render::dot(I.right, u);
+            rx = render::length(rx) > 1e-4f ? render::normalize(rx) : float3{1, 0, 0};
+            ax = rx * h;
+            ay = u * hl;
         } else if (d.align == FxAlign::Ground) {
             float cs = std::cos(p.rot), sn = std::sin(p.rot);
             ax = float3{cs, 0, sn} * h;
@@ -955,7 +1011,7 @@ void ParticleSystem::render(const FxFog& fog) {
             ax = (I.right * cs + I.up * sn) * h;
             ay = (I.up * cs - I.right * sn) * hl;
         }
-        float3 pos = d.align == FxAlign::Ground ? p.pos + float3{0, 0.03f, 0} : p.pos;
+        float3 pos = d.align == FxAlign::Ground ? p.pos + (I.upFn ? I.upFn(p.pos) * 0.03f : float3{0, 0.03f, 0}) : p.pos;
         float u0 = er.tex.u0, v0 = er.tex.v0, u1 = er.tex.u1, v1 = er.tex.v1;
         if (er.frames > 1) {
             int f = d.fps > 0 ? int(p.age * d.fps) % er.frames
