@@ -9,7 +9,7 @@ Fixed dist(Vec3 a, Vec3 b) { return Surface::onSphere(a) ? (a - b).length() : (a
 bool isCombat(const UnitType& t) { return !t.structure && (!t.weapons.empty() || !t.abilities.empty()) && !t.worker; }
 // Units the player controls by hand (possessed, picked up) or that are leaving are not the AI's.
 bool controllable(World& w, Entity e, const Unit& u) {
-    if (u.flags & (kUnitInHand | kUnitPossessed)) return false;
+    if (u.flags & (kUnitOffMap | kUnitPossessed)) return false;
     auto* n = w.tryGet<Needs>(e);
     return !n || !n->leaving;
 }
@@ -48,6 +48,7 @@ void RtsAI::update(Simulation& sim) {
         special(sim, *m);
         if (!m->rules().diggables.empty() || !m->rules().rooms.empty()) dungeon(sim, *m);
         if (m->rules().settlers) settlers(sim, *m);
+        if (m->rules().mech.any) mech(sim, *m);
         economy(sim, *m);
         military(sim, *m);
     }
@@ -239,7 +240,7 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             if (!offensive || a.target != TargetKind::Point || !m.canUsePlayerAbility(sim, player_, int(ai))) continue;
             std::vector<std::pair<Vec3, int>> foes, mine;
             w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
-                if (u.hp.raw <= 0 || R.types[u.type].invulnerable || (u.flags & kUnitInHand)) return;
+                if (u.hp.raw <= 0 || R.types[u.type].invulnerable || (u.flags & kUnitOffMap)) return;
                 int value = R.types[u.type].structure ? 3 : 1;
                 if (o.player == player_ || (o.player != 0 && o.player != kHostileNeutral && sim.allied(o.player, player_))) mine.push_back({tr.pos, value});
                 else if (m.hostile(sim, player_, o.player) && o.player != kHostileNeutral) foes.push_back({tr.pos, value});

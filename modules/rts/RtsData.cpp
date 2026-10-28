@@ -734,6 +734,7 @@ Rules loadRules(const Json& j) {
     r.advancedEffects = adv;
     r.dungeon = anyDungeonType || r.territory.enabled || !r.diggables.empty() || !r.rooms.empty() || r.hand.max > 0 ||
                 r.possession.enabled || !r.playerAbilities.empty();
+    loadMechRules(r, j);
     return r;
 }
 

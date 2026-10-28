@@ -1,6 +1,7 @@
 #include "Workspace.h"
 #include "ScenarioOps.h"
 #include "SchemaOps.h"
+namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // CampaignOps.cpp
 #include "SimTools.h"
 #include "TileOps.h"
 #include "TerrainOps.h"
@@ -169,7 +170,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerSchemaOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -1127,7 +1128,8 @@ void Workspace::registerCoreOps() {
         R"({"properties": {"seconds": {"type": "number", "description": "time limit, default 900"}, "seed": {"type": "integer"},
             "difficulty": {"type": "integer", "description": "0 easy, 1 normal, 2 hard"},
             "events": {"description": "true = log every event (with time, players, objects), or a list of event names"},
-            "maxEvents": {"type": "integer"}}})",
+            "maxEvents": {"type": "integer"},
+            "saveCheck": {"type": "number", "description": "at this second: save, load into a fresh simulation and run both 10 s without bots; reports whether they stay identical"}}})",
         [this, needProject](const Json& p) {
             needProject();
             SimConfig cfg;
@@ -1154,7 +1156,24 @@ void Workspace::registerCoreOps() {
             }
             const size_t maxLog = size_t(std::clamp<int64_t>(p["maxEvents"].integer(300), 1, 5000));
             Json eventLog = Json::array(), triggerLog = Json::array();
+            Json saveCheck;
+            const uint32_t saveTick = p.has("saveCheck") ? uint32_t(pf(p, "saveCheck", 0) * float(sim.tickRate())) : 0;
             while (sim.tick() < limit && sim.result() == 0) {
+                if (saveTick && sim.tick() == saveTick) {   // save state check (agent-mech): load into a twin and compare
+                    saveCheck = Json::object();
+                    const std::string bytes = sim.serialize();
+                    saveCheck.set("bytes", Json::number(int64_t(bytes.size())));
+                    Simulation twin(cfg, std::make_unique<game::RtsModule>()), copy(cfg, std::make_unique<game::RtsModule>());
+                    twin.setup(project.rulesJson, simMap);
+                    copy.setup(project.rulesJson, simMap);
+                    std::string err;
+                    bool ok = !bytes.empty() && twin.deserialize(bytes, &err) && copy.deserialize(bytes, &err);
+                    int diverged = -1;
+                    for (int i = 0; ok && i < int(sim.tickRate()) * 10; ++i) { twin.step(); copy.step(); if (twin.checksum() != copy.checksum()) { diverged = i; break; } }
+                    saveCheck.set("ok", Json::fromBool(ok && diverged < 0));
+                    if (!err.empty()) saveCheck.set("error", str(err));
+                    if (diverged >= 0) saveCheck.set("divergedAfterTicks", Json::number(int64_t(diverged)));
+                }
                 for (auto& b : bots) b.update(sim);
                 sim.step();
                 for (auto& ev : sim.events()) {
@@ -1207,6 +1226,7 @@ void Workspace::registerCoreOps() {
             r.set("events", ev);
             if (eventLog.size()) r.set("eventLog", eventLog);
             if (triggerLog.size()) r.set("triggers", triggerLog);
+            if (saveCheck.isObject()) r.set("saveCheck", saveCheck);
             char cs[32]; std::snprintf(cs, sizeof cs, "%016llx", (unsigned long long)sim.checksum());
             r.set("checksum", str(cs));
             r.set("summary", str("Тестовый матч: победа " + winner + " за " + std::to_string(sim.tick() / sim.tickRate()) + " с"));

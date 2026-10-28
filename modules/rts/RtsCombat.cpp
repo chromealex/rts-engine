@@ -14,6 +14,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
     GameState& gs = state(sim);
     w.each<Combat, Unit, Owner, Transform>([&](Entity e, Combat& c, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || (u.flags & (kUnitUnderConstruction | kUnitDisabled | kUnitInHand | kUnitPossessed))) return;
+        if (mechOn(sim) && !mechCanAcquire(sim, e)) { if (c.autoTarget && w.alive(c.target)) { c.target = kNullEntity; if (!w.has<Orders>(e) || w.get<Orders>(e).queue.empty()) stopMoving(sim, e); } return; }   // agent-mech
         if (++c.acquireTimer < 4) return;
         if (rules_.advancedEffects && (statusFlags(sim, e) & (kStBlind | kStStun | kStDisarm))) return;
         c.acquireTimer = 0;
@@ -42,7 +43,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
             const UnitType& ct = rules_.types[cu->type];
             if (ct.invulnerable || !layerHit(layers, ct.layer)) return;
             if (!hostile(sim, o.player, w.get<Owner>(cand).player)) return;
-            if (rules_.advancedEffects) { uint32_t fl = statusFlags(sim, cand); if ((fl & kStInvisible) && !(fl & kStRevealed)) return; }
+            if (rules_.advancedEffects) { uint32_t fl = statusFlags(sim, cand); if ((fl & kStInvisible) && !(fl & kStRevealed) && !(rules_.mech.detection && detected(sim, cand, o.player))) return; }
             Vec3 cp = w.get<Transform>(cand).pos;
             Fixed d = dist2D(cp, tr.pos);
             if (d > sight) return;
@@ -65,9 +66,11 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     if (!u || u->hp.raw <= 0) return;
     const UnitType& t = rules_.types[u->type];
     if (t.invulnerable) return;
-    Fixed raw = dmg * rules_.damageMult(dmgType, t.armorType);
+    if (rules_.mech.shields) { dmg = mechShieldAbsorb(sim, target, dmg); if (dmg.raw <= 0) { sim.emit({kEvHit, sourceOwner, target, source, 0, w.get<Transform>(target).pos}); return; } }
+    Fixed raw = dmgType == kDamagePure ? dmg : dmg * rules_.damageMult(dmgType, t.armorType);
     Fixed armor = stat(sim, target, Stat::Armor);
-    Fixed fin = fxMax(raw - armor, raw / 5);
+    Fixed fin = rules_.mech.any ? mechArmorDamage(sim, target, raw, dmgType) : fxMax(raw - armor, raw / 5);   // agent-mech armor models
+    if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target);   // agent-mech (retreat)
     if (rules_.advancedEffects) {
         uint32_t fl = statusFlags(sim, target);
         if (fl & kStInvulnerable) return;
@@ -87,6 +90,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     }
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
+    if (rules_.mech.veterancy && w.alive(source)) mechOnHit(sim, target, source);   // agent-mech
     sim.emit({kEvHit, sourceOwner, target, source, fin.raw, w.get<Transform>(target).pos});
     // creeps fight back as a camp
     if (auto* g = w.tryGet<Guard>(target); g && w.alive(source) && w.has<Unit>(source)) {
@@ -114,7 +118,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
         if (u.flags & (kUnitUnderConstruction | kUnitDisabled | kUnitInHand)) return;
         if (auto* b = w.tryGet<Buffs>(e); b && b->stunUntil > sim.tick()) return;
         if (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStDisarm))) return;
-        if (!w.alive(c.target) || !w.has<Unit>(c.target) || (w.get<Unit>(c.target).flags & kUnitInHand)) { c.target = kNullEntity; return; }
+        if (!w.alive(c.target) || !w.has<Unit>(c.target) || (w.get<Unit>(c.target).flags & kUnitOffMap)) { c.target = kNullEntity; return; }
         const Unit& tu = w.get<Unit>(c.target);
         const UnitType& tt = rules_.types[tu.type];
         if (tu.hp.raw <= 0) return;
@@ -127,8 +131,9 @@ void RtsModule::sysWeapons(Simulation& sim) {
         Fixed rangeBonus = stat(sim, e, Stat::Range) + (adv.raw > 0 ? rules_.heights.rangePerLevel * adv : Fixed{});
         Fixed range = maxWeaponRange(t) + rangeBonus;
         // idle units with an automatic target chase it (unless holding / guarding a structure)
-        if (c.autoTarget && ord && ord->queue.empty() && m && !(u.flags & kUnitHold) && dist > range) {
+        if (c.autoTarget && ord && ord->queue.empty() && m && !(u.flags & (kUnitHold | kUnitInCargo)) && dist > range) {
             if (dist > stat(sim, e, Stat::Sight) + Fixed::fromInt(2)) { c.target = kNullEntity; return; }
+            if (mechOn(sim) && !mechMayChase(sim, e, tp)) { c.target = kNullEntity; return; }   // defensive stance
             if (!m->moving || (sim.tick() + e.index) % 20 == 0) moveTo(sim, e, tp, range);
             return;
         }
@@ -149,6 +154,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 if (sim.tick() - c.chargeStart < uint32_t((wd.chargeTime * int64_t(sim.tickRate())).toInt())) continue;
                 c.chargeStart = sim.tick();
             }
+            if (rules_.mech.ammo && !mechUseAmmo(sim, e, i)) continue;   // agent-mech: out of ammo
             c.cooldown[i] = wd.cooldown;
             sim.emit({kEvAttack, o.player, e, c.target, int64_t(i), tr.pos});
             // shooting uphill can miss (StarCraft); the roll uses the shared deterministic RNG
@@ -158,23 +164,25 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 continue;
             }
             Fixed dmg = wd.damage * mult;
+            uint16_t dtype = wd.damageType;
+            if (rules_.mech.armorModel == ArmorModel::Classes) mechClassDamage(sim, e, i, c.target, dmg, dtype);   // agent-mech
             const int16_t enchant = statusOnHit(e);
             const bool proc = wd.onHit >= 0 && (wd.onHitChance >= kOne || sim.rng().unit() < wd.onHitChance);
             if (wd.projectileSpeed.raw <= 0) {
-                dealDamage(sim, c.target, dmg, wd.damageType, e, o.player);
+                dealDamage(sim, c.target, dmg, dtype, e, o.player);
                 if (proc) onHits.push_back({wd.onHit, e, c.target, o.player, u.type, tp});
                 if (enchant >= 0) onHits.push_back({enchant, e, c.target, o.player, u.type, tp});
                 if (wd.splash.raw > 0) {
                     gs.hash.query(tp, wd.splash, [&](Entity s) {
                         if (s == c.target || !w.has<Unit>(s)) return;
                         if (!hostile(sim, o.player, w.get<Owner>(s).player)) return;
-                        if (dist2D(w.get<Transform>(s).pos, tp) <= wd.splash) dealDamage(sim, s, dmg, wd.damageType, e, o.player);
+                        if (dist2D(w.get<Transform>(s).pos, tp) <= wd.splash) dealDamage(sim, s, dmg, dtype, e, o.player);
                     });
                 }
             } else {
                 Projectile pr;
                 pr.target = c.target; pr.source = e; pr.aim = tp; pr.speed = wd.projectileSpeed;
-                pr.damage = dmg; pr.splash = wd.splash; pr.damageType = wd.damageType; pr.owner = o.player; pr.layers = wd.targets;
+                pr.damage = dmg; pr.splash = wd.splash; pr.damageType = dtype; pr.owner = o.player; pr.layers = wd.targets;
                 pr.onHit = proc ? wd.onHit : enchant; pr.sourceType = u.type;
                 if (proc && enchant >= 0) onHits.push_back({enchant, e, c.target, o.player, u.type, tp});
                 Vec3 start = lift(sim, tr.pos, Fixed::fromRatio(6, 10));
@@ -297,6 +305,7 @@ void RtsModule::castAbility(Simulation& sim, Entity caster, int index, Entity ta
     if (a.target == TargetKind::Self || a.target == TargetKind::None) { target = caster; point = w.get<Transform>(caster).pos; }
     if (w.alive(target) && w.has<Transform>(target)) point = w.get<Transform>(target).pos;
     sim.emit({kEvAbility, owner, caster, target, index, point});
+    if (rules_.mech.toggles && mechToggle(sim, caster, index)) return;   // agent-mech: cloak / burrow / siege mode
     if (!rules_.advancedEffects) { applyEffects(sim, caster, owner, casterType, a.effects, target, point); return; }
     const AbilityDef& al = abilityFor(sim, caster, index);
     pay(sim, owner, al.cost, {}, false);
@@ -338,7 +347,7 @@ void RtsModule::applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint
         if (ef.radius.raw > 0) {
             state(sim).hash.query(point, ef.radius, [&](Entity s) {
                 auto* su = w.tryGet<Unit>(s);
-                if (!su || su->hp.raw <= 0 || (su->flags & kUnitInHand) || dist2D(w.get<Transform>(s).pos, point) > ef.radius) return;
+                if (!su || su->hp.raw <= 0 || (su->flags & kUnitOffMap) || dist2D(w.get<Transform>(s).pos, point) > ef.radius) return;
                 uint8_t so = w.get<Owner>(s).player;
                 bool enemy = hostile(sim, owner, so);
                 bool ally = so == owner || (so != 0 && so != kHostileNeutral && owner != kHostileNeutral && sim.allied(so, owner));
@@ -554,6 +563,7 @@ void RtsModule::sysDeath(Simulation& sim) {
         const Vec3 pos = w.get<Transform>(e).pos;
         const bool silent = u.flags & kUnitSilent;
         if (auto* f = w.tryGet<Footprint>(e)) gs.grid.block(f->x, f->y, f->w, f->h, -1);
+        if (mechOn(sim)) mechOnDeath(sim, e);   // agent-mech: passengers, veterancy
         if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty() && gs.players[owner].typeCountAll[u.type] > 0)
             gs.players[owner].typeCountAll[u.type]--;
         if (auto* ex = w.tryGet<Extractor>(e)) {
