@@ -430,6 +430,19 @@ std::vector<std::string> markupKeys(std::string_view m) {
     return out;
 }
 
+std::string visibleText(std::string_view p) {
+    std::string out;
+    for (size_t i = 0; i < p.size(); ++i) {
+        if ((p[i] == '{' || p[i] == '}') && i + 1 < p.size() && p[i + 1] == p[i]) { out += p[i]; ++i; continue; }
+        if (p[i] == '{') {
+            const size_t end = p.find('}', i + 1);
+            if (end != std::string_view::npos) { i = end; continue; }
+        }
+        out += p[i];
+    }
+    return out;
+}
+
 // ------------------------------------------------------------------ validation
 
 std::vector<Issue> check(const Catalog& base, const std::string& baseLang, const Catalog& lang, const std::string& language) {
@@ -461,8 +474,9 @@ std::vector<Issue> check(const Catalog& base, const std::string& baseLang, const
                 if (!std::binary_search(want.begin(), want.end(), n))
                     add(Issue::Error, key, "unknown placeholder {" + n + "} (" + baseLang + " has " + join(want) + ")");
         }
+        // Only words count: "{name}: {text}" is legitimately the same in every language.
         if (!le->plural && !be.plural && le->text == be.text && baseLanguage(language) != baseLanguage(baseLang) &&
-            le->text.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos)
+            visibleText(le->text).find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos)
             add(Issue::Warning, key, "same text as in " + baseLang + " (not translated yet?)");
         if (be.plural && !le->plural)
             add(Issue::Warning, key, "is plural in " + baseLang + " but a plain string here");

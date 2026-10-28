@@ -2167,6 +2167,20 @@ TEST(i18n_saved_language_roundtrip) {
     std::filesystem::remove_all(root);
 }
 
+TEST(i18n_placeholder_only_strings_are_not_untranslated) {
+    // "{name}: {text}" (net.chat_line) is the same in every language: no "not translated" warning.
+    CHECK(i18n::visibleText("{name}: {text}") == ": ");
+    CHECK(i18n::visibleText("{{x}} {n} ok") == "{x}  ok");
+    i18n::Catalog en, ru;
+    en.merge(Json::parse(R"({"chat": "{name}: {text}", "score": "{a} – {b}", "lit": "{{raw}}", "hi": "Hello, {name}"})"));
+    ru.merge(Json::parse(R"({"chat": "{name}: {text}", "score": "{a} – {b}", "lit": "{{raw}}", "hi": "Hello, {name}"})"));
+    std::vector<std::string> flagged;
+    for (auto& i : i18n::check(en, "en", ru, "ru"))
+        if (i.message.find("not translated yet") != std::string::npos) flagged.push_back(i.key);
+    // literal braces are visible text, so "{{raw}}" still counts as words
+    CHECK((flagged == std::vector<std::string>{"hi", "lit"}));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

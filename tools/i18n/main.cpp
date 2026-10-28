@@ -149,7 +149,10 @@ int checkMarkup(const fs::path& dir, const i18n::Catalog& table, const std::stri
         std::istringstream words(plain);
         for (std::string w; words >> w;) {
             bool letters = false;
-            for (unsigned char c : w) if (std::isalpha(c) || c >= 0x80) letters = true;
+            // UTF-8 lead bytes of alphabets (Latin-1/Ext, Greek, Cyrillic, ..., CJK), not of symbols
+            // such as ✓ or arrows (E2 xx xx), which need no translation
+            for (unsigned char c : w)
+                if (std::isalpha(c) || (c >= 0xC3 && c <= 0xD5) || (c >= 0xE3 && c <= 0xED)) letters = true;
             if (letters && w.find("&amp;") == std::string::npos) {
                 std::printf("%s: warning: hard-coded text '%s' (use {{ 'key' | tr(lang) }})\n", f.string().c_str(), w.c_str());
                 ++warnings;
