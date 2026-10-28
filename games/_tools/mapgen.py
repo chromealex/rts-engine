@@ -371,17 +371,22 @@ def lastcolony():
     m.rect(40, 4, 3, 16, '#', sym=False)
     m.rect(40, 28, 3, 16, '#', sym=False)
     m.ent("command_center", 1, [14, 24], sym=False)
-    for i in range(4):
-        m.ent("colonist", 1, [18, 21 + i], sym=False)
     m.ent("ranger", 1, [20, 22], sym=False); m.ent("ranger", 1, [20, 26], sym=False)
-    m.ent("ranger", 1, [21, 24], sym=False)
+    m.ent("ranger", 1, [21, 24], sym=False); m.ent("ranger", 1, [21, 25], sym=False)
     m.ent("stone_quarry", 0, [8.5, 14.5], sym=False)
     m.ent("stone_quarry", 0, [8.5, 33.5], sym=False)
     for y in range(8, 40, 2):
-        m.ent("tree", 0, [3.5, y + 0.5], sym=False)
+        for x in (3, 5):
+            m.ent("tree", 0, [x + 0.5, y + 0.5], sym=False)
+    for x in range(12, 24, 2):
+        m.ent("tree", 0, [x + 0.5, 10.5], sym=False)
+        m.ent("tree", 0, [x + 0.5, 37.5], sym=False)
     m.extra["waves"] = [
         {"time": 90, "player": 2, "at": [60, 24], "spread": 3, "spawn": [{"type": "walker", "count": 5}], "every": 45, "growth": 1.25, "repeats": 14},
-        {"time": 240, "player": 2, "at": [60, 6], "spread": 2, "spawn": [{"type": "runner", "count": 3}], "every": 60, "growth": 1.2, "repeats": 8},
+        {"time": 240, "player": 2, "at": [60, 6], "spread": 2, "spawn": [{"type": "runner", "count": 3}], "every": 60, "growth": 1.2, "repeats": 12},
+        {"time": 480, "player": 2, "at": [60, 42], "spread": 2, "spawn": [{"type": "harpy", "count": 2}], "every": 90, "growth": 1.2, "repeats": 8},
+        {"time": 1140, "player": 2, "at": [60, 24], "spread": 4, "spawn": [{"type": "walker", "count": 60}, {"type": "runner", "count": 20},
+                                                                             {"type": "chubby", "count": 4}], "every": 0, "repeats": 0},
     ]
     write("lastcolony", m, "last_valley")
 
