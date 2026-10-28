@@ -388,8 +388,7 @@ void RtsPlanetGroundFx::buildLanes(gfx::Device& dev, const PlanetRenderer& plane
 // ------------------------------------------------------------------ frame
 
 bool RtsPlanetGroundFx::draw(gfx::Device& dev, Renderer3D& r, const PlanetRenderer& planets, const PlanetViewFrame& frame, const RtsScene& s,
-                             double time, const std::vector<uint8_t>* vision, const MapGrid& g, const RtsGroundFx& looks, const Rules& rules,
-                             const std::vector<uint8_t>* demo) {
+                             double time, const std::vector<uint8_t>* vision, const MapGrid& g, const RtsGroundFx& looks, const Rules& rules) {
     const PlanetWorld& W = planets.world();
     const Surface* S = W.sim.get();
     if (!S || g.surf.get() != S) return false;
@@ -414,8 +413,8 @@ bool RtsPlanetGroundFx::draw(gfx::Device& dev, Renderer3D& r, const PlanetRender
         init_ = true;
         nextScan_ = -1;
     }
-    const std::vector<uint8_t>* terr = demo && demo->size() == n ? demo : &g.territory;
-    const bool useT = (demo ? looks.territoryOn() : looks.showsTerritory()) && (demo || rules.territory.enabled || !rules.rooms.empty()) && terr->size() == n;
+    const std::vector<uint8_t>* terr = &g.territory;
+    const bool useT = looks.showsTerritory() && (rules.territory.enabled || !rules.rooms.empty()) && terr->size() == n;
     const auto& dl = looks.digLook();
     const bool useD = dl.on && !rules.diggables.empty() && g.dig.size() == n;
     bool rockChanged = false;

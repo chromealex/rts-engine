@@ -26,12 +26,10 @@ class RtsPlanetGroundFx {
 public:
     void shutdown(gfx::Device& dev);
     // Per frame (planet maps): rescans the layers a few times per second, rebuilds changed tiles, queues meshes.
-    // demo: per grid cell owner slots to show instead of MapGrid::territory (RTS_PLANET_TERRITORY_DEMO, testing);
-    // empty = the simulation's layer. Returns true when the rock layer seen by the viewer changed (the planet
-    // terrain then needs the new cell flags: RtsView::drawPlanets).
+    // Returns true when the rock layer seen by the viewer changed (the planet terrain then needs the new cell
+    // flags: RtsView::drawPlanets).
     bool draw(gfx::Device& dev, render::Renderer3D& r, const PlanetRenderer& planets, const PlanetViewFrame& frame, const RtsScene& s,
-              double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsGroundFx& looks, const Rules& rules,
-              const std::vector<uint8_t>* demo = nullptr);
+              double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsGroundFx& looks, const Rules& rules);
     int quads() const { return quads_; }
     static constexpr int kTile = 32;
 
