@@ -863,6 +863,14 @@ matching the filter to `at` / `area`), `setTickets` (`amount`).
 Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"enemies"`, `"allies"`,
 `"creeps"`, `"neutral"`, or a slot number. `"target": "triggeringUnit"` acts on the event's unit.
 
+### Testing data through MCP
+
+`scenario_run` runs a scripted check on a copy of the open map: named `spawn`s, timed `commands` (keys of
+`play_command`), optional `bots`, `checks` (pass/fail) and `watch` / `events` / trigger logs. Every fired trigger
+is also a simulation event `kEvTriggerFired` (value = trigger index: rules triggers first, then map triggers;
+player = triggering slot) — presentation/tools only, not hashed. `rules_lint` lists keys the loader never reads;
+`rules_schema` with `part: "keys"` lists every key the loader reads per block, taken from the loader itself.
+
 ## Texture atlases (game.json `atlas`, optional)
 
 When a game is packaged (`rtsbuild`, `assetpipe pack --atlas <profile>`), small 2D images are

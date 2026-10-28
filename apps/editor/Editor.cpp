@@ -1,6 +1,7 @@
 // Editor: lifecycle, docking layout, menus, documents, play-test and viewport rendering.
 // Window contents live in apps/editor/windows/*.cpp; the agent link in EditorAgent.cpp.
 #include "Editor.h"
+#include "core/SimTools.h"
 #include "imgui.h"
 #include "imgui_internal.h" // DockBuilder
 
@@ -560,6 +561,7 @@ void Editor::startPlay(int humanSlot) {
         };
         if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
         sim_->setup(ws_.project.rulesJson, mapJson);
+        playIds_ = mapEntityIds(*sim_, *simModule(), mapJson);
         view_.lights().configure(ws_.project.manifest["lighting"], mapJson["lighting"], mapJson["lights"]); // day/night, map lights
     } catch (const std::exception& e) {
         status = std::string("Ошибка запуска: ") + e.what();
