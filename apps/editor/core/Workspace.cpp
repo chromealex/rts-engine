@@ -16,6 +16,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include "engine/pack/FileCopy.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
@@ -365,7 +366,8 @@ void Workspace::registerCoreOps() {
             if (tpl != "empty") {
                 fs::path src = fs::path(gamesDir()) / tpl;
                 if (!fs::exists(src / "game.json")) throw std::runtime_error("template game '" + tpl + "' not found");
-                fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+                std::error_code ec;   // not fs::copy: MinGW fails on the existing dst/maps (FileCopy.h)
+                if (!rts::pack::copyTree(src, dst, ec)) throw std::runtime_error("copy " + src.string() + ": " + ec.message());
             } else {
                 writeText((dst / "rules.json").string(), R"({
   "resources": {"gold": {"name": "Золото", "start": 500}},
@@ -1142,7 +1144,8 @@ void Workspace::registerCoreOps() {
             fs::path canon = fs::weakly_canonical(dst);
             if (canon.string().rfind(fs::weakly_canonical(project.dir).string(), 0) != 0) throw std::runtime_error("dest must stay inside the game folder");
             fs::create_directories(dst.parent_path());
-            fs::copy_file(ps(p, "source"), dst, fs::copy_options::overwrite_existing);
+            std::error_code ec;   // re-import over an existing file: MinGW-safe copy (FileCopy.h)
+            if (!rts::pack::copyFileReplace(ps(p, "source"), dst, ec)) throw std::runtime_error("copy " + ps(p, "source") + ": " + ec.message());
             Json r = ok();
             r.set("summary", str("Импортирован " + ps(p, "dest")));
             return r;

@@ -1,4 +1,5 @@
 #include "Chunks.h"
+#include "FileCopy.h"
 
 #include <algorithm>
 #include <cstring>
@@ -55,7 +56,7 @@ std::unique_ptr<Download> fetchFile(const std::string& url, const std::string& d
 #endif
     std::error_code ec;
     if (!fs::is_regular_file(path, ec)) { error = "not found: " + path; return nullptr; }
-    fs::copy_file(path, destPath, fs::copy_options::overwrite_existing, ec);
+    copyFileReplace(path, destPath, ec);   // a resumed .part may exist (MinGW: see FileCopy.h)
     if (ec) return std::make_unique<Finished>(false, 0, "copy " + path + ": " + ec.message());
     return std::make_unique<Finished>(true, uint64_t(fs::file_size(destPath, ec)), "");
 }
