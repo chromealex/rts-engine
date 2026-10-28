@@ -1,5 +1,6 @@
 // Setup, commands, shared queries and state hashing for the generic RTS module.
 #include "RtsInternal.h"
+#include "gen/MapGen.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -15,8 +16,18 @@ Vec3 readPos(const Json& p) { return {p[0].fx(), Fixed{}, p[p.size() >= 3 ? 2 : 
 void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     rules_ = loadRules(rulesJson);
     sim.world().setResource<GameState>();
-    setupMap(sim, map);
-    loadTriggers(rules_, rulesJson, map, triggers_);
+    // map generation (map "generate" / world body "generate"): deterministic, regenerated identically by every
+    // client, the server arbiter and replays ("seed": "match" = the match seed). Maps without it are untouched.
+    generated_ = Json();
+    if (map["generate"].isObject() || map["world"]["bodies"].isArray()) {
+        Json gm = map;
+        std::string err;
+        if (!gen::applyGenerate(gm, rules_, rulesJson, sim.config().seed, int(sim.players().size()), &err)) throw std::runtime_error(err);
+        if (!(gm == map)) generated_ = std::move(gm);
+    }
+    const Json& mapIn = generated_.isObject() ? generated_ : map;
+    setupMap(sim, mapIn);
+    loadTriggers(rules_, rulesJson, mapIn, triggers_);
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
