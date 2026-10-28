@@ -298,7 +298,6 @@ Json entityJson(const SimRefs& refs, Entity e) {
     }
     if (auto* h = w.tryGet<Hero>(e)) j.set("level", Json::number(int64_t(h->level)));
     if (auto* v = w.tryGet<Veteran>(e); v && v->level > 1) j.set("rank", Json::number(int64_t(v->level)));
-    if (auto* sh = w.tryGet<MechShield>(e)) j.set("shield", Json::number(sh->hp.toDouble(), 1));
     if (auto* sh = w.tryGet<Shield>(e)) j.set("shield", Json::number(sh->value.toDouble(), 1));
     if (auto* b = w.tryGet<Belt>(e)) {
         static const char* n[] = {"?", "e", "s", "w", "n"};

@@ -249,7 +249,6 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10) && rules_.mech.workerCaps && !mechNodeHasRoom(sim, o.target, e)) { stopMoving(sim, e); return false; }   // agent-mech: waits for a free place
         const Fixed cd = contactDistance(sim, e, o.target);
         // limited nodes (one worker per patch): a worker that can't get to the patch because others stand there
         // waits close by instead of asking for a new path every tick
@@ -566,13 +565,13 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (!state(sim).roadsOnly && !near) moveTo(sim, e, tp, Fixed{});
             o.state = 1;
         }
-        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target);
+        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crewed && !w.has<Garrison>(o.target);
         if (contactDistance(sim, e, o.target) > (crewing ? Fixed::fromRatio(6, 10) : Fixed::fromRatio(2, 10))) {
             if (m && !m->moving) o.state = 0;
             return false;
         }
         // arrived: man an empty vehicle (Z), reinforce, assault or capture
-        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
+        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crewed && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
         if (rules_.advancedEffects) { enterGarrison(sim, e, o.target); return true; }
         auto* g = w.tryGet<Garrison>(o.target);
         const uint8_t me = w.get<Owner>(e).player;

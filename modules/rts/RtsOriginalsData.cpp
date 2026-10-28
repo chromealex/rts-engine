@@ -50,15 +50,61 @@ ModTarget modTarget(const Rules& r, const std::string& where, const Json& e) {
 void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
     bool any = false;
     // ---- damage model
-    if (const Json& a = j["armor"]; a.isObject()) {
-        std::string model = a.getStr("model", "subtract");
-        if (model != "subtract" && model != "percent") fail("armor.model", "expected 'subtract' or 'percent', got '" + model + "'");
-        r.armor.percent = model == "percent";
-        r.armor.perPoint = a.getFx("perPoint", r.armor.perPoint);
-        r.armor.minDamage = a.getFx("minDamage", r.armor.minDamage);
-        r.armor.minShare = a.getFx("minShare", r.armor.minShare);
+    // "armor": {"model", "perPoint", "minDamage", "minShare", "negative", "base"}; alias "armorModel" (agent-mech):
+    // "percent" | {"type", "factor", "min", "minFraction", "base"} — same meaning, percent there uses the exact
+    // exponential curve for negative armor
+    ArmorRules& ar = r.armor;
+    auto classIndex = [&](const std::string& name) -> uint16_t {
+        for (size_t i = 0; i < ar.classes.size(); ++i) if (ar.classes[i] == name) return uint16_t(i);
+        if (ar.classes.size() >= 64) fail("armor classes", "at most 64");
+        ar.classes.push_back(name);
+        return uint16_t(ar.classes.size() - 1);
+    };
+    const Json& aj = j["armor"].isObject() ? j["armor"] : j["armorModel"];
+    const bool alias = !j["armor"].isObject() && !aj.isNull();
+    if (!aj.isNull()) {
+        const char* where = alias ? "armorModel" : "armor.model";
+        const std::string model = aj.isString() ? aj.str() : aj.getStr(alias ? "type" : "model", "subtract");
+        if (model == "subtract") ar.model = ArmorModel::Subtract;
+        else if (model == "percent") ar.model = ArmorModel::Percent;
+        else if (model == "classes") ar.model = ArmorModel::Classes;
+        else fail(where, "expected 'subtract', 'percent' or 'classes', got '" + model + "'");
+        const bool cls = ar.model == ArmorModel::Classes;
+        ar.perPoint = aj.getFx(alias ? "factor" : "perPoint", ar.perPoint);
+        ar.minDamage = aj.getFx(alias ? "min" : "minDamage", cls ? Fixed::fromInt(1) : ar.minDamage);
+        ar.minShare = aj.getFx(alias ? "minFraction" : "minShare", cls ? Fixed{} : ar.minShare);
+        const std::string neg = aj.getStr("negative", alias ? "exponential" : "linear");
+        if (neg != "linear" && neg != "exponential") fail(std::string(where) + " negative", "expected 'linear' or 'exponential', got '" + neg + "'");
+        ar.negativeExp = neg == "exponential";
+        for (auto& b : aj["base"].items()) classIndex(b.str());
+        ar.baseClasses = int(ar.classes.size());
+        if (cls && ar.baseClasses == 0) fail(std::string(where) + " base", "the classes model needs base classes, e.g. [\"melee\", \"pierce\"]");
     }
-    // ---- upkeep with resource masks and income multipliers
+    if (ar.model == ArmorModel::Classes) {
+        size_t ci = 0;
+        for (auto& [id, tj] : j["types"].members()) {
+            UnitType& t = r.types[ci++];
+            for (auto& [c, v] : tj["armors"].members()) {
+                uint16_t k = classIndex(c);
+                if (t.classArmors.size() <= k) t.classArmors.resize(size_t(k) + 1);
+                t.classArmors[k] = v.fx();
+                t.classMask |= uint64_t(1) << k;
+            }
+            size_t wi = 0;
+            for (auto& wj : tj["weapons"].items()) {
+                if (wi >= t.weapons.size()) break;
+                for (auto& [c, v] : wj["attacks"].members()) t.weapons[wi].attacks.push_back({classIndex(c), v.fx()});
+                ++wi;
+            }
+        }
+    }
+    // ---- upkeep with resource masks and income multipliers; "upkeepResources" (agent-mech alias): the resources of
+    // every tier without its own "resources"
+    uint32_t upkeepDefault = 0xFFFFFFFFu;
+    if (j.has("upkeepResources")) {
+        upkeepDefault = 0;
+        for (auto& rs : j["upkeepResources"].items()) upkeepDefault |= 1u << resId(r, "upkeepResources", rs.str());
+    }
     if (j["upkeep"].isArray()) {
         r.upkeep.clear();
         for (auto& u : j["upkeep"].items()) {
@@ -66,6 +112,7 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             t.supply = u.getFx("supply");
             t.gatherMult = u.getFx("gatherMult", t.gatherMult);
             t.incomeMult = u.getFx("incomeMult", t.incomeMult);
+            t.resMask = upkeepDefault;
             if (u.has("resources")) {
                 t.resMask = 0;
                 for (auto& rs : u["resources"].items()) t.resMask |= 1u << resId(r, "upkeep.resources", rs.str());
@@ -137,6 +184,14 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             t.shieldArmor = h.getFx("shieldArmor");
             if (t.shieldMax.raw > 0) any = true;
         }
+        if (const Json& sh = tj["shields"]; sh.isObject()) {   // alias (agent-mech): {"max", "regen", "delay", "armor"}
+            t.shieldMax = sh.getFx("max");
+            if (t.shieldMax.raw <= 0) fail(where + " shields.max", "must be > 0");
+            t.shieldRegen = sh.getFx("regen", Fixed::fromInt(2));
+            t.shieldDelay = sh.getFx("delay", t.shieldDelay);
+            t.shieldArmor = sh.getFx("armor");
+            any = true;
+        }
         size_t wi = 0;
         for (auto& wj : tj["weapons"].items()) {
             WeaponDef& w = t.weapons[wi++];
@@ -150,7 +205,10 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             }
             w.killsCrew = wj.getFx("killsCrew");
         }
-        if (const Json& rn = tj["resourceNode"]; rn.isObject()) { t.maxGatherers = int(rn.getInt("maxGatherers", 0)); if (t.maxGatherers) any = true; }
+        if (const Json& rn = tj["resourceNode"]; rn.isObject()) {   // "maxWorkers": agent-mech alias
+            t.maxGatherers = int(rn.getInt("maxGatherers", rn.getInt("maxWorkers", 0)));
+            if (t.maxGatherers) any = true;
+        }
         if (const Json& pf = tj["powerField"]; pf.isObject()) {
             any = true;
             t.fieldId = int16_t(pf.getInt("id", 0));
@@ -158,11 +216,16 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
         }
         if (const Json& s = tj["structure"]; s.isObject() && s.has("needsField")) { any = true; t.needsField = int16_t(s.getInt("needsField", 0)); }
         t.queueSlots = std::max<int>(1, int(tj.getInt("queueSlots", 1)));
-        // "crew": "type" / {"unit": type} = the crew this vehicle carries (originals); {"accepts": tags} / true
-        // is agent-mech's crewable vehicle (RtsMechData.cpp)
-        if (const Json& c = tj["crew"]; c.isString() || (c.isObject() && c.has("unit"))) {
+        // "crew": "type" / {"unit": type}: manned by units with "crews"; {"accepts": tags} / true (agent-mech alias):
+        // manned by any mobile unit with one of the tags (any without tags)
+        if (const Json& c = tj["crew"]; c.isString() || c.isObject() || c.boolean()) {
             any = true;
-            t.crew = typeId(r, where + " crew", c.isString() ? c.str() : c.getStr("unit"));
+            t.crewed = true;
+            if (c.isString() || c.has("unit")) t.crew = typeId(r, where + " crew", c.isString() ? c.str() : c.getStr("unit"));
+            if (!c.isString() && (c.boolean() || c.has("accepts") || !c.has("unit"))) {
+                t.crewOpen = true;
+                t.crewAccepts = tagsOf(r, where + " crew.accepts", c["accepts"]);
+            }
         }
         t.crews = tj.getBool("crews", false);
         if (const Json& inf = tj["infect"]; inf.isObject()) {
@@ -177,8 +240,10 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             if (t.eats > 0) any = true;
         }
         if (tj.has("onDeath")) { any = true; t.onDeath = int16_t(ep.payload(where + " onDeath", tj["onDeath"])); }
+        t.upgradeGarrison = int(tj.getInt("upgradeGarrison", 0));   // agent-mech alias of cost.garrison
+        if (t.upgradeGarrison > 0) any = true;
         if (const Json& c = tj["cost"]; c.isObject()) {
-            t.upgradeGarrison = int(c.getInt("garrison", 0));
+            t.upgradeGarrison = int(c.getInt("garrison", t.upgradeGarrison));
             t.costGrowth = c.getFx("growth");
             if (t.upgradeGarrison > 0 || t.costGrowth.raw != 0) any = true;
         }
@@ -238,7 +303,7 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
         for (auto& w : t.weapons) if (!w.bonus.empty() || w.armorClass || w.killsCrew.raw > 0) any = true;
     }
     if (r.armor.minDamage.raw > 0 || r.armor.minShare != Fixed::fromRatio(1, 5)) any = true;
-    r.originals = any || r.armor.percent || !r.territory.incomePerCell.empty() || r.regions.requireExplored;
+    r.originals = any || r.armor.model == ArmorModel::Percent || !r.territory.incomePerCell.empty() || r.regions.requireExplored;
     for (auto& u : r.upkeep) if (u.resMask != 0xFFFFFFFFu || u.incomeMult != Fixed::fromInt(1)) r.originals = true;
 }
 
