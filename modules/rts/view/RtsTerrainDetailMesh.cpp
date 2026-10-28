@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include "../../../engine/platform/Platform.h"
 #include "RtsTerrainRender.h"
@@ -94,6 +96,7 @@ bool TerrainRenderer::buildDetail(gfx::Device& dev, const MapGrid& g, bool flatD
     p.scale = k; p.bevel = look_.bevel; p.wobble = look_.wobble; p.noise = look_.roughness;
     bool resized = detail_.w != W || detail_.h != H || detail_.k != k || all || fileDetailChanged_;
     int ri0 = 0, rj0 = 0, ri1 = 0, rj1 = 0;   // resynthesised sample rect (empty = none)
+    const auto tp0 = std::chrono::steady_clock::now();
     if (resized) {
         if (hasFileDetail_) detail_ = fileDetail_.k == k && fileDetail_.w == W && fileDetail_.h == H ? fileDetail_ : terrain::resampleDetail(fileDetail_, k);
         else {
@@ -166,7 +169,11 @@ bool TerrainRenderer::buildDetail(gfx::Device& dev, const MapGrid& g, bool flatD
     while ((1 << lv) <= kChunk * k / 4) ++lv;           // coarsest level: 4x4 quads per chunk
     lodLevels_ = lv;
     for (auto& c : chunks_) { c.lods.resize(size_t(lodLevels_)); c.lastUse.resize(size_t(lodLevels_), 0); }
+    const auto tp1 = std::chrono::steady_clock::now();
     if (changed || resized) updateDetailTextures(dev, ri1 > ri0 ? ri0 : 0, rj1 > rj0 ? rj0 : 0, ri1 > ri0 ? ri1 : detail_.sw(), rj1 > rj0 ? rj1 : detail_.sh());
+    if (std::getenv("RTS_TERRAIN_STATS"))
+        std::fprintf(stderr, "[terrain] detail build: surface+chunks %.1f ms, textures %.1f ms\n",
+                     std::chrono::duration<double, std::milli>(tp1 - tp0).count(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tp1).count());
     detailOn_ = true;
     stats_.detailK = k;
     return changed || resized;
@@ -206,12 +213,13 @@ void TerrainRenderer::updateDetailTextures(gfx::Device& dev, int i0, int j0, int
     for (int v = u0; v < u1; ++v)
         for (int t = t0; t < t1; ++t) {
             const float x = float(t) * sx * e, z = float(v) * sz * e;
-            const float hc = detail_.sample(x, z);
-            const float hx0 = detail_.sample(x - e, z), hx1 = detail_.sample(x + e, z), hz0 = detail_.sample(x, z - e), hz1 = detail_.sample(x, z + e);
+            // nearest sample (texel ~ sample): central differences on the grid
+            const int si = int(float(t) * sx + 0.5f), sj = int(float(v) * sz + 0.5f);
+            const float hc = detail_.at(si, sj);
+            const float hx0 = detail_.at(si - 1, sj), hx1 = detail_.at(si + 1, sj), hz0 = detail_.at(si, sj - 1), hz1 = detail_.at(si, sj + 1);
             float3 n = normalize({hx0 - hx1, 2.0f * e, hz0 - hz1});
             // cavity: how far the point lies below its neighbours at two radii (0.5 = flat)
-            const float r2 = e * 3.0f;
-            const float ring = (detail_.sample(x - r2, z) + detail_.sample(x + r2, z) + detail_.sample(x, z - r2) + detail_.sample(x, z + r2)) * 0.25f;
+            const float ring = (detail_.at(si - 3, sj) + detail_.at(si + 3, sj) + detail_.at(si, sj - 3) + detail_.at(si, sj + 3)) * 0.25f;
             const float cav = std::clamp(0.5f + ((hx0 + hx1 + hz0 + hz1) * 0.25f - hc) * 3.0f + (ring - hc) * 0.8f, 0.0f, 1.0f);
             const float macro = 0.5f + 0.5f * (vnoise(x * 0.07f, z * 0.07f, 91) * 0.6f + vnoise(x * 0.23f, z * 0.23f, 93) * 0.4f);
             uint8_t* px = &nrmPx_[(size_t(v) * size_t(TW) + size_t(t)) * 4];
