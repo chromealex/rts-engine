@@ -47,6 +47,33 @@ void RtsAI::originals(Simulation& sim, RtsModule& m) {
             send(sim, c);
         });
     }
+    // structures that unlock units by upgrading in place (add-ons, hall tiers, lair): upgrade when a combat unit
+    // we could otherwise train needs the result and we have none of it
+    if (sim.tick() % 50 < 12) {
+        auto& eco = m.state(sim).players[player_];
+        std::vector<uint16_t> wanted;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            const UnitType& t = R.types[ti];
+            if (t.structure || t.weapons.empty() || t.worker || t.hero) continue;
+            if (t.factionMask) {
+                int fi = R.findFaction(eco.faction);
+                if (fi < 0 || !(t.factionMask & (1u << fi))) continue;
+            }
+            for (auto& rq : t.requires_) if (!rq.tech && eco.typeCountAll[rq.index] == 0) wanted.push_back(rq.index);
+        }
+        bool issued = false;
+        w.each<Unit, Owner, Production>([&](Entity e, Unit& u, Owner& o, Production& p) {
+            if (issued || o.player != player_ || !p.queue.empty() || (u.flags & kUnitUnderConstruction)) return;
+            for (uint16_t up : R.types[u.type].upgrades) {
+                if (std::find(wanted.begin(), wanted.end(), up) == wanted.end() || R.types[up].upgradeGarrison > 0) continue;
+                if (!m.requirementsMet(sim, player_, R.types[up].requires_) || !m.canAfford(sim, player_, R.types[up].cost)) continue;
+                Command c; c.type = kCmdUpgrade; c.units = {e}; c.param = up;
+                send(sim, c);
+                issued = true;
+                return;
+            }
+        });
+    }
     // garrison buildings: spend spare units on the next level (never on conversions)
     w.each<Garrison, Unit, Owner, Production>([&](Entity e, Garrison& g, Unit& u, Owner& o, Production& p) {
         if (o.player != player_ || !p.queue.empty()) return;

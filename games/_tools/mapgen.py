@@ -226,10 +226,15 @@ def starfall():
     m.level_rect(2, 2, 20, 20, 1)
     m.rect(22, 10, 1, 3, '/')
     m.rect(21, 10, 1, 3, '/')
-    m.ent("mineral", 0, [5.5, 5.5]); m.ent("mineral", 0, [6.5, 4.5]); m.ent("mineral", 0, [4.5, 7.5])
-    m.ent("mineral", 0, [8.5, 4.5]); m.ent("mineral", 0, [4.5, 9.5])
-    m.ent("geyser", 0, [15, 4])
-    m.ent("mineral", 0, [30.5, 40.5]); m.ent("mineral", 0, [31.5, 41.5])
+    # SC2 base: 8 patches (4 x 1800, 4 x 900) in an arc, two geysers
+    for i, (x, y) in enumerate([(4, 5), (4, 7), (4, 9), (4, 11), (6, 3), (8, 3), (10, 3), (6, 13)]):
+        m.ent("mineral" if i % 2 == 0 else "mineral_small", 0, [x, y + 0.5])
+    m.ent("geyser", 0, [15.5, 4.5])
+    m.ent("geyser", 0, [5.5, 17.5])
+    # natural expansion below the ramp
+    for i, (x, y) in enumerate([(26, 36), (26, 38), (26, 40), (28, 42), (30, 42)]):
+        m.ent("mineral" if i % 2 == 0 else "mineral_small", 0, [x, y + 0.5])
+    m.ent("geyser", 0, [33.5, 43.5])
     m.players[0]["start"] = [11, 12]
     m.players[1]["start"] = m.mirror([11, 12])
     write("starfall", m, "twin_plateaus")

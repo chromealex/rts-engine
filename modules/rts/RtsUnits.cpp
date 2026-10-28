@@ -188,8 +188,18 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
-            if (nt.maxGatherers > 0 && gatherersAt(sim, o.target) >= nt.maxGatherers) {
+        const Fixed cd = contactDistance(sim, e, o.target);
+        // limited nodes (one worker per patch): a worker that can't get to the patch because others stand there
+        // waits close by instead of asking for a new path every tick
+        const bool queued = nt.maxGatherers > 0 && cd <= Fixed::fromInt(2) && m && !m->moving;
+        if (cd <= Fixed::fromRatio(6, 10) || queued) {
+            const bool full = nt.maxGatherers > 0 && gatherersAt(sim, o.target) >= nt.maxGatherers;
+            if (!full && cd > Fixed::fromRatio(6, 10)) {             // free but out of reach: walk up again now and then
+                if ((sim.tick() + e.index) % 20 == 0) o.state = 0;
+                return false;
+            }
+            if (full) {
+                if ((sim.tick() + e.index) % 8 != 0) return false;   // wait; look for another node a few times a second
                 // node full (WC3 mine: 5 inside, SC patch: one at a time): try a free node close by, else wait
                 Vec3 at = w.get<Transform>(e).pos;
                 Entity alt;
@@ -207,6 +217,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
                 return false;
             }
             stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
+            if (nt.maxGatherers > 0) { gatherersAt(sim, o.target); if (gatherCount_.size() <= o.target.index) gatherCount_.resize(o.target.index + 1, 0); gatherCount_[o.target.index]++; }
         }
         else if (m && !m->moving) o.state = 0;
         return false;

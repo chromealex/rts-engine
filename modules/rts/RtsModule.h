@@ -576,6 +576,8 @@ private:
     std::vector<SlotClaim> slotClaims_;   // rebuilt every tick from Combat slots (derived, not state)
     struct DeathSpawn { uint16_t type; uint8_t owner; Vec3 pos; int count; };
     std::vector<DeathSpawn> deathSpawns_; // filled and emptied inside sysDeath (infection)
+    mutable std::vector<uint16_t> gatherCount_;   // derived per tick: workers harvesting at each node (by entity index)
+    mutable uint32_t gatherCountTick_ = UINT32_MAX;
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
