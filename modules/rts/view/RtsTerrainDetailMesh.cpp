@@ -37,9 +37,28 @@ float vnoise(float x, float y, uint32_t s) {
 } // namespace
 
 void TerrainRenderer::setDetail(const terrain::DetailSurface* d, const std::vector<uint8_t>* splat) {
-    hasFileDetail_ = d && d->valid();
-    if (hasFileDetail_) fileDetail_ = *d; else fileDetail_ = {};
-    fileSplat_ = splat ? *splat : std::vector<uint8_t>{};
+    const bool has = d && d->valid();
+    std::vector<uint8_t> sp = splat ? *splat : std::vector<uint8_t>{};
+    // same size as the drawn surface: only the changed samples are rebuilt (editor sculpting)
+    if (has && hasFileDetail_ && !fileDetailChanged_ && d->w == fileDetail_.w && d->h == fileDetail_.h && d->k == fileDetail_.k && sp.size() == fileSplat_.size()) {
+        const int SW = d->sw(), SH = d->sh();
+        int i0 = SW, j0 = SH, i1 = -1, j1 = -1;
+        for (int j = 0; j < SH; ++j)
+            for (int i = 0; i < SW; ++i) {
+                const size_t n = size_t(j) * size_t(SW) + size_t(i);
+                if (d->hgt[n] == fileDetail_.hgt[n] && (sp.empty() || std::memcmp(&sp[n * 4], &fileSplat_[n * 4], 4) == 0)) continue;
+                i0 = std::min(i0, i); j0 = std::min(j0, j); i1 = std::max(i1, i); j1 = std::max(j1, j);
+            }
+        if (i1 >= 0) {
+            fileDetail_.hgt = d->hgt; fileSplat_ = std::move(sp);
+            dirtyI0_ = std::min(dirtyI0_, i0); dirtyJ0_ = std::min(dirtyJ0_, j0); dirtyI1_ = std::max(dirtyI1_, i1 + 1); dirtyJ1_ = std::max(dirtyJ1_, j1 + 1);
+        }
+        return;
+    }
+    if (!has && !hasFileDetail_) return;
+    hasFileDetail_ = has;
+    if (has) fileDetail_ = *d; else fileDetail_ = {};
+    fileSplat_ = std::move(sp);
     fileDetailChanged_ = true;
 }
 
@@ -83,6 +102,16 @@ bool TerrainRenderer::buildDetail(gfx::Device& dev, const MapGrid& g, bool flatD
         }
         ri1 = detail_.sw(); rj1 = detail_.sh();
         for (auto& c : chunks_) { freeChunk(dev, c); c.hash = chunkHash(g, c, flatDig); c.geoHash = 0; }
+    } else if (hasFileDetail_ && dirtyI1_ > dirtyI0_) {
+        // explicit detail edited in place (same scale as drawn): copy the changed samples
+        if (detail_.k == fileDetail_.k) {
+            ri0 = dirtyI0_; rj0 = dirtyJ0_; ri1 = dirtyI1_; rj1 = dirtyJ1_;
+            for (int j = rj0; j < rj1; ++j)
+                for (int i = ri0; i < ri1; ++i) detail_.hgt[size_t(j) * size_t(detail_.sw()) + size_t(i)] = fileDetail_.hgt[size_t(j) * size_t(fileDetail_.sw()) + size_t(i)];
+        } else {
+            detail_ = terrain::resampleDetail(fileDetail_, k);
+            ri0 = 0; rj0 = 0; ri1 = detail_.sw(); rj1 = detail_.sh();
+        }
     } else if (!hasFileDetail_) {
         // editor edits: resynthesise around chunks whose cells changed
         int x0 = 1 << 30, y0 = 1 << 30, x1 = -1, y1 = -1;
@@ -101,7 +130,17 @@ bool TerrainRenderer::buildDetail(gfx::Device& dev, const MapGrid& g, bool flatD
         }
     }
     fileDetailChanged_ = false;
+    dirtyI0_ = dirtyJ0_ = 1 << 30; dirtyI1_ = dirtyJ1_ = -1;
     detailK_ = k;
+    if (hasFileDetail_ && !resized) // explicit detail: cell edits change colours / splat only
+        for (auto& c : chunks_) {
+            const uint64_t h = chunkHash(g, c, flatDig);
+            if (h == c.hash) continue;
+            c.hash = h; c.geoHash = 0;
+            const int a0 = c.x0 * k, b0 = c.y0 * k, a1 = c.x1 * k + 1, b1 = c.y1 * k + 1;
+            if (ri1 <= ri0) { ri0 = a0; rj0 = b0; ri1 = a1; rj1 = b1; }
+            else { ri0 = std::min(ri0, a0); rj0 = std::min(rj0, b0); ri1 = std::max(ri1, a1); rj1 = std::max(rj1, b1); }
+        }
     // cell colours (vertex colours are the bilinear mix of the classic cell colours)
     cellCol_.resize(size_t(W * H));
     for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) cellCol_[size_t(y * W + x)] = cellColor(g, x, y, flatDig);

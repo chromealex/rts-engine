@@ -193,6 +193,7 @@ void GameClient::startNetMatch() {
         if (sl != human_) bots_.emplace_back(sl, m.seed, AIConfig{});
     mapIndex_ = 0;
     for (size_t i = 0; i < maps_.size(); ++i) if (maps_[i].file == m.map.file) mapIndex_ = i;
+    try { view_.setTerrainDetail(Json::parse(mapText)); } catch (...) {}
     if (const Json* gm = mod().generatedMap()) { // generated maps: world / material of the map the sim was built from
         if ((*gm)["world"].isObject()) view_.setWorld(*gm);
         view_.setTerrainMaterial((*gm)["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);

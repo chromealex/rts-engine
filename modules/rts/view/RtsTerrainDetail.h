@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "../../../engine/data/Json.h"
 #include "../RtsMap.h"
 
 namespace rts::game::terrain {
@@ -53,5 +54,13 @@ bool decodeDetail(const std::string& bytes, int w, int h, int k, DetailSurface& 
 std::string encodeDetail(const DetailSurface& d);
 // Resample to another scale (bilinear); used when a quality tier draws fewer samples than the file has.
 DetailSurface resampleDetail(const DetailSurface& d, int k);
+
+// Map key terrain.detail = {"scale": k, "file": "maps/x.detail.r16", "splat": "maps/x.splat.raw"}: reads the
+// files with `read` (paths relative to the game folder). splat (optional): RGBA8 weights of layers 0..3
+// per detail sample. Returns false without a detail block or on a broken file (err set then).
+bool loadMapDetail(const Json& map, const ContentReader& read, DetailSurface& out, std::vector<uint8_t>& splat, std::string* err);
+// int16 (1/16 units) <-> surface
+void detailFromInt16(int w, int h, int k, const std::vector<int16_t>& v, DetailSurface& out);
+std::vector<int16_t> detailToInt16(const DetailSurface& d);
 
 } // namespace rts::game::terrain
