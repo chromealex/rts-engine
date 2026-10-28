@@ -33,7 +33,9 @@ public:
     void init(gfx::Device& dev) { dev_ = &dev; }
     void shutdown();
     // `base` is prefixed to the path when reading (editor: "<project dir>/", game: "").
-    TextureRef resolve(const std::string& path, bool nearest = true, const std::string& base = "");
+    // `tiling`: a repeating world-space texture (terrain splat layers): never taken from an atlas
+    // page (wrap needs its own texture), created with repeat + mipmaps.
+    TextureRef resolve(const std::string& path, bool nearest = true, const std::string& base = "", bool tiling = false);
     // Procedural texture registered under a logical name (e.g. "builtin:shadow").
     TextureRef addGenerated(const std::string& name, int w, int h, const std::vector<uint32_t>& rgba, bool nearest);
     const std::string& lastError() const { return error_; }
