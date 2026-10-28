@@ -68,6 +68,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;
     g.flowMaxFields = rules_.movement.flow.maxFields;
+    g.blockedGoalNearest = rules_.movement.blockedGoalNearest;
     g.flowBudgetBytes = size_t(rules_.movement.flow.budgetMB) << 20;
     if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
@@ -219,6 +220,11 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     gs.victory = map.has("victory") ? loadVictory(map["victory"], rules_.victory) : rules_.victory;
     // a map may switch flow fields on / tune them for itself ("movement": {"flowField": {...}}): big horde maps
     if (const Json& ff = map["movement"]["flowField"]; ff.isObject()) loadFlowFieldRules(ff, rules_.movement.flow, "map movement.flowField");
+    if (map["movement"].has("blockedGoals")) {
+        const std::string bg = map["movement"].getStr("blockedGoals");
+        if (bg != "nearest" && bg != "search") throw std::runtime_error("map movement.blockedGoals: expected 'nearest' or 'search'");
+        rules_.movement.blockedGoalNearest = bg == "nearest";
+    }
     else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players

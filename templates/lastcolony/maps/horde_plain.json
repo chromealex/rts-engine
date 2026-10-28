@@ -993,7 +993,8 @@
   "flowField": {
    "waves": true,
    "minGroup": 12
-  }
+  },
+  "blockedGoals": "nearest"
  },
  "waves": [
   {
