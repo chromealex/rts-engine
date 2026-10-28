@@ -7,7 +7,7 @@ game.json        manifest: name, id, version, rules file, maps list, orientation
 rules.json       resources, types (units/structures/objects), techs, factions, game rules, triggers
 maps/*.json      terrain, players, objects, waves, triggers, areas, victory overrides
 audio.json       sounds, music and which sound plays on which game event (optional: no file = silent)
-models/ ui/ ...  assets (glTF models, textures, UI, sounds)
+models/ ui/ ...  assets (glTF models, textures, UI, sounds); 2D images may be packed into atlases (see Texture atlases)
 ```
 
 JSON allows `//` comments. **Numbers are plain decimals** (`1.5`, never `1e3`): the simulation is
@@ -472,6 +472,106 @@ matching the filter to `at` / `area`), `setTickets` (`amount`).
 
 Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"enemies"`, `"allies"`,
 `"creeps"`, `"neutral"`, or a slot number. `"target": "triggeringUnit"` acts on the event's unit.
+
+## Texture atlases (game.json `atlas`, optional)
+
+When a game is packaged (`rtsbuild`, `assetpipe pack --atlas <profile>`), small 2D images are
+packed into atlas pages: fewer texture switches/draw calls, trimmed transparent borders, identical
+images stored once, and pages compressed by the pack's zstd. Game code keeps using the original
+paths (`units/orc/grunt/walk_0.png`); the lookup is transparent at runtime. Loose-folder builds
+(`--no-pack`, editor) use the images as they are. The whole block is optional:
+
+```json
+"atlas": {
+  "enable": true,                                   // false (or rtsbuild --no-atlas): ship images as is
+  "maxPage": { "web": 2048, "android": 2048, "default": 4096 },  // or a single number
+  "pageSize": "mul4",          // page sides: multiples of 4 (default) or "pow2"
+  "padding": 2,                // empty texels between images
+  "extrude": 1,                // edge texels repeated around each image (no filtering seams)
+  "trim": true,                // cut fully transparent borders (offsets are kept)
+  "maxTextureSize": 0,         // larger images stay standalone; 0 = maxPage / 4
+  "mipLevels": 2,              // groups with "mips": padding/alignment safe down to 2^levels
+  "pageFormat": "rtex",        // "rtex" (raw RGBA, zstd in the pack, fastest load) or "png"
+  "groups": { "units": { "rotate": false, "mips": true }, "tiles": { "trim": false } },
+  "files": {                   // glob -> settings; `*` also matches '/'; later rules win
+    "ui/splash/*": { "noAtlas": true },
+    "units/orcs/*": { "group": "orcs" },
+    "textures/water.png": { "wrap": "repeat" },
+    "units/*/shadow.png": { "kind": "mask" }
+  }
+}
+```
+
+Profiles are rtsbuild targets (`macos`, `ios`, `android`, `web`, `windows`, `linux`); built-in
+page limits: 2048 for `web`/`android`, 4096 otherwise. Targets with equal settings share one pack.
+
+**What goes together.** An image's group key is *usage group* + *kind* (+ opaque/alpha when the
+group splits by alpha, + mips). Images only share a page with the same key:
+
+| usage group | default folders (first path component, `engine/` prefix ignored) | defaults |
+|---|---|---|
+| `ui` | `ui/`, `icons/`, `portraits/`, `cursors/`, `hud/` | trim |
+| `units` | `sprites/`, `units/`, `buildings/`, `structures/`, `characters/` | trim |
+| `tiles` | `tiles/`, `tilesets/`, `terrain/` | no trim (sheet grids stay intact), opaque and alpha tiles on separate pages |
+| `effects` | `effects/`, `fx/`, `vfx/`, `particles/` | trim |
+| any name | set with `"group"` (or `"atlasGroup"`) in `files` | as `units` |
+
+Other folders (`models/`, `textures/`, ...) are not atlased unless a `files` rule names a group:
+3D meshes use UVs outside 0..1 and wrap. *Kind* is `color`, `normal` (`*_n`, `*_nrm`, `*_normal`,
+`normals/`) or `mask` (`*_mask`) — normal maps and masks are never mixed with colour and never
+trimmed. Never atlased: `noAtlas`, `"wrap": "repeat"` (also `*_repeat`, `*_tiling`, `*_wrap`),
+images above `maxTextureSize` (after trimming), and an image that would be alone in its group
+(one page = no saved texture switch, only padding). Images referenced as a frame-grid sprite
+sheet anywhere in the game's JSON (`"sheet": "sprites/tank.png"`) are never trimmed or rotated, so
+frame uvs map linearly onto the atlas region. Inside a group, images of one folder (one unit's
+frames, one faction) stay on the same page whenever they fit; pages are shrunk to the smallest size
+that holds them. Per-file keys: `group`/`atlasGroup`, `noAtlas`, `wrap`, `kind`, `rotate` (allow a
+90° turn, off by default so facings never rotate), `trim`, `mips`, `splitAlpha`, `padding`,
+`extrude`; the same keys (except `group`) work per group in `groups`.
+
+**In the pack.** Atlased images are removed; `_atlas/` is reserved and holds the pages
+(`_atlas/<group>-<n>.rtex`) and `_atlas/atlas.json`:
+
+```json
+{ "version": 1,
+  "pages": [ { "file": "_atlas/units-0.rtex", "group": "units", "w": 1016, "h": 864, "alpha": true, "mips": false } ],
+  "textures": { "units/orc/grunt/walk_0.png": [0, 3, 3, 30, 38, 33, 29, 96, 96, 0] } }
+```
+
+Texture entry: `[page, x, y, w, h, offsetX, offsetY, sourceW, sourceH, rotated]` — integer pixels.
+`(x, y, w, h)` is the trimmed content in the page (when `rotated` = 1 it occupies `h x w` turned 90°
+clockwise); `(offsetX, offsetY)` is its position in the original `sourceW x sourceH` image, so
+pivots given in original-image pixels stay valid. `.rtex`: 24-byte header (`RTEX`, version,
+width, height, flags: 1 alpha, 2 mips, 4 left-delta filtered rows) + RGBA8 rows top to bottom,
+straight alpha. Output is byte-identical for the same input.
+
+**Runtime API** (`engine/atlas/TextureLibrary.h`, link `rts_atlas`):
+
+```cpp
+atlas::TextureLibrary lib(dev, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); });
+const atlas::TextureRef* t = lib.get("units/orc/grunt/walk_0.png");   // nullptr if missing
+// quad: t->w x t->h source pixels at (t->offsetX, t->offsetY) from the original image's top-left
+// (pivot in original pixels: pos - pivot + offset); UVs t->uv = TL, TR, BR, BL (rotation applied);
+// t->texture equal for images on one page -> batch by it; t->opaque -> draw without blending.
+```
+
+`atlas::mapUV(*t, px, py, u, v)` maps a point in original-image pixels to the texture (trim and
+rotation included) — e.g. frame corners of a sheet. For a renderer that already maps frames via a
+rect (`u0 + (u1 - u0) * lu`), the rect of an atlased sheet is `t->uv[0..1]` .. `t->uv[4..5]`.
+The 2D sprite/tile renderer's `render::TextureCache::resolve()` already understands atlases:
+an atlased image resolves to the page texture + its rect (sprite sheets are never trimmed, so
+frame uvs stay exact); a trimmed or rotated image is rebuilt as a standalone texture.
+Plain (non-atlased) images come back the same way (own texture, full UVs, no trim). CPU pixels of
+an original image: `lib.loadImage(path, img)` or `atlas::ImageSource` (the UI uses it, so RmlUi
+`<img src>` and decorators keep working with atlased files).
+
+**Build report.** `rtsbuild` prints atlas statistics and writes `size-report.json` next to
+`size-report.txt` (`<out>/<target>/`): `pack` {rawBytes, packBytes, entries, duplicates, top[]} and
+`atlas` {enabled, profile, maxPage, candidates, atlased, duplicates, pages, occupancyPercent,
+sourceBytes, atlasBytes, storedBytes, bytesSaved, gpuBytesBefore, gpuBytesAfter,
+textureBindsBefore, textureBindsAfter, groups[] {group, textures, unique, pages,
+occupancyPercent}, excluded[] {path, reason}}. Preview: `assetpipe atlas --profile web -o <dir>
+games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and the report.
 
 ## Recipes (mechanics of known games)
 
