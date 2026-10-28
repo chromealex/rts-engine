@@ -66,8 +66,6 @@ local function conditionsHold(di, d, player)
       end
     elseif k == "regions" then
       ok = compare(fx(rts.regions_owned(player)), c.cmp, c.value)
-    elseif k == "objective" or k == "dialog" or k == "camera" or k == "endMission" then
-      rts.trig_campaign(di, ai, player, unit, ax, ay, az)   -- campaigns (RtsCampaign.cpp)
     elseif k == "script" then
       ok = rts.trig_script_condition(di, ci, player)
     end
@@ -170,6 +168,8 @@ local function runActions(di, d, player, unit, wx, wy, wz)
       for _, p in ipairs(players) do rts.set_tickets(rts.team_of(p), a.amount) end
     elseif k == "castAbility" then
       for _, p in ipairs(players) do rts.cast_player_ability(p, a.index, ax, ay, az, unit, a.attack_move) end
+    elseif k == "objective" or k == "dialog" or k == "camera" or k == "endMission" then
+      rts.trig_campaign(di, ai, player, unit, ax, ay, az)   -- campaigns (RtsCampaign.cpp)
     elseif k == "script" then
       rts.trig_script_action(di, ai, player, unit, ax, ay, az)
     end
