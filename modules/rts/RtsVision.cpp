@@ -127,9 +127,20 @@ inline void cellOfDir(const std::vector<int64_t>& wp, int n, Vec3 d, DirCell& io
     else face = d.z.raw >= 0 ? 4 : 5;
     const SphereFace& f = kSphereFaces[face];
     const Fixed dn = dotFace(d, f.n);
-    auto cellOf = [&](Fixed du, int hint) {   // max i in [0, n-1] with warp[i] <= clamp(du / dn)
-        const int64_t sw = std::clamp((du / dn).raw, wp.front(), wp.back());
+    auto cellOf = [&](Fixed du, int hint) {   // max i in [0, n-1] with warp[i] <= clamp(du / dn) (0 if none)
         int i = std::clamp(hint, 0, n - 1);
+        constexpr int64_t kLim = int64_t(1) << 30;
+        if (du.raw > -kLim && du.raw < kLim && dn.raw > 0 && dn.raw < kLim) {
+            // du / dn = trunc(x / dn), x = du.raw << 16 (Fixed division); w <= trunc(x / dn) without dividing:
+            // x >= 0: w * dn <= x; x < 0 (trunc = ceil): (w - 1) * dn < x. The upper clamp never matters for
+            // i <= n - 1, the lower one gives 0 like an empty walk.
+            const int64_t x = du.raw * Fixed::kOne, D = dn.raw;
+            auto le = [&](int64_t wv) { return x >= 0 ? wv * D <= x : (wv - 1) * D < x; };
+            while (i + 1 <= n - 1 && le(wp[size_t(i) + 1])) ++i;
+            while (i > 0 && !le(wp[size_t(i)])) --i;
+            return i;
+        }
+        const int64_t sw = std::clamp((du / dn).raw, wp.front(), wp.back());
         while (i + 1 <= n - 1 && wp[size_t(i) + 1] <= sw) ++i;
         while (i > 0 && wp[size_t(i)] > sw) --i;
         return i;
