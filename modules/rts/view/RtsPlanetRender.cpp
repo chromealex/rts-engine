@@ -412,7 +412,9 @@ void PlanetRenderer::initSpace(gfx::Device& dev) {
         sd.uniformSlots = 1; sd.label = "planet sky";
         skyShader_ = dev.createShader(sd);
         if (skyShader_.valid()) {
-            gfx::PipelineDesc p; p.shader = skyShader_; p.attrCount = 0; p.stride = 0; p.indexType = gfx::IndexType::None;
+            // one unused attribute over the bound sphere buffer: Metal wants a valid vertex layout (stride > 0)
+            gfx::PipelineDesc p; p.shader = skyShader_; p.attrs[0] = {0, gfx::VertexFormat::Float3, 0}; p.attrCount = 1;
+            p.stride = sizeof(MeshVertex); p.indexType = gfx::IndexType::None;
             p.cull = gfx::CullMode::None; p.depthWrite = false; p.label = "planet sky";
             skyPipe_ = dev.createPipeline(p);
         } else std::fprintf(stderr, "[planet] sky shader: %s\n", dev.lastError().c_str());
