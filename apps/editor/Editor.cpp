@@ -398,7 +398,10 @@ void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) 
     if (playing()) { renderGame(vp, cam); return; }
     buildEditScene(scene_);
     r3d_.beginScene(cam, vp.w, vp.h);
+    setOverlayContext(vp, cam, false);
     view_.draw(r3d_, scene_, time_, nullptr, grid_);
+    if (const auto& oc = view_.overlays().context(); overlayPreviewType >= 0 && oc.placeType >= 0)   // overlay preview ghost
+        view_.drawGhost(r3d_, uint16_t(oc.placeType), oc.placeAt, oc.placeOk, grid_, time_);
     if (editOverlays) drawEditOverlays3D();
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
@@ -418,7 +421,10 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     game::sceneFromSim(*sim_, sc, float(sim_->alpha()), uint8_t(human_));
     for (auto& o : sc.objects) o.selected = std::find(gameSelection.begin(), gameSelection.end(), o.entity) != gameSelection.end();
     r3d_.beginScene(cam, vp.w, vp.h);
+    setOverlayContext(vp, cam, true);
     view_.draw(r3d_, sc, time_, human_ ? &gs.vision[size_t(human_)] : nullptr, gs.grid);
+    if (const auto& oc = view_.overlays().context(); overlayPreviewType >= 0 && oc.placeType >= 0)
+        view_.drawGhost(r3d_, uint16_t(oc.placeType), oc.placeAt, oc.placeOk, gs.grid, time_);
     const float fxDt = fxTime_ < 0 || playPaused ? 0.0f : float(time_ - fxTime_) * playSpeed;
     fxTime_ = time_;
     gameFx_.setView(cam, r3d_.viewProj(), vp.w, vp.h);
@@ -432,6 +438,42 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     gameFx_.render({r3d_.lighting.fogColor, r3d_.lighting.fogDensity});
     dev_->endPass();
     view_.drawOverlays(cam, sc, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
+}
+
+// Overlays get what the player does in this view: cursor, held keys, the structure being placed
+// (Scene: the Place tool; both: overlay_preview), pause / match over.
+void Editor::setOverlayContext(const Viewport& vp, const RTSCamera& cam, bool play) {
+    game::OverlayContext oc;
+    oc.sim = play ? sim_.get() : nullptr;
+    oc.player = uint8_t(play ? std::max(0, human_) : 1);
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    float x = 0, z = 0;
+    if (vp.hovered && groundAt(vp, cam, mp.x, mp.y, x, z)) { oc.hasCursor = true; oc.cursor = {x, 0, z}; }
+    using platform::Key;
+    for (int k = 0; k < 26; ++k) overlayKeys_[int(Key::A) + k] = ImGui::IsKeyDown(ImGuiKey(ImGuiKey_A + k));
+    for (int k = 0; k < 10; ++k) overlayKeys_[int(Key::Num0) + k] = ImGui::IsKeyDown(ImGuiKey(ImGuiKey_0 + k));
+    overlayKeys_[int(Key::LeftShift)] = ImGui::GetIO().KeyShift;
+    overlayKeys_[int(Key::LeftCtrl)] = ImGui::GetIO().KeyCtrl;
+    overlayKeys_[int(Key::LeftAlt)] = ImGui::GetIO().KeyAlt;
+    overlayKeys_[int(Key::LeftSuper)] = ImGui::GetIO().KeySuper;
+    overlayKeys_[int(Key::Space)] = ImGui::IsKeyDown(ImGuiKey_Space);
+    oc.keys = overlayKeys_;
+    oc.keyCount = int(Key::Count);
+    int place = overlayPreviewType >= 0 ? overlayPreviewType : (!play && tool == Tool::Place ? placeType : -1);
+    if (place >= 0 && size_t(place) < rules().types.size() && rules().types[size_t(place)].structure) {
+        const auto& t = rules().types[size_t(place)];
+        const float px = oc.hasCursor ? x : cam.target.x, pz = oc.hasCursor ? z : cam.target.z;
+        oc.placeType = place;
+        oc.placeAt = {(t.footprintW % 2) ? std::floor(px) + 0.5f : std::round(px), 0, (t.footprintH % 2) ? std::floor(pz) + 0.5f : std::round(pz)};
+        const game::MapGrid& g = play && sim_ ? simModule()->state(*sim_).grid : grid_;
+        oc.placeOk = g.areaBuildable(int(std::floor(oc.placeAt.x - t.footprintW * 0.5f + 0.01f)), int(std::floor(oc.placeAt.z - t.footprintH * 0.5f + 0.01f)),
+                                     t.footprintW, t.footprintH);
+    }
+    oc.paused = play && playPaused;
+    oc.over = play && sim_ && sim_->result() != 0;
+    oc.areas = &doc().data.extra["areas"];
+    oc.preview = overlayPreview.empty() ? nullptr : &overlayPreview;
+    view_.setOverlayContext(oc);
 }
 
 // Agent edits: fly the scene camera there and flash the area.

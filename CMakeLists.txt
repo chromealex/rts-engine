@@ -588,3 +588,18 @@ endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)
 endif()
+
+# ---------------------------------------------------------------------------
+# Overlays (overlays agent): data-driven helper elements (build grids, ranges, rally lines, damage
+# numbers, bars). rts_overlay_data: GPU-free schema / validation / templates, shared by the view and
+# the editor core (MCP overlay_* operations); the evaluator + renderer live in rts_game_view.
+# ---------------------------------------------------------------------------
+add_library(rts_overlay_data STATIC modules/rts/view/RtsOverlayData.cpp)
+target_link_libraries(rts_overlay_data PUBLIC rts_game)
+target_include_directories(rts_overlay_data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsOverlays.cpp modules/rts/view/RtsOverlaysDraw.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_overlay_data)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/OverlayOps.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_overlay_data)
+endif()
