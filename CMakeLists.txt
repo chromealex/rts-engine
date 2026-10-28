@@ -888,7 +888,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(RTS_LUA_SRC lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
     llex.c lmathlib.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c
-    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c rts_linit.c)
+    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c)
 list(TRANSFORM RTS_LUA_SRC PREPEND third_party/lua/)
 add_library(rts_lua STATIC ${RTS_LUA_SRC})
 target_include_directories(rts_lua PUBLIC third_party/lua)

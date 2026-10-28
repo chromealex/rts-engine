@@ -695,6 +695,11 @@ Rules loadRules(const Json& j) {
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
         r.movement.planetHpaCells = int(std::clamp<int64_t>(mv.getInt("planetHpaCells", r.movement.planetHpaCells), 0, int64_t(1) << 30));
+        if (mv.has("blockedGoals")) {
+            const std::string bg = mv.getStr("blockedGoals");
+            if (bg != "nearest" && bg != "search") fail("movement.blockedGoals", "expected 'nearest' or 'search', got '" + bg + "'");
+            r.movement.blockedGoalNearest = bg == "nearest";
+        }
         if (const Json& ff = mv["flowField"]; ff.isObject()) {
             loadFlowFieldRules(ff, r.movement.flow, "movement.flowField");
         } else if (mv.has("flowField")) fail("movement.flowField", "expected an object");
