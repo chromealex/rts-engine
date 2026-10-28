@@ -462,7 +462,17 @@ struct RoadNetworkRules {
 };
 
 // Local avoidance between moving units.
+// rules movement.flowField: shared flow fields instead of one path search per unit (RtsFlowField.cpp)
+struct FlowFieldRules {
+    int minGroup = 0;                 // move / attack-move / patrol orders of >= this many units use a field (0 = never)
+    bool waves = false;               // scripted and lane waves march along fields
+    Fixed spread = Fixed::fromRatio(4, 10);   // goal area radius = 0.3 + spread * sqrt(units) world units
+    int maxFields = 64;
+    int budgetMB = 32;
+    bool enabled() const { return minGroup > 0 || waves; }
+};
 struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2);
+                       FlowFieldRules flow;
                        int planetHpaCells = 256 * 256; };   // planets: HPA* on bodies with >= this many cells (0 = all)
 
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
@@ -563,6 +573,7 @@ struct Rules {
 };
 
 Rules loadRules(const Json& j);        // throws std::runtime_error with a readable message
+void loadFlowFieldRules(const Json& j, FlowFieldRules& out, const std::string& where);   // movement.flowField (rules or map)
 void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loadRules after types are parsed
 // Unit designs (UD): rules "designs": {"chassis": {...}, "parts": {...}} and types with "design": {"chassis", "parts"}
 // expand into plain type blocks. Returns a copy without "designs"; loadRules calls it when the block is present.
