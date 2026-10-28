@@ -4,7 +4,7 @@
 // - rules_lint: keys in rules.json / the map that nothing reads (typos, misplaced blocks), with the
 //   closest key the loader asked for at that place.
 // - rules_schema: the doc text plus, per block path ("types.*.weapons[]"), every key the loader
-//   asks for there, collected over all games in templates/; keys missing from docs/game-format.md are
+//   asks for there, collected over all games in templates/ and recent projects; keys missing from docs/game-format.md are
 //   listed as undocumented.
 // Presentation-only blocks (view, sprite, visual terrain/fog keys, lights, ...) are read by the
 // view, not the simulation loader, so they are skipped.
