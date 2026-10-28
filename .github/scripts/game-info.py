@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prints a game's packaging info as KEY=value lines (append to $GITHUB_OUTPUT in CI).
 
-Usage: game-info.py games/skirmish
+Usage: game-info.py templates/skirmish
 Mirrors tools/rtsbuild: game.json may contain comments; EXE is rtsbuild's sanitize(name).
 """
 import json, re, sys
