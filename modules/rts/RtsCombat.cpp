@@ -40,7 +40,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
             auto* cu = w.tryGet<Unit>(cand);
             if (!cu || cu->hp.raw <= 0) return;
             const UnitType& ct = rules_.types[cu->type];
-            if (ct.invulnerable || !(ct.layer & layers)) return;
+            if (ct.invulnerable || !layerHit(layers, ct.layer)) return;
             if (!hostile(sim, o.player, w.get<Owner>(cand).player)) return;
             if (rules_.advancedEffects) { uint32_t fl = statusFlags(sim, cand); if ((fl & kStInvisible) && !(fl & kStRevealed)) return; }
             Vec3 cp = w.get<Transform>(cand).pos;
