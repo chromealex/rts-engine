@@ -73,7 +73,9 @@ add_library(rts_game STATIC
     modules/rts/RtsData.cpp
     modules/rts/RtsMap.cpp
     modules/rts/RtsHpa.cpp
+    modules/rts/RtsMapSphere.cpp
     modules/rts/RtsSphere.cpp
+    modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp
