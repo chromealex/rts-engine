@@ -148,14 +148,15 @@ template <class T> size_t parseNumbers(const std::string& s, std::vector<T>& out
         while (p < e && !(*p == ' ' || *p == '\n' || *p == '\r' || *p == '\t')) ++p;
         T v{};
         if (*b == '+') ++b;
-        auto res = std::from_chars(b, p, v);
-        if (res.ec != std::errc() || res.ptr != p) {
-            if constexpr (std::is_floating_point_v<T>) {
-                std::string tok(b, p);
-                char* end = nullptr;
-                v = T(std::strtod(tok.c_str(), &end));   // "1.#QNAN", "inf", hex floats
-                if (end == tok.c_str() || !std::isfinite(v)) { v = 0; ++bad; }
-            } else { v = 0; ++bad; }
+        if constexpr (std::is_floating_point_v<T>) {
+            // strtod: floating-point std::from_chars needs macOS 26 / iOS 26 in Apple's libc++
+            std::string tok(b, p);
+            char* end = nullptr;
+            v = T(std::strtod(tok.c_str(), &end));   // also "1.#QNAN", "inf", hex floats
+            if (end == tok.c_str() || !std::isfinite(v)) { v = 0; ++bad; }
+        } else {
+            auto res = std::from_chars(b, p, v);
+            if (res.ec != std::errc() || res.ptr != p) { v = 0; ++bad; }
         }
         out.push_back(v);
     }
