@@ -7,6 +7,7 @@
 // Presentation (renderer, audio, UI) never writes into the Simulation. It reads state,
 // interpolates between ticks with alpha(), and consumes events().
 #pragma once
+#include "../core/Archive.h"
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -53,6 +54,9 @@ public:
     virtual void hashState(Simulation& sim, Hasher& h) = 0;
     // 0 while the game is running; winning team id (>0) when finished; -1 for a draw.
     virtual int result(Simulation& sim) = 0;
+    // Save states: write / read the module's dynamic state (World pools and resources). The reading side runs
+    // on a simulation set up from the same rules and map. Default: not supported.
+    virtual bool serializeState(Simulation&, Archive&) { return false; }
 };
 
 // Everything that changes while the simulation runs (rollback netcode saves one per tick).
@@ -106,6 +110,11 @@ public:
     // Rollback support. loadState() also drops executed commands recorded after the snapshot.
     void saveState(SimSnapshot& out) const;
     void loadState(const SimSnapshot& in);
+    // Save states in bytes: identical on every platform, versioned, checked by the state checksum on load.
+    // Load into a simulation set up from the same rules + map (and seed); false (state untouched on a bad header,
+    // possibly partial otherwise) with a reason in err.
+    std::string serialize();
+    bool deserialize(const std::string& bytes, std::string* err = nullptr);
 
     void addSystem(std::string name, SystemFn fn) { systems_.push_back({std::move(name), std::move(fn)}); }
     void emit(const SimEvent& e) { events_.push_back(e); }

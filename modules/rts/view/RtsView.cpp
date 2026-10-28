@@ -29,6 +29,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
         try { if (read_("game.json", text)) { game = Json::parse(text); rulesPath = game.getStr("rules", "rules.json"); } } catch (...) {}
         try { if (read_(rulesPath, text)) rj = Json::parse(text); } catch (...) {}
         fog_.setLook(parseFogLook(rj["fogOfWar"], game["fogOfWar"]));
+        spriteDefaults_ = parseSpriteDefaults(rj["sprites"], game["sprites"]);   // 2D: shadow mode, lit
         fogMeshDirty_ = true;
         // overlays: built-ins + rules "overlays" + game.json "overlays" (by id)
         overlays_.init(rules, rj["overlays"], game["overlays"], contentBase_);
@@ -45,7 +46,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
         looks_.push_back(std::move(l));
     }
     twoD_ = std::make_unique<Rts2DView>();
-    if (!twoD_->init(dev, rules, contentBase_)) twoD_.reset();
+    if (!twoD_->init(dev, rules, contentBase_, spriteDefaults_)) twoD_.reset();
     lights_.init(rules);
     groundFx_.init(dev, rules, read_, contentBase_);
     terrain_.init(dev, rules, read_, contentBase_);
@@ -83,7 +84,7 @@ float RtsView::selectionRadius(uint16_t type) const {
 void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid) {
     if (planets_.active()) { drawPlanets(r, s, time, vision, grid); return; }   // RtsPlanetView.cpp
     const bool tiles = twoD_ && twoD_->hasTiles();
-    if (twoD_) twoD_->beginFrame(r.camera(), time);
+    if (twoD_) twoD_->beginFrame(r.camera(), time, r, &grid, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
     bars_.assign(s.objects.size(), {});
     if (hasTerrain_ && !tiles) terrain_.draw(r, grid, vision, groundFx_.drawsDig());
     if (!tiles) groundFx_.draw(r, s, time, vision, grid, *this);
@@ -197,7 +198,9 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.lanes = R.lanes.enabled ? &gs.lanes : nullptr;
     out.laneSignature = gs.laneSignature;
     out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
+    if (const Surface* surf = gs.surface.get()) { sceneFromSphere(sim, *m, *surf, out, alpha, viewer); return; }   // RtsPlanetView.cpp
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+        if (u.flags & kUnitInCargo) return;   // inside a transport (agent-mech)
         SceneObject so;
         so.entity = e; so.type = u.type; so.owner = o.player;
         float3 a = toF(t.prevPos), b = toF(t.pos);
@@ -206,7 +209,9 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         const UnitType& ut = R.types[u.type];
         so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
         if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
+        so.unpowered = (u.flags & kUnitDisabled) || (o.player < gs.players.size() && gs.players[o.player].productionMult < Fixed::fromInt(1));
         if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
+        if (auto* tp = w.tryGet<Transport>(e); tp && !tp->cargo.empty()) so.garrison = int(tp->cargo.size());   // passengers
         if (auto* c = w.tryGet<Cargo>(e)) { so.carry = float(c->amount.toDouble()); so.carryRes = c->res; }
         if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) so.order = uint8_t(od->queue.front().type) + 1;
         if (auto* mb = w.tryGet<Mobile>(e)) so.moving = mb->moving;
@@ -220,7 +225,8 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
             OrderType ot = OrderType(so.order - 1);
             if (ot == OrderType::Gather || ot == OrderType::Build || ot == OrderType::Repair) so.action = kActWork;
         }
-        if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {
+        if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer) && !m->canSee(sim, e, viewer)) so.visible = false;   // cloaked, not detected
+        else if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {
             // enemies only when visible; neutral structures (resources) once explored
             int x = int(t.pos.x.floorInt()), y = int(t.pos.z.floorInt());
             uint8_t v = gs.grid.inside(x, y) ? gs.vision[viewer][size_t(gs.grid.index(x, y))] : 0;

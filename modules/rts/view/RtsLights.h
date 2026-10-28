@@ -10,6 +10,11 @@
 //                   "sweep": 45, "sweepSpeed": 25 (searchlight swing, degrees and degrees/s),
 //                   "offset": [forward, side] (in the object's frame, e.g. headlights [0.5, ±0.2]),
 //                   "beam": 0.45 (visible light shaft, 0 = none; default only for height >= 1.5).
+//                 Behaviour (any light): "pattern": "steady" | "pulse" | "strobe" | "beacon" with
+//                   "rate" (Hz; beacon spots rotate, beacon points blink); "electric": true dims and
+//                   stutters when its owner lacks power, sputters when the object is badly damaged
+//                   (default: spots are electric, fires are not); "nightOnly": true switches it on
+//                   at dusk and off at dawn.
 //                   Spot defaults: radius 9, intensity 2.2, height 1.5, white.
 //   "attackLight":     { "color", "radius", "intensity", "time", "halo" }   muzzle flash
 //   "projectileLight": { "color", "radius", "intensity", "halo" }           its projectiles
@@ -31,6 +36,8 @@
 //     "cloudStrength": 0.45, "cloudScale": 1, "wind": [1.2, 0.5]   (world units / s)
 //     "storm": 0,         0..1: overcast + lightning flashes (deterministic in game time)
 //     "waterReflections": true,   planar reflections on water (High tier only)
+//     "combatFlashes": true,      default attack / hit / death / ability flashes; set false when the
+//                                 game's particle effects carry their own "light" modules (fx/*.json)
 //     "preset": "desert" }   desert | snow | volcanic | overcast | cave (underground: permanent
 //                         night, almost no ambient); sets palettes and defaults, fields still win
 // Decorative lights (lanterns, lava, campfires) in the map's "lights" array:
@@ -72,7 +79,13 @@ public:
         float angle = 40, softness = 0.6f, pitch = 35, yaw = 0, sweep = 0, sweepSpeed = 25;
         float beam = 0.45f;            // spot: visible light shaft strength (0 = none)
         float forward = 0, side = 0;   // offset in the object's frame
+        enum class Pattern : uint8_t { Steady, Pulse, Strobe, Beacon } pattern = Pattern::Steady;
+        float rate = 1;                // pattern frequency (Hz)
+        bool electric = false, nightOnly = false;
     };
+    // Brightness factor 0..1 of a light from its pattern, power, damage and the time of day
+    // (night = max(night, dusk)); deterministic in (t, phase).
+    static float glowLevel(const Glow& g, float t, float phase, float hp, bool powered, float night);
     struct MapLight : Glow { float x = 0, z = 0; };
     static Glow parseGlow(const Json& j);
     // The renderer light of a Glow standing on `ground`, facing `yaw` (radians, 0 = +X) at time t
@@ -117,9 +130,12 @@ private:
     bool cycle_ = false;                 // a lighting block or a test override is present
     float startTime_ = 0.5f, dayLength_ = 0, nightLevel_ = 1, forcedNight_ = -1;
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
+    bool sunDirSet_ = false;            // "sunDir": [x, y, z] towards the sun at noon (map > game)
+    render::float3 sunDir_;
+    float shadowSoftness_ = -1;         // "shadowSoftness": sun shadow penumbra radius (world), < 0 = renderer default
     float lightning_ = 0;
     std::string preset_;
-    bool waterRefl_ = true;
+    bool waterRefl_ = true, combatFlashes_ = true;
     Palette day_, night_p_;
     bool preview_ = false;
     float previewTime_ = 0.5f, previewClouds_ = 0, previewStorm_ = 0;

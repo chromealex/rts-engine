@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Makes a copy of games/skirmish with every native plugin enabled (test ad ids), for CI builds that
+"""Makes a copy of templates/skirmish with every native plugin enabled (test ad ids), for CI builds that
 compile the plugins against the real SDKs. Usage: plugins-testgame.py <out dir>"""
 import json, re, shutil, sys
 from pathlib import Path
@@ -7,7 +7,7 @@ from pathlib import Path
 out = Path(sys.argv[1])
 if out.exists():
     shutil.rmtree(out)
-shutil.copytree("games/skirmish", out)
+shutil.copytree("templates/skirmish", out)
 text = (out / "game.json").read_text(encoding="utf-8")
 game = json.loads(re.sub(r"^\s*//.*$", "", text, flags=re.M))
 game["plugins"] = {

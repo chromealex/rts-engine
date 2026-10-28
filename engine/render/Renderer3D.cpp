@@ -128,7 +128,7 @@ void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
     viewProj_ = cam.proj(aspect, dev_->info().clipDepthZeroToOne) * cam.view();
     camPos_ = cam.eye();
     cam_ = cam;
-    items_.clear(); lines_.clear(); tris_.clear(); custom_.clear(); customOpaque_.clear();
+    items_.clear(); lines_.clear(); tris_.clear(); custom_.clear(); customOpaque_.clear(); customShadow_.clear();
     modelItems_.clear(); jointData_.clear(); morphData_.clear();
     computeShadowMatrix(cam, aspect);
     lights.begin(cam, aspect);
@@ -255,9 +255,11 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
             ++drawCalls_;
         }
         renderModels(0);
+        for (auto& fn : customShadow_) fn(*dev_);
         dev_->endPass();
     }
 
+    renderSpotShadow();   // High: the main spot light's shadow map (Renderer3DReflect.cpp)
     lights.renderMap();
     renderReflection();   // High: mirrored pass for water (Renderer3DReflect.cpp)
 

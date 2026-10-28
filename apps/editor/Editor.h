@@ -57,7 +57,7 @@ class Editor {
 public:
     struct Options {
         std::string projectDir;   // folder with game.json (empty: show the game picker)
-        std::string engineDir;    // engine checkout (games/, docs/, rtsbuild)
+        std::string engineDir;    // engine checkout (templates/, docs/, rtsbuild)
         std::string buildTool;    // path to rtsbuild
         std::string gameExe;      // path to the game client (device runs)
         std::string mcpTool;      // path to rtsmcp (one-click agent setup in the Agent window)
@@ -104,6 +104,10 @@ public:
     bool planetMap() const { return view_.planetMode(); }
     bool planetAt(const Viewport& vp, float sx, float sy, int& body, render::float3& local) const;
     std::string planetBodyId(int body) const;
+    // Planet maps: screen point -> map position {"body", "face", "x", "y"} (cells); null when nothing is hit.
+    Json planetPosAt(const Viewport& vp, float sx, float sy) const;
+    // Body-local point of a map position (entity "at", player "start"); false when invalid.
+    bool planetLocal(const Json& at, int& body, render::float3& local) const;
     void fitScene();
 
     // play-test (Game window)
@@ -130,7 +134,8 @@ public:
     bool saveMap(const std::string& file);
     void openGame(const std::string& idOrDir);
     void reloadRules();                        // after rules change: views, palette
-    void showGamePicker() { showPicker_ = true; }
+    void showGamePicker() { showProjectHub(0); }
+    void showProjectHub(int tab);   // 0: recent projects, 1: new project (EditorProjects.cpp)
 
     // rendering a map view into a Viewport (used by Scene and Game windows)
     void renderScene(Viewport& vp, const render::RTSCamera& cam, bool editOverlays);
@@ -235,6 +240,7 @@ private:
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;
     int human_ = 0;
+    std::map<std::string, Entity> playIds_;   // map entity "id" -> live entity of the play-test (play_command names)
     float lastSimMs_ = 0;
 
     net::LineServer server_;

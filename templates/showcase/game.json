@@ -1,0 +1,18 @@
+// Model showcase: the "Iron and Gold" rules with imported models, materials and animations
+// (glTF skinned / rigid, OBJ, variants, team masks, procedural animation). See docs/models.md.
+{
+  "description": "Iron and Gold с 3D-моделями и анимацией.",
+  "name": "Model Showcase",
+  "id": "com.rtsengine.showcase",
+  "version": "0.1.0",
+  "build": 1,
+  "module": "rts",
+  "sourceLanguage": "en",
+  "languages": ["en", "ru"],
+  "rules": "rules.json",
+  "maps": [
+    { "file": "maps/valley.json", "title": "River Valley (1v1)" }
+  ],
+  "orientation": "landscape",
+  "icon": "icon.png"
+}

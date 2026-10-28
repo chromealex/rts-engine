@@ -135,7 +135,7 @@ private:
     void estimate(Editor& ed) {
         auto& ws = ed.ws();
         if (ws.building()) { dirtyIn_ = 0.5; return; }
-        outDir_ = (fs::path(ws.project.dir).parent_path() / "dist" / "_estimate").string();
+        outDir_ = (fs::path(ws.project.dir) / "Builds" / "_estimate").string();
         ws.startBuild(kTargets[target_].id, "Release", "--estimate --out " + quote(outDir_) + buildFlags());
         estimating_ = true;
         dirtyIn_ = 0;

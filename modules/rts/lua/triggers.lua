@@ -66,6 +66,8 @@ local function conditionsHold(di, d, player)
       end
     elseif k == "regions" then
       ok = compare(fx(rts.regions_owned(player)), c.cmp, c.value)
+    elseif k == "objective" or k == "dialog" or k == "camera" or k == "endMission" then
+      rts.trig_campaign(di, ai, player, unit, ax, ay, az)   -- campaigns (RtsCampaign.cpp)
     elseif k == "script" then
       ok = rts.trig_script_condition(di, ci, player)
     end
@@ -181,6 +183,7 @@ local function fire(di, player, unit, x, y, z)
   if d.once and rts.trig_fired(di, player) then return end
   if not conditionsHold(di, d, player) then return end
   if d.once then rts.trig_fired(di, player, true) end
+  rts.emit(rts.EV_TRIGGER_FIRED, player, unit, nil, di - 1, x, y, z)   -- presentation / tools only
   runActions(di, d, player, unit, x, y, z)
 end
 

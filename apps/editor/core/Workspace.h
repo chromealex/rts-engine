@@ -53,7 +53,7 @@ public:
 
     Workspace();
     ~Workspace();
-    std::string engineDir;        // engine checkout (games/, docs/, rtsbuild)
+    std::string engineDir;        // engine checkout (templates/, docs/, rtsbuild)
     std::string buildTool;        // rtsbuild executable
     Project project;
     MapDoc map;
@@ -69,7 +69,7 @@ public:
 
     std::vector<GameInfo> listGames() const;
     bool openGame(const std::string& idOrDir, std::string* err);
-    std::string gamesDir() const { return engineDir + "/games"; }
+    std::string gamesDir() const { return engineDir + "/templates"; }   // project templates (sample games)
     std::string mapsDir() const { return project.dir + "/maps"; }
     std::string relative(const std::string& file) const;
     void note(Change c) { changes.push_back(std::move(c)); }

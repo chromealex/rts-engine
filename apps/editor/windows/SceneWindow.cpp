@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../Editor.h"
+#include "../core/PlanetOps.h"
 #include "../EditorUtil.h"
 
 namespace rts::editor {
@@ -89,17 +90,82 @@ private:
         }
     }
 
+    void planetDown(Editor& ed, float sx, float sy, ImGuiIO& io) {
+        const int n = ed.pickEntity(vp_, ed.sceneCam, sx, sy);
+        const Json at = ed.planetPosAt(vp_, sx, sy);
+        auto& doc = ed.doc();
+        auto& d = doc.data;
+        switch (ed.tool) {
+        case Tool::Select:
+            ed.selectEntity(n);
+            if (n >= 0) { doc.beginEdit(); dragging_ = true; }
+            break;
+        case Tool::Place: {
+            if (n >= 0 && !io.KeyShift) { ed.selectEntity(n); break; }
+            if (!at.isObject() || ed.rules().types.empty()) break;
+            DocEntity e;
+            e.type = ed.rules().types[size_t(ed.placeType)].id;
+            e.owner = ed.placeOwner;
+            e.at = at; e.x = float(at["x"].toDouble()); e.z = float(at["y"].toDouble());
+            ed.selectEntity(doc.addEntity(e));
+            ed.status = "Добавлено: " + ed.rules().types[size_t(ed.placeType)].name;
+            break;
+        }
+        case Tool::Start:
+            if (!at.isObject() || ed.startPlayer < 1 || ed.startPlayer > int(d.players.size())) break;
+            doc.beginEdit();
+            d.players[size_t(ed.startPlayer - 1)].hasStart = true;
+            d.players[size_t(ed.startPlayer - 1)].startAt = at;
+            doc.touched();
+            break;
+        case Tool::Terrain:
+            if (!at.isObject()) break;
+            doc.beginEdit();
+            painting_ = true;
+            planetDrag(ed, sx, sy, io);
+            break;
+        case Tool::Erase:
+            if (n >= 0) { doc.removeEntity(n); ed.select({}); }
+            break;
+        default: ed.status = "На картах планет: выбор, объекты, клетки, старты, ластик; рельеф — окно «Рельеф»"; break;
+        }
+    }
+
+    void planetDrag(Editor& ed, float sx, float sy, ImGuiIO& io) {
+        auto& doc = ed.doc();
+        auto& d = doc.data;
+        const Json at = ed.planetPosAt(vp_, sx, sy);
+        if (!at.isObject()) return;
+        const int sel = ed.selectedEntity();
+        if (dragging_ && sel >= 0 && sel < int(d.entities.size())) {
+            auto& e = d.entities[size_t(sel)];
+            e.at = at; e.x = float(at["x"].toDouble()); e.z = float(at["y"].toDouble());
+            doc.touched();
+        }
+        if (painting_ && ed.tool == Tool::Terrain) {
+            int body; render::float3 local;
+            if (ed.planetLocal(at, body, local)) planetPaint(doc, at.getStr("body"), normalize(local), float(ed.brush) - 0.5f, io.KeyShift ? '.' : ed.paintCell);
+        }
+    }
+
     void input(Editor& ed) {
         ImGuiIO& io = ImGui::GetIO();
         RTSCamera& cam = ed.sceneCam;
         const float mx = io.MousePos.x, my = io.MousePos.y;
-        if (ed.planetMap()) { // camera from the planet controls; tools below still work on the start body
+        if (ed.planetMap()) { // planet camera; tools: select / move / place / erase objects, start, cells
             planetInput(ed);
-            if (ed.playing()) return;
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && vp_.hovered) down(ed, mx, my, io);
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (dragging_ || painting_) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) drag(ed, mx, my, io);
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) up(ed, mx, my);
             hoverX_ = mx; hoverY_ = my;
+            if (ed.playing()) return;
+            if (!io.WantTextInput && (ImGui::IsWindowFocused() || vp_.hovered)) {
+                if ((ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) && ed.selectedEntity() >= 0) {
+                    ed.doc().removeEntity(ed.selectedEntity());
+                    ed.select({});
+                }
+                if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) ed.select({});
+            }
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && vp_.hovered) planetDown(ed, mx, my, io);
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (dragging_ || painting_) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) planetDrag(ed, mx, my, io);
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) dragging_ = painting_ = false;
             return;
         }
         // camera

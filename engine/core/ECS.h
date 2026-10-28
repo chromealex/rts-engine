@@ -198,6 +198,12 @@ public:
         return id < resources_.size() && resources_[id] ? static_cast<T*>(resources_[id].get()) : nullptr;
     }
 
+    // Save states (Simulation::serialize): the entity allocator, restored exactly so ids and recycling match.
+    struct EntityState { std::vector<uint32_t> gens; std::vector<uint8_t> alive; std::vector<uint32_t> free; std::vector<Entity> pendingDestroy; };
+    EntityState entityState() const { return {gens_, alive_, free_, pendingDestroy_}; }
+    size_t poolCount() const { size_t n = 0; for (auto& p : pools_) if (p) ++n; return n; }
+    void restoreEntityState(EntityState s) { gens_ = std::move(s.gens); alive_ = std::move(s.alive); free_ = std::move(s.free); pendingDestroy_ = std::move(s.pendingDestroy); }
+
     void clear() {
         pools_.clear(); resources_.clear(); resourceOps_.clear(); gens_.clear(); alive_.clear(); free_.clear(); pendingDestroy_.clear();
     }

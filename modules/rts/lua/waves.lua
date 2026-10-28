@@ -20,7 +20,7 @@ local function march(spawned)
 end
 
 function std.waves(tick)
-  local spawned = {}
+  local spawned, routed = {}, {}
   for i, wd in ipairs(WAVES) do
     local done = rts.wave_done(i)
     if not (wd.repeats >= 0 and done > wd.repeats) then
@@ -34,7 +34,10 @@ function std.waves(tick)
             local ox = (rts.rng_unit() * 2 - 1) * wd.spread
             local oz = (rts.rng_unit() * 2 - 1) * wd.spread
             local e = rts.spawn_on_cell(s.type, wd.player, wd.x + ox, wd.y, wd.z + oz, 6)
-            if e then spawned[#spawned + 1] = e end
+            if e then
+              spawned[#spawned + 1] = e
+              if rts.wave_has_route(i) then routed[#routed + 1] = { e, i } end   -- waypoints first (agent-mech)
+            end
           end
         end
         rts.emit(rts.EV_WAVE, wd.player, nil, nil, done, wd.x, wd.y, wd.z)
@@ -60,4 +63,5 @@ function std.waves(tick)
     rts.emit(rts.EV_WAVE, 0, nil, nil, #rel)
   end
   march(spawned)
+  for _, r in ipairs(routed) do rts.wave_route(r[1], r[2]) end
 end

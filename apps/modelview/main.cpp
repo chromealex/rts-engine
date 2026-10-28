@@ -3,12 +3,12 @@
 // screenshots of the model pipeline.
 //
 //   rts_modelview a.glb b.gltf@Walk c.obj [--clip Walk] [--time 0.4] [--variant winter] [--baked]
-//                 [--team 0.9,0.2,0.2] [--quality low|medium|high] [--height 1.5] [--distance 6]
+//                 [--team 0.9,0.2,0.2] [--quality low|medium|high] [--height 1.5] [--native] [--distance 6]
 //                 [--yaw 20] [--pitch 30] [--spacing 2.2]
 //   file@Clip plays that clip on that instance. Keys: Space next clip, Q quality, V variant,
 //   P pause, T team colour; drag to orbit, wheel to zoom. RTS_SCREENSHOT works as in the client.
 //
-//   rts_modelview --game games/showcase [--types footman,catapult] [--start 4] [--fixed-dt 0.016]
+//   rts_modelview --game templates/showcase [--types footman,catapult] [--start 4] [--fixed-dt 0.016]
 //   gallery: every type of the game through the game's own view (view blocks, overrides,
 //   procedural animation), cycling idle -> move -> attack -> death -> respawn.
 #include "../../engine/platform/Platform.h"
@@ -44,6 +44,7 @@ struct Instance {
 struct Viewer {
     std::vector<std::pair<std::string, std::string>> files;   // path, clip
     std::string clipAll, variantName;
+    bool native = false;
     float seek = -1, height = 0, spacing = 2.2f, distance = 0, yawDeg = 25, pitchDeg = 32;
     float3 team{0.92f * 0.92f, 0.22f * 0.22f, 0.20f * 0.20f};
     MaterialQuality quality = MaterialQuality::High;
@@ -131,6 +132,13 @@ struct Viewer {
                 Model& m = *in.model;
                 float3 mn = m.boundsMin, mx = m.boundsMax;
                 float s = height > 0 && mx.y > mn.y ? height / (mx.y - mn.y) : 1.0f;
+                // formats with their own units (voxels, Warcraft, Generals, Collada in cm) would put the
+                // camera inside the model: frame anything far from game size at 2 units (--native keeps it)
+                const float big = std::max({mx.x - mn.x, mx.y - mn.y, mx.z - mn.z});
+                if (height <= 0 && !native && big > 1e-6f && (big > 6.0f || big < 0.2f)) {
+                    s = 2.0f / big;
+                    log.push_back(path + ": shown at " + std::to_string(s) + "x (native size " + std::to_string(big) + " units; --native to keep it)");
+                }
                 in.fix = mat4::translate({x, 0, 0}) * mat4::scale({s, s, s}) * mat4::translate({-(mn.x + mx.x) * 0.5f, -mn.y, -(mn.z + mx.z) * 0.5f});
                 maxH = std::max(maxH, (mx.y - mn.y) * s);
                 in.anim.setModel(&m);
@@ -274,6 +282,7 @@ int rtsMain(int argc, char** argv) {
         else if (a == "--height") v.height = std::stof(next());
         else if (a == "--spacing") v.spacing = std::stof(next());
         else if (a == "--distance") v.distance = std::stof(next());
+        else if (a == "--native") v.native = true;
         else if (a == "--yaw") v.yawDeg = std::stof(next());
         else if (a == "--pitch") v.pitchDeg = std::stof(next());
         else if (a == "--quality") {
@@ -287,7 +296,7 @@ int rtsMain(int argc, char** argv) {
     }
     if (v.files.empty() && v.gameDir.empty()) {
         std::printf("usage: rts_modelview model.glb [model2.gltf@Clip ...] [--clip C] [--time T] [--variant V] [--quality low|medium|high]\n"
-                    "       rts_modelview --game games/<id> [--types a,b] [--start T] [--fixed-dt S]\n");
+                    "       rts_modelview --game templates/<id> [--types a,b] [--start T] [--fixed-dt S]\n");
         return 1;
     }
     platform::AppConfig cfg;

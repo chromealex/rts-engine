@@ -122,7 +122,7 @@ std::vector<Entity> query(Vm& vm, const Filter& f) {
     std::vector<Entity> out;
     const TrigArea* ar = f.area >= 0 ? &m.triggers().areas[size_t(f.area)] : nullptr;
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
-        if (u.hp.raw <= 0 || (u.flags & kUnitInHand)) return;
+        if (u.hp.raw <= 0 || (u.flags & kUnitOffMap)) return;
         if (f.owner >= 0 && o.player != f.owner) return;
         if (f.type >= 0 && u.type != f.type) return;
         const UnitType& ut = R.types[u.type];

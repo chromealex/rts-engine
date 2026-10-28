@@ -122,6 +122,64 @@ void Simulation::loadState(const SimSnapshot& in) {
     accumulator_ = 0.0;
 }
 
+// ---------------------------------------------------------------- save states
+namespace {
+constexpr uint32_t kSaveMagic = 0x56535452;   // "RTSV"
+constexpr uint32_t kSaveVersion = 1;
+} // namespace
+void io(Archive& a, Command& c) { a(c.tick, c.player, c.flags, c.type, c.seq, c.units, c.target, c.point, c.param); }   // found by ADL
+void io(Archive& a, PlayerInfo& p) { a(p.slot, p.name, p.team, p.alive); }
+
+std::string Simulation::serialize() {
+    std::string out;
+    Archive a(&out);
+    uint32_t magic = kSaveMagic, version = kSaveVersion, rate = tickRate_;
+    uint64_t seed = cfg_.seed, st = rng_.state(), inc = rng_.increment();
+    a(magic, version, seed, rate, tick_, st, inc, players_, pending_, executed_, seqByPlayer_);
+    World::EntityState es = world_.entityState();
+    a(es.gens, es.alive, es.free, es.pendingDestroy);
+    if (!module_->serializeState(*this, a)) return {};
+    uint64_t cs = checksum();
+    a(cs);
+    return out;
+}
+
+bool Simulation::deserialize(const std::string& bytes, std::string* err) {
+    auto fail = [&](const std::string& why) { if (err) *err = why; return false; };
+    Archive a(bytes);
+    uint32_t magic = 0, version = 0, rate = 0, tick = 0;
+    uint64_t seed = 0, st = 0, inc = 0;
+    a(magic, version, seed, rate);
+    if (!a.ok() || magic != kSaveMagic) return fail("not a save state");
+    if (version != kSaveVersion) return fail("save state version " + std::to_string(version) + ", this build reads " + std::to_string(kSaveVersion));
+    if (rate != tickRate_) return fail("tick rate differs");
+    std::vector<PlayerInfo> players;
+    std::map<uint32_t, std::vector<Command>> pending;
+    std::vector<Command> executed;
+    std::map<uint8_t, uint32_t> seq;
+    a(tick, st, inc, players, pending, executed, seq);
+    World::EntityState es;
+    a(es.gens, es.alive, es.free, es.pendingDestroy);
+    if (!a.ok()) return fail("truncated save state");
+    if (players.size() != players_.size()) return fail("player count differs (load into a simulation set up from the same map)");
+    tick_ = tick;
+    rng_.restore(st, inc);
+    players_ = std::move(players);
+    pending_ = std::move(pending);
+    executed_ = std::move(executed);
+    seqByPlayer_ = std::move(seq);
+    world_.restoreEntityState(std::move(es));
+    events_.clear();
+    accumulator_ = 0.0;
+    if (!module_->serializeState(*this, a) || !a.ok()) return fail("corrupt module state");
+    uint64_t cs = 0;
+    a(cs);
+    if (!a.ok()) return fail("truncated save state");
+    if (checksum() != cs) return fail("state checksum mismatch after loading (different rules or map?)");
+    (void)seed;
+    return true;
+}
+
 uint64_t Simulation::checksum() {
     Hasher h;
     h.u32(tick_);
