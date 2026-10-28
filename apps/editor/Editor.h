@@ -129,6 +129,11 @@ public:
     void renderScene(Viewport& vp, const render::RTSCamera& cam, bool editOverlays);
     void renderGame(Viewport& vp, const render::RTSCamera& cam);
 
+    // overlays (Overlays window / overlay_preview): ids drawn regardless of their conditions, and a
+    // structure type whose ghost overlays (build grid, placement) are previewed at the cursor
+    std::vector<std::string> overlayPreview;
+    int overlayPreviewType = -1;
+
     // particle effects of the play-test (fx/fx.json + fx/*.json of the open game)
     fx::ParticleSystem& gameFx() { return gameFx_; }
     void reloadFx();                           // after fx files changed (Effects window, agents)
@@ -172,6 +177,7 @@ private:
     void registerPlayOps();   // EditorPlayOps.cpp
     void samplePlayStats();
     void deliverShots(gfx::Device& dev);
+    void setOverlayContext(const Viewport& vp, const render::RTSCamera& cam, bool play);   // input state for RtsOverlays
 
     Options opt_;
     Workspace ws_;
@@ -210,6 +216,7 @@ private:
     struct PendingShot { int client; int64_t id; std::string device; };
     std::vector<PendingShot> shots_;
     bool captureArmed_ = false;
+    bool overlayKeys_[int(platform::Key::Count)] = {};
 };
 
 } // namespace rts::editor
