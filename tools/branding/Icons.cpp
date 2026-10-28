@@ -60,12 +60,6 @@ void saveText(const std::string& path, const std::string& text, Generated& g) {
     else g.warnings.push_back(err);
 }
 
-std::string jsonColor(const Color& c) {
-    char b[160];
-    std::snprintf(b, sizeof b, "{ \"color-space\": \"srgb\", \"components\": { \"red\": \"%.3f\", \"green\": \"%.3f\", \"blue\": \"%.3f\", \"alpha\": \"1.000\" } }", c.r, c.g, c.b);
-    return b;
-}
-
 struct Density { const char* name; float scale; };
 const Density kDensities[] = {{"mdpi", 1}, {"hdpi", 1.5f}, {"xhdpi", 2}, {"xxhdpi", 3}, {"xxxhdpi", 4}};
 

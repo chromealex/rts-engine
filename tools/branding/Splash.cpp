@@ -31,15 +31,6 @@ bool loadOpt(const std::string& dir, const std::string& rel, Image& out, Generat
     g.warnings.push_back("splash: " + err);
     return false;
 }
-// First frame of a layer as a standalone image.
-bool firstFrame(const splash::Layer& l, const std::string& dir, Image& out, Generated& g) {
-    if (!l.images.empty()) return loadOpt(dir, l.images[0], out, g);
-    Image sheet;
-    if (!loadOpt(dir, l.sheet, sheet, g)) return false;
-    out = makeImage(std::min(l.frameW, sheet.width), std::min(l.frameH, sheet.height));
-    for (int y = 0; y < out.height; ++y) std::copy_n(sheet.px(0, y), size_t(out.width) * 4, out.px(0, y));
-    return true;
-}
 std::string f3(float v) { char b[16]; std::snprintf(b, sizeof b, "%.3f", v); return b; }
 
 } // namespace
