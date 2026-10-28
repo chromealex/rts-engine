@@ -81,9 +81,9 @@ void planetHeights(Ctx& c, PlanetGen& pg, int symN) {
                 const int64_t arc = sphereArcTurns(d, cd).raw;
                 if (arc >= cr * 3 / 2) continue;
                 const int64_t t = arc * kOne / cr;               // 0 centre, 1 rim
-                v += t < kOne ? -(((kOne - ((t * t) >> 16)) * 3) / 4) : ((kOne * 3 / 2 - t) * 2 / 3);
+                v += t < kOne ? -(((kOne - ((t * t) >> 16)) * 3) / 8) : ((kOne * 3 / 2 - t) / 3);   // shallow bowl + low rim
             }
-            sum += v;
+            sum += std::clamp<int64_t>(v, -kOne, kOne);   // overlapping craters never dig deeper than the relief
         }
         pg.hc[k] = int32_t(((sum / symN) * relief) >> 16);
     }

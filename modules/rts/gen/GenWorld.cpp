@@ -336,6 +336,23 @@ bool generateWorld(Ctx& c, const GenRequest& req, Json& map, std::string* err) {
             const int64_t lat = d.y.raw < 0 ? -d.y.raw : d.y.raw;
             if (lat > Q(35, 100)) continue;
             int64_t score = -lat * 2 - int64_t(rng.below(kOne / 2));
+            {   // rough ground costs: the height range over the base area (flattening can't fix a crater rim)
+                int32_t lo = INT32_MAX, hi = INT32_MIN;
+                for (int dy = -baseR; dy <= baseR; dy += 2)
+                    for (int dx = -baseR; dx <= baseR; dx += 2) {
+                        const int o = B.pg.S.offset(id, dx, dy);
+                        if (o < 0) continue;
+                        const int32_t h = B.pg.cellH(o);
+                        lo = std::min(lo, h); hi = std::max(hi, h);
+                    }
+                if (hi >= lo) score -= int64_t(hi - lo) * kOne / std::max(1, kHU);
+            }
+            {   // structures can't straddle face seams: keep the base away from face edges
+                const game::SphereCell sc = B.pg.S.cell(id);
+                const int edge = std::min(std::min(sc.x, B.pg.N - 1 - sc.x), std::min(sc.y, B.pg.N - 1 - sc.y));
+                const int want = std::min(baseR, B.pg.N / 2 - 1);
+                if (edge < want) score -= int64_t(want - edge) * kOne / 2;
+            }
             if (B.pg.hasSea) {   // land around: count land cells within the base radius
                 int land = 0;
                 for (int dy = -baseR; dy <= baseR; dy += 2)
