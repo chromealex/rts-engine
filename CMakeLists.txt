@@ -429,3 +429,16 @@ if(TARGET main)
     target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
     target_link_libraries(main PRIVATE rts_ui rts_net)
 endif()
+
+# ---------------------------------------------------------------------------
+# 2D games (2D-mode agent): tile maps + autotiling (deterministic, part of the game library),
+# sprite batch + textures (RHI only), sprite/tile presentation in the RTS view.
+# ---------------------------------------------------------------------------
+target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
+add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
+target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_render2d)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
+endif()

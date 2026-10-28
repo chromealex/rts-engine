@@ -13,6 +13,7 @@
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/RtsTiles.h"
 #include <algorithm>
 
 using namespace rts;
@@ -1839,6 +1840,80 @@ TEST(sample_games_bot_matches_deterministic) {
         bool ok = a == b && !cmds.empty();
         if (!ok) std::printf("    %s: not deterministic or idle bots\n", g[0]);
         CHECK(ok);
+    }
+}
+
+// ---------------- 2D games: tilesets, autotiling, tile terrain (2D-mode agent) ----------------
+static const char* kTestTileset = R"({"name": "t", "atlas": "a.png", "tileSize": [16, 16], "columns": 8, "terrains": [
+    {"id": "sand", "char": "s", "cell": ".", "tiles": [0, {"tile": 1, "weight": 0.5}]},
+    {"id": "ore", "char": "o", "cell": ".", "field": {"resource": "ore", "density": 5}, "under": "sand", "tiles": [2], "autotile": {"type": "corner16", "first": 100}},
+    {"id": "high", "char": "h", "cell": "R", "level": 1, "under": "sand", "autotile": {"type": "blob47", "first": 10}},
+    {"id": "wall", "char": "w", "cell": "#", "autotile": {"type": "mask16", "first": 60}}]})";
+
+TEST(tiles2d_tileset_and_autotile) {
+    game::Tileset ts = game::loadTileset(Json::parse(kTestTileset));
+    CHECK(ts.terrains.size() == 4 && ts.find("high") == 2 && ts.findChar('w') == 3);
+    // canonical blob order: 47 shapes, isolated = 0, full = 46, corners without both edges don't count
+    std::vector<int> seen;
+    for (int m = 0; m < 256; ++m) { int i = game::blob47Index(m); if (std::find(seen.begin(), seen.end(), i) == seen.end()) seen.push_back(i); }
+    CHECK(seen.size() == 47 && game::blob47Index(0) == 0 && game::blob47Index(255) == 46 && game::blob47Index(2) == 0);
+    Json tiles = Json::parse(R"({"tileset": "x", "rows": ["sssss", "shhhs", "shhhs", "shhhs", "swwws"]})");
+    game::TileLayer L = game::loadTileLayer(tiles, ts, 5, 5);
+    game::CellTiles c = game::resolveCell(ts, L, 2, 2);          // interior of the plateau: full mask, no base tiles -> blob tile 46
+    CHECK(c.top == 10 + 46 && c.under == -1);
+    c = game::resolveCell(ts, L, 1, 1);                           // NW corner of the plateau: E, S, SE set
+    CHECK(c.top == 10 + game::blob47Index(4 | 8 | 16) && (c.under == 0 || c.under == 1));
+    c = game::resolveCell(ts, L, 1, 4);                           // wall row: E neighbour + map edge below (S counts as same)
+    CHECK(c.top == 60 + (2 | 4));
+    // deterministic variants
+    CHECK(game::resolveCell(ts, L, 0, 0).top == game::resolveCell(ts, L, 0, 0).top);
+    bool threw = false;
+    try { game::loadTileset(Json::parse(R"({"atlas": "a.png", "terrains": [{"id": "a", "under": "zz", "tiles": [0]}]})")); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+}
+
+TEST(tiles2d_terrain_applied_to_map_idempotent) {
+    game::Tileset ts = game::loadTileset(Json::parse(kTestTileset));
+    Json map = Json::parse(R"({"size": [4, 2], "terrain": {"rows": ["....", "...."]},
+        "fields": [{"resource": "ore", "rows": ["9999", "0000"]}],
+        "tiles": {"tileset": "x", "rows": ["show", "ssss"]}})");
+    game::applyTilesToMap(map, ts);
+    CHECK(map["terrain"]["rows"][0].str() == ".R.#" && map["terrain"]["levels"][0].str() == "0100");
+    std::string once = map.dump();
+    game::applyTilesToMap(map, ts);
+    CHECK(map.dump() == once);                                     // loading twice gives the same map
+    // the tiles own their cells' fields: hand-painted digits there are cleared, others kept
+    CHECK(map["fields"][0]["rows"][0].str() == "9909" && map["fields"][1]["rows"][0].str() == "0050");
+    Json old = Json::parse(R"({"size": [4, 2], "terrain": {"rows": ["....", "~~~~"]}})");
+    std::string before = old.dump();
+    game::applyTilesToMap(old, ts);
+    CHECK(old.dump() == before);                                   // maps without tiles are untouched
+}
+
+TEST(tiles2d_sample_games_deterministic) {
+    for (const char* g : {"tiles2d", "km2d"}) {
+        std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g;
+        Json manifest = Json::parseFile(dir + "/game.json");
+        auto run = [&] {
+            Json map = Json::parseFile(dir + "/" + manifest["maps"][size_t(0)].getStr("file"));
+            std::string err;
+            bool ok = game::applyTilesToMap(map, [&](const std::string& p, std::string& out) {
+                std::ifstream f(dir + "/" + p, std::ios::binary);
+                if (!f) return false;
+                out.assign(std::istreambuf_iterator<char>(f), {});
+                return true;
+            }, &err);
+            CHECK(ok);
+            SimConfig cfg; cfg.seed = 5;
+            Simulation sim(cfg, std::make_unique<game::RtsModule>());
+            sim.setup(Json::parseFile(dir + "/rules.json"), map);
+            std::vector<game::RtsAI> bots;
+            for (auto& p : sim.players()) bots.emplace_back(p.slot, 5);
+            for (int i = 0; i < 20 * 120; ++i) { for (auto& b : bots) b.update(sim); sim.step(); }
+            return sim.checksum();
+        };
+        uint64_t a = run(), b = run();
+        CHECK(a == b);
     }
 }
 

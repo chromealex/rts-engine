@@ -252,7 +252,8 @@ void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
     float aspect = fbH > 0 ? float(fbW) / float(fbH) : 1.0f;
     viewProj_ = cam.proj(aspect, dev_->info().clipDepthZeroToOne) * cam.view();
     camPos_ = cam.eye();
-    items_.clear(); lines_.clear(); tris_.clear();
+    cam_ = cam;
+    items_.clear(); lines_.clear(); tris_.clear(); custom_.clear();
     computeShadowMatrix(cam, aspect);
 }
 
@@ -401,6 +402,9 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); any = true; }
         drawItem(it);
     }
+    // custom renderers (sprites) after translucent meshes: they don't write depth, so water drawn
+    // later would tint them; overlays (fog of war, markers) still come on top
+    for (auto& fn : custom_) fn(*dev_);
     if (!tris_.empty()) {
         dev_->updateBuffer(triVB_, tris_.data(), tris_.size() * sizeof(ColorVertex));
         dev_->setPipeline(triPipe_);
