@@ -1346,7 +1346,7 @@ The editor uses the projection and angle for its Scene and Game views.
 | key | meaning |
 |---|---|
 | `sheet` | image (PNG/JPEG/TGA), required. **Rows = facings** (row 0 faces east/+X, then clockwise on screen: SE, S, SW, W, ...), **columns = animation frames** |
-| `frame` | frame size in pixels (default: whole sheet width, square) |
+| `frame` | frame size in pixels (default: whole sheet width, square — give it for single images that are not square, otherwise the frame reaches past or stops short of the image) |
 | `facings` | 1, 4, 8, 16, 32... rows; `mirror: true` stores only north → east → south (`facings/2 + 1` rows) and flips them for the west side |
 | `actions` | column ranges `[start, count, fps]` or `{"start", "count", "fps", "loop"}`. `idle`, `move`, `attack`, `work` (gathering/building workers), `build` (structure under construction; non-looping = frame follows the progress), `die` (played where the object disappeared, then the last frame stays `corpseTime` s). Missing actions fall back to `idle` (`work` → `attack` → `idle`) |
 | `mode` | `billboard` (faces the camera; default), `upright` (vertical quad), `ground` (lies on the terrain; top-down games) |
@@ -1391,8 +1391,11 @@ and other lit sprites with the sun direction, softness and PCF tiers of the 3D g
 
 Where shadows fall is the sun's direction: `"lighting": {"sunDir": [x, y, z]}` (game.json or the
 map, towards the sun at noon; the day cycle swings around it). Flat drawings hide shadows that
-fall behind them, so sprite games usually want the sun behind the scene (km2d: `[-0.7, 1.1, -0.5]`,
-shadows towards the viewer and to the right).
+fall straight behind them, and a sun behind the scene leaves camera-facing cliff walls unlit, so
+sprite games usually want it from the side and a little in front (km2d: `[-1.0, 1.2, 0.45]`,
+shadows to the right). `"shadowSoftness"` (world units, default 0.22) is the penumbra radius;
+pixel-art games look cleaner with a tight one (km2d 0.07): kernels of a few shadow-map texels are
+filtered without the per-pixel noise rotation, so they stay smooth on every tier.
 
 **Blobs and ground sprites are projected**: a blob (and any `"mode": "ground"` sprite) is cut from
 the ground triangles under it — the exact triangles of the terrain mesh or the tile map — and drawn

@@ -119,6 +119,7 @@ private:
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
     bool sunDirSet_ = false;            // "sunDir": [x, y, z] towards the sun at noon (map > game)
     render::float3 sunDir_;
+    float shadowSoftness_ = -1;         // "shadowSoftness": sun shadow penumbra radius (world), < 0 = renderer default
     float lightning_ = 0;
     std::string preset_;
     bool waterRefl_ = true;
