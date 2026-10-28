@@ -156,7 +156,20 @@ std::string replaceAll(std::string s, const std::string& a, const std::string& b
 // fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists (see FileCopy.h).
 void copyDir(const fs::path& from, const fs::path& to) {
     std::error_code ec;
-    if (!rts::pack::copyTree(from, to, ec)) die("не удалось скопировать " + from.string() + " -> " + to.string() + ": " + ec.message());
+    // a project's outputs live inside it (Builds/ holds `to` itself when staging the project): never copied
+    const bool project = fs::exists(from / "game.json", ec);
+    if (!project) {
+        if (!rts::pack::copyTree(from, to, ec)) die("не удалось скопировать " + from.string() + " -> " + to.string() + ": " + ec.message());
+        return;
+    }
+    fs::create_directories(to, ec);
+    for (auto it = fs::directory_iterator(from, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name == "Builds" || name == "dist" || name == "logs" || name == "Logs" || name == ".rtsengine") continue;
+        std::error_code e2;
+        const bool ok = it->is_directory(e2) ? rts::pack::copyTree(it->path(), to / name, e2) : rts::pack::copyFileReplace(it->path(), to / name, e2);
+        if (!ok) die("не удалось скопировать " + it->path().string() + " -> " + (to / name).string() + ": " + e2.message());
+    }
 }
 void copyFile(const fs::path& from, const fs::path& to) {
     std::error_code ec;
