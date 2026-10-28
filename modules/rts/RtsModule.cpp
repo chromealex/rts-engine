@@ -831,6 +831,7 @@ Fixed RtsModule::contactDistance(Simulation& sim, Entity a, Entity b) {
     if (!ta || !tb) return Fixed::fromInt(1 << 20);
     const UnitType& A = rules_.types[w.get<Unit>(a).type];
     const UnitType& B = rules_.types[w.get<Unit>(b).type];
+    if (rules_.mech.altitude && (A.mech.altMax.raw > 0 || B.mech.altMax.raw > 0)) return mechContact3D(sim, a, b);   // agent-mech SP: 3D flight
     if (B.structure && Surface::onSphere(tb->pos)) // planets: footprint as a disc of its half extent
         return fxMax(dist2D(ta->pos, tb->pos) - A.radius - Fixed::fromInt(std::min(B.footprintW, B.footprintH)) / 2, Fixed{});
     if (B.structure) {
@@ -1004,7 +1005,8 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             const Fixed spacing = maxR * 2 + Fixed::fromRatio(2, 5);
             const int n = int(ms.size());
             const Fixed R = fxMax(Fixed::fromInt(4), spacing * n / 2);
-            for (int i = 0; i < n; ++i) {
+            if (rules_.mech.flowFields && n > 24) mechArmyBlock(sim, ms, target, dir, perp, spacing, arc);   // agent-mech BA: big armies form a block
+            else for (int i = 0; i < n; ++i) {
                 Fixed lat = spacing * (2 * i - (n - 1)) / 2;
                 Vec3 p = target + perp * lat + dir * (lat * lat / (R * 2));
                 arc.push_back({ms[size_t(i)], flat(p)});

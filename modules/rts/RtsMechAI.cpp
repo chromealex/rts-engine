@@ -198,4 +198,37 @@ void RtsAI::mechEconomy(Simulation& sim, RtsModule& m) {
     }
 }
 
+// Turn-based mode: think only on our turn; end it once our units have used their moves (or after a while).
+bool RtsAI::mechTurnAI(Simulation& sim, RtsModule& m) {
+    const MechState& M = m.state(sim).mech;
+    if (M.turnPlayer != player_) return false;
+    World& w = sim.world();
+    bool busy = false;
+    w.each<Unit, Owner, Mobile>([&](Entity, Unit& u, Owner& o, Mobile& mb) { if (o.player == player_ && u.hp.raw > 0 && mb.moving) busy = true; });
+    if (turnActed_ != M.turnIndex) {   // once per turn: every fighter goes for the nearest enemy (fixed armies: no waiting for a wave)
+        turnActed_ = M.turnIndex;
+        const Rules& R = m.rules();
+        std::vector<std::pair<Entity, Vec3>> mine;
+        std::vector<Vec3> foes;
+        w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+            if (u.hp.raw <= 0 || (u.flags & kUnitOffMap)) return;
+            if (o.player == player_) { if (!R.types[u.type].weapons.empty() && w.has<Mobile>(e)) mine.push_back({e, t.pos}); }
+            else if (o.player != 0 && m.hostile(sim, player_, o.player)) foes.push_back(t.pos);
+        });
+        if (!foes.empty())
+            for (auto& [e, p] : mine) {
+                Vec3 best = foes[0];
+                for (auto& f : foes) if (dist2D(f, p) < dist2D(best, p)) best = f;
+                Command c; c.player = player_; c.type = kCmdAttack; c.units = {e}; c.point = best; send(sim, c);
+            }
+    }
+    const uint32_t since = sim.tick() - M.turnStart;
+    const uint32_t minT = uint32_t(sim.tickRate()) * 2, maxT = uint32_t((m.rules().mech.turnMoveSeconds * int64_t(sim.tickRate())).floorInt()) + uint32_t(sim.tickRate()) * 3;
+    if ((since >= minT && !busy) || since >= maxT) {
+        Command c; c.player = player_; c.type = kCmdEndTurn; send(sim, c);
+        return false;
+    }
+    return true;
+}
+
 } // namespace rts::game

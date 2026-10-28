@@ -84,7 +84,8 @@ bool RtsModule::applyMechCommand3(Simulation& sim, const Command& cmd) {
     }
     case kCmdBuildLine: {
         const int type = int(cmd.param & 0xFFFF);
-        if (type < 0 || size_t(type) >= rules_.types.size() || !rules_.types[size_t(type)].mech.wall) return true;
+        if (type < 0 || size_t(type) >= rules_.types.size() || !(rules_.types[size_t(type)].mech.wall || rules_.types[size_t(type)].mech.beltSpeed.raw > 0)) return true;
+        const bool belt = rules_.types[size_t(type)].mech.beltSpeed.raw > 0;
         const UnitType& t = rules_.types[size_t(type)];
         int x0 = gs.grid.cellX(cmd.point.x), y0 = gs.grid.cellY(cmd.point.z);
         int x1 = int((cmd.param >> 16) & 0xFFFF), y1 = int((cmd.param >> 32) & 0xFFFF);
@@ -96,12 +97,24 @@ bool RtsModule::applyMechCommand3(Simulation& sim, const Command& cmd) {
             if (std::find(b.begin(), b.end(), uint16_t(type)) != b.end()) builders.push_back(e);
         }
         if (builders.empty()) return true;
+        uint8_t dir = 1;
+        {
+            const int ddx = x1 - x0, ddy = y1 - y0;
+            if (ddx != 0 || ddy != 0) dir = std::abs(ddx) >= std::abs(ddy) ? (ddx > 0 ? 1 : 3) : (ddy > 0 ? 2 : 4);
+        }
         // Bresenham over cells, one segment every `step` cells
         int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1, dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1, err = dx + dy, k = 0;
         bool first = !(cmd.flags & kCmdQueue);
         for (int guard = 0; guard < 512; ++guard) {
             if (k++ % step == 0) {
                 Vec3 centre = snapToFootprint(t, gs.grid.cellCenter(x0, y0));
+                if (belt) {   // conveyors point along the line (its main axis)
+                    auto& plan = gs.mech.beltPlan;
+                    const int32_t c = gs.grid.index(x0, y0);
+                    bool found = false;
+                    for (auto& p : plan) if (p.first == c) { p.second = dir; found = true; }
+                    if (!found) plan.push_back({c, dir});
+                }
                 if (canPlace(sim, cmd.player, uint16_t(type), centre)) {
                     for (Entity b : builders) {
                         Order o;
