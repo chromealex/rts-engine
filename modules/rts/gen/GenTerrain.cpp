@@ -591,7 +591,7 @@ Json materialRows(const Ctx& c) {
 }
 
 Json heightsOut(const Ctx& c) {
-    if (c.model != game::TerrainModel::Levels || c.pbool("fineHeights", true) == false) return Json();
+    if (c.model != game::TerrainModel::Levels || c.pbool("fineHeights", false) == false) return Json();
     Json a = Json::array();
     bool any = false;
     for (int y = 0; y < c.h; ++y)

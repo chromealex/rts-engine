@@ -56,7 +56,8 @@ bool presetParams(const std::string& id, const Json& rulesJson, Json& out, std::
     const Json& eng = builtin()[id];
     if (!game.isObject() && !eng.isObject()) {
         std::string names;
-        for (auto& p : presetList(rulesJson).items()) names += (names.empty() ? "" : ", ") + p.getStr("id");
+        const Json list = presetList(rulesJson);
+        for (auto& p : list.items()) names += (names.empty() ? "" : ", ") + p.getStr("id");
         if (err) *err = "generate: unknown preset '" + id + "' (" + names + ")";
         return false;
     }
@@ -248,7 +249,7 @@ bool prepareGenerate(Json& map, const std::function<bool(const std::string&, std
         std::string text;
         Json ids = Json::array();
         if (read("game.json", text)) {
-            try { for (auto& l : Json::parse(text)["terrain"]["layers"].items()) ids.push(Json::string(l.getStr("id"))); }
+            try { const Json man = Json::parse(text); for (auto& l : man["terrain"]["layers"].items()) ids.push(Json::string(l.getStr("id"))); }
             catch (const std::exception&) {}
         }
         if (gen && gen->isObject()) gen->set("layerIds", ids);
