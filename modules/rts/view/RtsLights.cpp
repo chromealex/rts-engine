@@ -17,7 +17,7 @@ float3 toF(const Vec3& v) { return {float(v.x.toDouble()), float(v.y.toDouble())
 void RtsLights::consumeEvents(const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
     if (s.tick == lastTick_) return; // the scene is rebuilt every frame, events change once per tick
     lastTick_ = s.tick;
-    if (s.events.empty()) return;
+    if (s.events.empty() || !combatFlashes_) return;   // particle effects with "light" modules light combat instead
     std::unordered_map<uint64_t, uint16_t> typeOf;
     typeOf.reserve(s.objects.size());
     for (const SceneObject& o : s.objects) if (!o.isProjectile) typeOf[o.entity.packed()] = o.type;
@@ -145,9 +145,12 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
             const Glow& g = L.glows[gi];
             if (o.build < 1.0f && !g.whileBuilding) continue;
             PointLight l = glowLight(g, ground, yaw, scale, tt, ph);
+            const float lvl = glowLevel(g, tt, ph + float(gi), o.hp, !o.unpowered, std::max(night_, dusk_));
+            if (lvl <= 0.01f) continue;
+            l.intensity *= lvl; l.halo *= std::sqrt(lvl);
             l.key = base + uint32_t(gi);
             l.haloAlpha = haloK * std::min(l.intensity / std::max(g.intensity, 0.01f), 1.3f);
-            l.beam = g.spot ? g.beam * haloK : 0.0f;   // shafts show at dusk and night
+            l.beam = g.spot ? g.beam * haloK * lvl : 0.0f;   // shafts show at dusk and night
             l.intensity *= glowK;
             ls.add(l);
         }
@@ -158,12 +161,16 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
             int x = int(std::floor(m.x)), y = int(std::floor(m.z));
             if (!grid.inside(x, y) || (*vision)[size_t(grid.index(x, y))] == 0) continue;
         }
-        PointLight l = glowLight(m, {m.x, view.heightAt(grid, m.x, m.z), m.z}, 0.0f, 1.0f, tt, m.x * 1.7f + m.z * 2.3f);
+        const float mph = m.x * 1.7f + m.z * 2.3f;
+        const float lvl = glowLevel(m, tt, mph, 1.0f, true, std::max(night_, dusk_));
+        if (lvl <= 0.01f) continue;
+        PointLight l = glowLight(m, {m.x, view.heightAt(grid, m.x, m.z), m.z}, 0.0f, 1.0f, tt, mph);
+        l.intensity *= lvl; l.halo *= std::sqrt(lvl);
         l.intensity *= glowK;
         l.priority = 0.3f;
         l.key = 0x40000000u + uint32_t(mi);
         l.haloAlpha = haloK;
-        l.beam = m.spot ? m.beam * haloK : 0.0f;
+        l.beam = m.spot ? m.beam * haloK * lvl : 0.0f;
         ls.add(l);
     }
     emitActive(ls, time);

@@ -11,6 +11,10 @@
 // set is picked by stable importance (no fire flicker) with hysteresis on PointLight::key.
 // Halos: optional camera-facing additive glows around lights (a cheap stand-in for bloom).
 // Night glow: emissive materials are boosted by (1 + nightGlow) — windows light up at night.
+// Spot shadow (High): the most important spot light renders a 512² depth map of the shadow
+// casters; its pool in the light map is splatted with that shadow (one compare per light-map
+// texel), so buildings and units cast shadows into a searchlight beam on every lit surface without
+// any extra texture in the terrain / model shaders. That spot is left out of the per-pixel set.
 // Reflections: glossy / metallic materials get highlights from the lights and mirror the lit ground
 // along the reflected ray (Medium+, one fetch). High: water gets a real planar reflection of the
 // units, buildings and light glows (mirrored pass at half resolution, terrain and effects skipped).
@@ -65,6 +69,15 @@ struct LightUniforms {
     float spot[8][4];            // spot direction xyz, cosOuter (< -1.5: point light)
 };
 
+// What the lights cost this frame (Lighting window, benchmarks). Times are CPU (building and
+// submitting the passes); the RHI has no GPU timers.
+struct LightStats {
+    int lights = 0, perPixel = 0, mapQuads = 0, halos = 0, beams = 0, decals = 0;
+    int mapSize = 0, reflW = 0, reflH = 0;
+    bool mapDrawn = false, reflection = false;
+    float mapMs = 0, reflMs = 0;
+};
+
 class LightSystem {
 public:
     static constexpr int kMaxPixelLights = 8;
@@ -85,7 +98,15 @@ public:
     void add(const PointLight& l);
     void add(float3 pos, float radius, float3 color, float intensity = 1) { add(PointLight{pos, radius, color, intensity}); }
     size_t count() const { return lights_.size(); }
+    const LightStats& stats() const { return stats_; }
+    void noteReflectionTime(float ms) { stats_.reflMs = ms; }
 
+    // Renderer3D::render, after the sun shadow pass: picks the spot that gets a shadow this frame
+    // (High). True: the caller renders the casters into spotShadowPass() with spotShadowMatrix().
+    bool prepareSpotShadow();
+    gfx::PassDesc spotShadowPass() const;
+    int spotShadowSize() const { return spotShadowSize_; }
+    const mat4& spotShadowMatrix() const { return spotVP_; }
     void renderMap();            // Renderer3D::render, before the main pass (own render pass)
     // After setPipeline() of a lit pipeline: light uniforms + light map texture (+ the water
     // reflection texture for the lit shader).
@@ -106,8 +127,9 @@ public:
     bool contactShadows() const { return contact_; }
 
 private:
-    // spot: direction + height above ground, cone (cosOuter, cosInner, radius) — cosOuter < -1.5 = point
-    struct MapVertex { float x, y, u, v, r, g, b, a, dx, dy, dz, h, co, ci, rad, pad; };
+    // spot: direction + height above ground, cone (cosOuter, cosInner, radius) — cosOuter < -1.5 = point;
+    // light position xz, ground y, shadowed flag (the spot that has the shadow map)
+    struct MapVertex { float x, y, u, v, r, g, b, a, dx, dy, dz, h, co, ci, rad, pad, lx, lz, gy, sh; };
     struct HaloVertex { float x, y, z, u, v, r, g, b, a; };
     void createMap(int size);
     // Dynamic vertex data is appended (ring) instead of rewritten: Metal keeps one copy of a dynamic
@@ -122,7 +144,11 @@ private:
     gfx::BufferHandle vb_, haloVB_;
     size_t vbCursor_ = 0, haloCursor_ = 0, beamCursor_ = 0, decalCursor_ = 0;
     size_t vbCap_ = 0, smallCap_ = 0;
-    gfx::TextureHandle map_, mapDepth_, black_;
+    gfx::TextureHandle map_, mapDepth_, black_, spotShadow_;
+    int spotShadowSize_ = 0, shadowLight_ = -1;       // index in lights_ of the shadowed spot
+    uint32_t shadowKey_ = 0;
+    mat4 spotVP_;
+    void createSpotShadow(int size);
     int mapSize_ = 0;
     LightQuality quality_ = LightQuality::Medium;
     float originX_ = 0, originZ_ = 0, extent_ = 64;   // wanted this frame
@@ -144,6 +170,7 @@ private:
     float viewW_ = 1, viewH_ = 1;
     bool reflectOn_ = true, reflReady_ = false;
     LightUniforms u_{};
+    LightStats stats_;
     float nightGlow_ = 0;
     uint32_t mapFrame_ = 0;
     bool mapReady_ = false, mapHasLights_ = false;

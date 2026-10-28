@@ -207,6 +207,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         const UnitType& ut = R.types[u.type];
         so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
         if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
+        so.unpowered = (u.flags & kUnitDisabled) || (o.player < gs.players.size() && gs.players[o.player].productionMult < Fixed::fromInt(1));
         if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
         if (auto* c = w.tryGet<Cargo>(e)) { so.carry = float(c->amount.toDouble()); so.carryRes = c->res; }
         if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) so.order = uint8_t(od->queue.front().type) + 1;
