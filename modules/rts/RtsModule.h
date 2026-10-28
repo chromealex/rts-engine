@@ -421,6 +421,7 @@ struct GameState {
     std::vector<std::vector<int32_t>> visibleCells; // per player: cells at 2 (derived, so fog reset is O(visible))
     uint8_t fogMode = 0;                            // FogMode of this match (rules, map override)
     std::vector<int64_t> visionBase, visionOcc;     // line of sight: ground / occluder heights (1/64 units, derived)
+    uint64_t visionToken = 0;                       // vision cache that last updated this state (RtsVision.cpp; not saved / hashed)
     // regions
     int regionCount = 0;
     std::vector<uint8_t> regionOwner;
@@ -466,6 +467,8 @@ struct GameState {
 };
 
 // ---------------------------------------------------------------- module
+struct VisionCache;   // RtsVision.cpp
+
 class RtsModule final : public GameModule {
 public:
     RtsModule();
@@ -497,6 +500,9 @@ public:
     bool canTrain(Simulation& sim, uint8_t player, uint16_t type) const; // requirements + unique
     bool canAfford(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed supply = {}, int* missing = nullptr) const;
     bool isVisible(Simulation& sim, uint8_t player, Vec3 p) const;
+    // Tests / tools: run the brute-force reference vision instead of the cached one (results are identical;
+    // RTS_VISION=ref does the same, RTS_VISION=check runs both and aborts on a difference).
+    void setVisionReference(bool on);
     bool hostile(Simulation& sim, uint8_t a, uint8_t b) const;
     Fixed stat(Simulation& sim, Entity e, Stat s) const;          // effective stat with techs/levels/buffs
     Fixed typeStat(Simulation& sim, uint8_t player, uint16_t type, Stat s, Fixed base) const;
@@ -688,7 +694,13 @@ private:
     void setupWorld(Simulation& sim, const Json& map);               // world block -> Surface + stacked grid
     Vec3 mapPos(Simulation& sim, const Json& p) const;               // [x, z] / [x, y, z] or {"body", "face", "x", "y"}
     void moveSphere(Simulation& sim);                                // movement + separation on planet surfaces / shells
-    void visionSphere(Simulation& sim);
+    // vision (RtsVision.cpp): fast cached passes and the brute-force reference they must match exactly
+    void visionFlatFast(Simulation& sim);
+    void visionSphereFast(Simulation& sim);
+    void visionFlatRef(Simulation& sim);
+    void visionSphereRef(Simulation& sim);
+    std::shared_ptr<VisionCache> vcache_;   // derived, never state (see RtsVision.cpp)
+    bool visionRef_ = false;
     void sysTransit(Simulation& sim);
     void applyTransit(Simulation& sim, const Command& cmd);
     void hashWorld(Simulation& sim, Hasher& h);
