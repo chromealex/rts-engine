@@ -111,6 +111,11 @@ struct MechType {
     Fixed moraleMax{};                     // 0: rules morale.max
     Fixed chargeBonus{}, chargeRun{}, chargeShock{}, chargeCooldown{};   // charge: run-up (cells), first-hit damage multiplier
     Fixed supplyRadius{};                  // depot: supplies own units within this radius
+    // logistics (Mindustry, Factorio): belts, producers, crafters, belt inputs
+    Fixed beltSpeed{};                     // conveyor piece: cells per second
+    uint64_t beltAccepts = 0;              // resources taken from belts into the owner's stock (bit per resource)
+    int16_t outRes = -1; Fixed outAmount{}, outInterval{};   // producer: puts packets on adjacent belts
+    std::vector<Amount> craftIn, craftOut; Fixed craftTime{};  // crafter: inputs from belts -> outputs to belts
 };
 
 struct MechRules {
@@ -192,7 +197,8 @@ struct MechRules {
     uint64_t supplyTags = 0;
     Fixed supplyAttrition = Fixed::fromRatio(1, 100), supplySpeed = Fixed::fromRatio(4, 5), supplyAttack = Fixed::fromRatio(4, 5);
     bool battle() const { return morale || fatigue || charge || supply; }
-    bool flowFields = false; int flowMinCells = 8, flowCache = 16;   // BA: big armies share flow fields
+    bool flowFields = false; int flowMinCells = 8, flowCache = 16;
+    bool conveyors = false;   // BA: big armies share flow fields
     int findItem(const std::string& id) const { for (size_t i = 0; i < items.size(); ++i) if (items[i].id == id) return int(i); return -1; }
 };
 

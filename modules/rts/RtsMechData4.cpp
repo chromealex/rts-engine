@@ -79,6 +79,45 @@ void loadMechStage4(Rules& r, const Json& j) {
             mt.chargeCooldown = c.getFx("cooldown", Fixed::fromInt(8));
             m.charge = m.any = true;
         }
+        if (const Json& cv = tj["conveyor"]; cv.isObject()) {
+            if (!t.structure || t.footprintW != 1 || t.footprintH != 1) fail(where + ".conveyor", "a conveyor piece is a 1x1 structure");
+            mt.beltSpeed = cv.getFx("speed", Fixed::fromInt(2));
+            if (mt.beltSpeed.raw <= 0) fail(where + ".conveyor.speed", "must be > 0");
+            m.conveyors = m.any = true;
+        }
+        if (const Json& bi = tj["beltInput"]; !bi.isNull()) {
+            if (bi.isString() && bi.str() == "any") mt.beltAccepts = ~uint64_t(0);
+            else for (auto& x : bi.items()) {
+                const int ri = r.findResource(x.str());
+                if (ri < 0) fail(where + ".beltInput", "unknown resource '" + x.str() + "'");
+                mt.beltAccepts |= uint64_t(1) << ri;
+            }
+            m.conveyors = m.any = true;
+        }
+        if (const Json& bo = tj["beltOutput"]; bo.isObject()) {
+            mt.outRes = int16_t(r.findResource(bo.getStr("resource")));
+            if (mt.outRes < 0) fail(where + ".beltOutput.resource", "unknown resource '" + bo.getStr("resource") + "'");
+            mt.outAmount = bo.getFx("amount", Fixed::fromInt(1));
+            mt.outInterval = bo.getFx("interval", Fixed::fromInt(1));
+            m.conveyors = m.any = true;
+        }
+        if (const Json& cr = tj["craft"]; cr.isObject()) {
+            auto amounts = [&](const char* key) {
+                std::vector<Amount> v;
+                for (auto& [res, n] : cr[key].members()) {
+                    const int ri = r.findResource(res);
+                    if (ri < 0) fail(where + ".craft." + key, "unknown resource '" + res + "'");
+                    v.push_back({uint16_t(ri), n.fx()});
+                }
+                return v;
+            };
+            mt.craftIn = amounts("in");
+            mt.craftOut = amounts("out");
+            mt.craftTime = cr.getFx("time", Fixed::fromInt(2));
+            if (mt.craftIn.empty() || mt.craftOut.empty()) fail(where + ".craft", "needs \"in\" and \"out\"");
+            for (auto& a : mt.craftIn) mt.beltAccepts |= uint64_t(1) << a.res;
+            m.conveyors = m.any = true;
+        }
         if (tj.has("supplyRadius")) {
             mt.supplyRadius = tj.getFx("supplyRadius");
             if (!m.supply) fail(where + ".supplyRadius", "needs a rules \"supply\" block");
