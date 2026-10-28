@@ -34,6 +34,18 @@ struct TextureRef {
     int page = -1;                           // atlas page index, -1 = standalone texture
 };
 
+// Texture uv of a point given in ORIGINAL image pixels (handles trim and rotation; exact inside
+// the content). Frame grids: images referenced as a "sheet" in game data are never trimmed or
+// rotated, so mapping frame corners with this equals a linear u0..u1 / v0..v1 mapping.
+inline void mapUV(const TextureRef& t, float px, float py, float& u, float& v) {
+    float fx = t.w > 0 ? (px - float(t.offsetX)) / float(t.w) : 0.0f, fy = t.h > 0 ? (py - float(t.offsetY)) / float(t.h) : 0.0f;
+    // bilinear over the corners TL, TR, BR, BL
+    float tu = t.uv[0] + (t.uv[2] - t.uv[0]) * fx, tv = t.uv[1] + (t.uv[3] - t.uv[1]) * fx;
+    float bu = t.uv[6] + (t.uv[4] - t.uv[6]) * fx, bv = t.uv[7] + (t.uv[5] - t.uv[7]) * fx;
+    u = tu + (bu - tu) * fy;
+    v = tv + (bv - tv) * fy;
+}
+
 class TextureLibrary {
 public:
     using ReadFn = std::function<bool(const std::string& path, std::string& out)>;

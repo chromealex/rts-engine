@@ -204,6 +204,7 @@ int cmdAtlas(int argc, char** argv) {
     rts::atlas::AtlasOutput res;
     try {
         auto cfg = rts::atlas::AtlasConfig::fromGame(rootGameJson(inputs), profile);
+        rts::atlas::scanSheets(w, cfg);
         for (const std::string& p : w.paths()) {
             if (!rts::atlas::isImagePath(p)) continue;
             rts::atlas::SourceImage src;

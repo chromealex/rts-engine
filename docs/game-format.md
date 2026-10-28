@@ -520,7 +520,10 @@ Other folders (`models/`, `textures/`, ...) are not atlased unless a `files` rul
 3D meshes use UVs outside 0..1 and wrap. *Kind* is `color`, `normal` (`*_n`, `*_nrm`, `*_normal`,
 `normals/`) or `mask` (`*_mask`) — normal maps and masks are never mixed with colour and never
 trimmed. Never atlased: `noAtlas`, `"wrap": "repeat"` (also `*_repeat`, `*_tiling`, `*_wrap`),
-images above `maxTextureSize` (after trimming). Inside a group, images of one folder (one unit's
+images above `maxTextureSize` (after trimming), and an image that would be alone in its group
+(one page = no saved texture switch, only padding). Images referenced as a frame-grid sprite
+sheet anywhere in the game's JSON (`"sheet": "sprites/tank.png"`) are never trimmed or rotated, so
+frame uvs map linearly onto the atlas region. Inside a group, images of one folder (one unit's
 frames, one faction) stay on the same page whenever they fit; pages are shrunk to the smallest size
 that holds them. Per-file keys: `group`/`atlasGroup`, `noAtlas`, `wrap`, `kind`, `rotate` (allow a
 90° turn, off by default so facings never rotate), `trim`, `mips`, `splitAlpha`, `padding`,
@@ -552,6 +555,9 @@ const atlas::TextureRef* t = lib.get("units/orc/grunt/walk_0.png");   // nullptr
 // t->texture equal for images on one page -> batch by it; t->opaque -> draw without blending.
 ```
 
+`atlas::mapUV(*t, px, py, u, v)` maps a point in original-image pixels to the texture (trim and
+rotation included) — e.g. frame corners of a sheet. For a renderer that already maps frames via a
+rect (`u0 + (u1 - u0) * lu`), the rect of an atlased sheet is `t->uv[0..1]` .. `t->uv[4..5]`.
 Plain (non-atlased) images come back the same way (own texture, full UVs, no trim). CPU pixels of
 an original image: `lib.loadImage(path, img)` or `atlas::ImageSource` (the UI uses it, so RmlUi
 `<img src>` and decorators keep working with atlased files).

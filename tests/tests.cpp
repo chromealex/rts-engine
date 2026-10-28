@@ -2087,8 +2087,13 @@ TEST(atlas_grouping_rules) {
         atlasSrc("tiles/water_repeat.png", col), atlasSrc("tiles/grass.png", atlasTestImage(16, 16, 0, 0, 16, 16, 5, true)),
         atlasSrc("tiles/bush.png", atlasTestImage(16, 16, 2, 2, 8, 8, 6)), atlasSrc("models/rock.png", col),
         atlasSrc("ui/logo.png", col), atlasSrc("ui/big.png", atlasTestImage(700, 20, 0, 0, 700, 20, 8, true)),
-        atlasSrc("textures/fx/spark.png", col), atlasSrc("ui/cursor.png", atlasTestImage(16, 16, 0, 0, 16, 16, 9))};
-    AtlasConfig cfg = atlasCfg(R"({"atlas": {"files": {"ui/logo.png": {"noAtlas": true}, "textures/fx/*": {"group": "effects"}}}})", "web");
+        atlasSrc("textures/fx/spark.png", col), atlasSrc("ui/cursor.png", atlasTestImage(16, 16, 0, 0, 16, 16, 9)),
+        // second members: a group holding a single image is left standalone
+        atlasSrc("units/knight/legs.png", atlasTestImage(20, 20, 0, 0, 20, 20, 13, true)), atlasSrc("units/knight/legs_n.png", atlasTestImage(20, 20, 0, 0, 20, 20, 14, true)),
+        atlasSrc("tiles/grass2.png", atlasTestImage(16, 16, 0, 0, 16, 16, 15, true)), atlasSrc("tiles/bush2.png", atlasTestImage(16, 16, 1, 1, 9, 9, 16)),
+        atlasSrc("textures/fx/spark2.png", atlasTestImage(8, 8, 0, 0, 8, 8, 17)), atlasSrc("ui/cursor2.png", atlasTestImage(16, 16, 0, 0, 12, 12, 18)),
+        atlasSrc("effects/lonely.png", atlasTestImage(8, 8, 0, 0, 8, 8, 19))};
+    AtlasConfig cfg = atlasCfg(R"({"atlas": {"files": {"ui/logo.png": {"noAtlas": true}, "textures/fx/*": {"group": "fx2"}}}})", "web");
     CHECK(cfg.pack.maxPage == 2048);
     AtlasOutput out;
     CHECK(buildAtlas(in, cfg, out));
@@ -2099,14 +2104,35 @@ TEST(atlas_grouping_rules) {
     CHECK(pageOf("tiles/grass.png") >= 0 && pageOf("tiles/bush.png") >= 0 && pageOf("tiles/grass.png") != pageOf("tiles/bush.png")); // opaque vs alpha tiles
     CHECK(pageOf("models/rock.png") < 0);                                           // 3D textures are not candidates
     CHECK(pageOf("ui/logo.png") < 0 && pageOf("ui/big.png") < 0);                   // noAtlas, too large (> maxPage/4)
-    CHECK(pageOf("textures/fx/spark.png") >= 0 && out.manifest.pages()[size_t(pageOf("textures/fx/spark.png"))].group == "effects");
+    CHECK(pageOf("textures/fx/spark.png") >= 0 && out.manifest.pages()[size_t(pageOf("textures/fx/spark.png"))].group == "fx2");
+    CHECK(pageOf("effects/lonely.png") < 0);                                        // alone in its group
     CHECK(pageOf("ui/cursor.png") >= 0);
     const Region* g = out.manifest.find("tiles/grass.png");
     CHECK(g && !out.manifest.pages()[size_t(g->page)].alpha);
-    CHECK(out.stats.excluded.size() == 3);
+    CHECK(out.stats.excluded.size() == 4);
     bool threw = false;
     try { atlasCfg(R"({"atlas": {"files": {"x": {"grup": "a"}}}})"); } catch (const std::exception& e) { threw = std::string(e.what()).find("grup") != std::string::npos; }
     CHECK(threw);
+}
+
+TEST(atlas_sprite_sheets_are_never_trimmed) {
+    using namespace rts;
+    pack::PackWriter w;
+    atlas::Image sheet = atlasTestImage(64, 32, 3, 2, 50, 28, 31), other = atlasTestImage(64, 32, 3, 2, 50, 28, 32);
+    CHECK(w.addData("rules.json", R"({"types": {"tank": {"sprite": {"sheet": "sprites/tank.png", "frame": [32, 32]}}}})"));
+    CHECK(w.addData("sprites/tank.png", atlas::encodePng(sheet)));
+    CHECK(w.addData("sprites/other.png", atlas::encodePng(other)));
+    atlas::AtlasStats st;
+    CHECK(atlas::applyAtlas(w, atlas::AtlasConfig::fromGame(Json::object(), "linux"), st));
+    std::string bytes;
+    CHECK(w.writeToString(bytes, pack::WriteOptions{}));
+    auto p = pack::Pack::open(pack::memorySource(bytes));
+    std::string text;
+    atlas::Manifest m;
+    CHECK(p && p->read(atlas::kManifestPath, text) && m.parse(text));
+    const atlas::Region *s = m.find("sprites/tank.png"), *o = m.find("sprites/other.png");
+    CHECK(s && s->w == 64 && s->h == 32 && s->offsetX == 0 && !s->rotated); // frame grid intact
+    CHECK(o && o->w == 50 && o->offsetX == 3);                             // standalone sprite trimmed
 }
 
 TEST(atlas_pack_integration_and_runtime_lookup) {
@@ -2115,11 +2141,13 @@ TEST(atlas_pack_integration_and_runtime_lookup) {
     atlas::Image sprite = atlasTestImage(40, 30, 6, 4, 20, 18, 11), tile = atlasTestImage(16, 16, 0, 0, 16, 16, 12, true);
     CHECK(w.addData("game.json", R"({"name": "t", "atlas": {"maxPage": {"default": 512}}})"));
     CHECK(w.addData("units/a/walk.png", atlas::encodePng(sprite)));
+    CHECK(w.addData("units/a/run.png", atlas::encodePng(atlasTestImage(12, 12, 0, 0, 12, 12, 13))));
     CHECK(w.addData("tiles/t.png", atlas::encodePng(tile)));
+    CHECK(w.addData("tiles/t2.png", atlas::encodePng(atlasTestImage(16, 16, 0, 0, 16, 16, 14, true))));
     CHECK(w.addData("models/m.png", atlas::encodePng(tile)));
     atlas::AtlasStats st;
     CHECK(atlas::applyAtlas(w, atlas::AtlasConfig::fromGame(Json::parse(R"({"atlas": {"maxPage": {"default": 512}}})"), "linux"), st));
-    CHECK(st.atlased == 2 && st.pages == 2);
+    CHECK(st.atlased == 4 && st.pages == 2);
     std::string bytes, bytes2;
     pack::WriteStats ws;
     CHECK(w.writeToString(bytes, pack::WriteOptions{}, &ws));
@@ -2436,6 +2464,11 @@ TEST(atlas_texture_library_is_transparent) {
         CHECK(rm->page == -1 && rm->w == 8 && rm->h == 4 && rm->opaque && rm->uv[4] == 1.0f);
         CHECK(dev.created.size() == 2 && lib.residentPages() == 1);  // one page + one standalone texture
         CHECK(lib.get("units/x/a.png") == ra);                      // cached
+        float u = 0, v = 0;
+        atlas::mapUV(*ra, float(ra->offsetX), float(ra->offsetY), u, v);
+        CHECK(u == ra->uv[0] && v == ra->uv[1]);
+        atlas::mapUV(*rm, 8.0f, 4.0f, u, v);
+        CHECK(u == 1.0f && v == 1.0f);
         atlas::Image back;
         CHECK(lib.loadImage("units/x/b.png", back) && sameImage(back, b));
     }
