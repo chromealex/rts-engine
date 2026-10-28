@@ -54,6 +54,8 @@ struct Belt { uint8_t dir = 1; };
 struct Crafter { std::vector<Fixed> in, out; Fixed timer{}, outTimer{}; };
 // Turn-based mode: what a unit may still do this turn.
 struct TurnBudget { Fixed move{}; int shots = 0; Vec3 lastPos{}; uint32_t turn = 0; };
+// Free 3D flight: the altitude the unit climbs / dives to.
+struct Altitude { Fixed target{}, y{}; };
 
 // Global mech state (inside GameState; hashed when used).
 struct MechState {

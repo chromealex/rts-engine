@@ -207,6 +207,7 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
         if (!c.target.valid()) throw std::runtime_error("target matches no live object");
     }
     c.point = readPoint(p);
+    if (p.has("y")) c.point.y = toFixed(p["y"].toDouble(0));   // altitude for 3D flyers
     if (!p.has("at") && !p.has("x") && c.target.valid() && refs.sim.world().alive(c.target))
         c.point = refs.sim.world().get<Transform>(c.target).pos;
     c.param = p["param"].integer(0);

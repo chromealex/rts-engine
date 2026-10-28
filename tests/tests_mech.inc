@@ -1168,3 +1168,30 @@ TEST(mech_strategic) {
     auto s2 = strategic::StrategicGame::create(def2, rules, 9);
     CHECK(s2.move(1, 1, s2.findProvince("y"), &err) && s2.checksum() == s.checksum());
 }
+
+// ---------------------------------------------------------------- SP: free 3D flight (Homeworld)
+TEST(mech_space_flight) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "types": {
+        "fighter": {"move": {"speed": 5, "layer": "air"}, "sight": 30, "health": {"max": 100}, "altitude": {"min": 0, "max": 30, "climb": 5, "start": 2},
+                    "weapons": [{"range": 4, "damage": 10, "cooldown": 1, "targets": ["air", "ground"]}]},
+        "frigate": {"move": {"speed": 2, "layer": "air"}, "sight": 30, "health": {"max": 500}, "altitude": {"min": 0, "max": 30, "climb": 2, "start": 20}}}})";
+    std::string map = flatMap(40, 20, R"(,"entities":[{"type":"fighter","owner":1,"pos":[5,10]},{"type":"frigate","owner":2,"pos":[8,10]}])");
+    auto sim = makeSimJson(rules, map);
+    Entity f = unitNear(*sim, 5, 10), fr = unitNear(*sim, 8, 10);
+    run(*sim, 0.2);
+    CHECK(posOf(*sim, fr).y == Fixed::fromInt(20) && posOf(*sim, f).y == Fixed::fromInt(2));
+    // 3 cells apart on the map but 18 apart in height: out of range
+    CHECK(mod(*sim).contactDistance(*sim, f, fr) > Fixed::fromInt(15));
+    sim->submit(mechCmd(1, game::kCmdHold, {f}));
+    run(*sim, 2);
+    CHECK(hpOf(*sim, fr) == Fixed::fromInt(500));
+    // climbing to the frigate's altitude brings it in range
+    Command up = mechCmd(1, game::kCmdMove, {f}, kNullEntity, Vec3{Fixed::fromInt(6), Fixed::fromInt(20), Fixed::fromInt(10)});
+    sim->submit(up);
+    run(*sim, 5);
+    CHECK(posOf(*sim, f).y == Fixed::fromInt(20));
+    sim->submit(mechCmd(1, game::kCmdAttack, {f}, fr));
+    run(*sim, 3);
+    CHECK(hpOf(*sim, fr) < Fixed::fromInt(500));
+    CHECK(mechRoundTrip(*sim, rules, map, 40));
+}

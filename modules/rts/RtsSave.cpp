@@ -85,6 +85,7 @@ void io(Archive& a, MechState& x) {
 void io(Archive& a, Suppression& x) { a(x.value); }
 void io(Archive& a, Belt& x) { a(x.dir); }
 void io(Archive& a, TurnBudget& x) { a(x.move, x.shots, x.lastPos, x.turn); }
+void io(Archive& a, Altitude& x) { a(x.target, x.y); }
 void io(Archive& a, Crafter& x) { a(x.in, x.out, x.timer, x.outTimer); }
 void io(Archive& a, Morale& x) { a(x.value, x.fatigue, x.run, x.lastPos, x.chargeTick, x.lastCharge, x.lastFire, x.state, x.init, x.outOfSupply); }
 void io(Archive& a, Turret& x) { a(x.dir, x.init); }
@@ -185,7 +186,7 @@ using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, P
                         Garrison, Projectile, Hero, Transit, Squad, Buffs, AbilityState, Statuses, Area, Channel, GroupTag, Capture, Guard, Summon,
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
                         Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
-                        Suppression, Turret, Abandoned, GrowState, Morale, Belt, Crafter, TurnBudget>;
+                        Suppression, Turret, Abandoned, GrowState, Morale, Belt, Crafter, TurnBudget, Altitude>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {

@@ -789,6 +789,7 @@ Fixed RtsModule::contactDistance(Simulation& sim, Entity a, Entity b) {
     if (!ta || !tb) return Fixed::fromInt(1 << 20);
     const UnitType& A = rules_.types[w.get<Unit>(a).type];
     const UnitType& B = rules_.types[w.get<Unit>(b).type];
+    if (rules_.mech.altitude && (A.mech.altMax.raw > 0 || B.mech.altMax.raw > 0)) return mechContact3D(sim, a, b);   // agent-mech SP: 3D flight
     if (B.structure && Surface::onSphere(tb->pos)) // planets: footprint as a disc of its half extent
         return fxMax(dist2D(ta->pos, tb->pos) - A.radius - Fixed::fromInt(std::min(B.footprintW, B.footprintH)) / 2, Fixed{});
     if (B.structure) {

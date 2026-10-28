@@ -116,6 +116,8 @@ struct MechType {
     uint64_t beltAccepts = 0;              // resources taken from belts into the owner's stock (bit per resource)
     int16_t outRes = -1; Fixed outAmount{}, outInterval{};   // producer: puts packets on adjacent belts
     std::vector<Amount> craftIn, craftOut; Fixed craftTime{};  // crafter: inputs from belts -> outputs to belts
+    // free 3D flight (Homeworld): altitude band, climb rate, start altitude; ranges are measured in 3D
+    Fixed altMin{}, altMax{}, altClimb{}, altStart{};
 };
 
 struct MechRules {
@@ -200,6 +202,7 @@ struct MechRules {
     bool flowFields = false; int flowMinCells = 8, flowCache = 16;
     bool conveyors = false;
     // turn-based mode (TB): players act in turns on the same simulation (Heroes / XCOM style battles)
+    bool altitude = false;   // some type flies in 3D (SP)
     bool turns = false;
     Fixed turnMoveSeconds = Fixed::fromInt(4);   // move budget per turn = type speed x this
     int turnAttacks = 1;                         // shots per weapon per turn

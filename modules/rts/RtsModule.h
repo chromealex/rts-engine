@@ -621,6 +621,10 @@ public:
     bool mechTurnFire(Simulation& sim, Entity e);
     void mechTurnStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
     uint8_t turnPlayer(Simulation& sim) const;
+    // free 3D flight (RtsMechSpace.cpp)
+    void mechAltitudeCommand(Simulation& sim, const Command& cmd);
+    void mechTickAltitude(Simulation& sim);
+    Fixed mechContact3D(Simulation& sim, Entity a, Entity b);
     bool genericSeparation = false;   // tests: compare the BA separation against the generic loop
     // BA: separation of overlapping units with a per-cell grid and flat arrays (exactly the pushes of sysMovement)
     void mechSeparation(Simulation& sim, const std::vector<Fixed>& weight, const std::vector<uint8_t>& anchored, Fixed deadZone, size_t,

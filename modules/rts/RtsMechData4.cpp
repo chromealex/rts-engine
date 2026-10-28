@@ -125,6 +125,15 @@ void loadMechStage4(Rules& r, const Json& j) {
             for (auto& a : mt.craftIn) mt.beltAccepts |= uint64_t(1) << a.res;
             m.conveyors = m.any = true;
         }
+        if (const Json& al = tj["altitude"]; al.isObject()) {
+            mt.altMin = al.getFx("min", Fixed{});
+            mt.altMax = al.getFx("max", Fixed::fromInt(20));
+            mt.altClimb = al.getFx("climb", Fixed::fromInt(3));
+            mt.altStart = al.getFx("start", mt.altMin);
+            if (!(mt.altMin < mt.altMax)) fail(where + ".altitude", "needs min < max");
+            if (!(t.layer & kLayerAir)) fail(where + ".altitude", "only for air / space units (move.layer air)");
+            m.altitude = m.any = true;
+        }
         if (tj.has("supplyRadius")) {
             mt.supplyRadius = tj.getFx("supplyRadius");
             if (!m.supply) fail(where + ".supplyRadius", "needs a rules \"supply\" block");
