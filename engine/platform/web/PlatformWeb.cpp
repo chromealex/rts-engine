@@ -1,5 +1,6 @@
 // Web (Emscripten): canvas + WebGL2 (GLES3 backend). Content is preloaded into the virtual FS at /content.
 #include "../PlatformCommon.h"
+#include "../Plugins.h"
 #include "../../gfx/Gfx.h"
 
 #include <emscripten.h>
@@ -132,6 +133,44 @@ EM_JS(void, rts_web_storage_init, (const char* path), {
     });
 });
 EM_JS(void, rts_web_storage_sync, (), { if (Module.rtsSync) Module.rtsSync(); });
+
+// JavaScript plugins: window.RTSPlugins.register(name, { init(config), products(args), ... }).
+// Methods may return a value or a Promise; a rejected Promise / thrown error is a failed call.
+// The shell defines a small RTSPlugins stub so plugin scripts can load before the engine.
+EM_JS_DEPS(rts_web_plugins, "$stringToNewUTF8");
+EM_JS(void, rts_web_plugins_init, (), {
+    var R = window.RTSPlugins = window.RTSPlugins || {};
+    R.plugins = R.plugins || {};
+    R.register = R.register || function (name, impl) { R.plugins[name] = impl; };
+    var queued = R.queue || [];
+    R.emit = function (plugin, event, data) {
+        var s = function (v) { return stringToNewUTF8(String(v)); };
+        _rts_web_plugin_event(s(plugin), s(event), s(JSON.stringify(data === undefined ? {} : data)));
+    };
+    R.queue = [];
+    queued.forEach(function (e) { R.emit(e[0], e[1], e[2]); });
+});
+EM_JS(int, rts_web_plugin_available, (const char* name), {
+    var R = window.RTSPlugins;
+    return R && R.plugins && R.plugins[UTF8ToString(name)] ? 1 : 0;
+});
+EM_JS(void, rts_web_plugin_call, (const char* name, const char* method, const char* args, double id), {
+    var n = UTF8ToString(name), m = UTF8ToString(method), a = UTF8ToString(args);
+    var reply = function (ok, text) { _rts_web_plugin_reply(id, ok ? 1 : 0, stringToNewUTF8(text)); };
+    Promise.resolve().then(function () {
+        var p = window.RTSPlugins.plugins[n];
+        if (!p) throw new Error("plugin '" + n + "' is not in this build");
+        if (typeof p[m] !== "function") {
+            if (m === "init" || m === "lifecycle") return null; // optional
+            throw new Error(n + ": unknown method " + m);
+        }
+        return p[m](JSON.parse(a || "{}"));
+    }).then(function (res) {
+        reply(true, JSON.stringify(res === undefined ? null : res));
+    }, function (err) {
+        reply(false, err && err.message ? err.message : String(err));
+    });
+});
 
 EM_JS(int, rts_web_text_focused, (), {
     return Module.rtsText && Module.rtsText.el && document.activeElement === Module.rtsText.el ? 1 : 0;
@@ -282,6 +321,13 @@ void showSoftKeyboard(bool show, const TextInputArea& a) {
 const char* name() { return "web"; }
 void setTitle(const std::string& t) { emscripten_set_window_title(t.c_str()); }
 
+struct WebPluginBackend : plugins::detail::Backend {
+    bool available(const std::string& n) override { return rts_web_plugin_available(n.c_str()) != 0; }
+    void call(const std::string& n, const std::string& m, const std::string& a, uint64_t id) override {
+        rts_web_plugin_call(n.c_str(), m.c_str(), a.c_str(), double(id)); // ids stay far below 2^53
+    }
+} g_pluginBackend;
+
 int run(const AppConfig& cfg, AppCallbacks cb) {
     auto& S = state();
     S.cfg = cfg; S.cb = std::move(cb);
@@ -289,6 +335,8 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     S.userDir = "/user";
     updateSize();
     rts_web_clipboard_init();
+    rts_web_plugins_init();
+    plugins::detail::setBackend(&g_pluginBackend);
 
     EmscriptenWebGLContextAttributes a;
     emscripten_webgl_init_context_attributes(&a);
@@ -346,6 +394,17 @@ EMSCRIPTEN_KEEPALIVE void rts_web_key(int code) {
 EMSCRIPTEN_KEEPALIVE void rts_web_ended() { rts::platform::detail::textInputEndedByUser(); }
 EMSCRIPTEN_KEEPALIVE void rts_web_keyboard(float h) { rts::platform::detail::setKeyboardHeight(h); }
 EMSCRIPTEN_KEEPALIVE void rts_web_start() { rts::platform::startAfterStorage(); }
+// Called from JS with strings allocated by stringToNewUTF8: copy, then free.
+EMSCRIPTEN_KEEPALIVE void rts_web_plugin_reply(double id, int ok, char* text) {
+    std::string s = text ? text : "";
+    std::free(text);
+    rts::plugins::detail::completeCall(uint64_t(id), ok != 0, s);
+}
+EMSCRIPTEN_KEEPALIVE void rts_web_plugin_event(char* plugin, char* event, char* data) {
+    std::string p = plugin ? plugin : "", e = event ? event : "", d = data ? data : "{}";
+    std::free(plugin); std::free(event); std::free(data);
+    rts::plugins::emit(p, e, d);
+}
 EMSCRIPTEN_KEEPALIVE void rts_web_fullscreen_changed(int on) {
     rts::platform::detail::state().fullscreen = on != 0;
     rts::platform::Event e; e.type = rts::platform::EventType::Resized; rts::platform::detail::dispatch(e);

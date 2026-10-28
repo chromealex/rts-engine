@@ -34,9 +34,9 @@ starting.
 Check a model or a whole game with the viewer:
 
 ```sh
-build/linux-release/rts_modelview games/mygame/models/knight.glb@Walk          # one model, one clip
+build/linux-release/rts_modelview templates/mygame/models/knight.glb@Walk          # one model, one clip
 build/linux-release/rts_modelview a.glb b.gltf c.obj --quality low              # side by side, low tier
-build/linux-release/rts_modelview --game games/showcase                         # every type, as the game draws it
+build/linux-release/rts_modelview --game templates/showcase                         # every type, as the game draws it
 build/linux-release/rts_modelview golem.glb@Walk --baked                        # skin from the baked clip texture
 ```
 
@@ -109,8 +109,8 @@ Everything else that [assimp](https://github.com/assimp/assimp) imports — Blen
 the host into a glTF binary **sidecar** next to the source:
 
 ```
-games/mygame/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
-games/mygame/models/ship.lwo.glb   <- what the game loads
+<project>/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
+<project>/models/ship.lwo.glb   <- what the game loads
 ```
 
 `render::loadModel` reads `<path>.glb` for any path whose format the runtime doesn't read, so
@@ -121,7 +121,7 @@ games/mygame/models/ship.lwo.glb   <- what the game loads
 - **rtsbuild**: every build converts the game's convertible models that have no sidecar yet, ships
   only the `.glb` and leaves the sources out of the pack (`модель models/ship.lwo: converted to …`);
 - **by hand / agents**: `modelconv models/ship.lwo` (one file; `--json` for scripts and MCP),
-  `modelconv --project games/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
+  `modelconv --project path/to/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
 
 The converter triangulates, generates missing normals, keeps 4 bone weights per vertex, names
 unnamed clips (`Default`, `Clip1`, …), and rewrites texture paths from the authoring machine
@@ -241,7 +241,7 @@ material name or node. Agents use the same operations over MCP:
 | `texture_generate {pattern, ...}`, `texture_patterns` | procedural textures |
 | `material_preview {material, shape?}` | (editor) show it in the Materials window, then `view_screenshot` |
 
-`games/showcase` has a library material (`steel_plates`, made with these operations) on the
+`templates/showcase` has a library material (`steel_plates`, made with these operations) on the
 catapult turret.
 
 ## Skeletal clips
@@ -409,7 +409,7 @@ list replaces the defaults (`"proceduralDefaults": true` keeps them too; `[]` tu
 
 ## Example
 
-`games/showcase` is "Iron and Gold" with imported views:
+`templates/showcase` is "Iron and Gold" with imported views:
 - footman: skinned golem in palette mode — blend space Walk/Run, clip events, sword on the right
   arm, additive breathing, lean, shake on hit, dissolve on death;
 - archer: the same golem baked (instanced), a far LOD, muzzle on the hand, dissolve on spawn;

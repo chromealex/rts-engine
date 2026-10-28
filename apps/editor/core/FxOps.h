@@ -1,6 +1,6 @@
 // Particle effect operations of the editor core (MCP agents, shared with the GUI): fx_list, fx_get,
-// fx_set, fx_delete, fx_templates, fx_import_unity, fx_bind. Effects are games/<id>/fx/<name>.json
-// (format: engine/fx/FxEffect.h), event bindings games/<id>/fx/fx.json (modules/rts/fx/RtsFx.h).
+// fx_set, fx_delete, fx_templates, fx_import_unity, fx_bind. Effects are templates/<id>/fx/<name>.json
+// (format: engine/fx/FxEffect.h), event bindings templates/<id>/fx/fx.json (modules/rts/fx/RtsFx.h).
 // Every write is validated with the engine's own loader first and noted as Change::Fx so the editor
 // reloads its effects. fx_preview lives in the GUI (apps/editor/EditorFxOps.cpp).
 #pragma once
