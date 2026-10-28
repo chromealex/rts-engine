@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdarg>
 #include <cstdio>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
@@ -48,12 +49,14 @@ struct Match {
     uint64_t seed = 0;
     uint64_t startMs = 0;
     std::vector<MatchPlayer> players;
+    std::map<uint8_t, uint64_t> keyBySlot; // rating identity, fixed at start: leaving must not dodge the loss
     std::vector<Member> members;
     uint32_t confirmedNext = 0;
     std::vector<Command> history;         // every confirmed command, in order
     std::vector<Command> carry;           // late commands for the next confirmed tick
     std::map<uint32_t, std::map<uint8_t, uint64_t>> checks;
     std::map<uint32_t, uint64_t> agreed;  // checksums every player agreed on (replay checkpoints)
+    bool concluding = false;              // waiting for the server's verdict: no more input
     bool desync = false;
     uint64_t lastBroadcast = 0;
 };
@@ -74,6 +77,27 @@ struct Room {
 
 struct Rating { int value = 1000; int games = 0; };
 
+// A finished match as the server needs it after the room may be gone (verdict, ratings, replay).
+struct MatchRecord {
+    uint32_t roomId = 0;
+    std::string gameId, queueId;
+    bool matchmade = false, desync = false;
+    MapInfo map;
+    RoomSettings settings;
+    uint64_t seed = 0;
+    std::vector<MatchPlayer> players;
+    std::map<uint8_t, uint64_t> keyBySlot;     // rating identity of each human
+    std::vector<Command> history;
+    std::map<uint32_t, uint64_t> agreed;
+    uint32_t confirmedNext = 0;
+};
+
+struct PendingVerdict {
+    MatchRecord rec;
+    NetText fallback;                          // reason shown when the simulation decides nothing
+    std::future<ArbiterResult> result;
+};
+
 struct Server::Impl {
     ServerConfig cfg;
 #ifndef __EMSCRIPTEN__
@@ -84,6 +108,7 @@ struct Server::Impl {
     std::map<uint32_t, std::unique_ptr<Client>> clients;
     std::map<uint32_t, std::unique_ptr<Room>> rooms;
     std::map<std::string, Rating> ratings;
+    std::vector<PendingVerdict> verdicts;
     uint32_t nextClientId = 1, nextRoomId = 1;
     uint64_t now = 0, lastMatchmake = 0, lastQueueStatus = 0;
     std::mt19937_64 rng{std::random_device{}()};
@@ -129,10 +154,15 @@ struct Server::Impl {
     void onMatchResult(Client& c, Room& r, ByteReader& rd);
     void reportDesync(Room& r, uint32_t tick, const std::map<uint8_t, uint64_t>& hashes);
     void memberDropped(Room& r, uint32_t clientId, bool left);
-    void memberResumed(Room& r, Client& c);
+    void memberResumed(Room& r, Client& c, uint64_t resumeSeed, uint32_t resumeTick);
     void reassignBots(Room& r);
-    void endMatch(Room& r, int32_t result, const NetText& reason);
-    void saveReplay(Room& r, uint32_t endTick, uint64_t endHash);
+    void endMatch(Room& r, int32_t result, const NetText& reason, uint32_t endTick, uint64_t endHash, bool verified);
+    void requestVerdict(Room& r, const NetText& fallback);
+    void pollVerdicts();
+    void confirmNextTick(Match& M);
+    MatchRecord record(Room& r);
+    std::vector<std::pair<uint8_t, int32_t>> applyOutcome(const MatchRecord& rec, int32_t result, uint32_t endTick, uint64_t endHash, bool verified);
+    void saveReplay(const MatchRecord& rec, uint32_t endTick, uint64_t endHash);
     Member* member(Room& r, uint32_t clientId);
 
     // matchmaking (Matchmaker.cpp)

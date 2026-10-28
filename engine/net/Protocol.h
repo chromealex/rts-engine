@@ -10,7 +10,7 @@
 
 namespace rts::net {
 
-constexpr uint32_t kProtocolVersion = 2; // 2: texts are localization keys (NetText)
+constexpr uint32_t kProtocolVersion = 3; // 2: texts are localization keys (NetText); 3: delta resume
 
 enum class Msg : uint8_t {
     // client -> server
@@ -72,7 +72,15 @@ struct RoomStateMsg {
 
 struct QueueInfo { std::string id, title; uint8_t teams = 2, teamSize = 1; bool botFill = false; };
 
-struct HelloMsg { uint32_t protocol = kProtocolVersion; std::string name, gameId; uint64_t clientKey = 0, reconnectToken = 0; };
+struct HelloMsg {
+    uint32_t protocol = kProtocolVersion;
+    std::string name, gameId;
+    uint64_t clientKey = 0, reconnectToken = 0;
+    // Delta resume: the client still has the match running (network drop, not a restart). The
+    // server then only sends confirmed input from resumeTick on instead of the whole history.
+    uint64_t resumeSeed = 0;     // seed of the match the client still has (0 = none)
+    uint32_t resumeTick = 0;     // the client's confirmedNext()
+};
 struct WelcomeMsg { uint32_t clientId = 0; uint64_t reconnectToken = 0; std::string serverName; bool resumed = false; std::vector<QueueInfo> queues; };
 struct ErrorMsg { ErrorCode code = ErrorCode::None; NetText text; };
 

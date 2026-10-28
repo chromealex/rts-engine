@@ -30,6 +30,7 @@ ServerConfig loadServerConfig(const Json& j) {
     c.maxClients = uint32_t(j.getInt("maxClients", c.maxClients));
     c.reconnectGraceSec = uint32_t(j.getInt("reconnectGraceSec", c.reconnectGraceSec));
     c.log = j.getBool("log", true);
+    c.surrenderCommand = uint16_t(j.getInt("surrenderCommand", 0));
     for (auto& [id, dir] : j["games"].members()) c.gameDirs[id] = dir.str();
     const RoomSettings defaults = settingsFrom(j["defaults"]);
     const Json& qs = j["queues"];
@@ -55,6 +56,7 @@ Server::Server(ServerConfig cfg) : impl_(std::make_unique<Impl>()) {
 }
 
 Server::~Server() {
+    for (auto& v : impl_->verdicts) if (v.result.valid()) v.result.wait();   // the arbiter threads use the config
     impl_->saveRatings();
     impl_->clients.clear(); // connections reference the listeners: destroy them first
 }
@@ -97,6 +99,8 @@ void Server::addConnection(std::unique_ptr<Conn> conn) {
     i.log("conn #%u %s", c->id, c->conn->describe().c_str());
     i.clients.emplace(c->id, std::move(c));
 }
+
+bool Server::busy() const { return !impl_->verdicts.empty(); }
 
 ServerStats Server::stats() const {
     ServerStats s = impl_->counters;
@@ -143,6 +147,7 @@ void Server::update(uint64_t now) {
         }
     }
     if (now - i.lastMatchmake >= 250) { i.lastMatchmake = now; i.matchmake(); }
+    i.pollVerdicts();
     std::vector<uint32_t> roomIds;
     for (auto& [id, r] : i.rooms) roomIds.push_back(id);
     for (uint32_t id : roomIds) if (Room* r = i.room(id); r && r->match) i.matchUpdate(*r);
@@ -290,7 +295,7 @@ void Server::Impl::onHello(Client& c, ByteReader& r) {
             send(*old, encode(w));
             if (Room* rm = room(old->roomId)) {
                 send(*old, encode(roomState(*rm)));
-                if (rm->match) memberResumed(*rm, *old);
+                if (rm->match) memberResumed(*rm, *old, h.resumeSeed, h.resumeTick);
             }
             const uint32_t dead = c.id;
             clients.erase(dead); // `c` is gone after this line
