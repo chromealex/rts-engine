@@ -152,4 +152,33 @@ fragment float4 fs_main(VOut in [[stage_in]]) {
 }
 )";
 
+// Contact shadows / ambient occlusion decals on the ground: same vertex layout as the halos, alpha
+// blended black. col.r: shape (0 ellipse, 1 rounded box), col.g: edge softness, col.a: strength.
+inline const char* kDecalFS = R"(
+in vec2 v_uv;
+in vec4 v_col;
+out vec4 o_color;
+void main() {
+    float f;
+    if (v_col.r < 0.5) { float d2 = dot(v_uv, v_uv); f = clamp(1.0 - d2, 0.0, 1.0); f *= f; }
+    else { vec2 a = abs(v_uv); f = 1.0 - smoothstep(1.0 - v_col.g, 1.0, max(a.x, a.y)); f *= 1.0 - 0.35 * dot(a, a) * 0.5; }
+    o_color = vec4(0.0, 0.0, 0.0, f * v_col.a);
+}
+)";
+inline const char* kDecalMSL = R"(#include <metal_stdlib>
+using namespace metal;
+struct HU0 { float4x4 viewProj; };
+struct VIn { float3 pos [[attribute(0)]]; float2 uv [[attribute(1)]]; float4 col [[attribute(2)]]; };
+struct VOut { float4 pos [[position]]; float2 uv; float4 col; };
+vertex VOut vs_main(VIn in [[stage_in]], constant HU0& u [[buffer(1)]]) {
+    VOut o; o.pos = u.viewProj * float4(in.pos, 1.0); o.uv = in.uv; o.col = in.col; return o;
+}
+fragment float4 fs_main(VOut in [[stage_in]]) {
+    float f;
+    if (in.col.r < 0.5) { float d2 = dot(in.uv, in.uv); f = clamp(1.0 - d2, 0.0, 1.0); f *= f; }
+    else { float2 a = abs(in.uv); f = 1.0 - smoothstep(1.0 - in.col.g, 1.0, max(a.x, a.y)); f *= 1.0 - 0.35 * dot(a, a) * 0.5; }
+    return float4(0.0, 0.0, 0.0, f * in.col.a);
+}
+)";
+
 } // namespace rts::render::shaders

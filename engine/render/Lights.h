@@ -65,7 +65,13 @@ public:
     void renderMap();            // Renderer3D::render, before the main pass (own render pass)
     // After setPipeline() of a lit pipeline: light uniforms + light map texture.
     void bind(int uniformSlot = 2, int textureSlot = 1);
-    void drawHalos(const mat4& viewProj);  // inside the main pass, after the opaque scene
+    void drawHalos(const mat4& viewProj);  // inside the main pass, after the opaque scene (also draws decals)
+
+    // Contact shadows / AO: soft dark decals on the ground under objects (all tiers, very cheap).
+    // center on the ground; half extents along world X / Z; box = rounded rectangle (buildings).
+    void addContactShadow(float3 center, float halfX, float halfZ, float strength, bool box = false, float softness = 0.5f);
+    void setContactShadows(bool on) { contact_ = on; }
+    bool contactShadows() const { return contact_; }
 
 private:
     struct MapVertex { float x, y, u, v, r, g, b, a; };
@@ -86,7 +92,11 @@ private:
     std::vector<PointLight> lights_;
     std::vector<uint8_t> perPixel_;
     std::vector<MapVertex> verts_;
-    std::vector<HaloVertex> halos_;
+    std::vector<HaloVertex> halos_, decals_;
+    gfx::ShaderHandle decalShader_;
+    gfx::PipelineHandle decalPipe_;
+    gfx::BufferHandle decalVB_;
+    bool contact_ = true;
     LightUniforms u_{};
     float nightGlow_ = 0;
     uint32_t mapFrame_ = 0;
