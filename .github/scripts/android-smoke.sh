@@ -5,8 +5,9 @@
 # Usage: android-smoke.sh <dir with the .apk>
 set -uo pipefail
 out=android-smoke; mkdir -p "$out"
-apk=$(ls "$1"/*.apk | head -1)
-[ -n "$apk" ] || { echo "::error::no APK in $1"; exit 1; }
+apks=("$1"/*.apk)
+apk=${apks[0]}
+[ -f "$apk" ] || { echo "::error::no APK in $1"; exit 1; }
 
 adb wait-for-device
 adb logcat -c

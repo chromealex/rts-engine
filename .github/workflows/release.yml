@@ -1,0 +1,280 @@
+# Release: push a tag "v1.2.3" (or run manually) → every platform is packaged with rtsbuild and
+# attached to a GitHub Release; the web build can also go to GitHub Pages.
+#
+# Signing is optional and switches on per platform when its secrets exist (Settings → Secrets):
+#   Android  ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   Apple    APPLE_TEAM_ID, ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_P8_BASE64 (App Store Connect API key:
+#            iOS upload to TestFlight and macOS notarization), MACOS_CERT_P12_BASE64 + MACOS_CERT_PASSWORD
+#            (Developer ID Application certificate)
+#   Windows  WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD (Authenticode)
+# Without them: APK signed with the debug key, ad-hoc signed .app, unsigned .exe/installer, the
+# iOS Xcode project as a zip. Web → GitHub Pages: set the repository variable DEPLOY_WEB_PAGES=true
+# and Pages source "GitHub Actions".
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      game:
+        description: Game folder to package
+        default: games/skirmish
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  GAME: ${{ github.event.inputs.game || 'games/skirmish' }}
+  CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+jobs:
+  info:
+    runs-on: ubuntu-24.04
+    outputs:
+      name: ${{ steps.g.outputs.NAME }}
+      id: ${{ steps.g.outputs.ID }}
+      version: ${{ steps.g.outputs.VERSION }}
+      exe: ${{ steps.g.outputs.EXE }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: g
+        run: python3 .github/scripts/game-info.py "$GAME" | tee -a "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------- Windows
+  windows:
+    needs: info
+    runs-on: windows-2022
+    env:
+      EXE: ${{ needs.info.outputs.exe }}
+      HAS_CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build tools and package
+        shell: bash
+        run: |
+          cmake --preset windows-msvc -DRTS_BUILD_TESTS=OFF
+          cmake --build build/windows-msvc --config Release --target rtsbuild
+          build/windows-msvc/Release/rtsbuild.exe --project "$GAME" --target windows --out dist
+      - name: Sign (Authenticode)
+        if: ${{ env.HAS_CERT == 'true' }}
+        env:
+          CERT: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", [Convert]::FromBase64String($env:CERT))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
+          & $signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 "dist\windows\$env:EXE\$env:EXE.exe"
+      - name: Installer (Inno Setup) and portable zip
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            $inno = "${env:ProgramFiles(x86)}\Inno Setup 6"
+            if (-not (Test-Path "$inno\ISCC.exe")) { choco install innosetup -y --no-progress }
+            $env:Path += ";$inno"
+          }
+          New-Item -ItemType Directory -Force out | Out-Null
+          iscc /DAppName="${{ needs.info.outputs.name }}" /DAppVersion="${{ needs.info.outputs.version }}" `
+               /DAppId="${{ needs.info.outputs.id }}" /DExeName="$env:EXE" /DSourceDir="$PWD\dist\windows\$env:EXE" `
+               /DOutputDir="$PWD\out" platform\windows\installer.iss
+          Compress-Archive -Path "dist\windows\$env:EXE" -DestinationPath "out\$env:EXE-${{ needs.info.outputs.version }}-windows-portable.zip"
+      - name: Sign installer
+        if: ${{ env.HAS_CERT == 'true' }}
+        env:
+          PASS: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Select-Object -Last 1
+          & $signtool sign /f "$env:RUNNER_TEMP\cert.pfx" /p $env:PASS /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 (Get-ChildItem out\*-setup.exe).FullName
+      - uses: actions/upload-artifact@v4
+        with: { name: release-windows, path: out/* }
+
+  # ---------------------------------------------------------------- Linux
+  linux:
+    needs: info
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Package
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libx11-dev libegl-dev libgles-dev
+          cmake --preset linux-release -DRTS_BUILD_TESTS=OFF
+          cmake --build build/linux-release --target rtsbuild
+          build/linux-release/rtsbuild --project "$GAME" --target linux --out dist
+          mkdir -p out && tar -C dist/linux -czf "out/${{ needs.info.outputs.exe }}-${{ needs.info.outputs.version }}-linux-x64.tar.gz" .
+      - uses: actions/upload-artifact@v4
+        with: { name: release-linux, path: out/* }
+
+  # ---------------------------------------------------------------- Android
+  android:
+    needs: info
+    runs-on: ubuntu-24.04
+    env:
+      EXE: ${{ needs.info.outputs.exe }}
+      VERSION: ${{ needs.info.outputs.version }}
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.10.2' }
+      - name: Release keystore
+        if: ${{ env.HAS_KEYSTORE == 'true' }}
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "RTS_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+      - name: APK and AAB
+        env:
+          RTS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          RTS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          RTS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          cmake -S . -B build/host -G Ninja -DCMAKE_BUILD_TYPE=Release -DRTS_BUILD_CLIENT=OFF -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF
+          cmake --build build/host --target rtsbuild
+          build/host/rtsbuild --project "$GAME" --target android --out dist
+          (cd "dist/android/$EXE" && ./gradlew bundleRelease --console=plain)
+          mkdir -p out
+          cp dist/android/*.apk "out/$EXE-$VERSION.apk"
+          cp "dist/android/$EXE/app/build/outputs/bundle/release/app-release.aab" "out/$EXE-$VERSION.aab"
+          [ -n "${RTS_KEYSTORE:-}" ] || echo "::warning::No ANDROID_KEYSTORE_BASE64 secret: signed with the debug key (fine for testing, not for Google Play)."
+      - uses: actions/upload-artifact@v4
+        with: { name: release-android, path: out/* }
+
+  # ---------------------------------------------------------------- macOS + iOS
+  apple:
+    needs: info
+    runs-on: macos-15
+    env:
+      EXE: ${{ needs.info.outputs.exe }}
+      VERSION: ${{ needs.info.outputs.version }}
+      TEAM: ${{ secrets.APPLE_TEAM_ID }}
+      HAS_ASC: ${{ secrets.ASC_KEY_P8_BASE64 != '' }}
+      HAS_DEVID: ${{ secrets.MACOS_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          cmake -S . -B build/host -DCMAKE_BUILD_TYPE=Release -DRTS_BUILD_CLIENT=OFF -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF
+          cmake --build build/host --target rtsbuild
+          mkdir -p out
+      - name: App Store Connect API key
+        if: ${{ env.HAS_ASC == 'true' }}
+        env:
+          P8: ${{ secrets.ASC_KEY_P8_BASE64 }}
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$P8" | base64 -D > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+      - name: Developer ID certificate
+        if: ${{ env.HAS_DEVID == 'true' }}
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          PASS: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KC="$RUNNER_TEMP/build.keychain"
+          echo "$P12" | base64 -D > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci "$KC" && security set-keychain-settings "$KC" && security unlock-keychain -p ci "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$PASS" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k ci "$KC" >/dev/null
+          # keep the existing keychains in the search list (word splitting intended)
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+      - name: macOS .app (sign + notarize when secrets exist)
+        run: |
+          build/host/rtsbuild --project "$GAME" --target macos --out dist
+          APP="dist/macos/$EXE.app"
+          if [ "$HAS_DEVID" = true ]; then
+            codesign --force --deep --options runtime --timestamp --sign "Developer ID Application" "$APP"
+          fi
+          ditto -c -k --keepParent "$APP" "out/$EXE-$VERSION-macos.zip"
+          if [ "$HAS_DEVID" = true ] && [ "$HAS_ASC" = true ]; then
+            xcrun notarytool submit "out/$EXE-$VERSION-macos.zip" --wait \
+              --key ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 --key-id "${{ secrets.ASC_KEY_ID }}" --issuer "${{ secrets.ASC_ISSUER_ID }}"
+            xcrun stapler staple "$APP"
+            rm "out/$EXE-$VERSION-macos.zip" && ditto -c -k --keepParent "$APP" "out/$EXE-$VERSION-macos.zip"
+          else
+            echo "::warning::macOS app is ad-hoc signed (no Developer ID / notarization secrets): Gatekeeper will ask users to confirm."
+          fi
+      - name: iOS (Xcode project; TestFlight upload when secrets exist)
+        run: |
+          build/host/rtsbuild --project "$GAME" --target ios --out dist ${TEAM:+--team "$TEAM"}
+          (cd dist/ios && zip -qr "../../out/$EXE-$VERSION-ios-xcode-project.zip" src xcode gen -x 'xcode/build/*')
+          if [ "$HAS_ASC" = true ] && [ -n "$TEAM" ]; then
+            AUTH=(-allowProvisioningUpdates -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8"
+                  -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}")
+            xcodebuild -project dist/ios/xcode/RTSEngine.xcodeproj -scheme rts_client -configuration Release -sdk iphoneos \
+              -destination 'generic/platform=iOS' -archivePath "$RUNNER_TEMP/app.xcarchive" DEVELOPMENT_TEAM="$TEAM" "${AUTH[@]}" archive
+            cat > "$RUNNER_TEMP/export.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>teamID</key><string>$TEAM</string>
+            <key>signingStyle</key><string>automatic</string>
+          </dict></plist>
+          PLIST
+            xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/app.xcarchive" -exportOptionsPlist "$RUNNER_TEMP/export.plist" \
+              -exportPath "$RUNNER_TEMP/export" "${AUTH[@]}"
+            echo "Uploaded to App Store Connect: it appears in TestFlight after processing."
+          else
+            echo "::warning::No APPLE_TEAM_ID / App Store Connect key: iOS ships as an Xcode project only."
+          fi
+      - uses: actions/upload-artifact@v4
+        with: { name: release-apple, path: out/* }
+
+  # ---------------------------------------------------------------- Web
+  web:
+    needs: info
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with: { version: 3.1.74 }
+      - name: Package
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          cmake -S . -B build/host -G Ninja -DCMAKE_BUILD_TYPE=Release -DRTS_BUILD_CLIENT=OFF -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF
+          cmake --build build/host --target rtsbuild
+          build/host/rtsbuild --project "$GAME" --target web --out dist
+          mkdir -p out && (cd dist/web && zip -qr "../../out/${{ needs.info.outputs.exe }}-${{ needs.info.outputs.version }}-web.zip" .)
+      - name: Smoke test
+        run: |
+          npm install --no-save playwright@1.48.2 && npx playwright install --with-deps chromium
+          node platform/web/smoke.mjs dist/web web-smoke
+      - uses: actions/upload-artifact@v4
+        with: { name: release-web, path: out/* }
+      - uses: actions/upload-pages-artifact@v3
+        if: ${{ vars.DEPLOY_WEB_PAGES == 'true' }}
+        with: { path: dist/web }
+
+  pages:
+    needs: web
+    if: ${{ vars.DEPLOY_WEB_PAGES == 'true' }}
+    runs-on: ubuntu-24.04
+    environment: { name: github-pages, url: '${{ steps.deploy.outputs.page_url }}' }
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
+
+  # ---------------------------------------------------------------- GitHub Release
+  publish:
+    needs: [info, windows, linux, android, apple, web]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { pattern: release-*, merge-multiple: true, path: out }
+      - run: ls -la out
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ needs.info.outputs.name }} ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: out/*
+          generate_release_notes: true
