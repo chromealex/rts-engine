@@ -6312,6 +6312,8 @@ TEST(models_voxel_broken_files) {
         try { loadModel(p, modeltest::mapReader({{p, v}}), &w); ++loaded; } catch (const std::exception&) {}
     }
     CHECK(loaded > 0);
+}
+
 // ---------------- models (MDX agent): Warcraft III .mdx / .mdl, BLP textures ----------------
 namespace mdxtest {
 using namespace rts::render;
