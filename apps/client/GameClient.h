@@ -98,14 +98,26 @@ class Minimap {
 public:
     void build(gfx::Device& dev, const GameState& gs, const Rules& rules);  // per match: terrain colours, texture
     void update(gfx::Device& dev, const GameState& gs, const Rules& rules, const RtsScene& scene, const std::vector<uint8_t>* vision,
-                const float3 (&viewQuad)[4], bool haveQuad);
+                const float3 (&viewQuad)[4], bool haveQuad, const std::vector<OverlayMinimapMark>* marks = nullptr);
     void release(gfx::Device& dev);
     gfx::TextureHandle texture() const { return tex_; }
     int width() const { return w_; }
     int height() const { return h_; }
     float cellsPerPixel() const { return cellsPerPx_; }
+    // planet maps (MinimapPlanet.cpp): a globe around the camera focus, or the system seen from above
+    void buildPlanet(gfx::Device& dev, const RtsView& view);
+    void updatePlanet(gfx::Device& dev, const RtsView& view, const RtsScene& scene, const Rules& rules, bool fog);
+    // u, v in [0, 1] of the image -> new camera focus (globe) or focused body (system); false = outside
+    bool planetPointer(RtsView& view, float u, float v) const;
 
 private:
+    // planet minimap state
+    bool system_ = false;
+    std::vector<uint32_t> cellColor_;       // per cell of the shown body
+    std::vector<int> pixelCell_;            // per pixel: cell id, -1 = space
+    std::vector<float> pixelShade_;
+    render::float3 lastDir_, lastFwd_;
+    int body_ = -1;
     gfx::TextureHandle tex_;
     int w_ = 0, h_ = 0, gridW_ = 0, gridH_ = 0;
     float cellsPerPx_ = 1;
@@ -114,7 +126,11 @@ private:
 
 class GameClient {
 public:
-    void init(gfx::Device& dev);
+    void init(gfx::Device& dev);   // every init step at once
+    // Startup in steps, one per frame, so the splash screen (ClientSplash.h) keeps animating.
+    static constexpr int kInitSteps = 6;
+    void initStep(gfx::Device& dev, int step);
+    static float initWeight(int step);   // share of the loading progress bar
     void frame(gfx::Device& dev, double dt);
     void event(const platform::Event& e);
     void shutdown();
@@ -132,6 +148,12 @@ private:
 
     void startMatch(size_t idx);
     void fitCamera();
+    // planet maps (ClientPlanet.cpp): orbit camera input, picking through RtsView; flat maps never get here
+    bool planet() const { return view_.planetMode(); }
+    void planetCameraKeys(double dt);
+    void fitPlanetCamera();
+    bool planetCameraEvent(const platform::Event& e, bool uiWants);
+    bool objectScreen(const SceneObject& o, float lift, float2& sp) const;   // flat maps: worldToScreen({x, lift, z})
     RtsModule& mod() { return *static_cast<RtsModule*>(&sim_->module()); }
     bool groundAt(float sx, float sy, float3& out) const;
     Entity pick(float sx, float sy) const;

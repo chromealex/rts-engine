@@ -189,6 +189,7 @@ struct RTSCamera {
     // Orthographic projection (2D games): `distance` still is the zoom; the visible half height is
     // distance * tan(fovY / 2), i.e. the same framing as the perspective camera at that distance.
     bool ortho = false;
+    float zNear = 0.5f, zFar = 1000.0f;   // perspective clip planes (planet systems need a far plane)
 
     float3 eye() const {
         float cp = std::cos(pitch), sp = std::sin(pitch);
@@ -202,7 +203,7 @@ struct RTSCamera {
         return mat4::lookAt(eye(), target, up);
     }
     mat4 proj(float aspect, bool zeroToOne) const {
-        if (!ortho) return mat4::perspective(fovY, aspect, 0.5f, 1000.0f, zeroToOne);
+        if (!ortho) return mat4::perspective(fovY, aspect, zNear, zFar, zeroToOne);
         float h = orthoHalfHeight(), w = h * aspect;
         // negative near plane: terrain/sprites taller than the zoom distance are not clipped
         return mat4::ortho(-w, w, -h, h, -200.0f, 1000.0f, zeroToOne);
