@@ -8,6 +8,7 @@
 #include <cstdio>
 
 #include "GameClient.h"
+#include "engine/net/NetLocalize.h"
 #include "modules/rts/RtsLocalize.h"
 
 namespace rts::client {
@@ -268,7 +269,9 @@ void GameClient::buildTopBar(UiState& s) {
             int g = 0;
             sim_->world().each<Garrison, Owner>([&](Entity, Garrison& gg, Owner& o) { if (o.player == p.slot) g += gg.count; });
             sim_->world().each<Unit, Owner>([&](Entity en, Unit&, Owner& o) { if (o.player == p.slot && sim_->world().has<Mobile>(en)) ++g; });
-            const std::string name = netMatch_ || mapIndex_ >= maps_.size() ? p.name : localizedPlayerName(loc_, maps_[mapIndex_].file, size_t(p.slot - 1), p.name);
+            // online: names come from the lobby (bots and unnamed players as "@net.*" keys)
+            const std::string name = netMatch_ ? net::displayName(loc_, p.name, p.slot)
+                                   : mapIndex_ >= maps_.size() ? p.name : localizedPlayerName(loc_, maps_[mapIndex_].file, size_t(p.slot - 1), p.name);
             s.top.push_back({fmt("%s %d", name.c_str(), g) + (p.alive ? "" : tr("hud.eliminated")), "", cssColor(RtsView::playerColor(p.slot)), false});
         }
     }
