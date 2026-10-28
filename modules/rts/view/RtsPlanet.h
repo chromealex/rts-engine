@@ -6,11 +6,14 @@
 // Faces / cells / corners follow modules/rts/RtsSphere.h; corner directions come from CubeSphere
 // (bit-identical on seams) converted to float once per body.
 #pragma once
+#include <cmath>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../../../engine/data/Json.h"
 #include "../../../engine/render/Math3D.h"
+#include "../RtsSurface.h"
 
 namespace rts::game {
 
@@ -38,6 +41,8 @@ struct PlanetBody {
 struct PlanetWorld {
     std::vector<PlanetBody> bodies;
     int start = 0;
+    // simulation surface (match maps): body centres come from Surface::bodyPosition, geometry from its corners
+    std::shared_ptr<const Surface> sim;
     bool empty() const { return bodies.empty(); }
     int find(const std::string& id) const;
     // Body centre in world space at game time `seconds` (circular orbits, docs/planets.md §1).
@@ -47,6 +52,15 @@ struct PlanetWorld {
 
 // Reads map["world"]; empty world when the map has none. Problems go to `warnings`.
 PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings = nullptr);
+// The world of a running match: bodies, orbits, sea level, corner heights (seam duplicates as the sim averaged
+// them) and cell flags from the simulation's Surface / grid; only visual keys (atmosphere, colours, which body
+// has an ocean) from `visual` (loadPlanetWorld of the same map; may be empty).
+PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::vector<uint8_t>& gridFlags, const PlanetWorld& visual);
+
+// Sim-space positions of planet maps: body b's things live around Surface::anchor(b) (RtsSurface.h).
+inline render::float3 anchorF(int body) { return {float(Surface::kSphereOrigin + body * Surface::kBodySpacing), 0, 0}; }
+inline bool onSphereF(render::float3 p) { return p.x >= float(Surface::kSphereOrigin - Surface::kBodySpacing / 2); }
+inline int bodyAtF(render::float3 p) { return int(std::floor((p.x - float(Surface::kSphereOrigin - Surface::kBodySpacing / 2)) / float(Surface::kBodySpacing))); }
 
 // Float cube-sphere surface of one body (body-local: origin = body centre).
 class PlanetSurface {
