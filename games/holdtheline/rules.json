@@ -1,0 +1,42 @@
+// "Hold the Line" — Company of Heroes-like: infantry squads (hp pool split over members, damage scales with
+// members alive, reinforced near own buildings), victory points drain the enemy's tickets, resource
+// points give fuel and munitions to whoever holds them; manpower trickles in from the headquarters.
+{
+  "victory": {"mode": "tickets", "tickets": 300, "drain": 1},
+  "supplyCap": 60,
+  "resources": {
+    "manpower": {"name": "Живая сила", "start": 400},
+    "fuel": {"name": "Топливо", "start": 50},
+    "munitions": {"name": "Боеприпасы", "start": 50}
+  },
+  "armorTypes": ["infantry", "vehicle", "building"],
+  "damageTable": {"small_arms": {"vehicle": 0.2, "building": 0.3}, "at": {"infantry": 0.3, "vehicle": 2}},
+  "types": {
+    "hq": {"name": "Штаб", "structure": {"footprint": [4, 4]}, "health": {"max": 3000, "armor": 5, "armorType": "building"}, "sight": 10,
+           "income": {"manpower": 6}, "supply": 20, "produces": ["engineer", "riflemen"], "view": {"shape": "hall"}},
+    "engineer": {"name": "Сапёры", "squad": {"members": 3, "reinforceCost": {"manpower": 15}, "reinforceTime": 4}, "health": {"max": 180, "armorType": "infantry"},
+                 "move": {"speed": 2.6, "radius": 0.5}, "sight": 8, "weapons": [{"range": 3, "damage": 6, "cooldown": 1.2, "damageType": "small_arms"}],
+                 "cost": {"manpower": 170, "time": 15, "supply": 2}, "builds": ["barracks", "motor_pool", "sandbag_mg"], "worker": true, "view": {"shape": "squad"}},
+    "riflemen": {"name": "Стрелки", "squad": {"members": 5, "reinforceCost": {"manpower": 25}, "reinforceTime": 4}, "health": {"max": 400, "armorType": "infantry"},
+                 "move": {"speed": 2.6, "radius": 0.6}, "sight": 9, "weapons": [{"range": 5, "damage": 18, "cooldown": 1.5, "damageType": "small_arms"}],
+                 "cost": {"manpower": 270, "time": 20, "supply": 4}, "view": {"shape": "squad"}},
+    "mg_team": {"name": "Пулемётный расчёт", "squad": {"members": 3, "reinforceCost": {"manpower": 20}}, "health": {"max": 240, "armorType": "infantry"},
+                "move": {"speed": 2.2, "radius": 0.5}, "sight": 10, "weapons": [{"range": 7, "damage": 30, "cooldown": 1.5, "damageType": "small_arms", "splash": 1}],
+                "cost": {"manpower": 260, "munitions": 20, "time": 24, "supply": 4}, "view": {"shape": "squad"}},
+    "at_gun": {"name": "ПТ орудие", "squad": {"members": 4, "reinforceCost": {"manpower": 25}}, "health": {"max": 280, "armorType": "infantry"},
+               "move": {"speed": 1.8, "radius": 0.6}, "sight": 10, "weapons": [{"range": 8, "damage": 80, "cooldown": 3.5, "damageType": "at", "projectileSpeed": 25}],
+               "cost": {"manpower": 300, "munitions": 40, "time": 28, "supply": 4}, "view": {"shape": "vehicle"}},
+    "light_tank": {"name": "Лёгкий танк", "health": {"max": 640, "armor": 3, "armorType": "vehicle"}, "move": {"speed": 3.4, "radius": 0.8}, "sight": 10,
+                   "weapons": [{"range": 6, "damage": 30, "cooldown": 1.5, "damageType": "at", "projectileSpeed": 25}, {"range": 5, "damage": 10, "cooldown": 1, "damageType": "small_arms"}],
+                   "cost": {"manpower": 280, "fuel": 90, "time": 35, "supply": 6}, "view": {"shape": "vehicle"}},
+    "barracks": {"name": "Казарма", "structure": {"footprint": [3, 3]}, "health": {"max": 1500, "armor": 3, "armorType": "building"}, "cost": {"manpower": 150, "time": 30},
+                 "produces": ["mg_team", "at_gun"], "supply": 10, "view": {"shape": "barracks"}},
+    "motor_pool": {"name": "Автопарк", "structure": {"footprint": [4, 3]}, "health": {"max": 1800, "armor": 3, "armorType": "building"}, "cost": {"manpower": 200, "fuel": 50, "time": 40},
+                   "requires": ["barracks"], "produces": ["light_tank"], "supply": 10, "view": {"shape": "workshop"}},
+    "sandbag_mg": {"name": "Пулемётное гнездо", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armor": 4, "armorType": "building"}, "requires": ["barracks"],
+                   "weapons": [{"range": 7, "damage": 15, "cooldown": 1, "damageType": "small_arms"}], "cost": {"manpower": 120, "munitions": 30, "time": 20}, "view": {"shape": "tower"}},
+    "victory_point": {"name": "Ключевая точка", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3, "victoryPoint": true}, "view": {"shape": "flag"}},
+    "fuel_point": {"name": "Склад топлива", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3}, "income": {"fuel": 2}, "view": {"shape": "flag"}},
+    "munition_point": {"name": "Склад боеприпасов", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3}, "income": {"munitions": 2}, "view": {"shape": "flag"}}
+  }
+}

@@ -14,6 +14,7 @@ uint8_t cellFlagsFromChar(char c) {
         case '=': return uint8_t(kCellGround | kCellWater | kCellNoBuild);
         case '/': return uint8_t(kCellGround | kCellRamp | kCellNoBuild);
         case 'R': return uint8_t(kCellGround | kCellRock);
+        case '+': return uint8_t(kCellGround | kCellRoad);
         default: return kCellGround;
     }
 }
@@ -24,11 +25,56 @@ void MapGrid::init(int width, int h_) {
     flags.assign(n, kCellGround);
     level.assign(n, 0);
     height.assign(n, 0);
+    corner.clear();
     blocked.assign(n, 0);
     creep.assign(n, 0);
     fieldRes.assign(n, -1);
     fieldAmt.assign(n, Fixed{});
     region.assign(n, -1);
+    dig.assign(n, 0);
+    digHp.assign(n, Fixed{});
+    digMark.assign(n, 0);
+    territory.assign(n, 0);
+    room.assign(n, -1);
+    clearance.assign(n, 0);
+    clearanceDirty = true;
+    soft.assign(n, 0);
+}
+
+int MapGrid::clearanceFor(Fixed radius) {
+    // a cell is 1 wide: bodies up to 0.5 fit anywhere, every further half cell needs one more free ring
+    if (radius <= Fixed::fromRatio(1, 2)) return 0;
+    return std::min(3, int(((radius - Fixed::fromRatio(1, 2)) * 2 + Fixed::fromRaw(65535)).floorInt()));
+}
+
+void MapGrid::updateClearance() {
+    clearanceDirty = false;
+    const size_t n = size_t(w * h);
+    clearance.assign(n, 3);
+    std::vector<int> q;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            size_t i = size_t(index(x, y));
+            if (!(flags[i] & kCellGround) || blocked[i]) { clearance[i] = 0; q.push_back(int(i)); }
+            else if (x == 0 || y == 0 || x == w - 1 || y == h - 1) { clearance[i] = 1; q.push_back(int(i)); }
+        }
+    for (size_t qi = 0; qi < q.size(); ++qi) {
+        int c = q[qi], x = c % w, y = c / w;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (!inside(x + dx, y + dy)) continue;
+                size_t ni = size_t(index(x + dx, y + dy));
+                if (clearance[ni] > clearance[size_t(c)] + 1) { clearance[ni] = uint8_t(clearance[size_t(c)] + 1); q.push_back(int(ni)); }
+            }
+    }
+}
+
+bool MapGrid::lineOk(int x, int y) const {
+    int i = index(x, y);
+    if (i == pathEndA_ || i == pathEndB_) return true;
+    if (pathSoft_ && soft[size_t(i)]) return false;
+    if (pathClear_ > 0 && clearance[size_t(i)] < pathClear_) return false;
+    return true;
 }
 
 bool MapGrid::passable(int x, int y, uint8_t layer) const {
@@ -56,6 +102,7 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
     for (int y = y0; y < y0 + fh; ++y)
         for (int x = x0; x < x0 + fw; ++x)
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
+    clearanceDirty = true;
 }
 
 bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
@@ -89,6 +136,7 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
     int err = dx - dy, x = x0, y = y0;
     if (!passable(x, y, layer)) return false;
     for (;;) {
+        if (!lineOk(x, y)) return false;
         if (x == x1 && y == y1) return true;
         int e2 = 2 * err;
         int nx = x, ny = y;
@@ -102,12 +150,19 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
     }
 }
 
-bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes) {
+bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes, int clear, bool useSoft) {
     out.clear();
     if (layer & 2) { out.push_back(to); return true; } // air: straight line
     int sx = cellX(from.x), sy = cellY(from.z), gx = cellX(to.x), gy = cellY(to.z);
     if (!inside(sx, sy) || w == 0) return false;
     if (!passable(sx, sy, layer)) nearestPassable(sx, sy, layer, 3);
+    if (!(layer & 1)) clear = 0;   // clearance is computed for ground cells
+    if (clear > 0 && clearanceDirty) updateClearance();
+    pathClear_ = clear;
+    pathSoft_ = useSoft && soft.size() == flags.size();
+    pathEndA_ = index(sx, sy);
+    pathEndB_ = inside(gx, gy) ? index(gx, gy) : -1;
+    struct Reset { MapGrid* g; ~Reset() { g->pathClear_ = 0; g->pathSoft_ = false; g->pathEndA_ = g->pathEndB_ = -1; } } reset{this};
     bool goalOk = passable(gx, gy, layer);
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
     if (goalOk && lineWalkable(sx, sy, gx, gy, layer)) { out.push_back(to); return true; }
@@ -149,6 +204,8 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
                            !canStep(nx, cy, nx, ny, layer) || !canStep(cx, ny, nx, ny, layer))) continue; // no corner cutting
             int ni = index(nx, ny);
             uint32_t ng = g + (k >= 4 ? 14u : 10u);
+            if (pathClear_ > 0 && clearance[size_t(ni)] < pathClear_) ng += 30u * uint32_t(pathClear_ - clearance[size_t(ni)]); // tight spot for a big body
+            if (pathSoft_ && soft[size_t(ni)] && ni != pathEndB_) ng += 25u;                                                // walk around standing allies
             if (stamp_[size_t(ni)] == search_ && gCost_[size_t(ni)] <= ng) continue;
             stamp_[size_t(ni)] = search_; gCost_[size_t(ni)] = ng; parent_[size_t(ni)] = cur.idx;
             uint32_t hh = heur(nx, ny);

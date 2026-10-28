@@ -44,6 +44,9 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
         buildLook(dev, t, l);
         looks_.push_back(std::move(l));
     }
+    twoD_ = std::make_unique<Rts2DView>();
+    if (!twoD_->init(dev, rules, contentBase_)) twoD_.reset();
+    lights_.init(rules);
     return true;
 }
 
@@ -52,6 +55,12 @@ void RtsView::shutdown(gfx::Device& dev) {
     models_.clear(); looks_.clear(); anims_.clear();
     for (Mesh* m : {&terrain_, &water_, &projectile_}) { dev.destroyBuffer(m->vb); dev.destroyBuffer(m->ib); *m = Mesh{}; }
     hasTerrain_ = false;
+    if (twoD_) twoD_->shutdown(dev);
+    twoD_.reset();
+}
+
+bool RtsView::spriteHit(const RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const {
+    return twoD_ && !o.isProjectile && twoD_->hasSprite(o.type) && twoD_->hit(cam, o, heightAt(grid, o.pos.x, o.pos.z), sx, sy, w, h);
 }
 
 float RtsView::selectionRadius(uint16_t type) const {
@@ -64,7 +73,10 @@ float RtsView::selectionRadius(uint16_t type) const {
 
 
 void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid) {
-    if (hasTerrain_) {
+    const bool tiles = twoD_ && twoD_->hasTiles();
+    if (twoD_) twoD_->beginFrame(r.camera(), time);
+    bars_.assign(s.objects.size(), {});
+    if (hasTerrain_ && !tiles) {
         r.drawMesh(terrain_, mat4{}, {1, 1, 1, 1}, kDrawNoCastShadow, 0.05f);
         bool anyWater = false;
         for (auto f : grid.flags) if ((f & kCellWater) && !(f & kCellGround)) { anyWater = true; break; }
@@ -85,6 +97,16 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         if (o.isProjectile) {
             if (o.visible && o.entity.valid()) drawProjectile(r, o.entity.packed(), o, dt);
             else if (o.visible) r.drawMesh(projectile_, mat4::translate(o.pos), {1, 0.95f, 0.8f, 1}, kDrawUnlit);
+            continue;
+        }
+        if (twoD_ && twoD_->hasSprite(o.type)) { // 2D games: sprites instead of models
+            float g = heightAt(grid, o.pos.x, o.pos.z);
+            twoD_->addObject(o, g);
+            bars_[i] = twoD_->barPoint(o, g);
+            if (o.visible && (o.selected || o.hovered)) {
+                uint32_t col = o.selected ? (o.owner == 0 ? rgba(255, 255, 160, 230) : rgba(120, 255, 120, 230)) : rgba(255, 255, 255, 130);
+                r.circleXZ({o.pos.x, 0, o.pos.z}, selectionRadius(o.type), col, 32, g + 0.05f);
+            }
             continue;
         }
         if (o.type >= looks_.size()) continue;
@@ -126,6 +148,10 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         ++it;
     }
     for (auto& mk : s.moveMarkers) r.circleXZ(mk, 0.35f, rgba(120, 255, 120, 200), 16, 0.06f);
+    if (twoD_) {
+        twoD_->endFrame(grid);
+        twoD_->submit(r, grid, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
+    }
 
     // fog of war: darken cells, merging runs per row to keep the triangle count low
     if (vision && !vision->empty()) {
@@ -146,6 +172,7 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
             }
         }
     }
+    lights_.draw(r, s, time, vision, grid, *this);
 }
 
 void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, float h, float ox, float oy, void* drawList) {
@@ -153,13 +180,19 @@ void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, flo
     ImFont* font = ImGui::GetFont();
     const float fs = ImGui::GetFontSize();
     char buf[32];
-    for (const auto& o : s.objects) {
+    for (size_t oi = 0; oi < s.objects.size(); ++oi) {
+        const auto& o = s.objects[oi];
         if (!o.visible || o.isProjectile) continue;
         const UnitType& t = rules_->types[o.type];
+        float2 sp;
+        if (twoD_ && twoD_->hasSprite(o.type) && oi < bars_.size()) {
+            if (!cam.worldToScreen(bars_[oi], w, h, sp)) continue;
+            sp.y -= 4;
+        } else {
         float top = t.structure ? 1.6f * looks_[o.type].scale * std::max(1.0f, std::max(t.footprintW, t.footprintH) * 0.6f) : 1.2f * looks_[o.type].scale;
         if (looks_[o.type].air) top += 2.4f;
-        float2 sp;
         if (!cam.worldToScreen({o.pos.x, top, o.pos.z}, w, h, sp)) continue;
+        }
         sp.x += ox; sp.y += oy;
         if (o.garrison >= 0) {
             std::snprintf(buf, sizeof buf, "%d", o.garrison);
@@ -200,6 +233,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.roads.clear();
     out.events = sim.events();
     out.tick = sim.tick();
+    out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         SceneObject so;
         so.entity = e; so.type = u.type; so.owner = o.player;
@@ -217,6 +251,12 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         if (auto* cb = w.tryGet<Combat>(e); cb && cb->target.valid() && w.alive(cb->target)) {
             if (auto* tt = w.tryGet<Transform>(cb->target)) { so.hasTarget = true; so.target = lerp(toF(tt->prevPos), toF(tt->pos), alpha); }
         }
+        if (so.moving) so.action = kActMove;
+        else if (so.hasTarget) so.action = kActAttack;
+        else if (so.order) {
+            OrderType ot = OrderType(so.order - 1);
+            if (ot == OrderType::Gather || ot == OrderType::Build || ot == OrderType::Repair) so.action = kActWork;
+        }
         if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {
             // enemies only when visible; neutral structures (resources) once explored
             int x = int(t.pos.x.floorInt()), y = int(t.pos.z.floorInt());
@@ -228,6 +268,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     w.each<Projectile, Transform>([&](Entity e, Projectile& pr, Transform& t) {
         SceneObject so;
         so.entity = e; so.isProjectile = true; so.source = pr.source;
+        if (auto* su = w.tryGet<Unit>(pr.source)) so.shooterType = su->type; // picks the projectile's light
         so.pos = lerp(toF(t.prevPos), toF(t.pos), alpha);
         if (viewer != 0) {
             int x = int(t.pos.x.floorInt()), y = int(t.pos.z.floorInt());

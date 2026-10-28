@@ -11,7 +11,7 @@ or stored in sim state, and the client localizes its own display copy of `Rules`
 | `GameLanguage.{h,cpp}` | `game.json` languages, choosing the language (saved → OS → source), loading engine + game tables |
 | `SystemLanguage.cpp` | OS languages: CoreFoundation (macOS/iOS), `GetUserPreferredUILanguages` (Windows), `navigator.languages` (web), system properties (Android), `LANGUAGE`/`LANG` (Linux). `RTS_LANG=de` overrides everywhere |
 | `modules/rts/RtsLocalize.{h,cpp}` | key scheme for RTS data, `localizeRules()`, `collectSourceStrings()` |
-| `tools/i18n` | `rts_i18n check` / `rts_i18n extract` |
+| `tools/i18n` | `rts_i18n check` (tables and `.rml` documents) / `rts_i18n extract` |
 | `engine/assets/lang/<tag>.json` | engine/client strings (`en` is the base) |
 | `games/<id>/lang/<tag>.json` | a game's strings; may also override engine keys |
 
@@ -44,6 +44,17 @@ loc.tr("hud.wave_in", i18n::Args().num("count", seconds));
 loc.trOr("type.footman", "Footman");          // data text as the fallback
 loc.text("@campaign.intro");                  // "@key" in data → lookup
 ```
+
+In RmlUi documents (`engine/assets/ui/*.rml`, or a game's `ui/*.rml` override), static text uses
+the `tr` transform of the client's data model:
+
+```html
+<h2>{{ 'menu.map' | tr(lang) }}</h2>
+```
+
+`lang` is only there so the text is re-evaluated when the player switches language (no document
+reload). Text with values (`Health {hp} / {max}`) is formatted in C++ and bound as a variable.
+`rts_i18n check` reports unknown keys and hard-coded words in documents.
 
 Every user-facing string goes through `tr()`; add the key to `engine/assets/lang/en.json` **and**
 `ru.json` in the same change (`rts_tests` fails if `ru` misses a key or a placeholder differs).

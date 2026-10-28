@@ -3,6 +3,7 @@
     <title>menu</title>
     <link type="text/rcss" href="theme.rcss"/>
 </head>
+<!-- Static text: {{ 'key' | tr(lang) }}; keys in engine/assets/lang/<language>.json (a game overrides them in lang/). -->
 <body>
 <!-- the model is bound on a div: <body> is the document element itself and binds too late -->
 <div class="root" data-model="game" data-class-touch="touch">
@@ -10,18 +11,25 @@
         <h1>{{gameName}}</h1>
         <p class="error" data-if="error != ''">{{error}}</p>
 
-        <h2>Сложность</h2>
+        <h2>{{ 'menu.difficulty' | tr(lang) }}</h2>
         <div class="choice">
-            <button data-class-active="difficulty == 0" data-event-click="difficulty = 0">Лёгкая</button>
-            <button data-class-active="difficulty == 1" data-event-click="difficulty = 1">Обычная</button>
-            <button data-class-active="difficulty == 2" data-event-click="difficulty = 2">Сложная</button>
+            <button data-class-active="difficulty == 0" data-event-click="difficulty = 0">{{ 'menu.easy' | tr(lang) }}</button>
+            <button data-class-active="difficulty == 1" data-event-click="difficulty = 1">{{ 'menu.normal' | tr(lang) }}</button>
+            <button data-class-active="difficulty == 2" data-event-click="difficulty = 2">{{ 'menu.hard' | tr(lang) }}</button>
         </div>
-        <button class="small" data-class-active="spectator" data-event-click="spectator = !spectator">
-            Только наблюдать (боты против ботов)
-        </button>
+        <button class="small" data-class-active="spectator" data-event-click="spectator = !spectator">{{ 'menu.spectate' | tr(lang) }}</button>
 
-        <h2>Карта</h2>
+        <h2>{{ 'menu.map' | tr(lang) }}</h2>
         <button class="map" data-for="m, i : maps" data-event-click="start(i)">{{m}}</button>
+
+        <button class="map online" data-event-click="net('open')">{{ 'ui.online' | tr(lang) }}</button>
+
+        <div data-if="languages.size > 0">
+            <h2>{{ 'menu.language' | tr(lang) }}</h2>
+            <div class="choice">
+                <button class="small" data-for="l : languages" data-class-active="l.active" data-event-click="act(l.id)">{{l.label}}</button>
+            </div>
+        </div>
 
         <p class="dim footer">{{platformInfo}}</p>
     </div>
