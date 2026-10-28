@@ -48,12 +48,13 @@ void RtsModule::moveToFlow(Simulation& sim, Entity e, Vec3 goal, Fixed radius) {
     const UnitType& t = rules_.types[w.get<Unit>(e).type];
     MapGrid& g = state(sim).grid;
     if (t.layer & kLayerAir) { moveTo(sim, e, goal, radius); return; }   // fliers go straight anyway
+    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{g, g.clockNs ? g.clockNs() : 0};
     const Fixed cs = g.surf ? g.surf->cellSize(g.surf->bodyAt(goal)) : kOne;
     const int rc = std::clamp(int((radius / cs).floorInt()), 0, 32);
     const int fi = g.flowAcquire(goal, rc, t.pathLayer, MapGrid::clearanceFor(t.radius), sim.tick());
     if (fi < 0) { moveTo(sim, e, goal, radius); return; }
     m->goal = goal; m->goalRadius = radius; m->stuck = Fixed{}; m->pathPos = 0;
-    m->flow = true; m->flowRadius = uint8_t(rc);
+    m->flow = true; m->flowRadius = uint8_t(rc); m->flowStuck = 0;
     bool arrived = false;
     if (!g.flowSteer(fi, w.get<Transform>(e).pos, goal, m->path, arrived)) { m->flow = false; moveTo(sim, e, goal, radius); return; }
     if (arrived || m->path.empty()) m->path = {goal};
@@ -67,7 +68,7 @@ void RtsModule::sysFlowFields(Simulation& sim) {
     World& w = sim.world();
     MapGrid& g = state(sim).grid;
     if (!rules_.movement.flow.enabled()) return;
-    const int64_t t0 = g.clockNs ? g.clockNs() : 0;
+    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{g, g.clockNs ? g.clockNs() : 0};
     g.flowResetRefs();
     const uint32_t tick = sim.tick();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
@@ -77,6 +78,7 @@ void RtsModule::sysFlowFields(Simulation& sim) {
         if (fi < 0) { m.flow = false; return; }   // evicted: plain path from here
         g.flowRef(fi, tick);
         if (m.path.size() >= 2 && m.pathPos == 0 && (tick + e.index) % 10 != 0) return;
+        if ((tick + e.index) % 200 == 0 && m.flowStuck) --m.flowStuck;   // forgive old stuck events slowly
         bool arrived = false;
         std::vector<Vec3> wp;
         if (!g.flowSteer(fi, tr.pos, m.goal, wp, arrived)) { // off the field (pushed into a pocket): A* from here
@@ -92,7 +94,6 @@ void RtsModule::sysFlowFields(Simulation& sim) {
         m.pathPos = 0;
     });
     g.flowHousekeeping();
-    if (g.clockNs) g.pathNs += g.clockNs() - t0;
 }
 
 void RtsModule::moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius) { moveToVia(sim, e, goal, radius, false); }
@@ -107,9 +108,6 @@ void RtsModule::moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bo
     m->stuck = Fixed{};
     m->pathPos = 0;
     m->flow = false;
-    MapGrid& g = state(sim).grid;
-    const int64_t t0 = g.clockNs ? g.clockNs() : 0;
-    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{g, t0};
     state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.pathLayer, m->path, 40000, MapGrid::clearanceFor(t.radius), aroundAllies);
     m->moving = !m->path.empty();
 }

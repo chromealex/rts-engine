@@ -270,10 +270,15 @@ void RtsModule::moveSphere(Simulation& sim) {
         if (m.pathPos >= m.path.size()) { m.moving = false; m.path.clear(); }
         if (m.stuck > kOne) {
             m.stuck = Fixed{};
-            m.flow = false;   // stuck on a flow field too: own A* path from here
+            // on a flow field: re-sample it (crowds clear by themselves; the field already holds the way around the
+            // obstacles). Only a unit stuck over and over (a new wall the field can't see yet) falls back to A*.
+            if (m.flow && ++m.flowStuck < 6) { m.path.clear(); m.pathPos = 0; m.path.push_back(m.goal); }
+            else {
+            m.flow = false;
             g.findPath(tr.pos, m.goal, t.pathLayer, m.path, 40000, MapGrid::clearanceFor(t.radius), true);
             m.pathPos = 0;
             m.moving = !m.path.empty();
+            }
         }
     });
     // 2) separation of overlapping units on the same layer (tangent plane)
