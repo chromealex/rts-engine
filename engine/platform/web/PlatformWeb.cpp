@@ -62,6 +62,77 @@ EM_JS(void, rts_web_text_input, (int show, float x, float y, float w, float h, i
         R.report();
     }
 });
+// Safe area from CSS env(safe-area-inset-*) (needs viewport-fit=cover in the shell's meta tag).
+EM_JS(void, rts_web_safe_area, (float* out), {
+    var p = Module.rtsSafeProbe;
+    if (!p) {
+        p = Module.rtsSafeProbe = document.createElement('div');
+        p.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+            'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+        document.body.appendChild(p);
+    }
+    var s = getComputedStyle(p);
+    HEAPF32[(out >> 2) + 0] = parseFloat(s.paddingLeft) || 0;
+    HEAPF32[(out >> 2) + 1] = parseFloat(s.paddingTop) || 0;
+    HEAPF32[(out >> 2) + 2] = parseFloat(s.paddingRight) || 0;
+    HEAPF32[(out >> 2) + 3] = parseFloat(s.paddingBottom) || 0;
+});
+
+// Clipboard. Writing works from a key/click handler; reading silently is forbidden, so Ctrl/Cmd+V
+// is held back until the browser's `paste` event hands over the text, then delivered to the game.
+EM_JS(void, rts_web_clipboard_write, (const char* text), {
+    var s = UTF8ToString(text);
+    Module.rtsClip = s;
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(s).catch(function () {});
+});
+EM_JS(void, rts_web_clipboard_init, (), {
+    document.addEventListener('paste', function (e) {
+        if (Module.rtsText && document.activeElement === Module.rtsText.el) return; // hidden input types it
+        var t = (e.clipboardData || window.clipboardData).getData('text') || "";
+        e.preventDefault();
+        _rts_web_clip_begin();
+        for (var ch of t) _rts_web_clip_char(ch.codePointAt(0));
+        _rts_web_clip_end();
+    });
+});
+
+// Fullscreen with orientation lock; `fullscreenchange` keeps isFullscreen() honest (Esc, swipe).
+EM_JS(void, rts_web_fullscreen, (int on, const char* orientation), {
+    var o = UTF8ToString(orientation);
+    var el = document.documentElement;
+    if (!Module.rtsFsInit) {
+        Module.rtsFsInit = true;
+        var onChange = function () { _rts_web_fullscreen_changed((document.fullscreenElement || document.webkitFullscreenElement) ? 1 : 0); };
+        document.addEventListener('fullscreenchange', onChange);
+        document.addEventListener('webkitfullscreenchange', onChange);
+    }
+    if (on) {
+        var req = el.requestFullscreen ? el.requestFullscreen({navigationUI: 'hide'}) : el.webkitRequestFullscreen ? el.webkitRequestFullscreen() : null;
+        Promise.resolve(req).then(function () {
+            if (o !== 'any' && screen.orientation && screen.orientation.lock) screen.orientation.lock(o).catch(function () {});
+        }).catch(function (err) { console.warn('fullscreen refused: ' + err); });
+    } else if (document.fullscreenElement || document.webkitFullscreenElement) {
+        if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock();
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    }
+});
+
+// userDataDir() on IndexedDB: load, then start the game; flush periodically and on page hide.
+EM_JS(void, rts_web_storage_init, (const char* path), {
+    var dir = UTF8ToString(path);
+    try { FS.mkdir(dir); } catch (e) {}
+    try { FS.mount(IDBFS, {}, dir); } catch (e) { console.warn('IDBFS unavailable, saves are per-session: ' + e); }
+    FS.syncfs(true, function (err) {
+        if (err) console.warn('loading saved data failed: ' + err);
+        Module.rtsSync = function () { FS.syncfs(false, function (e) { if (e) console.warn('saving data failed: ' + e); }); };
+        setInterval(Module.rtsSync, 5000);
+        document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') Module.rtsSync(); });
+        window.addEventListener('pagehide', Module.rtsSync);
+        _rts_web_start();
+    });
+});
+EM_JS(void, rts_web_storage_sync, (), { if (Module.rtsSync) Module.rtsSync(); });
+
 EM_JS(int, rts_web_text_focused, (), {
     return Module.rtsText && Module.rtsText.el && document.activeElement === Module.rtsText.el ? 1 : 0;
 });
@@ -72,6 +143,8 @@ using detail::state;
 namespace {
 std::unique_ptr<gfx::Device> g_device;
 EMSCRIPTEN_WEBGL_CONTEXT_HANDLE g_ctx = 0;
+uint8_t g_pasteMods = kModCtrl;
+std::string g_pasteText;
 detail::FrameClock g_clock; // rAF stops in hidden tabs; the clamp keeps the first frame back sane
 const char* kCanvas = "#canvas";
 
@@ -87,6 +160,9 @@ void updateSize() {
     S.winW = float(cssW); S.winH = float(cssH); S.scale = float(dpr);
     S.fbW = int(cssW * dpr); S.fbH = int(cssH * dpr);
     emscripten_set_canvas_element_size(kCanvas, S.fbW, S.fbH);
+    float in[4] = {};
+    rts_web_safe_area(in);
+    detail::setSafeArea({in[0], in[1], in[2], in[3]});
 }
 
 Key mapCode(const char* code) {
@@ -137,6 +213,13 @@ EM_BOOL onKey(int type, const EmscriptenKeyboardEvent* k, void*) {
             detail::dispatch(e);
         }
         return passthrough ? EM_TRUE : EM_FALSE;
+    }
+    if (type == EMSCRIPTEN_EVENT_KEYDOWN && !k->repeat && std::strcmp(k->code, "F11") == 0) {
+        detail::applyFullscreen(!state().fullscreen); // a key press is a user gesture: allowed
+    }
+    if ((k->ctrlKey || k->metaKey) && std::strcmp(k->code, "KeyV") == 0) {
+        g_pasteMods = modsOf(k->shiftKey, k->ctrlKey, k->altKey, k->metaKey);
+        return EM_FALSE; // the browser fires `paste` next; the game gets Ctrl+V from there
     }
     Event e;
     e.type = type == EMSCRIPTEN_EVENT_KEYDOWN ? EventType::KeyDown : EventType::KeyUp;
@@ -190,6 +273,7 @@ void frame(void*) {
 } // namespace
 
 namespace detail {
+void applyFullscreen(bool on) { rts_web_fullscreen(on ? 1 : 0, state().cfg.orientation.c_str()); }
 void showSoftKeyboard(bool show, const TextInputArea& a) {
     rts_web_text_input(show ? 1 : 0, a.x, a.y, a.w, a.h, state().touch ? 1 : 0);
 }
@@ -203,8 +287,8 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     S.cfg = cfg; S.cb = std::move(cb);
     S.contentRoot = "/content";
     S.userDir = "/user";
-    mkdir(S.userDir.c_str(), 0777); // in-memory MEMFS: writes work, but don't survive a reload yet
     updateSize();
+    rts_web_clipboard_init();
 
     EmscriptenWebGLContextAttributes a;
     emscripten_webgl_init_context_attributes(&a);
@@ -226,10 +310,26 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     emscripten_set_touchcancel_callback(kCanvas, nullptr, EM_TRUE, onTouch);
     emscripten_set_resize_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, EM_FALSE, onResize);
 
+    // userDataDir lives in IndexedDB (IDBFS). The game starts after the saved files are loaded, so
+    // init() sees settings from the last visit; writes are flushed every few seconds and when the
+    // page is hidden or closed (syncUserData() flushes right away).
+    rts_web_storage_init(S.userDir.c_str());
+    return 0; // main returns; the runtime stays alive (EXIT_RUNTIME=0) and rts_web_start runs the loop
+}
+
+void startAfterStorage() {
+    auto& S = state();
     g_device = gfx::createGLDevice(gfx::Backend::GLES3);
     if (S.cb.init) S.cb.init(*g_device);
-    emscripten_set_main_loop_arg(frame, nullptr, 0, EM_TRUE); // does not return
-    return 0;
+    emscripten_set_main_loop_arg(frame, nullptr, 0, EM_FALSE);
+}
+
+void syncUserData() { rts_web_storage_sync(); }
+
+std::string clipboardText() { return state().clipboard; }
+void setClipboardText(const std::string& s) {
+    state().clipboard = s;
+    rts_web_clipboard_write(s.c_str());
 }
 
 } // namespace rts::platform
@@ -245,6 +345,26 @@ EMSCRIPTEN_KEEPALIVE void rts_web_key(int code) {
 }
 EMSCRIPTEN_KEEPALIVE void rts_web_ended() { rts::platform::detail::textInputEndedByUser(); }
 EMSCRIPTEN_KEEPALIVE void rts_web_keyboard(float h) { rts::platform::detail::setKeyboardHeight(h); }
+EMSCRIPTEN_KEEPALIVE void rts_web_start() { rts::platform::startAfterStorage(); }
+EMSCRIPTEN_KEEPALIVE void rts_web_fullscreen_changed(int on) {
+    rts::platform::detail::state().fullscreen = on != 0;
+    rts::platform::Event e; e.type = rts::platform::EventType::Resized; rts::platform::detail::dispatch(e);
+}
+EMSCRIPTEN_KEEPALIVE void rts_web_clip_begin() { rts::platform::g_pasteText.clear(); }
+EMSCRIPTEN_KEEPALIVE void rts_web_clip_char(int cp) {
+    uint32_t c = uint32_t(cp);
+    std::string& s = rts::platform::g_pasteText;
+    if (c < 0x80) s += char(c);
+    else if (c < 0x800) { s += char(0xC0 | (c >> 6)); s += char(0x80 | (c & 63)); }
+    else if (c < 0x10000) { s += char(0xE0 | (c >> 12)); s += char(0x80 | ((c >> 6) & 63)); s += char(0x80 | (c & 63)); }
+    else { s += char(0xF0 | (c >> 18)); s += char(0x80 | ((c >> 12) & 63)); s += char(0x80 | ((c >> 6) & 63)); s += char(0x80 | (c & 63)); }
+}
+EMSCRIPTEN_KEEPALIVE void rts_web_clip_end() {
+    using namespace rts::platform;
+    detail::state().clipboard = g_pasteText;
+    Event e; e.type = EventType::KeyDown; e.key = Key::V; e.mods = g_pasteMods; detail::dispatch(e);
+    e.type = EventType::KeyUp; detail::dispatch(e);
+}
 }
 
 int main(int argc, char** argv) { return rtsMain(argc, argv); }

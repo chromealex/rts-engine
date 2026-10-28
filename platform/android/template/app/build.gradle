@@ -21,11 +21,24 @@ android {
             }
         }
     }
+    // Store builds: RTS_KEYSTORE (path to .jks), RTS_KEYSTORE_PASSWORD, RTS_KEY_ALIAS, RTS_KEY_PASSWORD
+    // (the release workflow sets them from GitHub secrets). Without them release is signed with the
+    // debug key, so the APK still installs out of the box.
+    signingConfigs {
+        release {
+            def ks = System.getenv('RTS_KEYSTORE')
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('RTS_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('RTS_KEY_ALIAS')
+                keyPassword System.getenv('RTS_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
-            // Uses the debug key so the APK installs out of the box; set up your own signingConfig for the store.
-            signingConfig signingConfigs.debug
+            signingConfig System.getenv('RTS_KEYSTORE') ? signingConfigs.release : signingConfigs.debug
         }
     }
     externalNativeBuild {

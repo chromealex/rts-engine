@@ -5,6 +5,8 @@
 package com.rtsengine.platform;
 
 import android.app.NativeActivity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.graphics.Rect;
 import android.os.Build;
@@ -13,7 +15,10 @@ import android.text.InputType;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.DisplayCutout;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
@@ -30,6 +35,7 @@ public class RtsActivity extends NativeActivity {
     static native void nativeKey(int key);
     static native void nativeKeyboard(int heightPx);
     static native void nativeTextInputEnded();
+    static native void nativeSafeArea(int left, int top, int right, int bottom);
 
     private TextSink sink;
     private boolean active;     // the game asked for text input
@@ -40,13 +46,19 @@ public class RtsActivity extends NativeActivity {
         super.onCreate(state);
         sink = new TextSink(this);
         addContentView(sink, new ViewGroup.LayoutParams(1, 1));
+        if (Build.VERSION.SDK_INT >= 28) {
+            // draw under the camera cutout too; safeAreaInsets() tells the UI where it is
+            WindowManager.LayoutParams lp = getWindow().getAttributes();
+            lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+            getWindow().setAttributes(lp);
+        }
         final View decor = getWindow().getDecorView();
-        if (Build.VERSION.SDK_INT >= 30) {
-            decor.setOnApplyWindowInsetsListener((v, insets) -> {
-                onKeyboardHeight(insets.getInsets(WindowInsets.Type.ime()).bottom);
-                return v.onApplyWindowInsets(insets);
-            });
-        } else {
+        decor.setOnApplyWindowInsetsListener((v, insets) -> {
+            reportSafeArea(insets);
+            if (Build.VERSION.SDK_INT >= 30) onKeyboardHeight(insets.getInsets(WindowInsets.Type.ime()).bottom);
+            return v.onApplyWindowInsets(insets);
+        });
+        if (Build.VERSION.SDK_INT < 30) {
             decor.getViewTreeObserver().addOnGlobalLayoutListener(() -> {
                 Rect r = new Rect();
                 decor.getWindowVisibleDisplayFrame(r);
@@ -54,6 +66,48 @@ public class RtsActivity extends NativeActivity {
                 onKeyboardHeight(h > decor.getRootView().getHeight() / 8 ? h : 0); // ignore nav bar
             });
         }
+    }
+
+    // Immersive: system bars hidden, a swipe from the edge shows them for a moment (games standard).
+    @Override
+    public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) return;
+        if (Build.VERSION.SDK_INT >= 30) {
+            WindowInsetsController c = getWindow().getInsetsController();
+            if (c != null) {
+                c.hide(WindowInsets.Type.systemBars());
+                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            }
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
+        }
+    }
+
+    private void reportSafeArea(WindowInsets insets) {
+        int l = 0, t = 0, r = 0, b = 0;
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.graphics.Insets i = insets.getInsets(WindowInsets.Type.displayCutout() | WindowInsets.Type.systemBars());
+            l = i.left; t = i.top; r = i.right; b = i.bottom;
+        } else if (Build.VERSION.SDK_INT >= 28) {
+            DisplayCutout c = insets.getDisplayCutout();
+            if (c != null) { l = c.getSafeInsetLeft(); t = c.getSafeInsetTop(); r = c.getSafeInsetRight(); b = c.getSafeInsetBottom(); }
+        }
+        nativeSafeArea(l, t, r, b);
+    }
+
+    // Called from the game thread (JNI). ClipboardManager is safe to use off the UI thread.
+    public String clipboardText() {
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm == null || !cm.hasPrimaryClip() || cm.getPrimaryClip().getItemCount() == 0) return "";
+        CharSequence s = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+        return s != null ? s.toString() : "";
+    }
+    public void setClipboardText(String s) {
+        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(ClipData.newPlainText("text", s));
     }
 
     private void onKeyboardHeight(int px) {

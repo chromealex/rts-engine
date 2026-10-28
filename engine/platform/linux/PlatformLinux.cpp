@@ -66,6 +66,24 @@ void saveScreenshot(const std::string& path, int w, int h) {
 const char* name() { return "linux"; }
 void setTitle(const std::string& t) { if (g_dpy && g_win) XStoreName(g_dpy, g_win, t.c_str()); }
 
+namespace detail {
+// EWMH: ask the window manager to toggle _NET_WM_STATE_FULLSCREEN (works on every modern WM).
+void applyFullscreen(bool on) {
+    if (!g_dpy || !g_win) return;
+    XEvent ev{};
+    ev.xclient.type = ClientMessage;
+    ev.xclient.window = g_win;
+    ev.xclient.message_type = XInternAtom(g_dpy, "_NET_WM_STATE", False);
+    ev.xclient.format = 32;
+    ev.xclient.data.l[0] = on ? 1 : 0; // _NET_WM_STATE_ADD / _REMOVE
+    ev.xclient.data.l[1] = long(XInternAtom(g_dpy, "_NET_WM_STATE_FULLSCREEN", False));
+    ev.xclient.data.l[2] = 1;          // source: application
+    XSendEvent(g_dpy, DefaultRootWindow(g_dpy), False, SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+    XFlush(g_dpy);
+    state().fullscreen = on;
+}
+} // namespace detail
+
 int run(const AppConfig& cfg, AppCallbacks cb) {
     auto& S = state();
     S.cfg = cfg; S.cb = std::move(cb);
@@ -163,6 +181,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
                 e.type = xe.type == KeyPress ? EventType::KeyDown : EventType::KeyUp;
                 e.key = mapKey(ks); e.mods = mods(xe.xkey.state);
                 detail::dispatch(e);
+                if (xe.type == KeyPress && e.key == Key::F11) detail::applyFullscreen(!state().fullscreen);
                 if (xe.type == KeyPress) {
                     char buf[16] = {}; KeySym sym; Status st;
                     int len = xic ? Xutf8LookupString(xic, &xe.xkey, buf, sizeof buf - 1, &sym, &st)
