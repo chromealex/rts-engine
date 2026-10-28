@@ -7,11 +7,21 @@
  "players": [
   {
    "name": "Синие",
-   "team": 1
+   "team": 1,
+   "faction": "atreides",
+   "start": [
+    10,
+    24
+   ]
   },
   {
    "name": "Красные",
-   "team": 2
+   "team": 2,
+   "faction": "harkonnen",
+   "start": [
+    54,
+    24
+   ]
   }
  ],
  "terrain": {
@@ -70,7 +80,7 @@
   {
    "resource": "spice",
    "center": [
-    23,
+    24,
     18
    ],
    "radius": 4
@@ -78,7 +88,7 @@
   {
    "resource": "spice",
    "center": [
-    41,
+    40,
     30
    ],
    "radius": 4
@@ -98,55 +108,47 @@
     8
    ],
    "radius": 4
+  },
+  {
+   "resource": "spice",
+   "center": [
+    30,
+    9
+   ],
+   "radius": 3
+  },
+  {
+   "resource": "spice",
+   "center": [
+    34,
+    39
+   ],
+   "radius": 3
   }
  ],
  "entities": [
   {
-   "type": "mcv",
-   "owner": 1,
+   "type": "spice_bloom",
+   "owner": 0,
    "pos": [
-    10,
-    24
+    22,
+    34
    ]
   },
   {
-   "type": "mcv",
-   "owner": 2,
+   "type": "spice_bloom",
+   "owner": 0,
    "pos": [
-    54,
-    24
+    42,
+    14
    ]
   },
   {
-   "type": "trooper",
-   "owner": 1,
+   "type": "spice_bloom",
+   "owner": 0,
    "pos": [
-    14,
-    26
-   ]
-  },
-  {
-   "type": "trooper",
-   "owner": 2,
-   "pos": [
-    50,
-    22
-   ]
-  },
-  {
-   "type": "trooper",
-   "owner": 1,
-   "pos": [
-    14,
-    27
-   ]
-  },
-  {
-   "type": "trooper",
-   "owner": 2,
-   "pos": [
-    50,
-    21
+    40,
+    6
    ]
   },
   {
@@ -156,6 +158,28 @@
     32,
     4
    ]
+  },
+  {
+   "type": "sandworm",
+   "owner": -1,
+   "pos": [
+    32,
+    44
+   ]
   }
- ]
+ ],
+ "areas": {
+  "desert_north": [
+   20,
+   2,
+   24,
+   10
+  ],
+  "desert_south": [
+   20,
+   36,
+   24,
+   10
+  ]
+ }
 }

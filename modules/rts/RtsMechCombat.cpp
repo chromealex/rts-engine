@@ -73,12 +73,6 @@ Fixed RtsModule::mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg) {
     return left;
 }
 
-Fixed RtsModule::gatherMultFor(Simulation& sim, uint8_t owner, int res) const {
-    const GameState& gs = *sim.world().resource<GameState>();
-    const uint32_t mask = rules_.mech.upkeepMask;
-    if (mask && (res < 0 || !(mask & (1u << res)))) return kOne;
-    return gs.players[owner].gatherMult;
-}
 
 bool RtsModule::mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const {
     World& w = sim.world();

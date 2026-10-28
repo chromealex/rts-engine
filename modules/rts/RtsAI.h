@@ -33,6 +33,7 @@ private:
     void settlers(Simulation& sim, RtsModule& m);  // roads to buildings, production chains
     void mech(Simulation& sim, RtsModule& m);      // agent-mech (RtsMechAI.cpp): retreat the wounded, man bunkers, ...
     void mechEconomy(Simulation& sim, RtsModule& m);   // market, trade carts, hero items, merges
+    void originals(Simulation& sim, RtsModule& m); // RtsAIOriginals.cpp: hero skills, crews, garrison upgrades
     bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
