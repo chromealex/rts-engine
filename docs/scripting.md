@@ -14,7 +14,7 @@ There are two kinds of scripts:
 | numbers | integers and `fx` (fixed point); **no floats** | normal Lua numbers |
 | may | read and change the game (`game.*` actions) | read the game, show notices / effects / sounds |
 
-A game without `"scripts"` creates no Lua VM at all: zero cost, identical checksums.
+A game without `"scripts"` runs only the engine's standard library (below): no "scripts" system, no budget, identical checksums.
 
 ```json
 // rules.json
@@ -240,6 +240,38 @@ View scripts are presentation: floats are fine, `game.*` queries work, actions d
 outputs are requests the host shows: `view.notice(text)`, `view.effect(name, x, z)` (particle
 effect of `fx/`), `view.sound(name, x, z)`. They never change the simulation, so they don't need
 the determinism rules.
+
+## Engine standard library (rule-level mechanics in Lua)
+
+Part of the engine's own mechanics is written in Lua: `modules/rts/lua/*.lua`, compiled into the
+engine (`embed.cmake` turns them into a header, so every platform loads them without file access)
+and run by every game, before the game's own scripts, in the same deterministic VM. The C++ core
+keeps everything hot (ECS, commands, movement, pathfinding, avoidance, targeting and weapons,
+projectiles, vision, hashing, data parsing) and offers aggregate queries and primitives in the
+low-level `rts` table (`modules/rts/RtsScriptStd.cpp`); Lua decides the rules.
+
+| module | replaces (C++) | called |
+|---|---|---|
+| `victory.lua` (`std.victory`) | `RtsModule::sysVictory` | "victory" system, every 10 ticks (`std.period.victory`) |
+| `waves.lua` (`std.waves`) | `RtsModule::sysWaves` (+ wave objective scan, kept as `rts.wave_objective`) | "waves" system, only in games with waves |
+| `triggers.lua` (`std.triggers`) | `RtsModule::sysTriggers`, `triggerConditions`, `runTriggerActions` (parsing stays in `RtsTriggers.cpp`) | "triggers" system, only in games with triggers |
+| `commands.lua` (`std.auto_build`, `std.sell`) | the `kCmdAutoBuild` and `kCmdSell` branches of `RtsModule::applyCommand` | from `applyCommand` |
+
+Every module is **bit-identical** to the C++ it replaced: same iteration order (ECS order comes from
+the C++ helpers), the same `Fixed` operations (`fx` metamethods call the engine's `Fixed`), the same
+RNG calls. `tests/checksums/check.sh` compares the checksums of every sample game and of the fixtures
+in `tests/checksums/games` (seeds 1-3) with `baseline.txt`, recorded from the C++ implementation;
+`tests/checksums/perf.py` compares two builds (wall time, or exact instruction counts with `--ir`).
+
+- Modules run without the instruction budget (engine code) and keep their state in the C++
+  `GameState` (hashed and rolled back as before), so a game with no scripts of its own has
+  unchanged checksums.
+- A module schedules itself: `std.period.<name> = N` (every N ticks; 0 = never in this game).
+- **Override**: a game replaces a module with `scripts/std/<name>.lua` listed in its rules
+  `"scripts"` (same contract: define `std.<name>`). Its changes are then the game's own rules.
+- Kept in C++ after measuring: the per-player economy pass (upkeep, capacity, income) — it runs over
+  all 256 player slots every tick, and the Lua version cost +50% instructions on `ironfront`.
+
 
 ## Editor, hot reload, MCP
 
