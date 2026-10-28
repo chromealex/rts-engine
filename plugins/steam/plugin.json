@@ -1,0 +1,25 @@
+{
+  "name": "steam",
+  "description": "Steam in-game purchases (Steam Inventory Service; DLC as non-consumables) for Windows, Linux and macOS. Protocol: store (docs/plugins.md). Config: appId, items {product: item definition id}, dlc {product: DLC app id}, restartIfNecessary, sdk (path to the Steamworks SDK; default $STEAMWORKS_SDK).",
+  "provides": ["store"],
+  "defaults": { "sdk": "${env.STEAMWORKS_SDK}" },
+  "sdkHint": "Steamworks SDK: download from https://partner.steamgames.com/downloads (unzip; the folder that has public/ and redistributable_bin/), then set STEAMWORKS_SDK=<that folder> or game.json plugins → steam → \"sdk\".",
+  "windows": {
+    "sources": ["src/*.cpp"],
+    "includeDirs": ["${sdk}/public"],
+    "libraries": ["${sdk}/redistributable_bin/win64/steam_api64.lib"],
+    "runtime": ["${sdk}/redistributable_bin/win64/steam_api64.dll"]
+  },
+  "linux": {
+    "sources": ["src/*.cpp"],
+    "includeDirs": ["${sdk}/public"],
+    "libraries": ["${sdk}/redistributable_bin/linux64/libsteam_api.so"],
+    "runtime": ["${sdk}/redistributable_bin/linux64/libsteam_api.so"]
+  },
+  "macos": {
+    "sources": ["src/*.cpp"],
+    "includeDirs": ["${sdk}/public"],
+    "libraries": ["${sdk}/redistributable_bin/osx/libsteam_api.dylib"],
+    "runtime": ["${sdk}/redistributable_bin/osx/libsteam_api.dylib"]
+  }
+}

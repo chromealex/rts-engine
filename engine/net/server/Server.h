@@ -69,7 +69,7 @@ struct ServerConfig {
 
 // Parse a server config (all keys optional):
 // {"name": "...", "udpPort": 27015, "wsPort": 27016, "replays": "replays", "ratings": "ratings.txt",
-//  "games": {"com.rtsengine.ironandgold": "games/skirmish"}, "reconnectGraceSec": 120,
+//  "games": {"com.rtsengine.ironandgold": "templates/skirmish"}, "reconnectGraceSec": 120,
 //  "queues": [{"id": "1v1", "title": "1 на 1", "teams": 2, "teamSize": 1, "botFillSec": 60,
 //              "ratingRange": 150, "ratingWidenPerSec": 10,
 //              "tickRate": 20, "inputDelay": 2, "rollbackWindow": 8, "lagToleranceMs": 300}]}

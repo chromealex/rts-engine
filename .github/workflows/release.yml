@@ -19,7 +19,7 @@ on:
     inputs:
       game:
         description: Game folder to package
-        default: games/skirmish
+        default: templates/skirmish
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ permissions:
   id-token: write
 
 env:
-  GAME: ${{ github.event.inputs.game || 'games/skirmish' }}
+  GAME: ${{ github.event.inputs.game || 'templates/skirmish' }}
   CMAKE_BUILD_PARALLEL_LEVEL: 4
 
 jobs:

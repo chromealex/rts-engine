@@ -16,5 +16,7 @@
     <key>LSApplicationCategoryType</key><string>public.app-category.strategy-games</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSPrincipalClass</key><string>NSApplication</string>
+    <!-- native plugins (rtsbuild → plugins.cmake) -->
+    ${RTS_PLUGIN_PLIST_XML}
 </dict>
 </plist>

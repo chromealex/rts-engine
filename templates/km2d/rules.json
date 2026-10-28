@@ -1,0 +1,114 @@
+// "Green Hills" — a small medieval economy (Knights and Merchants look): peasants gather gold and
+// wood and build; swordsmen and archers from the barracks; towers defend. Every type is a sprite
+// ("billboard" sprites facing the camera, 32 px = 1 cell, standing on the front edge of their footprint).
+// Shadows: game.json "sprites" opts into real sun shadows ("cast") and lit sprites; buildings give
+// their real wall + roof height as "castHeight" (the drawing also shows the roof from above).
+{
+  "victory": "noStructures",
+  "supplyCap": 100,
+  "resources": {
+    "gold": { "name": "Gold", "start": 500 },
+    "wood": { "name": "Wood", "start": 300 }
+  },
+  "armorTypes": ["light", "heavy", "fortified"],
+  "damageTable": {
+    "pierce": { "heavy": 0.7, "fortified": 0.35 },
+    "normal": { "fortified": 0.7 }
+  },
+  "types": {
+    "peasant": {
+      "name": "Peasant",
+      "health": { "max": 200, "armorType": "light" },
+      "move": { "speed": 2.3, "radius": 0.3 },
+      "sight": 7,
+      "weapons": [ { "id": "tool", "range": 0.5, "damage": 4, "cooldown": 1.5 } ],
+      "cost": { "gold": 60, "time": 10, "supply": 1 },
+      "gather": { "gold": { "carry": 10, "time": 2 }, "wood": { "carry": 10, "time": 3 } },
+      "builds": ["hall", "house", "barracks", "tower"],
+      "sprite": { "sheet": "sprites/peasant.png", "frame": [32, 32], "facings": 8, "pixelsPerCell": 32, "anchor": [0.5, 0.88],
+                  "actions": { "idle": [0, 1], "move": [1, 4, 8], "work": [5, 2, 3], "attack": [5, 2, 3], "die": [7, 3, 5] } }
+    },
+    "swordsman": {
+      "name": "Swordsman",
+      "health": { "max": 400, "armor": 2, "armorType": "heavy" },
+      "move": { "speed": 2.5, "radius": 0.35 },
+      "sight": 8,
+      "weapons": [ { "id": "sword", "range": 0.6, "damage": 13, "cooldown": 1.2, "damageType": "normal" } ],
+      "cost": { "gold": 120, "time": 14, "supply": 2 },
+      "sprite": { "sheet": "sprites/swordsman.png", "frame": [32, 32], "facings": 8, "pixelsPerCell": 32, "anchor": [0.5, 0.88],
+                  "actions": { "idle": [0, 1], "move": [1, 4, 8], "attack": [5, 2, 3], "die": [7, 3, 5] } }
+    },
+    "archer": {
+      "name": "Archer",
+      "health": { "max": 230, "armorType": "light" },
+      "move": { "speed": 2.6, "radius": 0.3 },
+      "sight": 9,
+      "weapons": [ { "id": "bow", "range": 5.5, "damage": 15, "cooldown": 1.5, "projectileSpeed": 14, "damageType": "pierce" } ],
+      "cost": { "gold": 110, "wood": 20, "time": 15, "supply": 2 },
+      "sprite": { "sheet": "sprites/archer.png", "frame": [32, 32], "facings": 8, "pixelsPerCell": 32, "anchor": [0.5, 0.88],
+                  "actions": { "idle": [0, 1], "move": [1, 4, 8], "attack": [5, 2, 3], "die": [7, 3, 5] } }
+    },
+    "hall": {
+      "name": "Town Hall",
+      "structure": { "footprint": [3, 3] },
+      "health": { "max": 1600, "armor": 4, "armorType": "fortified" },
+      "sight": 10,
+      "cost": { "gold": 400, "wood": 200, "time": 50 },
+      "produces": ["peasant"],
+      "dropoff": ["gold", "wood"],
+      "supply": 10,
+      "sprite": { "sheet": "sprites/hall.png", "castHeight": 2.6, "frame": [96, 123], "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 3] } }
+    },
+    "house": {
+      "name": "House",
+      "structure": { "footprint": [2, 2] },
+      "health": { "max": 450, "armor": 1, "armorType": "fortified" },
+      "cost": { "gold": 70, "wood": 40, "time": 18 },
+      "supply": 8,
+      "sprite": { "sheet": "sprites/house.png", "castHeight": 1.9, "frame": [64, 86], "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 3] } }
+    },
+    "barracks": {
+      "name": "Barracks",
+      "structure": { "footprint": [3, 3] },
+      "health": { "max": 1000, "armor": 3, "armorType": "fortified" },
+      "cost": { "gold": 150, "wood": 80, "time": 30 },
+      "produces": ["swordsman", "archer"],
+      "sprite": { "sheet": "sprites/barracks.png", "castHeight": 2.2, "frame": [96, 111], "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 3] } }
+    },
+    "tower": {
+      "name": "Watch Tower",
+      "structure": { "footprint": [2, 2] },
+      "health": { "max": 550, "armor": 4, "armorType": "fortified" },
+      "sight": 11,
+      "weapons": [ { "id": "arrows", "range": 6.5, "damage": 15, "cooldown": 1.3, "projectileSpeed": 16, "damageType": "pierce" } ],
+      "cost": { "gold": 100, "wood": 90, "time": 28 },
+      "requires": ["barracks"],
+      "sprite": { "sheet": "sprites/tower.png", "castHeight": 3.2, "frame": [64, 115], "pixelsPerCell": 32,
+                  "actions": { "idle": [0, 1], "build": { "start": 1, "count": 4, "loop": false }, "die": [5, 3, 3] } }
+    },
+    "goldmine": {
+      "name": "Gold Mine",
+      "structure": { "footprint": [2, 2] },
+      "invulnerable": true,
+      "resourceNode": { "resource": "gold", "amount": 10000 },
+      "sprite": { "sheet": "sprites/goldmine.png", "pixelsPerCell": 32, "team": "none", "castHeight": 0.9 }
+    },
+    "tree": {
+      "name": "Tree",
+      "structure": { "footprint": [1, 1] },
+      "invulnerable": true,
+      "resourceNode": { "resource": "wood", "amount": 100 },
+      "sprite": { "sheet": "sprites/tree.png", "pixelsPerCell": 32, "team": "none", "offset": [0, 0.15], "shadow": { "mode": "cast", "size": [1.6, 1.1], "alpha": 0.3 } }
+    }
+  },
+  "factions": {
+    "realm": { "name": "Realm", "start": [
+      { "type": "hall", "offset": [0, 0] },
+      { "type": "peasant", "offset": [3, 2], "count": 4 },
+      { "type": "swordsman", "offset": [-3, 2], "count": 1 }
+    ] }
+  }
+}
