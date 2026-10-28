@@ -60,7 +60,8 @@ is optional — the blocks present on a type decide what it can do.
   "metal":  {"kind": "flow", "start": 500, "storage": 1000},                               // Total Annihilation: income/expense per second, capped by storage
   "power":  {"kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense"]},// Red Alert power: provided vs consumed
   "spice":  {"capped": true, "storage": 1000},                                             // Dune silos: stock limited by storage
-  "coins":  {"global": true, "start": 100}                                                 // with "storage": "buildings": not a good, stays player-wide
+  "coins":  {"global": true, "start": 100},                                                // with "storage": "buildings": not a good, stays player-wide
+  "ore2":   {"field": true, "convertsTo": {"credits": 4}}                                  // delivered ore is credited as 4 credits each
 }
 ```
 Kinds: `stock` (default: gathered/earned, spent), `flow` (per-second income from `income`, spent while
