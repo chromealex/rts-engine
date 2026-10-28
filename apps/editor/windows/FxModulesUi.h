@@ -237,6 +237,7 @@ inline bool emitterUi(EmitterDef& d) {
         ch |= ImGui::SliderFloat("Сферическое направление", &d.sphericalDirection, 0, 1, "%.2f");
         ch |= ImGui::DragFloat("Случайная позиция", &d.randomPosition, 0.01f, 0, 100, "%.2f");
         ch |= ImGui::Checkbox("Повернуть по направлению", &d.alignToDirection);
+        ch |= ImGui::SliderFloat("Зеркалить поворот (вероятность)", &d.flipRotation, 0, 1, "%.2f");
         ImGui::TreePop();
     }
 

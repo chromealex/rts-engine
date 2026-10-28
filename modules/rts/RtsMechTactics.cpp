@@ -23,6 +23,7 @@ Vec3 rotateTowards(Vec3 from, Vec3 to, Fixed maxTurns) {
 
 bool RtsModule::mechOnFire(Simulation& sim, Entity e, size_t wi, Entity target) {
     World& w = sim.world();
+    if (rules_.mech.battle() && !mechBattleFire(sim, e)) return false;   // stage 4: routing units don't fight; charges
     const MechType& mt = rules_.types[w.get<Unit>(e).type].mech;
     // turret must face the target (rotated in mechTickTactics)
     if (at(mt.turretRate, wi).raw > 0 && w.alive(target)) {

@@ -1,7 +1,9 @@
 """Unity materials and textures for the effect importer: blend mode, main texture, tint (materials,
 custom shaders, Shader Graph), texture conversion into the game's fx/textures folder."""
+import json
 import os
 import re
+import shutil
 
 import images
 import unity_yaml as uy
@@ -22,11 +24,11 @@ def sanitize(name, limit=40):
 BUILTIN_SHADERS = {
     200: ('Legacy Shaders/Particles/Additive', 'additive'), 201: ('Legacy Shaders/Particles/Additive (Soft)', 'additive'),
     202: ('Legacy Shaders/Particles/Alpha Blended', 'alpha'), 203: ('Legacy Shaders/Particles/Alpha Blended Premultiply', 'premultiplied'),
-    204: ('Legacy Shaders/Particles/Multiply', 'alpha'), 205: ('Legacy Shaders/Particles/Multiply (Double)', 'alpha'),
+    204: ('Legacy Shaders/Particles/Multiply', 'multiply'), 205: ('Legacy Shaders/Particles/Multiply (Double)', 'multiply'),
     206: ('Legacy Shaders/Particles/VertexLit Blended', 'alpha'), 207: ('Legacy Shaders/Particles/Anim Alpha Blended', 'alpha'),
     208: ('Legacy Shaders/Particles/~Additive-Multiply', 'premultiplied'), 210: ('Particles/Standard Surface', 'alpha'),
     211: ('Particles/Standard Unlit', 'alpha'), 10720: ('Mobile/Particles/Additive', 'additive'),
-    10721: ('Mobile/Particles/Alpha Blended', 'alpha'), 10722: ('Mobile/Particles/Multiply', 'alpha'),
+    10721: ('Mobile/Particles/Alpha Blended', 'alpha'), 10722: ('Mobile/Particles/Multiply', 'multiply'),
     10723: ('Mobile/Particles/VertexLit Blended', 'alpha'),
 }
 
@@ -47,30 +49,45 @@ def _props(mat, section):
 
 
 def shader_blend_from_source(path):
+    """(blend, note) from a .shader's Blend / BlendOp state or a Shader Graph's surface / alpha mode."""
     try:
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             src = f.read()
     except OSError:
-        return None
+        return None, None
     if path.endswith('.shadergraph'):
         st = re.search(r'"m_SurfaceType"\s*:\s*(\d+)', src)
         am = re.search(r'"m_AlphaMode"\s*:\s*(\d+)', src)
         if st and st.group(1) == '0':
-            return 'alpha'
+            return 'opaque', None
         mode = am.group(1) if am else '0'
-        return {'0': 'alpha', '1': 'premultiplied', '2': 'additive', '3': 'alpha'}.get(mode, 'alpha')
+        return {'0': 'alpha', '1': 'premultiplied', '2': 'additive', '3': 'multiply'}.get(mode, 'alpha'), None
+    op = re.search(r'\bBlendOp\s+(\w+)', src)
+    if op and op.group(1).lower() in ('revsub', 'sub'):
+        return 'subtract', (None if op.group(1).lower() == 'revsub' else 'BlendOp Sub (source minus destination) -> subtract')
     m = re.search(r'\bBlend\s+(\w+)\s+(\w+)', src)
     if not m:
-        return None
+        if re.search(r'\bBlend\s+Off\b', src) or re.search(r'"Queue"\s*=\s*"Geometry', src):
+            return 'opaque', None
+        return None, None
     a, b = m.group(1).lower(), m.group(2).lower()
+    if (a, b) in (('dstcolor', 'zero'), ('zero', 'srccolor')):
+        return 'multiply', None
+    if (a, b) == ('dstcolor', 'srccolor'):
+        return 'multiply', 'multiply x2 -> multiply'
     if b == 'one':
-        return 'additive'
+        return 'additive', None
     if a == 'one' and b == 'oneminussrcalpha':
-        return 'premultiplied'
-    return 'alpha'
+        return 'premultiplied', None
+    if a == 'one' and b == 'zero':
+        return 'opaque', None
+    return 'alpha', None
 
 
 def blend_from_floats(f):
+    """(blend, note) from the usual material floats; 'cutout' = opaque with alpha test (decided by the caller)."""
+    if '_BlendOp' in f and int(num(f['_BlendOp'])) == 2:
+        return 'subtract', None
     if '_SrcBlend' in f and '_DstBlend' in f:
         s, d = int(num(f['_SrcBlend'])), int(num(f['_DstBlend']))
         if d == 1:
@@ -79,23 +96,28 @@ def blend_from_floats(f):
             return 'premultiplied', None
         if s == 5 and d == 10:
             return 'alpha', None
-        if (s, d) in ((2, 0), (0, 3), (2, 3)):
-            return 'alpha', 'multiply blending'
+        if (s, d) in ((2, 0), (0, 3)):
+            return 'multiply', None
+        if (s, d) == (2, 3):
+            return 'multiply', 'multiply x2 -> multiply'
         if d == 0 and s in (1, 5):
-            return None, None  # opaque surface: decide from the mode / shader
-    if '_Blend' in f and '_Surface' in f and int(num(f['_Surface'])) == 1:
-        b = int(num(f['_Blend']))
-        return {0: ('alpha', None), 1: ('premultiplied', None), 2: ('additive', None), 3: ('alpha', 'multiply blending')}.get(b, ('alpha', None))
+            if '_Mode' in f and int(num(f['_Mode'])) == 1 or num(f.get('_AlphaClip'), 0) > 0:
+                return 'cutout', None
+            return 'opaque', None
+    if '_Surface' in f:
+        if int(num(f['_Surface'])) == 0:
+            return ('cutout' if num(f.get('_AlphaClip'), 0) > 0 else 'opaque'), None
+        b = int(num(f.get('_Blend'), 0))
+        return {0: 'alpha', 1: 'premultiplied', 2: 'additive', 3: 'multiply'}.get(b, 'alpha'), None
     if '_Mode' in f:
         m = int(num(f['_Mode']))
-        table = {0: ('alpha', 'opaque particles'), 1: ('alpha', 'cutout'), 2: ('alpha', None), 3: ('premultiplied', None),
-                 4: ('additive', None), 5: ('additive', 'subtractive blending'), 6: ('alpha', 'modulate blending')}
+        table = {0: 'opaque', 1: 'cutout', 2: 'alpha', 3: 'premultiplied', 4: 'additive', 5: 'subtract', 6: 'multiply'}
         if m in table:
-            return table[m]
+            return table[m], ('modulate (multiply by the texture colour) -> multiply' if m == 6 else None)
     return None, None
 
 
-def read_material(ref, assets, log, slot):
+def read_material(ref, assets, log, slot, mesh=False):
     info = MaterialInfo()
     if not isinstance(ref, dict) or not get(ref, 'fileID'):
         info.texture_path, info.builtin_texture, info.blend, info.name = None, True, 'alpha', '(none)'
@@ -131,23 +153,30 @@ def read_material(ref, assets, log, slot):
         else:
             log.approx(slot, 'custom shader %s: only its Blend state, main texture and colour are kept' % info.shader)
         if blend is None:
-            blend = shader_blend_from_source(shader_path)
+            blend, why = shader_blend_from_source(shader_path)
     elif str(shader_ref.get('guid', '')).lower() == BUILTIN_GUID:
         sid = int(num(shader_ref.get('fileID'), 0))
         name, b = BUILTIN_SHADERS.get(sid, ('built-in shader %d' % sid, None))
         info.shader = name
         if blend is None and b:
             blend = b
-            if 'Multiply' in name:
-                why = 'multiply blending'
+            if 'Double' in name:
+                why = 'multiply x2 -> multiply'
     elif shader_ref.get('guid'):
         info.shader = 'shader %s (not in the source folder)' % shader_ref.get('guid')
     if blend is None:
         hint = (info.shader + ' ' + info.name).lower()
         blend = 'additive' if 'add' in hint or 'glow' in hint else 'premultiplied' if 'premul' in hint else 'alpha' if ('alpha' in hint or 'blend' in hint or 'smoke' in hint) else 'additive'
         log.approx(slot, 'blend mode guessed from names (%s): %s' % (info.shader, blend))
+    if blend == 'cutout':
+        if mesh:
+            blend = 'opaque'
+            log.approx(slot, 'cutout (alpha test) mesh material -> opaque')
+        else:
+            blend = 'alpha'
+            log.approx(slot, 'cutout (alpha test) billboards -> alpha blending')
     if why:
-        log.approx(slot, '%s -> %s' % (why, blend))
+        log.approx(slot, why)
     info.blend = blend
     # main texture
     for key in ('_MainTex', '_BaseMap', '_BaseColorMap', '_UnlitColorMap', '_MainTexture', '_Texture', '_Tex'):
@@ -203,10 +232,14 @@ class Textures:
     def get(self, info):
         if info.builtin_texture or not info.texture_path:
             return 'builtin:soft'
-        src = info.texture_path
-        if src in self.done:
-            return self.done[src]
-        stem = sanitize(os.path.splitext(os.path.basename(src))[0], 48)
+        return self.convert(info.texture_path, info.blend)
+
+    def convert(self, src, blend='additive', rect=None, label=None):
+        """Texture file -> fx/textures/<name>.png; rect (x, y, w, h in Unity pixels, origin bottom left) crops a sprite."""
+        key = (src, rect)
+        if key in self.done:
+            return self.done[key]
+        stem = sanitize(label or os.path.splitext(os.path.basename(src))[0], 48)
         name = stem
         k = 2
         while name in self.used:
@@ -220,7 +253,7 @@ class Textures:
             self.rep.warnings.append('texture %s could not be converted (%s): builtin:soft used instead' % (os.path.basename(src), note))
             entry['file'], entry['note'] = None, note
             self.rep.textures.append(entry)
-            self.done[src] = 'builtin:soft'
+            self.done[key] = 'builtin:soft'
             return 'builtin:soft'
         notes = [note] if note else []
         meta = self.assets.meta(src)
@@ -232,7 +265,11 @@ class Textures:
             for i in range(3, len(img.rgba), 4):
                 img.rgba[i] = 255
             notes.append('alpha ignored (import setting)')
-        if info.blend == 'alpha' and not img.has_alpha():
+        if rect is not None:
+            x, y, w, h = (int(round(v)) for v in rect)
+            img = images.crop(img, x, img.h - (y + h), w, h)
+            notes.append('sprite %s' % (label or ''))
+        if blend == 'alpha' and not img.has_alpha():
             self.rep.warnings.append('texture %s has no alpha but is alpha blended: it draws as squares (as in Unity)' % os.path.basename(src))
         if max(img.w, img.h) > 1024:
             notes.append('%dx%d: large for weak GPUs, consider 512' % (img.w, img.h))
@@ -241,5 +278,95 @@ class Textures:
         if not self.dry:
             images.write_png(os.path.join(self.game_dir, rel), img)
         self.rep.textures.append(entry)
-        self.done[src] = rel
+        self.done[key] = rel
         return rel
+
+
+# ------------------------------------------------------------------------------------------ sprites
+
+def sprite_info(ref, assets):
+    """Sprite reference -> (texture path, rect (x, y, w, h) or None for the whole texture, name, pixels per unit)."""
+    path = assets.path(ref)
+    if not path:
+        return None
+    meta = get(assets.meta(path), 'TextureImporter', default={}) or {}
+    ppu = num(meta.get('spritePixelsToUnits'), 100) or 100
+    fid = get(ref, 'fileID')
+    names = {}
+    for k, v in (get(meta, 'fileIDToRecycleName', default={}) or {}).items():
+        names[str(k)] = v
+    for item in get(meta, 'internalIDToNameTable', default=[]) or []:
+        first = get(item, 'first') or {}
+        for v in first.values():
+            names[str(v)] = get(item, 'second')
+    sprites = get(meta, 'spriteSheet', 'sprites', default=[]) or []
+    if int(num(meta.get('spriteMode'), 1)) == 2 and sprites:
+        want = names.get(str(fid))
+        for sp in sprites:
+            if not isinstance(sp, dict):
+                continue
+            if str(sp.get('internalID')) == str(fid) or (want is not None and sp.get('name') == want):
+                rc = sp.get('rect') or {}
+                return path, (num(rc.get('x')), num(rc.get('y')), num(rc.get('width')), num(rc.get('height'))), str(sp.get('name')), ppu
+    return path, None, os.path.splitext(os.path.basename(path))[0], ppu
+
+
+def sprite_size(info):
+    """World size (w, h) of a sprite in Unity units (needs the image size when the sprite is the whole texture)."""
+    path, rect, _, ppu = info
+    if rect is not None:
+        return rect[2] / ppu, rect[3] / ppu
+    img, _ = images.load_any(path) if path.lower().endswith(TEX_EXT) else (None, None)
+    return (img.w / ppu, img.h / ppu) if img is not None else (1.0, 1.0)
+
+
+# ------------------------------------------------------------------------------------------ meshes
+
+BUILTIN_MESH_GUID = '0000000000000000e000000000000000'
+BUILTIN_MESHES = {10202: 'cube', 10206: 'cylinder', 10207: 'sphere', 10208: 'capsule', 10209: 'plane', 10210: 'quad'}
+MODEL_EXT = ('.fbx', '.obj', '.gltf', '.glb')
+
+
+class Meshes:
+    """Unity mesh references -> "builtin:<primitive>" or a model file copied to <game>/models/ (same name)."""
+
+    def __init__(self, game_dir, assets, report, dry):
+        self.game_dir, self.assets, self.rep, self.dry = game_dir, assets, report, dry
+        self.done = {}
+
+    def get(self, ref):
+        """(engine mesh name or None, problem or None)."""
+        if not isinstance(ref, dict) or not get(ref, 'fileID'):
+            return None, 'no mesh'
+        guid = str(ref.get('guid', '')).lower()
+        if guid == BUILTIN_MESH_GUID:
+            prim = BUILTIN_MESHES.get(int(num(ref.get('fileID'))))
+            return ('builtin:' + prim, None) if prim else (None, 'built-in mesh %s is not a primitive' % ref.get('fileID'))
+        src = self.assets.path(ref)
+        if not src:
+            return None, 'mesh asset %s not found in the source folder' % guid
+        if src in self.done:
+            return self.done[src], None
+        ext = os.path.splitext(src)[1].lower()
+        if ext not in MODEL_EXT:
+            return None, 'mesh file %s (%s): the engine loads FBX / OBJ / glTF' % (os.path.basename(src), ext or 'Unity .asset')
+        rel = 'models/' + os.path.basename(src)
+        files = [(src, os.path.join(self.game_dir, rel))]
+        if ext == '.gltf':  # external buffers and images next to the .gltf
+            try:
+                with open(src, 'r', encoding='utf-8') as f:
+                    doc = json.load(f)
+                for item in (doc.get('buffers') or []) + (doc.get('images') or []):
+                    uri = item.get('uri') if isinstance(item, dict) else None
+                    if uri and not uri.startswith('data:') and '..' not in uri.replace('\\', '/').split('/'):
+                        files.append((os.path.join(os.path.dirname(src), uri), os.path.join(self.game_dir, 'models', uri)))
+            except (OSError, ValueError):
+                pass
+        if not self.dry:
+            for a, b in files:
+                if os.path.exists(a):
+                    os.makedirs(os.path.dirname(b), exist_ok=True)
+                    shutil.copyfile(a, b)
+        self.rep.notes.append('mesh %s -> %s' % (os.path.basename(src), rel))
+        self.done[src] = rel
+        return rel, None

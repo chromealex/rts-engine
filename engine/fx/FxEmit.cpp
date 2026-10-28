@@ -86,8 +86,15 @@ bool ParticleSystem::Impl::emit(Instance& in, uint32_t owner, int effect, int em
         else { float uu = rng.unit(), in0 = (1 - d.thickness) * (1 - d.thickness); rr = d.radius * std::sqrt(in0 + (1 - in0) * uu); }
         if (d.shape == FxShape::Cone) {   // the cone's base is perpendicular to its own axis (disc/ring: to the play direction)
             float3 ct, cb;
-            basisFrom(axis, ct, cb);
-            rim = ct * std::cos(a) + cb * std::sin(a);
+            if (rotated) {   // rim in the rotated shape frame, so the arc starts where Unity's does
+                const float3 dir = render::normalize(d.direction);
+                if (std::fabs(dir.y) > 0.999f) { ct = {1, 0, 0}; cb = {0, 0, 1}; }
+                else basisFrom(dir, ct, cb);
+                rim = render::normalize(shapeToWorld(ct * std::cos(a) + cb * std::sin(a)));
+            } else {
+                basisFrom(axis, ct, cb);
+                rim = ct * std::cos(a) + cb * std::sin(a);
+            }
             off = rim * rr;
             if (d.radius > 0) rimFrac = rr / d.radius;
         } else off = shapeToWorld({rr * std::cos(a), 0, rr * std::sin(a)});
@@ -241,6 +248,7 @@ bool ParticleSystem::Impl::emit(Instance& in, uint32_t owner, int effect, int em
     if (d.row == -2) p.row = uint8_t(std::min(d.frameRows - 1, int(rng.unit() * float(d.frameRows))));
     else if (d.row >= 0) p.row = uint8_t(std::min(d.row, d.frameRows - 1));
     if (er.meshIds.size() > 1) p.mesh = uint8_t(std::min(er.meshIds.size() - 1, size_t(rng.unit() * float(er.meshIds.size()))));
+    if (d.flipRotation > 0 && rng.unit() < d.flipRotation) { p.rot = -p.rot; p.spin = -p.spin; p.flags |= 32; }
     if (d.alignToDirection && d.meshes.empty()) {   // billboards: the quad's up axis along the start direction (screen space at draw time)
         p.flags |= 16;
     }

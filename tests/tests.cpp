@@ -1,3 +1,4 @@
+#include <chrono>
 // Dependency-free unit tests. Run: ctest  (or ./rts_tests)
 #include <filesystem>
 #include <cstdio>
@@ -5810,6 +5811,55 @@ TEST(fx_mesh_particles_from_model_files) {
     CHECK(ps.errors().empty());
 }
 
+TEST(fx_unity_importer_all_modules_play) {
+    // The synthetic project exercising every ParticleSystem module: imported effects parse and play.
+    if (std::system("python3 -c \"import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)\" > /dev/null 2>&1") != 0) {
+        std::printf("    (skipped: python3 not found)\n");
+        return;
+    }
+    const std::string src = std::string(RTS_SOURCE_DIR);
+    const std::string out = (std::filesystem::temp_directory_path() / "rts_unity_vfx_modules").string();
+    std::filesystem::remove_all(out);
+    std::filesystem::create_directories(out);
+    const std::string cmd = "python3 \"" + src + "/tools/importers/unity_vfx/import.py\" --source \"" + src +
+                            "/tests/data/unity_vfx/Assets/Modules\" --game \"" + out + "\" --json > \"" + out + "/report.json\"";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile(out + "/report.json");
+    CHECK(rep["effects"].size() >= 5);
+    auto read = [&](const std::string& p, std::string& text) {
+        std::ifstream f(out + "/" + p, std::ios::binary);
+        if (!f) return false;
+        text.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.setFileReader(read);
+    ps.setMeshLoader([&](const std::string& name, fx::FxMesh& m) { return fx::meshFromModelFile(name, read, m); });
+    ps.init(nullptr);
+    for (auto& e : rep["effects"].items()) {
+        int id = ps.effect(e.getStr("name"));
+        CHECK(id >= 0);
+        if (id < 0) continue;
+        ps.play(id, {0, 0, 0});
+        int most = 0;
+        for (int i = 0; i < 90; ++i) { ps.update(1 / 30.0f); most = std::max(most, ps.stats().particles); }
+        CHECK(most > 0);
+        std::vector<fx::FxParticleInfo> parts;
+        ps.snapshot(parts);
+        bool finite = true;
+        for (auto& p : parts) finite = finite && std::isfinite(p.pos.x + p.pos.y + p.pos.z + p.size);
+        CHECK(finite);
+    }
+    int meshErrors = 0;
+    for (auto& e : ps.errors()) {
+        if (e.find("rock.fbx") != std::string::npos) { ++meshErrors; continue; }   // a stub file in the test data
+        std::printf("    %s\n", e.c_str());
+    }
+    CHECK(ps.errors().size() == size_t(meshErrors));
+    std::filesystem::remove_all(out);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;
@@ -8158,6 +8208,19 @@ TEST(models_dds_formats) {
     CHECK(!decodeImage(ddsHeader(0, 4, "DXT1"), img) && !decodeImage(ddsHeader(100000, 4, "DXT1"), img));
 }
 
+// ---- sprite shadows (RtsSpriteShadow): data keys, tiers, projected decal geometry
+#include "modules/rts/view/RtsSpriteShadow.h"
+
+
+
+
+
+
+// ---------------- one-click MCP setup (editor Agent window) ----------------
+#if defined(RTS_TESTS_EDITOR_CORE)
+#include "apps/editor/core/McpInstall.h"
+#endif
+
 // ---------------- Planets: surface, world block, orbit layer, transit ----------------
 static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/templates/planets";
 
@@ -8606,6 +8669,87 @@ TEST(sprite_shadow_lighting_sun_dir_and_softness) {
     L.updateSky(l, 0);
     CHECK(std::fabs(l.shadowSoftness - render::Lighting{}.shadowSoftness) < 1e-5f);
 }
+
+
+// ---------------------------------------------------------------------------------------------
+// Materials on request: procedural textures, material library ops (models agent)
+// ---------------------------------------------------------------------------------------------
+#include "engine/render/TextureGen.h"
+TEST(materials_texture_patterns_tile_and_repeat) {
+    using namespace rts::render;
+    for (const auto& pat : texturePatterns()) {
+        Json spec = Json::object();
+        spec.set("pattern", Json::string(pat));
+        spec.set("size", Json::number(int64_t(64)));
+        spec.set("seed", Json::number(int64_t(7)));
+        Image a, b;
+        generateTexture(spec, a);
+        generateTexture(spec, b);
+        CHECK(a.width == 64 && a.height == 64 && a.rgba.size() == 64u * 64u * 4u && a.rgba == b.rgba);   // deterministic
+        if (pat == "gradient") continue;
+        // tileable: the left column continues the right one about as smoothly as neighbours do
+        long seam = 0, inner = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int c = 0; c < 3; ++c) {
+                seam += std::abs(int(a.rgba[(size_t(y) * 64 + 0) * 4 + size_t(c)]) - int(a.rgba[(size_t(y) * 64 + 63) * 4 + size_t(c)]));
+                inner += std::abs(int(a.rgba[(size_t(y) * 64 + 31) * 4 + size_t(c)]) - int(a.rgba[(size_t(y) * 64 + 32) * 4 + size_t(c)]));
+            }
+        if (seam > inner * 3 + 64 * 3 * 40) std::printf("  pattern %s: seam %ld vs inner %ld\n", pat.c_str(), seam, inner);
+        CHECK(seam <= inner * 3 + 64 * 3 * 40);
+    }
+    Json mask = Json::parse(R"({"pattern": "stripes", "size": 32, "scale": 4, "output": "mask"})");
+    Image m;
+    generateTexture(mask, m);
+    int white = 0;
+    for (size_t i = 0; i < m.rgba.size(); i += 4) white += m.rgba[i] > 128 ? 1 : 0;
+    CHECK(white > 32 * 32 / 4 && white < 32 * 32 * 3 / 4);
+    Json nrm = Json::parse(R"({"pattern": "brick", "size": 32, "output": "normal"})");
+    Image n;
+    generateTexture(nrm, n);
+    CHECK(n.rgba[2] > 127);   // normals point out of the surface
+    bool threw = false;
+    try { Image x; generateTexture(Json::parse(R"({"pattern": "plaid"})"), x); } catch (const std::exception& e) { threw = std::string(e.what()).find("brick") != std::string::npos; }
+    CHECK(threw);
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/Workspace.h"
+TEST(materials_library_ops_round_trip) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / ("rts_mat_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::remove_all(root);
+    fs::create_directories(root / "games");
+    fs::copy(fs::path(RTS_SOURCE_DIR) / "templates" / "showcase", root / "games" / "showcase", fs::copy_options::recursive);
+    editor::Workspace ws;
+    ws.engineDir = RTS_SOURCE_DIR;
+    std::string err;
+    CHECK(ws.openGame((root / "games" / "showcase").string(), &err));
+    auto ok = [](const Json& r) { if (r.has("error")) std::printf("  (op error) %s\n", r.getStr("error").c_str()); return !r.has("error"); };
+    Json r = ws.call("texture_generate", Json::parse(R"({"pattern": "panels", "size": 64, "seed": 4})"));
+    CHECK(ok(r) && r.getStr("path") == "textures/panels_4.png" && fs::file_size(root / "games/showcase/textures/panels_4.png") > 100);
+    CHECK(ok(ws.call("material_set", Json::parse(R"({"name": "steel", "material": {"color": [0.7,0.7,0.75], "metallic": 0.9, "texture": "textures/panels_4.png"}})"))));
+    CHECK(ok(ws.call("material_set", Json::parse(R"({"name": "rust", "material": {"base": "steel", "roughness": 0.9}})"))));
+    CHECK(!ok(ws.call("material_set", Json::parse(R"({"name": "x", "material": {"metallic": 3}})"))));
+    CHECK(!ok(ws.call("material_set", Json::parse(R"({"name": "y", "material": {"base": "nothing"}})"))));
+    Json g = ws.call("material_get", Json::parse(R"({"name": "rust"})"));
+    CHECK(g["resolved"].getStr("texture") == "textures/panels_4.png" && g["chain"].size() == 2);
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "catapult", "node": "Turret", "material": "rust"})"))));
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "footman", "target": "*", "material": {"use": "steel", "roughness": 0.2}})"))));
+    CHECK(ws.project.rulesJson["types"]["catapult"]["view"]["assign"].getStr("Turret") == "rust");
+    CHECK(ws.project.rulesJson["types"]["footman"]["view"]["materials"]["*"].getStr("use") == "steel");
+    Json l = ws.call("material_list", Json::parse(R"({"type": "catapult"})"));
+    CHECK(l["library"].has("steel") && l["types"].size() == 1 && l["types"][size_t(0)]["models"].size() == 2);
+    CHECK(!ok(ws.call("material_delete", Json::parse(R"({"name": "steel"})"))));   // used by rust and footman
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "catapult", "node": "Turret", "remove": true})"))));
+    CHECK(!ws.project.rulesJson["types"]["catapult"]["view"].has("assign"));
+    CHECK(ok(ws.call("material_delete", Json::parse(R"({"name": "rust"})"))));
+    Json saved = Json::parseFile((root / "games/showcase/materials.json").string());
+    CHECK(saved["materials"].has("steel") && !saved["materials"].has("rust"));
+    fs::remove_all(root);
+}
+#endif
+
+#include "tests_fidelity.inc"
 
 // ---------------- Planets: HPA* on cube-sphere bodies ----------------
 namespace {
