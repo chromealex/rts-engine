@@ -1121,3 +1121,50 @@ TEST(mech_turns) {
     CHECK(turnsSeen >= 8);
     CHECK(shots > 0);
 }
+
+// ---------------------------------------------------------------- TB: strategic map (Total War campaign layer)
+#include "modules/strategic/Strategic.h"
+TEST(mech_strategic) {
+    Json rules = Json::parse(std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(,
+      "types": {"spear": {"move": {"speed": 3}, "sight": 30, "radius": 0.4, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}], "cost": {"gold": 20}},
+                "archer": {"move": {"speed": 3}, "sight": 30, "radius": 0.4, "health": {"max": 60}, "weapons": [{"range": 6, "damage": 8, "cooldown": 1}], "cost": {"gold": 30}}}})");
+    Json def = Json::parse(R"({"players": [{"name": "Red"}, {"name": "Blue"}], "start": {"gold": 100}, "movesPerTurn": 1,
+      "recruit": {"spear": {}, "archer": {}},
+      "provinces": [{"id": "a", "owner": 1, "income": {"gold": 40}, "adj": ["b"]}, {"id": "b", "adj": ["c"], "income": {"gold": 10}},
+                    {"id": "c", "adj": ["d"], "income": {"gold": 10}}, {"id": "d", "owner": 2, "income": {"gold": 40}}],
+      "armies": [{"owner": 1, "at": "a", "units": {"spear": 12, "archer": 6}}, {"owner": 2, "at": "d", "units": {"spear": 6}}]})");
+    auto g = strategic::StrategicGame::create(def, rules, 5);
+    CHECK(g.current() == 1 && g.turn() == 1);
+    std::string err;
+    CHECK(!g.move(2, 2, g.findProvince("c"), &err) && err == "not your turn");
+    CHECK(!g.move(1, 1, g.findProvince("c"), &err) && err == "not adjacent");
+    CHECK(g.move(1, 1, g.findProvince("b"), &err));
+    CHECK(g.provinces()[size_t(g.findProvince("b"))].owner == 1);
+    CHECK(!g.move(1, 1, g.findProvince("c"), &err));   // one move per turn
+    CHECK(g.recruit(1, g.findProvince("a"), "spear", 5, &err) && g.treasury(1, 0) == Fixed::fromInt(0));
+    CHECK(!g.recruit(1, g.findProvince("a"), "spear", 1, &err));   // no gold left
+    CHECK(g.endTurn(1, &err) && g.current() == 2 && g.treasury(2, 0) == Fixed::fromInt(140));
+    CHECK(g.endTurn(2, &err) && g.current() == 1 && g.turn() == 2 && g.treasury(1, 0) == Fixed::fromInt(50));
+    // a save round trip keeps everything
+    auto g2 = strategic::StrategicGame::fromJson(g.toJson(), rules);
+    CHECK(g2.checksum() == g.checksum());
+    // bots play: the stronger red side wins the campaign, auto-resolved battles on the way
+    for (int k = 0; k < 40 && !g.winner(); ++k) g.botTurn(g.current());
+    CHECK(g.winner() == 1);
+    CHECK(!g.battles().empty());
+    // simulated battle on the RTS rules: 10 spears beat 4
+    Json def2 = Json::parse(R"({"players": [{"name": "Red"}, {"name": "Blue"}], "battle": {"mode": "simulate", "seconds": 120, "size": [40, 24]},
+      "provinces": [{"id": "x", "owner": 1, "adj": ["y"]}, {"id": "y", "owner": 2}],
+      "armies": [{"owner": 1, "at": "x", "units": {"spear": 10}}, {"owner": 2, "at": "y", "units": {"spear": 4}}]})");
+    auto s = strategic::StrategicGame::create(def2, rules, 9);
+    CHECK(s.move(1, 1, s.findProvince("y"), &err));
+    CHECK(s.battles().size() == 1 && s.battles()[0].simulated && s.battles()[0].winner == 1);
+    CHECK(s.provinces()[1].owner == 1 && s.winner() == 1);
+    int left = 0;
+    for (auto& a : s.armies()) if (a.owner == 1) left = a.total();
+    std::printf("  strategic: simulated battle 10 vs 4 spears, %d survive\n", left);
+    CHECK(left >= 5 && left <= 10);
+    // the same battle again gives the same result (deterministic)
+    auto s2 = strategic::StrategicGame::create(def2, rules, 9);
+    CHECK(s2.move(1, 1, s2.findProvince("y"), &err) && s2.checksum() == s.checksum());
+}
