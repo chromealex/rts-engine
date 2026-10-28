@@ -173,7 +173,11 @@ const char* kInstructions =
     "edit rules with rules_set / rules_merge -> build maps (map_new, terrain_paint, terrain_level, field_paint, region_paint, "
     "entity_place, player_set, map_set for waves/triggers/areas/victory) -> map_validate -> match_run (bots, balance check) -> "
     "map_save {addToGame:true} -> view_screenshot to look at it -> build_start for a platform. "
-    "map_ascii gives a quick text picture of a map. Everything you do shows up live in the user's editor window and can be undone there. "
+    "map_ascii gives a quick text picture of a map. 2D tile games: tileset_list, tiles_init, tile_paint. Dungeon / territory "
+    "games: terrain_paint with the game's map characters, territory_paint. Other data files (lang/*.json, audio.json, "
+    "tilesets, fx, ui/*.rml): game_file_read / game_file_write; models, textures, sounds: asset_import. "
+    "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
+    "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";
 
 } // namespace
