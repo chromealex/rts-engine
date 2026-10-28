@@ -374,6 +374,7 @@ void loadMechRules(Rules& r, const Json& j) {
     }
     loadMechStage2(r, j);
     loadMechStage3(r, j);
+    loadMechStage4(r, j);
     ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];

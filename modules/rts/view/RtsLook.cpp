@@ -56,7 +56,71 @@ const char* const kAuto[RtsView::kAnimCount][6] = {
     {"hit", "hurt", "damage", nullptr}, {"working", "produce", "work", nullptr},
     {"construct", nullptr}, {"cast", "spell", nullptr},
 };
+// case-insensitive glob with * and ? (node names in "assign")
+bool globMatchCi(const std::string& pat, const std::string& text) {
+    size_t p = 0, t = 0, star = std::string::npos, mark = 0;
+    auto eq = [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); };
+    while (t < text.size()) {
+        if (p < pat.size() && (pat[p] == '?' || eq(pat[p], text[t]))) { ++p; ++t; }
+        else if (p < pat.size() && pat[p] == '*') { star = p++; mark = t; }
+        else if (star != std::string::npos) { p = star + 1; t = ++mark; }
+        else return false;
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
 } // namespace
+
+Json RtsView::resolveMaterial(const UnitType& t, const Json& ref, int depth) {
+    if (depth > 8) { warn(t, "materials: reference chain too deep (a loop of \"base\" / \"use\"?)"); return Json::object(); }
+    auto overlay = [](Json base, const Json& top, const char* skip) {
+        for (const auto& [k, val] : top.members()) if (k != skip) base.set(k, val);
+        return base;
+    };
+    if (ref.isString()) {
+        const Json& e = materialLib_[ref.str()];
+        if (!e.isObject()) { warn(t, "materials: unknown library material '" + ref.str() + "' (materials.json)"); return Json::object(); }
+        return e.has("base") ? overlay(resolveMaterial(t, e["base"], depth + 1), e, "base") : e;
+    }
+    if (!ref.isObject()) return Json::object();
+    if (ref.has("use")) return overlay(resolveMaterial(t, ref["use"], depth + 1), ref, "use");
+    return ref.has("base") ? overlay(resolveMaterial(t, ref["base"], depth + 1), ref, "base") : ref;   // an unsaved library entry
+}
+
+void RtsView::applyMaterial(gfx::Device& dev, const UnitType& t, Model& m, Material& mt, const Json& ref) {
+    const Json o = resolveMaterial(t, ref);
+    if (o.getBool("replace")) { const std::string keep = mt.name; mt = Material{}; mt.name = keep; }
+    if (const Json& col = o["color"]; col.size() >= 3) mt.baseColor = {num(col[0], 1), num(col[1], 1), num(col[2], 1), col.size() > 3 ? num(col[3], 1) : mt.baseColor.w};
+    mt.metallic = num(o["metallic"], mt.metallic);
+    mt.roughness = num(o["roughness"], mt.roughness);
+    if (o.has("emissive")) mt.emissive = vec3(o["emissive"], mt.emissive);
+    mt.emissiveStrength = num(o["emissiveStrength"], mt.emissiveStrength);
+    if (o.has("alpha")) {
+        std::string a = o.getStr("alpha");
+        mt.alpha = a == "mask" ? AlphaMode::Mask : a == "blend" ? AlphaMode::Blend : AlphaMode::Opaque;
+        if (a != "mask" && a != "blend" && a != "opaque") warn(t, "alpha must be opaque, mask or blend");
+    }
+    mt.alphaCutoff = num(o["cutoff"], mt.alphaCutoff);
+    mt.doubleSided = o.getBool("doubleSided", mt.doubleSided);
+    if (o.has("unlit")) mt.shading = o.getBool("unlit") ? ShadingModel::Unlit : ShadingModel::Pbr;
+    mt.castShadow = o.getBool("castShadow", mt.castShadow);
+    mt.receiveShadow = o.getBool("receiveShadow", mt.receiveShadow);
+    mt.vertexColors = o.getBool("vertexColors", mt.vertexColors);
+    if (o.has("team")) {
+        std::string tm = o.getStr("team");
+        mt.team = tm == "tint" ? TeamMode::Tint : tm == "mask" ? TeamMode::Mask : tm == "alpha" ? TeamMode::BaseAlpha
+                : tm == "vertex" ? TeamMode::VertexAlpha : TeamMode::None;
+        if (tm != "tint" && tm != "mask" && tm != "alpha" && tm != "vertex" && tm != "none") warn(t, "team must be tint, mask, alpha, vertex or none");
+    }
+    mt.teamStrength = num(o["teamStrength"], mt.teamStrength);
+    if (o.has("teamMask")) { mt.teamTex = loadTexture(dev, t, m, o.getStr("teamMask")); if (mt.team == TeamMode::None || mt.team == TeamMode::Tint) mt.team = TeamMode::Mask; }
+    if (o.has("texture")) mt.baseTex = loadTexture(dev, t, m, o.getStr("texture"));
+    if (o.has("normalMap")) {
+        mt.normalTex = loadTexture(dev, t, m, o.getStr("normalMap")); // tangents: from the file or generated for its own normal maps
+    }
+    if (o.has("emissiveMap")) { mt.emissiveTex = loadTexture(dev, t, m, o.getStr("emissiveMap")); if (!o.has("emissive")) mt.emissive = {1, 1, 1}; }
+    if (const Json& uv = o["uvScale"]; uv.size() == 2) mt.uvScale = {num(uv[0], 1), num(uv[1], 1)};
+}
 
 const char* RtsView::animName(int k) {
     static const char* names[kAnimCount] = {"idle", "move", "attack", "gather", "build", "carry", "die", "spawn", "hit", "work", "construct", "cast"};
@@ -360,46 +424,41 @@ void RtsView::configureChoice(gfx::Device& dev, const UnitType& t, const Json& v
     for (const auto& n : team.items())
         if (m.findMaterial(n.str()) < 0) warn(t, "team: material '" + n.str() + "' not found in " + m.path);
 
-    // ---- material overrides: "*" first, then by name
-    auto apply = [&](Material& mt, const Json& o) {
-        if (const Json& col = o["color"]; col.size() >= 3) mt.baseColor = {num(col[0], 1), num(col[1], 1), num(col[2], 1), col.size() > 3 ? num(col[3], 1) : mt.baseColor.w};
-        mt.metallic = num(o["metallic"], mt.metallic);
-        mt.roughness = num(o["roughness"], mt.roughness);
-        if (o.has("emissive")) mt.emissive = vec3(o["emissive"], mt.emissive);
-        mt.emissiveStrength = num(o["emissiveStrength"], mt.emissiveStrength);
-        if (o.has("alpha")) {
-            std::string a = o.getStr("alpha");
-            mt.alpha = a == "mask" ? AlphaMode::Mask : a == "blend" ? AlphaMode::Blend : AlphaMode::Opaque;
-            if (a != "mask" && a != "blend" && a != "opaque") warn(t, "alpha must be opaque, mask or blend");
-        }
-        mt.alphaCutoff = num(o["cutoff"], mt.alphaCutoff);
-        mt.doubleSided = o.getBool("doubleSided", mt.doubleSided);
-        if (o.has("unlit")) mt.shading = o.getBool("unlit") ? ShadingModel::Unlit : ShadingModel::Pbr;
-        mt.castShadow = o.getBool("castShadow", mt.castShadow);
-        mt.receiveShadow = o.getBool("receiveShadow", mt.receiveShadow);
-        mt.vertexColors = o.getBool("vertexColors", mt.vertexColors);
-        if (o.has("team")) {
-            std::string tm = o.getStr("team");
-            mt.team = tm == "tint" ? TeamMode::Tint : tm == "mask" ? TeamMode::Mask : tm == "alpha" ? TeamMode::BaseAlpha
-                    : tm == "vertex" ? TeamMode::VertexAlpha : TeamMode::None;
-            if (tm != "tint" && tm != "mask" && tm != "alpha" && tm != "vertex" && tm != "none") warn(t, "team must be tint, mask, alpha, vertex or none");
-        }
-        mt.teamStrength = num(o["teamStrength"], mt.teamStrength);
-        if (o.has("teamMask")) { mt.teamTex = loadTexture(dev, t, m, o.getStr("teamMask")); if (mt.team == TeamMode::None || mt.team == TeamMode::Tint) mt.team = TeamMode::Mask; }
-        if (o.has("texture")) mt.baseTex = loadTexture(dev, t, m, o.getStr("texture"));
-        if (o.has("normalMap")) {
-            mt.normalTex = loadTexture(dev, t, m, o.getStr("normalMap")); // tangents: from the file or generated for its own normal maps
-        }
-        if (o.has("emissiveMap")) { mt.emissiveTex = loadTexture(dev, t, m, o.getStr("emissiveMap")); if (!o.has("emissive")) mt.emissive = {1, 1, 1}; }
-        if (const Json& uv = o["uvScale"]; uv.size() == 2) mt.uvScale = {num(uv[0], 1), num(uv[1], 1)};
-    };
+    // ---- material overrides: "*" first, then by name; values are override objects or library
+    // references ("steel", {"use": "steel", "roughness": 0.2})
+    auto apply = [&](Material& mt, const Json& ref) { applyMaterial(dev, t, m, mt, ref); };
     const Json& mats = v["materials"];
-    if (const Json& all = mats["*"]; all.isObject()) for (auto& mt : c.materials) apply(mt, all);
+    if (const Json& all = mats["*"]; all.isObject() || all.isString()) for (auto& mt : c.materials) apply(mt, all);
     for (const auto& [name, o] : mats.members()) {
         if (name == "*") continue;
         int i = m.findMaterial(name);
         if (i < 0) { warn(t, "materials: '" + name + "' not found in " + m.path); continue; }
         apply(c.materials[size_t(i)], o);
+    }
+    // ---- "assign": a fresh material for the meshes of matching nodes ("Turret": "steel", "Wheel*": {...})
+    c.nodeMaterial.clear();
+    for (const auto& [pattern, ref] : v["assign"].members()) {
+        Material nm;
+        nm.name = ref.isString() ? ref.str() : pattern;
+        Json fresh = resolveMaterial(t, ref);
+        apply(nm, fresh);
+        const int idx = int(c.materials.size());
+        bool any = false;
+        // a matching node and everything under it ("Turret" = the turret with its barrel); later
+        // entries override earlier ones
+        std::vector<int> stack;
+        for (size_t n = 0; n < m.nodes.size(); ++n) if (globMatchCi(pattern, m.nodes[n].name)) stack.push_back(int(n));
+        while (!stack.empty()) {
+            const int n = stack.back();
+            stack.pop_back();
+            for (int ch : m.nodes[size_t(n)].children) stack.push_back(ch);
+            if (m.nodes[size_t(n)].mesh < 0) continue;
+            if (c.nodeMaterial.empty()) c.nodeMaterial.assign(m.nodes.size(), -1);
+            c.nodeMaterial[size_t(n)] = idx;
+            any = true;
+        }
+        if (any) c.materials.push_back(nm);
+        else warn(t, "assign: no node (with meshes under it) matches '" + pattern + "' in " + m.path);
     }
     if (!v.getStr("variant").empty()) {   // "" = default materials (a model entry can clear the view's variant)
         c.variant = m.findVariant(v.getStr("variant"));

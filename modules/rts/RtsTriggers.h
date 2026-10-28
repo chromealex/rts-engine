@@ -41,15 +41,17 @@ struct TrigFilter {                // unit filter
 };
 
 struct TrigCondition {
-    enum Kind : uint8_t { Count, Resource, Variable, Researched, Random, Time, Alive, RegionsOwned } kind = Count;
+    enum Kind : uint8_t { Count, Resource, Variable, Researched, Random, Time, Alive, RegionsOwned,
+                          Script /* {"type": "script", "fn": ...}: a Lua function's result (RtsScript.h) */ } kind = Count;
     TrigPlayer player;
     TrigFilter filter;
     int area = -1;
     int16_t index = -1;            // resource / tech
-    std::string name;              // variable
+    std::string name;              // variable / script function
     TrigCmp cmp = TrigCmp::Ge;
     Fixed value{};
     bool negate = false;
+    Json args;                     // script: the condition's JSON (ctx.args)
 };
 
 struct TrigAction {
@@ -62,6 +64,7 @@ struct TrigAction {
         Dialog,            // "text", "speaker", "portrait", "voice", "duration"
         Camera,            // "at" / "area", "zoom", "duration", "lock"
         EndMission,        // "result": victory | defeat, "next": mission id
+        Script,            // {"type": "script", "fn": "name", ...}: calls a Lua function of the game's scripts
     } kind = Message;
     TrigPlayer player;
     TrigFilter filter;
@@ -76,9 +79,10 @@ struct TrigAction {
     Vec3 at{};
     bool hasAt = false;
     bool attackMove = false;
-    std::string text, name;        // message / variable / trigger id
+    std::string text, name;        // message / variable / trigger id / script function
     std::string op, speaker, portrait, voice;   // campaigns (objective op, dialog speaker...)
     bool flag = false;             // objective: primary; camera: lock
+    Json args;                     // script: the action's JSON (ctx.args)
 };
 
 struct TriggerDef {

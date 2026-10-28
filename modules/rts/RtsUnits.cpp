@@ -38,7 +38,62 @@ Entity RtsModule::findNearestResource(Simulation& sim, uint8_t owner, Vec3 p, in
 // ================================================================= movement helpers
 
 void RtsModule::stopMoving(Simulation& sim, Entity e) {
-    if (auto* m = sim.world().tryGet<Mobile>(e)) { m->moving = false; m->path.clear(); m->pathPos = 0; m->stuck = Fixed{}; }
+    if (auto* m = sim.world().tryGet<Mobile>(e)) { m->moving = false; m->path.clear(); m->pathPos = 0; m->stuck = Fixed{}; m->flow = false; }
+}
+
+void RtsModule::moveToFlow(Simulation& sim, Entity e, Vec3 goal, Fixed radius) {
+    World& w = sim.world();
+    auto* m = w.tryGet<Mobile>(e);
+    if (!m) return;
+    const UnitType& t = rules_.types[w.get<Unit>(e).type];
+    MapGrid& g = state(sim).grid;
+    if (t.layer & kLayerAir) { moveTo(sim, e, goal, radius); return; }   // fliers go straight anyway
+    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{g, g.clockNs ? g.clockNs() : 0};
+    const Fixed cs = g.surf ? g.surf->cellSize(g.surf->bodyAt(goal)) : kOne;
+    const int rc = std::clamp(int((radius / cs).floorInt()), 0, 32);
+    const int fi = g.flowAcquire(goal, rc, t.pathLayer, MapGrid::clearanceFor(t.radius), sim.tick());
+    if (fi < 0) { moveTo(sim, e, goal, radius); return; }
+    m->goal = goal; m->goalRadius = radius; m->stuck = Fixed{}; m->pathPos = 0;
+    m->flow = true; m->flowRadius = uint8_t(rc); m->flowStuck = 0;
+    bool arrived = false;
+    if (!g.flowSteer(fi, w.get<Transform>(e).pos, goal, m->path, arrived)) { m->flow = false; moveTo(sim, e, goal, radius); return; }
+    if (arrived || m->path.empty()) m->path = {goal};
+    else m->path.push_back(goal);   // [next waypoint, goal]: the goal keeps the unit moving between refreshes
+    m->moving = true;
+}
+
+// Units following flow fields: new waypoints when the last one was reached, and every 10 ticks (staggered by
+// entity index). Field references (LRU) are counted here. Deterministic: ECS order, fields are pure functions.
+void RtsModule::sysFlowFields(Simulation& sim) {
+    World& w = sim.world();
+    MapGrid& g = state(sim).grid;
+    if (!rules_.movement.flow.enabled()) return;
+    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{g, g.clockNs ? g.clockNs() : 0};
+    g.flowResetRefs();
+    const uint32_t tick = sim.tick();
+    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+        if (!m.flow || !m.moving || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
+        const UnitType& t = rules_.types[u.type];
+        const int fi = g.flowFind(g.cellOf(m.goal), m.flowRadius, t.pathLayer, g.flowHierFor(g.cellOf(m.goal)) ? 0 : MapGrid::clearanceFor(t.radius));
+        if (fi < 0) { m.flow = false; return; }   // evicted: plain path from here
+        g.flowRef(fi, tick);
+        if (m.path.size() >= 2 && m.pathPos == 0 && (tick + e.index) % 10 != 0) return;
+        if ((tick + e.index) % 200 == 0 && m.flowStuck) --m.flowStuck;   // forgive old stuck events slowly
+        bool arrived = false;
+        std::vector<Vec3> wp;
+        if (!g.flowSteer(fi, tr.pos, m.goal, wp, arrived)) { // off the field (pushed into a pocket): A* from here
+            m.flow = false;
+            g.findPath(tr.pos, m.goal, t.pathLayer, m.path, 40000, MapGrid::clearanceFor(t.radius));
+            m.pathPos = 0;
+            m.moving = !m.path.empty();
+            return;
+        }
+        m.path = wp;
+        if (arrived || wp.empty()) m.path = {m.goal};
+        else m.path.push_back(m.goal);
+        m.pathPos = 0;
+    });
+    g.flowHousekeeping();
 }
 
 void RtsModule::moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius) { moveToVia(sim, e, goal, radius, false); }
@@ -52,6 +107,7 @@ void RtsModule::moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bo
     m->goalRadius = radius;
     m->stuck = Fixed{};
     m->pathPos = 0;
+    m->flow = false;
     state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.pathLayer, m->path, 40000, MapGrid::clearanceFor(t.radius), aroundAllies);
     m->moving = !m->path.empty();
 }
@@ -347,11 +403,12 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         if (!m->moving || dist2D(m->goal, tp) > kOne || (sim.tick() + e.index) % 20 == 0) moveTo(sim, e, tp, range);
         return true;
     };
-    auto spread = [&](int movers) { return Fixed::fromRatio(3, 10) + fxSqrt(Fixed::fromInt(std::max(1, movers))) * Fixed::fromRatio(4, 10); };
+    const Fixed spreadK = o.flow ? rules_.movement.flow.spread : Fixed::fromRatio(4, 10);
+    auto spread = [&](int movers) { return Fixed::fromRatio(3, 10) + fxSqrt(Fixed::fromInt(std::max(1, movers))) * spreadK; };
 
     switch (o.type) {
     case OrderType::Move:
-        if (o.state == 0) { moveTo(sim, e, o.point, spread(o.param)); o.state = 1; return !m; }
+        if (o.state == 0) { if (o.flow) moveToFlow(sim, e, o.point, spread(o.param)); else moveTo(sim, e, o.point, spread(o.param)); o.state = 1; return !m; }
         return !m || !m->moving;
     case OrderType::Attack:
         if (!combat) return true;
@@ -365,7 +422,7 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (chase(combat->target)) { o.state = 0; return false; }
             combat->target = kNullEntity;
         }
-        if (o.state == 0) { moveTo(sim, e, o.point, spread(o.param)); o.state = 1; return false; }
+        if (o.state == 0) { if (o.flow) moveToFlow(sim, e, o.point, spread(o.param)); else moveTo(sim, e, o.point, spread(o.param)); o.state = 1; return false; }
         if (m && !m->moving) {
             if (o.type == OrderType::AttackMove) return true;
             std::swap(o.point, o.point2);
@@ -599,6 +656,7 @@ void RtsModule::sysMovement(Simulation& sim) {
 
     gs.hash.reset(g.w, g.h, 4);
     w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitOffMap)) gs.hash.insert(e, t.pos); });
+    sysFlowFields(sim);
 
     if (gs.surface) { moveSphere(sim); return; }   // planets (RtsPlanets.cpp)
 
@@ -637,6 +695,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         if (m.pathPos >= m.path.size()) { m.moving = false; m.path.clear(); }
         if (m.stuck > kOne) { // blocked by a new structure: re-path
             m.stuck = Fixed{};
+            m.flow = false;
             g.findPath(tr.pos, m.goal, t.pathLayer, m.path);
             m.pathPos = 0;
         }
@@ -666,7 +725,8 @@ void RtsModule::sysMovement(Simulation& sim) {
         anchored[e.index] = anchor;
     });
     const Fixed deadZone = Fixed::fromRatio(3, 100);
-    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+    if (!genericSeparation) mechSeparation(sim, weight, anchored, deadZone, pushes.size(), [&](Entity e, Vec3 d) { pushes.push_back({e, d}); });   // agent-mech BA: same pushes as the loop below, faster in crowds
+    else w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (u.flags & kUnitOffMap) return;
         if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];

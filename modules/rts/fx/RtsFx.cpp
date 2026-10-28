@@ -165,9 +165,16 @@ const RtsFx::Binding& RtsFx::trailFor(int type) const {
 bool RtsFx::playAt(const Binding& b, const Vec3& pos, int type, float3 dir, int owner) {
     if (!b.valid() || !ps_) return false;
     float3 p = toF(pos);
-    float ground = height_ ? height_(p.x, p.z) : 0.0f;
-    if (type >= 0 && size_t(type) < rules_->types.size() && (rules_->types[size_t(type)].layer & kLayerAir)) ground += kAirHeight;
-    p.y += ground + b.height;
+    const bool air = type >= 0 && size_t(type) < rules_->types.size() && (rules_->types[size_t(type)].layer & kLayerAir);
+    if (place_) { // curved worlds: lift along the local up, directions given with +Y up turn with it
+        float3 up;
+        if (!place_(p, b.height + (air ? kAirHeight : 0.0f), p, up)) { ++rejected_; return false; }
+        if (dir.y > 0.999f) dir = up;
+    } else {
+        float ground = height_ ? height_(p.x, p.z) : 0.0f;
+        if (air) ground += kAirHeight;
+        p.y += ground + b.height;
+    }
     float4 tint{1, 1, 1, 1};
     if (b.teamColor && owner > 0 && playerColor_) tint = playerColor_(owner);
     if (!ps_->play(b.effect, p, dir, b.scale, tint).valid()) return false;
@@ -277,8 +284,16 @@ void RtsFx::update(Simulation& sim, const std::vector<SceneObject>* scene) {
     if (!scene) return;
 
     World& w = sim.world();
-    for (const SceneObject& o : *scene) {
-        if (!o.entity.valid() || !o.visible) continue;
+    for (const SceneObject& so : *scene) {
+        if (!so.entity.valid() || !so.visible) continue;
+        SceneObject o = so;
+        float3 up{0, 1, 0};
+        if (place_) { // planets: body-local scene positions -> particle space (lift 0: the object's own height)
+            if (o.body < 0) continue;
+            float3 at;
+            if (!place_(anchorF(o.body) + o.pos, -1e9f, at, up)) continue;
+            o.pos = at;
+        }
         const uint64_t key = o.entity.packed();
         if (o.isProjectile) {   // trail follows the interpolated projectile
             auto it = trails_.find(key);
@@ -287,7 +302,7 @@ void RtsFx::update(Simulation& sim, const std::vector<SceneObject>* scene) {
                 auto* su = pr && w.alive(pr->source) ? w.tryGet<Unit>(pr->source) : nullptr;
                 const Binding& b = trailFor(su ? int(su->type) : -1);
                 if (!b.valid()) { trails_[key] = {{}, frame_}; continue; }   // remembered: no lookup every frame
-                trails_[key] = {ps_->play(b.effect, o.pos, {0, 1, 0}, b.scale), frame_};
+                trails_[key] = {ps_->play(b.effect, o.pos, up, b.scale), frame_};
             } else {
                 it->second.frame = frame_;
                 ps_->move(it->second.h, o.pos);
@@ -299,9 +314,8 @@ void RtsFx::update(Simulation& sim, const std::vector<SceneObject>* scene) {
         if (!b.valid()) continue;
         auto it = damaged_.find(key);
         if (o.hp < b.below && o.hp > 0) {
-            float3 p = o.pos;
-            p.y += b.height;
-            if (it == damaged_.end() || !ps_->playing(it->second.h)) damaged_[key] = {ps_->play(b.effect, p, {0, 1, 0}, b.scale), frame_};
+            float3 p = o.pos + up * b.height;
+            if (it == damaged_.end() || !ps_->playing(it->second.h)) damaged_[key] = {ps_->play(b.effect, p, up, b.scale), frame_};
             else { it->second.frame = frame_; ps_->move(it->second.h, p); }
         } else if (it != damaged_.end()) {
             ps_->stop(it->second.h);

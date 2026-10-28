@@ -31,7 +31,12 @@ public:
         }
         ImGui::TextDisabled("%s%s", cur.getStr("genre").c_str(), cur.getStr("source") == "game" ? " · из rules.json" : "");
         const bool planet = cur["params"].getStr("shape") == "planet";
-        if (planet) ImGui::TextWrapped("Пресет планеты: укажите его в world.bodies[].generate (генерация при старте матча).");
+        if (planet) {
+            ImGui::TextWrapped("Пресет планеты: строит всю карту-мир (тела из блока world открытой карты или солнце + планета + луна).");
+            static const char* layouts[] = {"shared", "separate"};
+            ImGui::Combo("Расстановка", &layout_, layouts, 2);
+            ui::help("shared: все игроки на одной планете (поворотная симметрия вокруг полюсов); separate: у каждого своя одинаковая планета.");
+        }
         ImGui::InputScalar("Seed", ImGuiDataType_U64, &seed_);
         ImGui::SameLine();
         if (ImGui::SmallButton("+1")) ++seed_;
@@ -48,11 +53,9 @@ public:
         if (params_.empty()) params_ = cur["params"].dump(-1);
         ui::inputMultiline("##params", params_, ImVec2(-1, 90));
 
-        if (planet) ImGui::BeginDisabled();
         if (ImGui::Button("Сгенерировать")) run(ed, "bake");
         ImGui::SameLine();
         if (ImGui::Button("Ещё (seed+1)")) { ++seed_; run(ed, "bake"); }
-        if (planet) ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("При старте матча")) run(ed, "match");
         ui::help("Записывает в карту блок generate с seed \"match\": каждый матч (и мультиплеер, и повтор) генерирует свою карту детерминированно.");
@@ -78,6 +81,11 @@ private:
         p.set("keepSize", Json::fromBool(keepSize_));
         try { if (!params_.empty()) p.set("params", Json::parse(params_)); }
         catch (const std::exception& e) { result_ = std::string("Ошибка в параметрах: ") + e.what(); return; }
+        if (presets[size_t(preset_)]["params"].getStr("shape") == "planet") {
+            Json pp = p["params"].isObject() ? p["params"] : Json::object();
+            pp.set("layout", Json::string(layout_ ? "separate" : "shared"));
+            p.set("params", pp);
+        }
         Json r = ed.ws().call("map_generate", p);
         result_ = r.has("error") ? "Ошибка: " + r.getStr("error") : r.getStr("summary");
         detail_.clear();
@@ -88,7 +96,7 @@ private:
         }
         ed.status = result_;
     }
-    int preset_ = 0, players_ = 2, sym_ = 0;
+    int preset_ = 0, players_ = 2, sym_ = 0, layout_ = 0;
     uint64_t seed_ = 1;
     bool useTemplate_ = true, keepSize_ = false;
     std::string params_, result_, detail_;

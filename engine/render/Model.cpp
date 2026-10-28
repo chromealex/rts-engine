@@ -308,8 +308,28 @@ void uploadImage(gfx::Device& dev, Image& img) {
 }
 } // namespace
 
+namespace {
+// Normal maps can be added later by material overrides / the material library (docs/models.md), to
+// any model: primitives that came without tangents but have UVs get them now, while the CPU copy
+// still exists. Tangents a loader wrote are kept.
+void ensureTangents(Model& m) {
+    for (const auto& mesh : m.meshes)
+        for (const auto& p : mesh.primitives) {
+            if (p.indexCount < 3) continue;
+            bool defaults = true, uvs = false;
+            for (uint32_t i = 0; i < p.indexCount && (defaults || !uvs); ++i) {
+                const ModelVertex& v = m.vertices[m.indices[p.firstIndex + i]];
+                defaults = defaults && v.tangent.x == 1 && v.tangent.y == 0 && v.tangent.z == 0 && v.tangent.w == 1;
+                uvs = uvs || v.uv.x != 0 || v.uv.y != 0;
+            }
+            if (defaults && uvs) generateTangents(m.vertices, m.indices, p.firstIndex, p.indexCount);
+        }
+}
+} // namespace
+
 bool uploadModel(gfx::Device& dev, Model& m, bool keepCpu) {
     if (!m.vertices.empty() && !m.vb.valid()) {
+        ensureTangents(m);
         gfx::BufferDesc vb; vb.type = gfx::BufferType::Vertex; vb.size = m.vertices.size() * sizeof(ModelVertex); vb.data = m.vertices.data(); vb.label = m.path.c_str();
         m.vb = dev.createBuffer(vb);
         gfx::BufferDesc ib; ib.type = gfx::BufferType::Index; ib.size = m.indices.size() * sizeof(uint32_t); ib.data = m.indices.data();

@@ -552,6 +552,9 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
         }
         break;
     }
+    case EffectKind::Script:   // deferred to the scripts phase of this tick (never runs inside a system's loop)
+        if (script_) script_->queueEffect(e, ctx, targets());
+        break;
     case EffectKind::Area:
     case EffectKind::Reveal: {
         if (list < 0) break;
@@ -650,6 +653,9 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
         break;
     case EffectKind::Resource: case EffectKind::PlayerStatus: case EffectKind::EqualizeResource: case EffectKind::StealSkill: case EffectKind::Cooldown:
         effectPlayer(sim, e, ctx);
+        break;
+    case EffectKind::AddCharges: case EffectKind::TeleportGroup:
+        effectFidelity(sim, e, ctx);   // RtsFidelity.cpp
         break;
     }
     if (list >= 0 && (e.kind == EffectKind::Damage || e.kind == EffectKind::Heal || e.kind == EffectKind::Status))

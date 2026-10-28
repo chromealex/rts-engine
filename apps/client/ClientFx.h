@@ -15,6 +15,8 @@ public:
     void shutdown();
     void startMatch(Simulation& sim, uint8_t viewer, const game::RtsView& view, const game::MapGrid& grid);
     void stopMatch();
+    // Planet maps: particles in the camera body's local space (RtsView::planetFxSpace); call before update().
+    void setPlanetView(const game::RtsView* view);
     // After Renderer3D::beginScene (needs its viewProj); dt = 0 while paused.
     void update(Simulation& sim, const game::RtsScene& scene, const render::RTSCamera& cam, const render::mat4& viewProj,
                 int fbW, int fbH, float dt);
@@ -33,6 +35,9 @@ private:
     render::TextureCache textures_;   // sprite textures of effects: the same loader (and atlas) as sprites
     bool attached_ = false;
     std::vector<fx::FxPointLight> lightBuf_;
+    const game::RtsView* planet_ = nullptr;   // planet maps: the view placing effects (null on flat maps)
+    int planetBody_ = -1;
+    render::mat4 space_;
 };
 
 } // namespace rts::client

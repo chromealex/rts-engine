@@ -176,7 +176,10 @@ void GameClient::startNetMatch() {
         std::string terr; // 2D tile maps: same as offline, or the match desyncs from the server's replay
         if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_ = std::make_unique<Simulation>(net_->simConfig(), std::make_unique<RtsModule>());
-        sim_->setup(Json::parse(rulesText), map);
+        Json rules = Json::parse(rulesText);
+        if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
+        sim_->setup(rules, map);
+        configurePostFx(map);
     } catch (const std::exception& e) {
         netError_ = e.what();
         sim_.reset();
@@ -193,10 +196,11 @@ void GameClient::startNetMatch() {
         if (sl != human_) bots_.emplace_back(sl, m.seed, AIConfig{});
     mapIndex_ = 0;
     for (size_t i = 0; i < maps_.size(); ++i) if (maps_[i].file == m.map.file) mapIndex_ = i;
-    if (const Json* gm = mod().generatedMap()) // generated maps: material layer of the map the sim was built from
-        view_.setTerrainMaterial((*gm)["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
-    if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, mod().generatedMap() ? *mod().generatedMap() : Json());   // planets
-    else view_.setWorld(Json());
+    try { view_.setTerrainDetail(Json::parse(mapText)); } catch (...) {}
+    const Json* gm = mod().generatedMap();   // generated maps: world / material of the map the sim was built from
+    if (gm) view_.setTerrainMaterial((*gm)["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
+    if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, gm ? *gm : Json());   // planets
+    else view_.setWorld(gm && (*gm)["world"].isObject() ? *gm : Json());
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();

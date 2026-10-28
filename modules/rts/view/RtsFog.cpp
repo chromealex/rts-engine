@@ -279,7 +279,10 @@ bool FogOfWar::update(const std::vector<uint8_t>& vision, int w, int h, double t
     }
     if (!changed) return false;
     field_ = cur_;
-    if (look_.style == FogLook::Smooth || look_.style == FogLook::Pattern) boxBlur(field_, tmp_, w_, h_, look_.softness);
+    if (look_.style == FogLook::Smooth || look_.style == FogLook::Pattern) {
+        if (blur_) blur_(field_, look_.softness);
+        else boxBlur(field_, tmp_, w_, h_, look_.softness);
+    }
     dirty_ = false;
     upload();
     return true;

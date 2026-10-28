@@ -80,6 +80,42 @@ struct SphereHpaGraph {
     std::vector<std::vector<uint32_t>> dist;                      // per cluster: k*k intra costs
 };
 
+// Flow field for one goal area (RtsFlowField.cpp): integration values (integer cost to the goal area, the A* step
+// costs 10/14 and its corner-cutting rules, slope classes through the path layer) and lazily cached directions.
+// Small maps: one backward Dijkstra over the whole grid (with the A* clearance penalty). HPA* maps / bodies:
+// hierarchical - a resumable reverse Dijkstra over the HPA* entrances gives each portal its cost to the goal (D);
+// a cluster's values come from a Dijkstra inside the cluster seeded with its portals' D, computed only for the
+// clusters units actually stand in or look into. Values are a pure function of the grid (blocks are revalidated
+// against cluster change stamps and their seeds), so caching never changes results and nothing is hashed.
+struct FlowField {
+    static constexpr uint32_t kInf = 0xFFFFFFFFu;
+    // key
+    int32_t goal = -1;            // goal cell
+    uint8_t radius = 0, layer = 0, clear = 0;   // goal area radius (cells), path layer, clearance class (0 when hier)
+    bool hier = false;
+    uint32_t stamp = 0;           // MapGrid flow stamp the field was validated against
+    uint32_t lastUse = 0;
+    int refs = 0;                 // units following it this tick (LRU keeps referenced fields)
+    std::vector<int32_t> seeds;   // goal area cells (value 0), sorted
+    // full field
+    bool built = false;
+    std::vector<uint32_t> value;
+    std::vector<int8_t> dir;      // -2 not computed, -1 none, else neighbour k
+    // hierarchical: abstract node ids = per-cluster base + entrance index
+    bool dInit = false;
+    std::vector<int32_t> base;
+    std::vector<uint32_t> D;
+    std::vector<uint8_t> settled;
+    std::vector<std::pair<uint32_t, int32_t>> heap;   // min-heap (std::greater) of (D, id)
+    std::vector<int32_t> blockOf;                     // per cluster: block index, -1 none
+    std::vector<int32_t> blockCluster;
+    std::vector<std::vector<uint32_t>> blockVal;
+    std::vector<std::vector<int8_t>> blockDir;
+    std::vector<uint64_t> blockSeedHash;
+    std::vector<uint32_t> blockStamp, blockBuilt;     // validated at field stamp / built at grid stamp
+    size_t bytes() const;
+};
+
 struct MapGrid {
     int w = 0, h = 0;
     // Planet maps (world block): the cube-sphere faces of every body stacked as rows (RtsSurface.h). Null on flat
@@ -121,6 +157,7 @@ struct MapGrid {
     std::vector<uint8_t> digMark;   // bit (slot-1): marked for digging by that player
     std::vector<uint8_t> territory; // owner slot of the cell (0: nobody) - DK floor, territory-war front
     std::vector<int16_t> room;      // painted room type on the cell, -1 none (owner = territory)
+    std::vector<uint8_t> foundation; // owner slot of the concrete on the cell (0: bare); empty without rules "foundation"
     // pathing helpers (not part of the hashed state: derived from it)
     std::vector<uint8_t> clearance; // ground cells: Chebyshev distance to the nearest non-walkable cell (capped)
     bool clearanceDirty = true;
@@ -142,7 +179,7 @@ struct MapGrid {
     Vec3 cellCenter(int x, int y) const { if (surf) return surf->cellCenter(index(x, y)); return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
     void block(int x0, int y0, int fw, int fh, int delta);
     void cellChanged(int x, int y);  // terrain of a cell changed at runtime (digging): refresh derived pathing data
-    void invalidatePathing() { clearanceDirty = true; for (auto& G : hpa_) { std::fill(G.dirty.begin(), G.dirty.end(), uint8_t(1)); G.anyDirty = true; } }   // after loading a save
+    void invalidatePathing() { ++pathVersion_; clearanceDirty = true; for (auto& G : hpa_) { std::fill(G.dirty.begin(), G.dirty.end(), uint8_t(1)); G.anyDirty = true; } }   // after loading a save
     bool areaBuildable(int x0, int y0, int fw, int fh) const;  // ground, no-build-free, unblocked, flat
     // clearance: cells needed around the path for a body of that size (0 = any walkable cell); narrower
     // cells cost more instead of being forbidden. soft: also route around cells marked in `soft`.
@@ -154,6 +191,32 @@ struct MapGrid {
     int hpaMinCells = 256 * 256;
     bool bigMap() const { return !surf && w * h >= hpaMinCells; }
     int hpaStats[2] = {};  // queries answered by HPA*, fallbacks to plain A* (diagnostics only)
+    // ---- flow fields (RtsFlowField.cpp). Index results are valid until the next flowHousekeeping().
+    int flowFind(int goalCell, int radius, uint8_t layer, int clear) const;   // clear is ignored for hierarchical fields
+    bool flowHierFor(int cell) const;                   // fields toward this goal cell are hierarchical (HPA* map / body)
+    // Finds or creates the field for a goal area (cells within `radius` cells of the goal cell, passable for the
+    // layer; grows up to 6 rings when none is). -1: no passable goal cell.
+    int flowAcquire(Vec3 goal, int radius, uint8_t layer, int clear, uint32_t tick);
+    // Waypoints for a unit at `from` following field fi toward `goalPos` (string-pulled descent, or the goal itself
+    // when the straight line is walkable). false: the unit's cell can't reach the goal area. arrived: in the area.
+    bool flowSteer(int fi, Vec3 from, Vec3 goalPos, std::vector<Vec3>& out, bool& arrived);
+    uint32_t flowValue(int fi, int cell);               // integration value of a cell (kInf: unreachable)
+    int flowDir(int fi, int cell);                      // best neighbour k (-1 none)
+    void flowHousekeeping();                            // LRU eviction of unreferenced fields beyond the budget
+    void flowResetRefs() { for (auto& f : flows_) f.refs = 0; }
+    void flowRef(int fi, uint32_t tick) { flows_[size_t(fi)].refs++; flows_[size_t(fi)].lastUse = tick; }
+    FlowField& flow(int fi) { return flows_[size_t(fi)]; }
+    size_t flowCount() const { return flows_.size(); }
+    size_t flowBytes() const;
+    void flowDropAll() { flows_.clear(); }              // tests: forces full rebuilds
+    // Tests: optimal A* cell path (unbounded, no clearance) and its 10/14 cost; -1 when none.
+    int64_t astarCellCost(int s, int g, uint8_t layer, std::vector<int>* cells = nullptr);
+    size_t flowBudgetBytes = size_t(32) << 20;
+    int flowMaxFields = 64;
+    // diagnostics (benchmarks): when set, time spent in path searches / field work is added to pathNs
+    std::function<int64_t()> clockNs;
+    int64_t pathNs = 0;
+
     // Planets: bodies with at least this many cells (6 N^2) use HPA* for long paths (0 forces it on every body;
     // headless --planet-hpa / RTS_PLANET_HPA=1). Same threshold as the flat 256x256.
     int sphereHpaMinCells = 256 * 256;
@@ -207,6 +270,33 @@ private:
     void sphereClusterCosts(int c, int src, uint8_t layer, std::vector<uint32_t>& d) const;
     void markSphereDirty(int cell);
     std::shared_ptr<const SphereHpaTopo> sphereTopo_;
+    // flow fields
+    std::vector<FlowField> flows_;
+    uint32_t flowStamp_ = 1;                 // bumps on every grid change (block / cellChanged)
+    std::vector<uint32_t> flowClusterStamp_; // per HPA* cluster (flat or sphere): stamp of its last change
+    struct FlowGraphView {
+        const std::vector<std::vector<int32_t>>* nodes = nullptr;
+        const std::vector<std::vector<std::vector<int32_t>>>* partners = nullptr;
+        const std::vector<std::vector<uint32_t>>* dist = nullptr;
+    };
+    FlowGraphView flowGraph(uint8_t layer);                  // the HPA* graph of the layer, brought up to date
+    void flowTouch(int cell);
+    void flowValidate(FlowField& f);
+    void flowSeeds(FlowField& f) const;
+    void flowBuildFull(FlowField& f);
+    void flowComputeD(FlowField& f);
+    void flowEnsureCluster(FlowField& f, int c);
+    int flowBlock(FlowField& f, int c);
+    int flowClusterOf(int cell) const;
+    int flowClusterCount() const;
+    void flowClusterRect(int c, int& x0, int& y0, int& cw, int& ch) const;
+    int flowLocalIndex(int c, int cell) const;
+    int flowNeighbor(int x, int k) const;                    // grid cell or -1
+    bool flowStepInto(int v, int u, uint8_t layer, bool& diag) const;   // step v -> u legal? (diag: diagonal step)
+    bool flowStepTo(int x, int k, uint8_t layer) const;      // step x -> neighbour k legal?
+    bool flowLine(int a, int b, uint8_t layer) const;        // walkable straight line between two cells
+    // Backward Dijkstra (cost of reaching the seeds) inside cluster c (c < 0: the whole grid).
+    void flowLocal(int c, const std::vector<std::pair<int32_t, uint32_t>>& seeds, uint8_t layer, int clear, std::vector<uint32_t>& val) const;
     std::vector<SphereHpaGraph> sphereHpa_;
     int pathClear_ = 0;
     bool pathSoft_ = false;
@@ -229,6 +319,19 @@ private:
     void clusterCosts(int c, int src, uint8_t layer, std::vector<uint32_t>& d) const; // Dijkstra inside cluster c
     void clusterCostsMasked(int c, int src, const std::vector<uint8_t>& mask, std::vector<uint32_t>& d) const;
     std::vector<HpaGraph> hpa_;
+    // flow fields (agent-mech BA): distance-to-goal per cell, shared by every unit sent to the same goal cell.
+    // The path a unit gets is a pure function of the grid and the goal; the cache only saves the work.
+    struct MechFlowField { int goal = -1; uint8_t layer = 0; int clear = 0; uint32_t version = 0, used = 0; std::vector<uint32_t> dist; };
+    std::vector<MechFlowField> flow_;
+    uint32_t flowUse_ = 0, pathVersion_ = 0;
+    const MechFlowField& flowFor(int goal, uint8_t layer);
+    bool flowCells(int sx, int sy, int gx, int gy, uint8_t layer, std::vector<int>& cells);
+public:
+    bool flowFields = false;      // rules "flowFields": long ground paths follow cached flow fields
+    int flowMinCells = 8;         // shorter trips keep plain A*
+    int flowCacheSize = 16;
+    int flowStats[2] = {};        // fields built, paths traced (diagnostics only)
+private:
     std::vector<uint32_t> gCost_, stamp_;
     std::vector<int32_t> parent_;
     uint32_t search_ = 0;

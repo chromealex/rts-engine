@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "engine/render/TextureCache.h"
 #include "ClientSplash.h"
 #include "GameClient.h"
 #include "modules/rts/RtsLocalize.h"
@@ -81,6 +82,13 @@ void GameClient::initStep(gfx::Device& dev, int step) {
         r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
         r3d_.setMaterialQuality(Renderer3D::defaultMaterialQualityFor(dev, platform::isTouchDevice()));
         r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
+        postFx_.init(dev);
+        postFxBase_ = render::PostFx::defaultQualityFor(dev, platform::isTouchDevice());
+        postFx_.setQuality(postFxBase_);
+        postFx_.setImageLoader([](const std::string& path, int& w, int& h, std::vector<uint8_t>& rgba) {
+            std::string bytes;
+            return platform::readContentFile(path, bytes) && render::decodeImage(bytes, w, h, rgba);
+        });
         break;
     case 2: view_.init(dev, rules_); break;     // models, textures, atlases of every type
     case 3: fx_.init(dev, rules_); break;
@@ -190,10 +198,16 @@ void GameClient::shutdown() {
     sound_.detach();
     audio_.shutdown();
     view_.shutdown(*dev_);
+    postFx_.shutdown();
     r3d_.shutdown();
     shutdownUi();
     minimap_.release(*dev_);
     overlay_.shutdown();
+}
+
+void GameClient::configurePostFx(const Json& map) {
+    postFx_.configure(manifest_["postfx"], map["postfx"]);
+    postFx_.setQuality(postFxBase_);
 }
 
 void GameClient::startMatch(size_t idx) {
@@ -209,8 +223,12 @@ void GameClient::startMatch(size_t idx) {
         cfg.seed = uint64_t(std::time(nullptr));
         if (const char* sd = std::getenv("RTS_SEED")) cfg.seed = uint64_t(std::strtoull(sd, nullptr, 10));   // testing: reproducible matches
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
-        sim_->setup(rulesJson_, map);
+        Json rules = rulesJson_;
+        if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
+        sim_->setup(rules, map);
+        if (viewScripts_.load(*sim_, rules, map, uint8_t(spectator_ ? 0 : human_))) viewScripts_.attach(*sim_);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
+        configurePostFx(map);
         quality_.reset(int(r3d_.shadowQuality()), int(r3d_.lights.quality()));
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
@@ -233,6 +251,7 @@ void GameClient::startMatch(size_t idx) {
         if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, vm);
         else view_.setWorld(vm);
         view_.setTerrainMaterial(vm["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
+        view_.setTerrainDetail(vm);
     }
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     if (const char* ff = std::getenv("RTS_FAST_FORWARD")) { // testing (screenshots): bots play N game seconds first
@@ -266,6 +285,11 @@ void GameClient::fitCamera() {
     float aspect = platform::windowHeight() > 0 ? platform::windowWidth() / platform::windowHeight() : 1.6f;
     cam_.distance = small ? std::max(g.w / aspect, float(g.h)) * 1.05f + 4 : 24.0f;
     applyCameraSetup(cameraSetupFrom(manifest_), cam_, float(platform::framebufferHeight())); // game.json "camera" (2D games)
+    if (const char* e = std::getenv("RTS_CAM")) { // testing (close-up screenshots): "x,z,distance[,pitchDeg[,yawDeg]]"
+        float v[5] = {c.x, c.z, cam_.distance, cam_.pitch * 57.2958f, cam_.yaw * 57.2958f};
+        int n = std::sscanf(e, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4]);
+        if (n >= 2) { cam_.target = {v[0], 0, v[1]}; cam_.distance = v[2]; cam_.pitch = v[3] / 57.2958f; cam_.yaw = v[4] / 57.2958f; cam_.minDistance = std::min(cam_.minDistance, v[2]); }
+    }
 }
 
 // ------------------------------------------------------------------ picking / selection
@@ -636,6 +660,21 @@ void GameClient::processEvents() {
     }
 }
 
+// View scripts: presentation requests -> notices, particle effects, sounds (never into the sim).
+void GameClient::runViewScripts(float dt) {
+    if (!viewScripts_.active()) return;
+    viewScripts_.update(*sim_, dt);
+    for (auto& r : viewScripts_.takeRequests()) {
+        if (r.kind == game::ViewRequest::Notice) notice(r.text);
+        else if (r.kind == game::ViewRequest::Effect) fx_.particles().play(r.text, {r.x, 0.5f, r.z});
+        else {
+            audio::PlayParams pp;
+            pp.positional = r.positioned; pp.x = r.x; pp.z = r.z;
+            audio_.play(r.text, pp);
+        }
+    }
+}
+
 void GameClient::frame(gfx::Device& dev, double dt) {
     time_ += dt;
     float alpha = 0;
@@ -672,6 +711,9 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             r3d_.setShadowQuality(ShadowQuality(quality_.shadows()));
             r3d_.lights.setQuality(rts::render::LightQuality(quality_.lights()));
             shadowQuality_ = boundShadowQuality_ = quality_.shadows();
+            // post effects follow: one tier down per governor step, but keep the cheap look (low)
+            if (postFxBase_ != render::PostFxQuality::Off)
+                postFx_.setQuality(render::PostFxQuality(std::max(1, int(postFxBase_) - quality_.stepsDown())));
         }
 
         steerPossessed();
@@ -734,11 +776,11 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             view_.setOverlayContext(oc);
         }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
-        if (!planet()) { // particles are placed in flat map coordinates: not on planets yet
-            fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
-                       screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-            fx_.addLights(r3d_.lights);   // particle lights ("light" module)
-        }
+        fx_.setPlanetView(planet() ? &view_ : nullptr);   // planets: effects in the camera body's space
+        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
+        fx_.addLights(r3d_.lights);   // particle lights ("light" module)
+        runViewScripts(screen_ == Screen::Playing ? float(dt) : 0.0f);
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
@@ -748,8 +790,9 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             }
         }
         drawToolPreview();
-        r3d_.render(pass);
-        if (!planet()) fx_.render(r3d_.lighting);
+        r3d_.render(pass, &postFx_);
+        fx_.render(r3d_.lighting);
+        r3d_.resolvePostFx();   // post effects (if any) under the HUD
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;

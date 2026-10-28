@@ -1,0 +1,17 @@
+// Scripting sample: Iron and Gold (skirmish) + Lua mechanics in scripts/ (docs/scripting.md).
+{
+  "name": "Iron and Gold: Scripted",
+  "id": "com.rtsengine.scripted",
+  "version": "0.1.0",
+  "build": 1,
+  "module": "rts",
+  "sourceLanguage": "en",
+  "languages": ["en", "ru"],
+  "rules": "rules.json",
+  "maps": [
+    { "file": "maps/valley.json", "title": "River Valley (1v1)" }
+  ],
+  "lighting": { "time": 0.35, "dayLength": 480, "clouds": 0.55 },
+  "orientation": "landscape",
+  "icon": "icon.png"
+}

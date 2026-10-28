@@ -212,7 +212,8 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
         {"level", EffectKind::Level}, {"equalize", EffectKind::Equalize}, {"link", EffectKind::Link}, {"redirect", EffectKind::Redirect},
         {"sendBack", EffectKind::SendBack}, {"clone", EffectKind::Clone}, {"formation", EffectKind::Formation}, {"convert", EffectKind::Convert},
         {"playerStatus", EffectKind::PlayerStatus}, {"equalizeResource", EffectKind::EqualizeResource}, {"sacrifice", EffectKind::Sacrifice},
-        {"stealSkill", EffectKind::StealSkill}, {"cooldown", EffectKind::Cooldown}};
+        {"stealSkill", EffectKind::StealSkill}, {"cooldown", EffectKind::Cooldown},
+        {"addCharges", EffectKind::AddCharges}, {"teleportGroup", EffectKind::TeleportGroup}, {"script", EffectKind::Script}};
     std::string k = ej.getStr("type", "damage");
     bool known = false;
     for (auto& [n, kk] : kinds) if (k == n) { e.kind = kk; known = true; }
@@ -223,6 +224,11 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
         if (e.amountMax < e.amount) fail(w, "amount range must be [min, max]");
     }
     else e.amount = ej.getFx("amount");
+    if (e.kind == EffectKind::Script) {
+        e.scriptFn = ej.getStr("fn");
+        if (e.scriptFn.empty()) fail(w, "needs 'fn' (a function of the game's scripts)");
+        e.scriptArgs = ej;
+    }
     e.percent = ej.getFx("percent");
     e.radius = ej.getFx("radius");
     e.duration = ej.getFx("duration");
@@ -266,6 +272,24 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
     e.fake = ej.getBool("fake", false);
     e.ofLost = ej.getBool("ofLost", false);
     e.fromCaster = ej.getBool("fromCaster", false);
+    if (e.kind == EffectKind::TeleportGroup) {
+        auto end = [&](const char* key, const char* def) -> uint8_t {
+            std::string s = ej.getStr(key, def);
+            if (s == "point") return 0;
+            if (s == "caster") return 1;
+            if (s == "point2") return 2;
+            fail(w, std::string(key) + " must be point, caster or point2");
+        };
+        e.tpFrom = end("origin", "point");
+        e.tpTo = end("destination", "point2");
+        if (e.tpFrom == 2) fail(w, "origin can't be point2");
+        if (e.tpFrom == e.tpTo) fail(w, "origin and destination are the same end");
+        e.killTags = tagsOf(ej["killTags"]);
+        if (e.radius.raw <= 0) e.radius = Fixed::fromInt(2);
+        if (!ej.has("affects")) { e.filter.enemies = false; e.filter.allies = true; }
+        if (!ej.has("kind")) e.filter.structures = false;
+    }
+    if (e.kind == EffectKind::AddCharges && e.amount.raw <= 0) e.amount = Fixed::fromInt(1);
     return e;
 }
 
@@ -275,7 +299,7 @@ SmartRule smartRule(const std::string& where, const std::string& s) {
         {"densestEnemy", SmartRule::DensestEnemy}, {"strongestEnemyStructure", SmartRule::StrongestEnemyStructure},
         {"weakestOwnStructure", SmartRule::WeakestOwnStructure}, {"largestEnemyGroup", SmartRule::LargestEnemyGroup},
         {"ownStructureUnderAttack", SmartRule::OwnStructureUnderAttack}, {"self", SmartRule::Self}, {"enemyPlayer", SmartRule::EnemyPlayer},
-        {"debuffedOwn", SmartRule::DebuffedOwn}};
+        {"debuffedOwn", SmartRule::DebuffedOwn}, {"ownProducer", SmartRule::OwnProducer}};
     for (auto& [n, r] : rules) if (s == n) return r;
     throw std::runtime_error(where + ": unknown smart rule '" + s + "'");
 }
@@ -287,7 +311,8 @@ TargetKind targetKind(const std::string& where, const std::string& tg) {
     if (tg == "structure") return TargetKind::Structure;
     if (tg == "group") return TargetKind::Group;
     if (tg == "player") return TargetKind::Player;
-    throw std::runtime_error(where + ": unknown target '" + tg + "' (none, self, unit, point, structure, group, player)");
+    if (tg == "pointPair") return TargetKind::PointPair;
+    throw std::runtime_error(where + ": unknown target '" + tg + "' (none, self, unit, point, structure, group, player, pointPair)");
 }
 } // namespace
 

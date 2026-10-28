@@ -21,6 +21,7 @@ enum class TargetKind : uint8_t {
     Structure,  // a structure (garrison building)
     Group,      // a group of units in transit (sent together)
     Player,     // a player: effects use the filter's enemies/allies/self over players
+    PointPair,  // two points (player abilities): from where to where (Chronosphere)
 };
 
 // Status flags: a status may carry several. Unit, structure or player statuses.
@@ -130,6 +131,10 @@ enum class EffectKind : uint8_t {
     SendBack, Clone, Formation, Convert,
     // players
     PlayerStatus, EqualizeResource, Sacrifice, StealSkill, Cooldown,
+    // RtsFidelity.cpp
+    AddCharges,     // structure with larva charges: + amount, up to `limit` (inject larvae)
+    TeleportGroup,  // units around one end moved to the other, keeping formation; may come back after `duration`
+    Script,     // {"type": "script", "fn": "name", ...}: a Lua function (RtsScript.h), runs in the tick's scripts phase
 };
 
 struct EffectDef {
@@ -164,11 +169,16 @@ struct EffectDef {
     bool fake = false;         // Clone: illusions
     bool ofLost = false;       // GarrisonAdd: percent of units lost (resurrection)
     bool fromCaster = false;   // Knockback / Area origin: from the caster instead of the point
+    uint64_t killTags = 0;     // TeleportGroup: units with these tags die instead (Chronosphere infantry)
+    uint8_t tpFrom = 0, tpTo = 0; // TeleportGroup "origin" / "destination": 0 point, 1 caster, 2 second point (pointPair)
+    std::string scriptFn;      // Script: global function of the simulation scripts
+    Json scriptArgs;           // Script: the effect's JSON (ctx.args)
 };
 
 // What autocast / the AI aims a skill at.
 enum class SmartRule : uint8_t { Auto, LowestHpAlly, DensestEnemy, StrongestEnemyStructure, WeakestOwnStructure,
-                                 LargestEnemyGroup, OwnStructureUnderAttack, Self, EnemyPlayer, DebuffedOwn };
+                                 LargestEnemyGroup, OwnStructureUnderAttack, Self, EnemyPlayer, DebuffedOwn,
+                                 OwnProducer };   // own structure with larva charges below the cap, without the payload's status
 
 struct AbilityDef {
     std::string id, name;

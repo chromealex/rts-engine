@@ -26,10 +26,16 @@ int bfsCells(const MapGrid& g, int start, uint8_t layer, int maxNodes, Pred&& pr
         if (pred(c)) return c;
         int x = c % g.w, y = c / g.w;
         for (int k = 0; k < 4; ++k) {
-            int nx = x + kDx4[k], ny = y + kDy4[k];
-            if (!g.inside(nx, ny)) continue;
-            int n = g.index(nx, ny);
-            if (seen[size_t(n)] || !g.canStep(x, y, nx, ny, layer)) continue;
+            int n;
+            if (g.surf) {   // planets: across face seams (Surface::kDx/kDy start with the same 4 directions)
+                n = g.surf->neighbor(c, k);
+                if (n < 0 || seen[size_t(n)] || !g.canMoveCells(c, n, layer)) continue;
+            } else {
+                int nx = x + kDx4[k], ny = y + kDy4[k];
+                if (!g.inside(nx, ny)) continue;
+                n = g.index(nx, ny);
+                if (seen[size_t(n)] || !g.canStep(x, y, nx, ny, layer)) continue;
+            }
             seen[size_t(n)] = 1;
             queue.push_back(n);
         }
@@ -37,7 +43,26 @@ int bfsCells(const MapGrid& g, int start, uint8_t layer, int maxNodes, Pred&& pr
     return -1;
 }
 
+// 4-neighbour k of a cell (kDx4/kDy4 order; across face seams on planets), -1 none.
+int nb4(const MapGrid& g, int c, int k) {
+    if (g.surf) return g.surf->neighbor(c, k);
+    const int nx = c % g.w + kDx4[k], ny = c / g.w + kDy4[k];
+    return g.inside(nx, ny) ? g.index(nx, ny) : -1;
+}
+
+// A cell around a footprint given in grid coordinates (x, y may lie one step outside the rect): on planets the
+// footprint is a rect inside one face, so the outside cells are offsets from the nearest footprint cell.
+int footCell(const MapGrid& g, const Footprint& f, int x, int y) {
+    if (!g.surf) return g.inside(x, y) ? g.index(x, y) : -1;
+    const int xc = std::clamp(x, f.x, f.x + f.w - 1), yc = std::clamp(y, f.y, f.y + f.h - 1);
+    return g.offsetCell(g.index(xc, yc), x - xc, y - yc);
+}
+
 bool adjacentOwned(const MapGrid& g, int c, uint8_t player) {
+    if (g.surf) {
+        for (int k = 0; k < 4; ++k) { const int n = g.surf->neighbor(c, k); if (n >= 0 && g.territory[size_t(n)] == player) return true; }
+        return false;
+    }
     int x = c % g.w, y = c / g.w;
     for (int k = 0; k < 4; ++k) {
         int nx = x + kDx4[k], ny = y + kDy4[k];
@@ -150,8 +175,30 @@ void RtsModule::setupDungeon(Simulation& sim, const Json& map) {
         std::vector<std::pair<Vec3, uint8_t>> anchors;
         for (size_t p = 1; p < np; ++p) {
             const Json& pj = map["players"][p - 1];
-            if (pj.has("start")) anchors.push_back({{pj["start"][0].fx(), Fixed{}, pj["start"][1].fx()}, uint8_t(p)});
+            if (pj.has("start")) anchors.push_back({g.surf ? mapPos(sim, pj["start"]) : Vec3{pj["start"][0].fx(), Fixed{}, pj["start"][1].fx()}, uint8_t(p)});
         }
+        if (g.surf) {
+            // planets: the same squares / discs, as cell offsets across face seams
+            auto ownC = [&](int c, uint8_t p) { if (c >= 0) own(c % g.w, c / g.w, p); };
+            w.each<Unit, Owner, Footprint>([&](Entity, Unit&, Owner& o, Footprint& f) {
+                if (o.player == 0 || o.player >= np) return;
+                for (int y = f.y; y < f.y + f.h; ++y)
+                    for (int x = f.x; x < f.x + f.w; ++x)
+                        for (int dy = -r; dy <= r; ++dy)
+                            for (int dx = -r; dx <= r; ++dx) ownC(g.offsetCell(g.index(x, y), dx, dy), o.player);
+                for (int y = f.y; y < f.y + f.h; ++y)
+                    for (int x = f.x; x < f.x + f.w; ++x)
+                        if (g.inside(x, y) && !g.territory[size_t(g.index(x, y))]) g.territory[size_t(g.index(x, y))] = o.player;
+            });
+            for (auto& [pos, p] : anchors) {
+                const int c0 = g.cellOf(pos);
+                if (c0 < 0) continue;
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dx = -r; dx <= r; ++dx)
+                        if (dx * dx + dy * dy <= r * r) ownC(g.offsetCell(c0, dx, dy), p);
+            }
+            anchors.clear();
+        } else
         w.each<Unit, Owner, Footprint>([&](Entity, Unit&, Owner& o, Footprint& f) {
             if (o.player == 0 || o.player >= np) return;
             for (int y = f.y - r; y < f.y + f.h + r; ++y)
@@ -192,9 +239,9 @@ void RtsModule::recomputeRooms(Simulation& sim) {
             int c = q[qi], x = c % g.w, y = c / g.w;
             sx += x; sy += y;
             for (int k = 0; k < 4; ++k) {
-                int nx = x + kDx4[k], ny = y + kDy4[k];
-                if (!g.inside(nx, ny)) continue;
-                size_t n = size_t(g.index(nx, ny));
+                const int nc = nb4(g, c, k);
+                if (nc < 0) continue;
+                size_t n = size_t(nc);
                 if (seen[n] || g.room[n] != int16_t(z.type) || g.territory[n] != z.owner) continue;
                 seen[n] = 1;
                 q.push_back(int32_t(n));
@@ -202,7 +249,11 @@ void RtsModule::recomputeRooms(Simulation& sim) {
         }
         std::sort(q.begin(), q.end());
         int64_t n = int64_t(q.size());
-        z.center = {Fixed::fromInt(sx) / n + kHalf, Fixed{}, Fixed::fromInt(sy) / n + kHalf};
+        if (g.surf) {   // planets: the mean of the cell centres, back on the surface
+            Vec3 m{};
+            for (int32_t c : q) m = m + g.centerOf(c);
+            z.center = g.surf->project(m / Fixed::fromInt(n));
+        } else z.center = {Fixed::fromInt(sx) / n + kHalf, Fixed{}, Fixed::fromInt(sy) / n + kHalf};
         z.cells = std::move(q);
         if (z.owner < gs.roomCells.size()) gs.roomCells[z.owner][z.type] += int(n);
         gs.roomZones.push_back(std::move(z));
@@ -237,7 +288,7 @@ int nearestRoomCell(const GameState& gs, uint8_t owner, int type, Vec3 from) {
         if (z.owner != owner || int(z.type) != type) continue;
         for (int32_t c : z.cells) {
             if (g.blocked[size_t(c)]) continue;
-            Fixed d = (g.cellCenter(c % g.w, c / g.w) - from).xz().length();
+            Fixed d = dist2D(g.centerOf(c), from);   // flat: the xz distance as before
             if (best < 0 || d < bestD) { best = c; bestD = d; }
         }
     }
@@ -254,9 +305,9 @@ bool RtsModule::runDig(Simulation& sim, Entity e, Order& o) {
     const UnitType& t = rules_.types[w.get<Unit>(e).type];
     auto* m = w.tryGet<Mobile>(e);
     const uint8_t owner = w.get<Owner>(e).player;
-    int dx = g.cellX(o.point2.x), dy = g.cellY(o.point2.z);
-    if (!g.inside(dx, dy) || t.digRate.raw <= 0) return true;
-    size_t di = size_t(g.index(dx, dy));
+    const int dc = g.cellOf(o.point2);
+    if (dc < 0 || t.digRate.raw <= 0) return true;
+    size_t di = size_t(dc);
     if (!g.dig[di] || !(g.digMark[di] & markBit(owner))) return true;
     Transform& tr = w.get<Transform>(e);
     if (o.state == 0) { moveTo(sim, e, o.point, Fixed::fromRatio(3, 10)); o.state = 1; return false; }
@@ -293,9 +344,9 @@ bool RtsModule::runClaimCell(Simulation& sim, Entity e, Order& o) {
     const UnitType& t = rules_.types[w.get<Unit>(e).type];
     auto* m = w.tryGet<Mobile>(e);
     const uint8_t owner = w.get<Owner>(e).player;
-    int cx = g.cellX(o.point.x), cy = g.cellY(o.point.z);
-    if (!g.inside(cx, cy) || t.claimerTime.raw <= 0) return true;
-    size_t ci = size_t(g.index(cx, cy));
+    const int cc = g.cellOf(o.point);
+    if (cc < 0 || t.claimerTime.raw <= 0) return true;
+    size_t ci = size_t(cc);
     if (g.territory[ci] == owner || !(g.flags[ci] & kCellGround)) return true;
     Transform& tr = w.get<Transform>(e);
     if (o.state == 0) { moveTo(sim, e, o.point, Fixed::fromRatio(2, 10)); o.state = 1; return false; }
@@ -329,9 +380,9 @@ bool RtsModule::runNeed(Simulation& sim, Entity e, Order& o) {
         // structure-based need (inn): the building must still be ours
         if (!w.alive(o.target) || w.get<Owner>(o.target).player != owner) return true;
     } else {
-        int cx = g.cellX(o.point.x), cy = g.cellY(o.point.z);
-        if (!g.inside(cx, cy)) return true;
-        size_t ci = size_t(g.index(cx, cy));
+        const int cc = g.cellOf(o.point);
+        if (cc < 0) return true;
+        size_t ci = size_t(cc);
         if (g.room[ci] != room || g.territory[ci] != owner) return true; // room gone
     }
     Transform& tr = w.get<Transform>(e);
@@ -403,16 +454,23 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
     int rw = 0, rh = 0, extra = 0;
     unpackRect(cmd.param, rw, rh, extra);
     rw = std::clamp(rw, 1, 64); rh = std::clamp(rh, 1, 64);
-    const int x0 = g.cellX(cmd.point.x), y0 = g.cellY(cmd.point.z);
+    int x0 = g.cellX(cmd.point.x), y0 = g.cellY(cmd.point.z);
+    if (g.surf) g.cellXY(cmd.point, x0, y0);   // planets: grid row/column of the cell under the point (-1: none)
+    // cell (x0 + dx, y0 + dy) of the command rect: on planets an offset across face seams, -1 none
+    auto rectCell = [&](int dx, int dy) {
+        if (!g.surf) return g.inside(x0 + dx, y0 + dy) ? g.index(x0 + dx, y0 + dy) : -1;
+        return g.inside(x0, y0) ? g.offsetCell(g.index(x0, y0), dx, dy) : -1;
+    };
 
     switch (cmd.type) {
     case kCmdDig: {
         uint8_t bit = markBit(pl);
         if (!bit) return;
-        for (int y = y0; y < y0 + rh; ++y)
-            for (int x = x0; x < x0 + rw; ++x) {
-                if (!g.inside(x, y)) continue;
-                size_t i = size_t(g.index(x, y));
+        for (int dy = 0; dy < rh; ++dy)
+            for (int dx = 0; dx < rw; ++dx) {
+                const int c = rectCell(dx, dy);
+                if (c < 0) continue;
+                size_t i = size_t(c);
                 if (!g.dig[i]) continue;
                 if (extra == 1) g.digMark[i] &= uint8_t(~bit); else g.digMark[i] |= bit;
                 gs.territoryDirty = true;
@@ -422,10 +480,11 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
     case kCmdPaintRoom: {
         if (extra >= int(rules_.rooms.size()) || extra < -1) return;
         std::vector<size_t> cells;
-        for (int y = y0; y < y0 + rh; ++y)
-            for (int x = x0; x < x0 + rw; ++x) {
-                if (!g.inside(x, y)) continue;
-                size_t i = size_t(g.index(x, y));
+        for (int dy = 0; dy < rh; ++dy)
+            for (int dx = 0; dx < rw; ++dx) {
+                const int c = rectCell(dx, dy);
+                if (c < 0) continue;
+                size_t i = size_t(c);
                 if (g.territory[i] != pl || !(g.flags[i] & kCellGround)) continue;
                 if (extra < 0 ? g.room[i] < 0 : (g.room[i] == extra || g.blocked[i])) continue;
                 cells.push_back(i);
@@ -453,8 +512,8 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
             if (std::find(gs.hand[pl].begin(), gs.hand[pl].end(), e) != gs.hand[pl].end()) continue;
             Vec3 p = w.get<Transform>(e).pos;
             if (rules_.territory.enabled && rules_.hand.ownTerritoryOnly) {
-                int cx = g.cellX(p.x), cy = g.cellY(p.z);
-                if (!g.inside(cx, cy) || g.territory[size_t(g.index(cx, cy))] != pl) continue;
+                const int pc = g.cellOf(p);
+                if (pc < 0 || g.territory[size_t(pc)] != pl) continue;
             }
             u->flags |= kUnitInHand;
             if (auto* ord = w.tryGet<Orders>(e)) ord->queue.clear();
@@ -534,7 +593,9 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
         return;
     }
     case kCmdPlayerAbility: {
-        int idx = int(cmd.param);
+        int idx = int(cmd.param & 0xFFFF);
+        if (rules_.fidelity) takePoint2(sim, pl, cmd.param);   // pointPair abilities carry their second point
+        else if (cmd.param >> 16) return;
         if (rules_.advancedEffects) { castPlayerAbility(sim, pl, idx, cmd.point, cmd.target); return; }
         if (!canUsePlayerAbility(sim, pl, idx)) return;
         if (rules_.mech.deck && !mechDeckAllows(sim, pl, idx, cmd.point)) return;   // agent-mech: deploy zone
@@ -653,8 +714,10 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 for (int y = f.y - 1; y <= f.y + f.h; ++y)
                     for (int x = f.x - 1; x <= f.x + f.w; ++x) {
                         bool edge = x == f.x - 1 || x == f.x + f.w || y == f.y - 1 || y == f.y + f.h;
-                        if (!edge || !g.inside(x, y)) continue;
-                        uint8_t tw = g.territory[size_t(g.index(x, y))];
+                        if (!edge) continue;
+                        const int ec = footCell(g, f, x, y);
+                        if (ec < 0) continue;
+                        uint8_t tw = g.territory[size_t(ec)];
                         if (tw > 0 && tw < np) cnt[tw]++;
                     }
                 if (o.player < np && o.player != 0 && cnt[o.player] > 0) return;
@@ -687,20 +750,23 @@ void RtsModule::sysDungeon(Simulation& sim) {
             const UnitType& t = rules_.types[u.type];
             cs.acc = fxMin(cs.acc + t.claimRate * step, Fixed::fromInt(4));
             const int r = int((t.claimRadius + Fixed::fromRaw((int64_t(1) << Fixed::kFracBits) - 1)).floorInt());
-            const int cx = g.cellX(tr.pos.x), cy = g.cellY(tr.pos.z);
+            int cx = g.cellX(tr.pos.x), cy = g.cellY(tr.pos.z);
+            const int c0 = g.surf ? g.cellOf(tr.pos) : -1;
+            if (g.surf) { if (c0 < 0) return; cx = c0 % g.w; cy = c0 / g.w; }
             const Fixed r2 = t.claimRadius * t.claimRadius;
             while (cs.acc >= kOne) {
                 int pick = -1, pickD = 0;
                 for (int y = cy - r; y <= cy + r; ++y)
                     for (int x = cx - r; x <= cx + r; ++x) {
-                        if (!g.inside(x, y)) continue;
+                        int i;
+                        if (g.surf) { i = g.offsetCell(c0, x - cx, y - cy); if (i < 0) continue; }   // planets: across seams
+                        else { if (!g.inside(x, y)) continue; i = g.index(x, y); }
                         int d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
                         if (Fixed::fromInt(d2) > r2 || (pick >= 0 && d2 >= pickD)) continue;
-                        int i = g.index(x, y);
                         if (g.territory[size_t(i)] == o.player || !(g.flags[size_t(i)] & kCellGround)) continue;
                         if (!adjacentOwned(g, i, o.player)) continue;
                         bool contested = false;
-                        Vec3 cc = g.cellCenter(x, y);
+                        Vec3 cc = g.surf ? g.centerOf(i) : g.cellCenter(x, y);
                         gs.hash.query(cc, Fixed::fromRatio(3, 2), [&](Entity s) {
                             auto* su = w.tryGet<Unit>(s);
                             if (contested || !su || su->hp.raw <= 0 || rules_.types[su->type].structure) return;
@@ -736,8 +802,8 @@ void RtsModule::sysDungeon(Simulation& sim) {
             w.each<Orders>([&](Entity, Orders& ord) {
                 if (ord.queue.empty()) return;
                 const Order& o = ord.queue.front();
-                if (o.type == OrderType::Dig) { int x = g.cellX(o.point2.x), y = g.cellY(o.point2.z); if (g.inside(x, y)) digTaken[size_t(g.index(x, y))]++; }
-                if (o.type == OrderType::ClaimCell) { int x = g.cellX(o.point.x), y = g.cellY(o.point.z); if (g.inside(x, y)) claimTaken[size_t(g.index(x, y))] = 1; }
+                if (o.type == OrderType::Dig) { const int c = g.cellOf(o.point2); if (c >= 0) digTaken[size_t(c)]++; }
+                if (o.type == OrderType::ClaimCell) { const int c = g.cellOf(o.point); if (c >= 0) claimTaken[size_t(c)] = 1; }
             });
             for (Entity e : idle) {
                 const UnitType& t = rules_.types[w.get<Unit>(e).type];
@@ -745,16 +811,15 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 const uint8_t bit = markBit(owner);
                 const bool claimer = t.claimerTime.raw > 0 && rules_.territory.enabled && rules_.territory.claimBy != ClaimBy::Units;
                 Vec3 p = w.get<Transform>(e).pos;
-                int sx = g.cellX(p.x), sy = g.cellY(p.z);
-                if (!g.inside(sx, sy)) continue;
+                const int sc = g.cellOf(p);
+                if (sc < 0) continue;
                 int claimCell = -1, digCell = -1, standCell = -1;
-                bfsCells(g, g.index(sx, sy), t.pathLayer, 6000, [&](int c) {
-                    int x = c % g.w, y = c / g.w;
+                bfsCells(g, sc, t.pathLayer, 6000, [&](int c) {
                     if (t.digRate.raw > 0 && bit)
                         for (int k = 0; k < 4; ++k) {
-                            int nx = x + kDx4[k], ny = y + kDy4[k];
-                            if (!g.inside(nx, ny)) continue;
-                            size_t n = size_t(g.index(nx, ny));
+                            const int nc = nb4(g, c, k);
+                            if (nc < 0) continue;
+                            size_t n = size_t(nc);
                             if (g.dig[n] && (g.digMark[n] & bit) && digTaken[n] < 2) { digCell = int(n); standCell = c; return true; }
                         }
                     if (claimer && claimCell < 0 && g.territory[size_t(c)] != owner && !g.blocked[size_t(c)] && !claimTaken[size_t(c)] && adjacentOwned(g, c, owner)) {
@@ -765,10 +830,10 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 });
                 if (digCell >= 0) {
                     digTaken[size_t(digCell)]++;
-                    jobs.push_back({e, OrderType::Dig, g.cellCenter(standCell % g.w, standCell / g.w), g.cellCenter(digCell % g.w, digCell / g.w)});
+                    jobs.push_back({e, OrderType::Dig, g.centerOf(standCell), g.centerOf(digCell)});
                 } else if (claimCell >= 0) {
                     claimTaken[size_t(claimCell)] = 1;
-                    jobs.push_back({e, OrderType::ClaimCell, g.cellCenter(claimCell % g.w, claimCell / g.w), {}});
+                    jobs.push_back({e, OrderType::ClaimCell, g.centerOf(claimCell), {}});
                 }
             }
             for (auto& j : jobs) { Order o; o.type = j.type; o.point = j.a; o.point2 = j.b; issue(sim, j.e, o, false); }
@@ -817,7 +882,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 if (!best.valid() || contactDistance(sim, e, best) < Fixed::fromRatio(3, 2)) acts.push_back({e, 0, 0, -1, true, true});
                 else if (ord && (ord->queue.empty() || ord->queue.front().type != OrderType::Move)) {
                     Vec3 pp = w.get<Transform>(best).pos;
-                    acts.push_back({e, -1, 0, g.index(g.cellX(pp.x), g.cellY(pp.z)), true, false});
+                    acts.push_back({e, -1, 0, g.surf ? g.cellOf(pp) : g.index(g.cellX(pp.x), g.cellY(pp.z)), true, false});
                 }
                 return;
             }
@@ -853,7 +918,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 for (uint16_t r : nd.works) {
                     int cell = nearestRoomCell(gs, o.player, r, tr.pos);
                     if (cell < 0) continue;
-                    Fixed d = (g.cellCenter(cell % g.w, cell / g.w) - tr.pos).xz().length();
+                    Fixed d = dist2D(g.centerOf(cell), tr.pos);
                     if (bestCell < 0 || d < bestD) { bestCell = cell; bestRoom = r; bestD = d; }
                 }
                 if (bestCell >= 0) acts.push_back({e, kNeedWork, bestRoom, bestCell, false, false});
@@ -869,7 +934,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 continue;
             }
             Order o;
-            o.point = g.cellCenter(a.cell % g.w, a.cell / g.w);
+            o.point = g.surf && a.cell < 0 ? w.get<Transform>(a.e).pos : g.centerOf(a.cell);
             if (a.at.valid()) { o.target = a.at; o.point = w.get<Transform>(a.at).pos; }
             if (a.leave) { o.type = OrderType::Move; o.param = 1; }
             else { o.type = OrderType::Need; o.param = int32_t(a.kind | (a.room << 8)); }
@@ -922,7 +987,23 @@ void RtsModule::sysDungeon(Simulation& sim) {
 
     // ---- auto-training structures push units to the nearest front
     auto frontFrom = [&](uint8_t owner, Vec3 from, Vec3& out) -> bool {
-        if (rules_.territory.enabled) {
+        if (rules_.territory.enabled && g.surf) {
+            // planets: breadth-first over the body's cells (across seams), nearest front cell in steps
+            const int c0 = g.cellOf(from);
+            if (c0 >= 0) {
+                std::vector<int> q{c0};
+                std::vector<uint8_t> seen(g.territory.size(), 0);
+                seen[size_t(c0)] = 1;
+                for (size_t qi = 0; qi < q.size(); ++qi) {
+                    const int c = q[qi];
+                    if (g.territory[size_t(c)] != owner && (g.flags[size_t(c)] & kCellGround) && adjacentOwned(g, c, owner)) { out = g.centerOf(c); return true; }
+                    for (int k = 0; k < 4; ++k) {
+                        const int n = g.surf->neighbor(c, k);
+                        if (n >= 0 && !seen[size_t(n)]) { seen[size_t(n)] = 1; q.push_back(n); }
+                    }
+                }
+            }
+        } else if (rules_.territory.enabled) {
             int cx = g.cellX(from.x), cy = g.cellY(from.z);
             for (int r = 0; r <= std::max(g.w, g.h); ++r) {
                 int best = -1, bestD = 0;

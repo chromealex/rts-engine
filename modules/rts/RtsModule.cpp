@@ -27,6 +27,9 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     setupMap(sim, mapIn);
     loadTriggers(rules_, rulesJson, mapIn, triggers_);
     mechSetup(sim, mapIn);   // agent-mech
+    // Lua: the engine's standard library (rule-level mechanics, modules/rts/lua) + the game's scripts
+    script_ = std::make_unique<ScriptEngine>(*this);
+    script_->load(sim, rulesJson, mapIn);
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
@@ -36,7 +39,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (rules_.settlers) sim.addSystem("settlers", [this](Simulation& s) { sysSettlers(s); });
     if (rules_.lanes.enabled) sim.addSystem("lanes", [this](Simulation& s) { sysLanes(s); });
     sim.addSystem("garrison", [this](Simulation& s) { sysGarrison(s); });
-    sim.addSystem("waves", [this](Simulation& s) { sysWaves(s); });
+    sim.addSystem("waves", [this](Simulation& s) { script_->callStd(s, StdFn::Waves); });   // lua/waves.lua
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
     if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
@@ -44,6 +47,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
     if (rules_.advancedEffects) sim.addSystem("effects", [this](Simulation& s) { sysEffects(s); });
     if (rules_.originals) sim.addSystem("originals", [this](Simulation& s) { sysOriginals(s); }); // RtsOriginals.cpp
+    if (rules_.fidelity) sim.addSystem("fidelity", [this](Simulation& s) { sysFidelity(s); });    // RtsFidelity.cpp
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
     sim.addSystem("movement", [this](Simulation& s) { sysMovement(s); });
     if (state(sim).surface) sim.addSystem("transit", [this](Simulation& s) { sysTransit(s); });
@@ -53,8 +57,11 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("capture", [this](Simulation& s) { sysCapture(s); });
     sim.addSystem("creep", [this](Simulation& s) { sysCreep(s); });
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
-    sim.addSystem("victory", [this](Simulation& s) { sysVictory(s); });
-    sim.addSystem("triggers", [this](Simulation& s) { sysTriggers(s); }); // last: sees every event of the tick
+    sim.addSystem("victory", [this](Simulation& s) { script_->callStd(s, StdFn::Victory); });   // lua/victory.lua
+    sim.addSystem("triggers", [this](Simulation& s) {   // last: sees every event of the tick (lua/triggers.lua)
+        if (!triggers_.defs.empty()) script_->callStd(s, StdFn::Triggers);
+    });
+    if (script_->hasUserScripts()) sim.addSystem("scripts", [this](Simulation& s) { script_->tick(s); }); // after triggers: same events
     sysCreep(sim);
     sysEconomy(sim); // initial supply/tech counts
     // big maps: build the hierarchical pathing graph now (it is derived data, so this only moves the cost
@@ -66,6 +73,8 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // planets: HPA* on bodies above the cell threshold (RtsHpaSphere.cpp). RTS_PLANET_HPA=1 / 0 forces it on / off
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;
+    g.flowMaxFields = rules_.movement.flow.maxFields;
+    g.flowBudgetBytes = size_t(rules_.movement.flow.budgetMB) << 20;
     if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
         for (auto& t : rules_.types)
@@ -214,6 +223,9 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
 
     // victory
     gs.victory = map.has("victory") ? loadVictory(map["victory"], rules_.victory) : rules_.victory;
+    // a map may switch flow fields on / tune them for itself ("movement": {"flowField": {...}}): big horde maps
+    if (const Json& ff = map["movement"]["flowField"]; ff.isObject()) loadFlowFieldRules(ff, rules_.movement.flow, "map movement.flowField");
+    else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players
     const size_t np = sim.players().size();
@@ -472,6 +484,7 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
     if (t.hero && rules_.originals) onHeroSpawn(sim, e, owner);
+    if (rules_.fidelity && t.structure) spawnFidelity(sim, e, underConstruction);   // slabs, weathering, traps
     sim.emit({kEvSpawned, owner, e, kNullEntity, type, pos});
     return e;
 }
@@ -818,6 +831,7 @@ Fixed RtsModule::contactDistance(Simulation& sim, Entity a, Entity b) {
     if (!ta || !tb) return Fixed::fromInt(1 << 20);
     const UnitType& A = rules_.types[w.get<Unit>(a).type];
     const UnitType& B = rules_.types[w.get<Unit>(b).type];
+    if (rules_.mech.altitude && (A.mech.altMax.raw > 0 || B.mech.altMax.raw > 0)) return mechContact3D(sim, a, b);   // agent-mech SP: 3D flight
     if (B.structure && Surface::onSphere(tb->pos)) // planets: footprint as a disc of its half extent
         return fxMax(dist2D(ta->pos, tb->pos) - A.radius - Fixed::fromInt(std::min(B.footprintW, B.footprintH)) / 2, Fixed{});
     if (B.structure) {
@@ -949,23 +963,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         return;
     }
 
-    if (cmd.type == kCmdAutoBuild) {
-        uint16_t type = kNoType;
-        if (cmd.param >= 0 && size_t(cmd.param) < rules_.types.size()) {
-            if (std::find(rules_.autoBuildPool.begin(), rules_.autoBuildPool.end(), uint16_t(cmd.param)) != rules_.autoBuildPool.end()) type = uint16_t(cmd.param);
-        } else {
-            std::vector<uint16_t> options;
-            for (uint16_t t : rules_.autoBuildPool) if (canTrain(sim, cmd.player, t)) options.push_back(t);
-            if (!options.empty()) type = options[sim.rng().below(uint32_t(options.size()))];
-        }
-        if (type == kNoType || !canTrain(sim, cmd.player, type)) return;
-        Vec3 spot;
-        if (!findAutoSpot(sim, cmd.player, type, spot)) { sim.emit({kEvNotEnough, cmd.player, kNullEntity, kNullEntity, 254, {}}); return; }
-        if (!pay(sim, cmd.player, autoBuildCost(sim, cmd.player, type), {})) return;
-        gs.autoBuilt[cmd.player]++;
-        placeStructure(sim, cmd.player, type, spot, kNullEntity, false);
-        return;
-    }
+    if (cmd.type == kCmdAutoBuild) { script_->callStd(sim, StdFn::AutoBuild, {cmd.player, cmd.param}); return; }   // lua/commands.lua
 
     std::vector<Entity> sel;
     for (Entity e : cmd.units) {
@@ -985,7 +983,10 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     if (w.alive(cmd.target)) if (auto* t = w.tryGet<Transform>(cmd.target)) target = t->pos;
     // attack-move of a group: spread into an arc facing the goal, flanks ahead (they wrap around the enemy)
     std::vector<std::pair<Entity, Vec3>> arc;
-    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3) {
+    // big groups to one point share a flow field (rules movement.flowField.minGroup); no arc for them
+    const bool flowGroup = rules_.movement.flow.minGroup > 0 && movers >= rules_.movement.flow.minGroup &&
+                           (cmd.type == kCmdMove || cmd.type == kCmdAttack || cmd.type == kCmdPatrol || cmd.type == kCmdSmart);
+    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3 && !flowGroup) {
         Vec3 c{};
         Fixed maxR{};
         std::vector<Entity> ms;
@@ -1004,7 +1005,8 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             const Fixed spacing = maxR * 2 + Fixed::fromRatio(2, 5);
             const int n = int(ms.size());
             const Fixed R = fxMax(Fixed::fromInt(4), spacing * n / 2);
-            for (int i = 0; i < n; ++i) {
+            if (rules_.mech.flowFields && n > 24) mechArmyBlock(sim, ms, target, dir, perp, spacing, arc);   // agent-mech BA: big armies form a block
+            else for (int i = 0; i < n; ++i) {
                 Fixed lat = spacing * (2 * i - (n - 1)) / 2;
                 Vec3 p = target + perp * lat + dir * (lat * lat / (R * 2));
                 arc.push_back({ms[size_t(i)], flat(p)});
@@ -1018,6 +1020,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         Order o;
         o.point = flat(target);
         o.target = w.alive(cmd.target) ? cmd.target : kNullEntity;
+        o.flow = flowGroup && !(t.layer & kLayerAir);
         switch (cmd.type) {
         case kCmdMove:
             o.type = OrderType::Move; o.target = kNullEntity; o.param = movers;
@@ -1157,14 +1160,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             placeStructure(sim, cmd.player, st, cmd.point, kNullEntity, true);
             return; // one placement per command
         }
-        case kCmdSell: {
-            if (!t.structure || !t.sellable) break;
-            refund(sim, cmd.player, t.cost, rules_.sellRefund * (w.get<Unit>(e).hp / fxMax(t.maxHp, kOne)));
-            sim.emit({kEvSold, cmd.player, e, kNullEntity, w.get<Unit>(e).type, w.get<Transform>(e).pos});
-            w.get<Unit>(e).hp = Fixed{};
-            w.get<Unit>(e).flags |= kUnitSilent;
-            break;
-        }
+        case kCmdSell: script_->callStd(sim, StdFn::Sell, {cmd.player, int64_t(e.packed())}); break;   // lua/commands.lua
         case kCmdDeploy: {
             if (t.deploysTo == kNoType) break;
             Vec3 at = w.get<Transform>(e).pos;
@@ -1325,6 +1321,7 @@ bool RtsModule::findAutoSpot(Simulation& sim, uint8_t player, uint16_t type, Vec
             if (!canPlace(sim, player, type, p)) continue;
             Vec2 d = S ? S->toPlane(c, p - c).xz() : (p - c).xz();
             Fixed score = d.length() - d.dot(away) / 2;     // close to the core, behind it
+            if (rules_.fidelity) { Fixed fs = spotScoreFidelity(sim, player, type, x0, y0, d, away); if (fs >= Fixed::fromInt(1 << 19)) continue; score += fs; }
             if (score < bestScore) { bestScore = score; out = p; found = true; }
         }
     return found;
@@ -1368,6 +1365,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     if (rules_.settlers) hashSettlers(sim, h);
     if (rules_.advancedEffects) hashEffects(sim, h);
     if (rules_.originals) hashOriginals(sim, h);
+    if (rules_.fidelity) hashFidelity(sim, h);
     if (rules_.lanes.enabled) {
         h.u32(gs.laneSignature); h.u32(uint32_t(gs.lanes.size()));
         for (auto& l : gs.lanes) { h.u32(uint32_t(l.points.size())); if (!l.points.empty()) h.v3(l.points[l.points.size() / 2]); }
@@ -1376,6 +1374,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);

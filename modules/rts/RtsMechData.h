@@ -94,6 +94,17 @@ struct MechType {
     Fixed powerField{};                    // pylon: powers own structures within this radius
     bool needsPower = false;               // works and can be built only in a power field
     uint16_t infectSpawn = 0xFFFF; int infectCount = 0;   // structure overrun by an infecting attacker spawns these
+    // stage 4
+    Fixed moraleMax{};                     // 0: rules morale.max
+    Fixed chargeBonus{}, chargeRun{}, chargeShock{}, chargeCooldown{};   // charge: run-up (cells), first-hit damage multiplier
+    Fixed supplyRadius{};                  // depot: supplies own units within this radius
+    // logistics (Mindustry, Factorio): belts, producers, crafters, belt inputs
+    Fixed beltSpeed{};                     // conveyor piece: cells per second
+    uint64_t beltAccepts = 0;              // resources taken from belts into the owner's stock (bit per resource)
+    int16_t outRes = -1; Fixed outAmount{}, outInterval{};   // producer: puts packets on adjacent belts
+    std::vector<Amount> craftIn, craftOut; Fixed craftTime{};  // crafter: inputs from belts -> outputs to belts
+    // free 3D flight (Homeworld): altitude band, climb rate, start altitude; ranges are measured in 3D
+    Fixed altMin{}, altMax{}, altClimb{}, altStart{};
 };
 
 struct MechRules {
@@ -149,6 +160,30 @@ struct MechRules {
     int16_t livesRes = -1;
     Fixed damagePerUnit = Fixed::fromInt(1);
     std::vector<Amount> roundIncome;
+    // stage 4: morale and rout (Total War), fatigue, charge, supply lines (Rise of Nations, Hearts of Iron)
+    bool morale = false;
+    Fixed moraleMax = Fixed::fromInt(100), moraleRegen = Fixed::fromInt(2), hitLoss = Fixed::fromInt(100);
+    Fixed allyDeath = Fixed::fromInt(6), allyRadius = Fixed::fromInt(6), flankSide = Fixed::fromRatio(3, 2), flankRear = Fixed::fromInt(2);
+    Fixed waverAt = Fixed::fromInt(40), routAt = Fixed::fromInt(20), rallyAt = Fixed::fromInt(60), routSpeed = Fixed::fromRatio(5, 4);
+    Fixed waverAttack = Fixed::fromRatio(17, 20), generalRegen = Fixed::fromInt(6), generalRadius = Fixed::fromInt(10), generalDeath = Fixed::fromInt(30);
+    uint64_t moraleTags = 0, generalTags = 0;
+    bool fatigue = false;
+    Fixed fatRun = Fixed::fromInt(2), fatFight = Fixed::fromInt(4), fatRecover = Fixed::fromInt(5);
+    Fixed tiredAt = Fixed::fromInt(50), exhaustedAt = Fixed::fromInt(85), tiredMul = Fixed::fromRatio(17, 20), exhaustedMul = Fixed::fromRatio(3, 5);
+    uint64_t fatigueTags = 0;
+    bool charge = false;
+    bool supply = false;
+    uint64_t supplyTags = 0;
+    Fixed supplyAttrition = Fixed::fromRatio(1, 100), supplySpeed = Fixed::fromRatio(4, 5), supplyAttack = Fixed::fromRatio(4, 5);
+    bool battle() const { return morale || fatigue || charge || supply; }
+    bool flowFields = false; int flowMinCells = 8, flowCache = 16;
+    bool conveyors = false;
+    // turn-based mode (TB): players act in turns on the same simulation (Heroes / XCOM style battles)
+    bool altitude = false;   // some type flies in 3D (SP)
+    bool turns = false;
+    Fixed turnMoveSeconds = Fixed::fromInt(4);   // move budget per turn = type speed x this
+    int turnAttacks = 1;                         // shots per weapon per turn
+    Fixed turnTimeLimit{};                       // >0: the turn ends by itself after this many seconds   // BA: big armies share flow fields
     int findItem(const std::string& id) const { for (size_t i = 0; i < items.size(); ++i) if (items[i].id == id) return int(i); return -1; }
 };
 

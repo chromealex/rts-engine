@@ -34,6 +34,7 @@ private:
     void mech(Simulation& sim, RtsModule& m);      // agent-mech (RtsMechAI.cpp): retreat the wounded, man bunkers, ...
     void mechEconomy(Simulation& sim, RtsModule& m);   // market, trade carts, hero items, merges
     void originals(Simulation& sim, RtsModule& m); // RtsAIOriginals.cpp: hero skills, crews, garrison upgrades
+    void fidelity(Simulation& sim, RtsModule& m);  // RtsAIFidelity.cpp: concrete slabs, traps
     bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
@@ -51,7 +52,9 @@ private:
     int savingFor_ = -1;          // player skill the bot saves resources for
     uint32_t savingUntil_ = 0;
     uint32_t lastSettlersTick_ = 0;
-    uint32_t lastMechTick_ = 0;   // few workers left and one can be trained: don't spend on the army
+    uint32_t lastMechTick_ = 0;
+    bool mechTurnAI(Simulation& sim, RtsModule& m);
+    uint32_t turnActed_ = 0;   // turn-based mode: false when it is not our turn; ends our turns   // few workers left and one can be trained: don't spend on the army
 };
 
 } // namespace rts::game

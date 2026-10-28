@@ -91,6 +91,8 @@ void Editor::init(gfx::Device& dev) {
     io.IniFilename = iniPath.c_str();
     resetLayout_ = !fs::exists(iniPath, fec);
     r3d_.init(dev);
+    postFx_.init(dev);
+    postFx_.setQuality(render::PostFx::defaultQualityFor(dev, false));
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, false));
     r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, false));
     for (auto& f : WindowRegistry::factories()) {
@@ -142,6 +144,7 @@ void Editor::shutdown() {
     fxTextures_.shutdown();
     windows_.clear(); // windows release their viewports in their destructors via update()? keep simple: textures die with the device
     view_.shutdown(*dev_);
+    postFx_.shutdown();
     r3d_.shutdown();
     ui_.shutdown();
     dev_ = nullptr;
@@ -161,7 +164,11 @@ void Editor::focusWindow(const std::string& id) {
 void Editor::openGame(const std::string& idOrDir) {
     std::string err;
     if (playing()) stopPlay();
-    if (!ws_.openGame(idOrDir, &err)) { status = "Не удалось открыть игру: " + err; return; }
+    if (!ws_.openGame(idOrDir, &err)) {
+        status = "Не удалось открыть проект: " + err;
+        ws_.log("editor", status + " (" + idOrDir + ")", true);
+        return;
+    }
     ws_.changes.clear();
     reloadRules();
     selection = {};
@@ -370,6 +377,11 @@ void Editor::syncGrid() {
         }
     }
     view_.setTerrainMaterial(d.extra["terrainMaterial"], d.w, d.h);
+    if (!d.detail.empty() && d.detailScale > 0) {   // visual detail layer (TerrainOps sculpt / import)
+        game::terrain::DetailSurface ds;
+        game::terrain::detailFromInt16(d.w, d.h, d.detailScale, d.detail, ds);
+        view_.setTerrainDetail(&ds, d.detailSplat.empty() ? nullptr : &d.detailSplat);
+    } else view_.setTerrainDetail(nullptr, nullptr);
     view_.buildTerrain(*dev_, grid_);
     gridRevision_ = doc().revision;
 }
@@ -504,8 +516,9 @@ void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) 
     pass.depthTarget = vp.depth;
     pass.clearColor[0] = 0.13f; pass.clearColor[1] = 0.15f; pass.clearColor[2] = 0.17f;
     if (planets) pass.clearColor[0] = pass.clearColor[1] = pass.clearColor[2] = 0.0f;
-    r3d_.render(pass);
+    r3d_.render(pass, postFxInScene ? &postFx_ : nullptr);
     gameFx_.render({r3d_.lighting.fogColor, r3d_.lighting.fogDensity});
+    r3d_.resolvePostFx();
     dev_->endPass();
     view_.drawOverlays(useCam, scene_, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
@@ -515,7 +528,10 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     auto& gs = simModule()->state(*sim_);
     // fields / creep changing during play are read by the terrain shader: build once per play session
     if (!playTerrainBuilt_) {
-        if (const Json* gm = simModule()->generatedMap()) view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h); // map "generate"
+        if (const Json* gm = simModule()->generatedMap()) {   // map "generate": the view shows what the sim was built from
+            if ((*gm)["world"].isObject()) { view_.setWorld(*gm); worldHash_ = 0; }
+            view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h);
+        }
         view_.buildTerrain(*dev_, gs.grid);
         playTerrainBuilt_ = true;
     }
@@ -532,8 +548,9 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     pass.colorTarget = vp.color;
     pass.depthTarget = vp.depth;
     pass.clearColor[0] = 0.55f; pass.clearColor[1] = 0.66f; pass.clearColor[2] = 0.78f;
-    r3d_.render(pass);
+    r3d_.render(pass, &postFx_);
     gameFx_.render({r3d_.lighting.fogColor, r3d_.lighting.fogDensity});
+    r3d_.resolvePostFx();
     dev_->endPass();
     view_.drawOverlays(cam, sc, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
@@ -614,7 +631,7 @@ void Editor::startPlay(int humanSlot) {
             return true;
         };
         if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
-        sim_->setup(ws_.project.rulesJson, mapJson);
+        sim_->setup(ws_.project.simRules(mapJson), mapJson);
         playIds_ = mapEntityIds(*sim_, *simModule(), mapJson);
         view_.lights().configure(ws_.project.manifest["lighting"], mapJson["lighting"], mapJson["lights"]); // day/night, map lights
     } catch (const std::exception& e) {
