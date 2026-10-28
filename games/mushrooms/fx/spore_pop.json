@@ -1,0 +1,8 @@
+// A mushroom bursts: a soft green puff (cheap: battles pop dozens at once).
+{
+  "emitters": [
+    { "texture": "builtin:soft", "blend": "additive", "burst": 5, "life": [0.3, 0.5], "speed": [0.8, 1.6],
+      "shape": "sphere", "radius": 0.15, "drag": 3, "size": [0.3, 0.45], "sizeOverLife": [[0, 0.6], [1, 1.4]],
+      "color": [[0, "#d8ff9cc0"], [1, "#6ac04000"]] }
+  ]
+}

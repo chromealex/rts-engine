@@ -1,5 +1,6 @@
 // File decoding (WAV, OGG Vorbis, MP3, FLAC) through miniaudio's decoders.
 #include "MiniaudioConfig.h"
+#include <algorithm>
 #include "AudioMixer.h"
 
 namespace rts::audio {
@@ -13,14 +14,17 @@ bool initDecoder(const std::string& bytes, ma_format fmt, ma_uint32 channels, ma
 
 } // namespace
 
-bool decodeClip(const std::string& bytes, Clip& out, std::string& error) {
+bool decodeClip(const std::string& bytes, Clip& out, std::string& error) { return decodeClipAs(bytes, 0, 0, out, error); }
+
+bool decodeClipAs(const std::string& bytes, int channels, int sampleRate, Clip& out, std::string& error) {
     out = Clip{};
     if (bytes.empty()) { error = "empty file"; return false; }
     ma_decoder dec;
-    if (!initDecoder(bytes, ma_format_s16, 0, 0, dec)) { error = "unsupported or corrupted audio (WAV, OGG, MP3, FLAC)"; return false; }
+    const ma_uint32 ch = ma_uint32(std::clamp(channels, 0, 2)), rate = ma_uint32(std::max(0, sampleRate));
+    if (!initDecoder(bytes, ma_format_s16, ch, rate, dec)) { error = "unsupported or corrupted audio (WAV, OGG, MP3, FLAC)"; return false; }
     if (dec.outputChannels > 2) { // surround sources are downmixed to stereo by the decoder
         ma_decoder_uninit(&dec);
-        if (!initDecoder(bytes, ma_format_s16, 2, 0, dec)) { error = "cannot downmix to stereo"; return false; }
+        if (!initDecoder(bytes, ma_format_s16, 2, rate, dec)) { error = "cannot downmix to stereo"; return false; }
     }
     out.channels = int(dec.outputChannels);
     out.sampleRate = int(dec.outputSampleRate);
@@ -64,6 +68,10 @@ void StreamDecoder::close() {
 }
 
 bool StreamDecoder::isOpen() const { return impl_->open; }
+
+bool StreamDecoder::seek(int64_t frame) {
+    return impl_->open && ma_decoder_seek_to_pcm_frame(&impl_->dec, ma_uint64(std::max<int64_t>(0, frame))) == MA_SUCCESS;
+}
 
 int StreamDecoder::read(float* stereo, int frames) {
     if (!impl_->open || frames <= 0) return 0;

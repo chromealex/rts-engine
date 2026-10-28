@@ -97,7 +97,7 @@ gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, bool shadow) 
         const std::string msl = defs + (shadow ? shaders::kModelShadowMSL : shaders::kModelMSL);
         gfx::ShaderDesc sd;
         sd.glslVertex = vs.c_str(); sd.glslFragment = fs.c_str(); sd.msl = msl.c_str();
-        sd.uniformSlots = 4; sd.textureSlots = 7; sd.label = shadow ? "model shadow" : "model";
+        sd.uniformSlots = shadow ? 4 : 5; sd.textureSlots = shadow ? 7 : 8; sd.label = shadow ? "model shadow" : "model";
         ShaderEntry e;
         e.shader = dev_->createShader(sd);
         if (!e.shader.valid()) {
@@ -183,7 +183,10 @@ void Renderer3D::drawModel(const ModelDraw& d) {
 void Renderer3D::drawModelItem(const ModelItem& it, bool shadow, const ModelItem*& lastMat) {
     gfx::PipelineHandle ph = modelPipeline(it, shadow);
     if (!ph.valid()) return;
-    if (!(ph == currentPipe_)) { dev_->setPipeline(ph); currentPipe_ = ph; }
+    if (!(ph == currentPipe_)) {
+        dev_->setPipeline(ph); currentPipe_ = ph;
+        if (!shadow) lights.bind(4, 7);   // U4 / tex7: dynamic lights
+    }
     ModelDrawUniforms u{};
     std::memcpy(u.model, it.world.m, sizeof u.model);
     mat4 nm = it.world.normalMatrix();

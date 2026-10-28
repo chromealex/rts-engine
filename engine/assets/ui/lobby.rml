@@ -13,44 +13,44 @@
 <body>
 <div class="root" data-model="game" data-class-touch="touch">
 <div id="lobby" class="panel" data-if="screen == 'lobby'">
-    <h1>@lobby.title</h1>
+    <h1>{{ 'lobby.title' | tr(lang) }}</h1>
     <p class="error" data-if="netError != ''">{{netError}}</p>
 
     <!-- connection -->
     <div data-if="lobby == 'connect' || lobby == 'connecting'">
-        <div class="field"><span class="flabel">@lobby.server</span><input type="text" data-value="netAddress"/></div>
-        <div class="field"><span class="flabel">@lobby.name</span><input type="text" data-value="netName" maxlength="24"/></div>
+        <div class="field"><span class="flabel">{{ 'lobby.server' | tr(lang) }}</span><input type="text" data-value="netAddress"/></div>
+        <div class="field"><span class="flabel">{{ 'lobby.name' | tr(lang) }}</span><input type="text" data-value="netName" maxlength="24"/></div>
         <p class="dim" data-if="lobby == 'connecting'">{{netStatus}}</p>
         <div class="buttons">
-            <button data-if="lobby == 'connect'" data-event-click="net('connect')">@lobby.connect</button>
-            <button data-if="lobby == 'connecting'" data-event-click="net('disconnect')">@lobby.cancel</button>
-            <button data-event-click="net('back')">@lobby.back</button>
+            <button data-if="lobby == 'connect'" data-event-click="net('connect')">{{ 'lobby.connect' | tr(lang) }}</button>
+            <button data-if="lobby == 'connecting'" data-event-click="net('disconnect')">{{ 'lobby.cancel' | tr(lang) }}</button>
+            <button data-event-click="net('back')">{{ 'lobby.back' | tr(lang) }}</button>
         </div>
     </div>
 
     <!-- server browser: quick match + rooms -->
     <div data-if="lobby == 'browse'">
-        <div class="statusline"><span class="dim grow">{{netStatus}}</span><button class="small" data-event-click="net('disconnect')">@lobby.disconnect</button></div>
+        <div class="statusline"><span class="dim grow">{{netStatus}}</span><button class="small" data-event-click="net('disconnect')">{{ 'lobby.disconnect' | tr(lang) }}</button></div>
         <div class="cols">
             <div class="col">
-                <h2>@lobby.quick</h2>
+                <h2>{{ 'lobby.quick' | tr(lang) }}</h2>
                 <button class="line" data-for="q : queues" data-class-active="q.active" data-class-disabled="!q.enabled" data-event-click="act(q.id)">
                     <span class="label">{{q.label}}</span><span class="sub" data-if="q.cost != ''">{{q.cost}}</span>
                 </button>
-                <button class="small" data-if="searching" data-event-click="net('unqueue')">@lobby.cancel</button>
+                <button class="small" data-if="searching" data-event-click="net('unqueue')">{{ 'lobby.cancel' | tr(lang) }}</button>
 
-                <h2>@lobby.create</h2>
+                <h2>{{ 'lobby.create' | tr(lang) }}</h2>
                 <div class="field"><input type="text" data-value="roomName" maxlength="32"/></div>
                 <button class="line" data-for="m : createMaps" data-event-click="act(m.id)">
                     <span class="label">{{m.label}}</span><span class="sub">{{m.cost}}</span>
                 </button>
             </div>
             <div class="col">
-                <h2>@lobby.rooms <button class="small" data-event-click="net('refresh')">@lobby.refresh</button></h2>
-                <p class="dim" data-if="rooms.size == 0">@lobby.no_rooms</p>
+                <h2>{{ 'lobby.rooms' | tr(lang) }} <button class="small" data-event-click="net('refresh')">{{ 'lobby.refresh' | tr(lang) }}</button></h2>
+                <p class="dim" data-if="rooms.size == 0">{{ 'lobby.no_rooms' | tr(lang) }}</p>
                 <div class="roomrow" data-for="r : rooms">
                     <div class="grow"><div>{{r.label}}</div><div class="sub">{{r.cost}} <span class="warnc">{{r.tip}}</span></div></div>
-                    <button class="small" data-class-disabled="!r.enabled" data-event-click="act(r.id)">@lobby.join</button>
+                    <button class="small" data-class-disabled="!r.enabled" data-event-click="act(r.id)">{{ 'lobby.join' | tr(lang) }}</button>
                     <button class="small" data-event-click="act(r.alt)">{{r.altLabel}}</button>
                 </div>
             </div>
@@ -66,26 +66,26 @@
                     <div class="grow">
                         <span>{{sl.label}}</span>
                         <span class="sub" data-if="sl.hotkey != ''">({{sl.hotkey}})</span>
-                        <div class="sub">{{sl.cost}} <span class="ok" data-if="sl.tip != ''">✓ {{sl.tip}}</span></div>
+                        <div class="sub">{{sl.cost}} <span class="ok" data-if="sl.tip != ''">{{sl.tip}}</span></div>
                     </div>
-                    <button class="small" data-if="sl.enabled" data-event-click="act(sl.id)">@lobby.take</button>
+                    <button class="small" data-if="sl.enabled" data-event-click="act(sl.id)">{{ 'lobby.take' | tr(lang) }}</button>
                     <button class="small" data-if="sl.alt >= 0" data-event-click="act(sl.alt)">{{sl.altLabel}}</button>
                 </div>
                 <p class="dim" data-if="spectators != ''">{{spectators}}</p>
                 <div class="buttons">
-                    <button data-if="!isHost" data-class-active="myReady" data-event-click="net('ready')">@lobby.ready</button>
-                    <button data-if="isHost" data-class-disabled="!canStart" data-event-click="net('start')">@lobby.start</button>
-                    <button data-event-click="net('spectate')">@lobby.spectate</button>
-                    <button data-event-click="net('leave')">@lobby.leave</button>
+                    <button data-if="!isHost" data-class-active="myReady" data-event-click="net('ready')">{{ 'lobby.ready' | tr(lang) }}</button>
+                    <button data-if="isHost" data-class-disabled="!canStart" data-event-click="net('start')">{{ 'lobby.start' | tr(lang) }}</button>
+                    <button data-event-click="net('spectate')">{{ 'lobby.spectate' | tr(lang) }}</button>
+                    <button data-event-click="net('leave')">{{ 'lobby.leave' | tr(lang) }}</button>
                 </div>
                 <p class="dim" data-if="isHost &amp;&amp; !canStart">{{waitHint}}</p>
             </div>
             <div class="col">
-                <h2>@lobby.chat</h2>
+                <h2>{{ 'lobby.chat' | tr(lang) }}</h2>
                 <div id="chatlog"><div class="chatline" data-for="c : chat">{{c}}</div></div>
                 <div class="field row">
                     <input type="text" class="grow" data-value="chatInput" maxlength="200" data-event-keydown="net('chatkey', ev.key_identifier)"/>
-                    <button class="small" data-event-click="net('chat')">@lobby.send</button>
+                    <button class="small" data-event-click="net('chat')">{{ 'lobby.send' | tr(lang) }}</button>
                 </div>
             </div>
         </div>

@@ -1,0 +1,17 @@
+<rml>
+<head>
+    <title>keyboard</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="keyboard.rcss"/>
+</head>
+<!-- On-screen keyboard (engine/ui/UiKeyboard.cpp). Model "keyboard": visible, top (docked at the top
+     because the caret is low on the screen), keys[] {label, cls, id}; event press(id) on mousedown.
+     The document never takes focus (focus: none), so the text field keeps the caret. -->
+<body class="kb-body">
+<div id="kb" data-model="keyboard" data-if="visible" data-class-top="top">
+    <div class="kb-keys">
+        <div data-for="k : keys" data-attr-class="k.cls" data-event-mousedown="press(k.id)">{{k.label}}</div>
+    </div>
+</div>
+</body>
+</rml>

@@ -77,6 +77,10 @@ bool MapDoc::loadJson(const Json& j, std::string* err) {
             for (size_t x = 0; x < r.size() && int(x) < d.w; ++x) if (r[x] >= '0' && r[x] <= '9') d.levels[d.idx(int(x), int(y))] = int8_t(r[x] - '0');
         }
         for (size_t i = 0; i < t["heights"].size() && i < n; ++i) d.heights[i] = int16_t(t["heights"][i].integer());
+        if (t["corners"].size() > 0) {
+            d.corners.assign(size_t((d.w + 1) * (d.h + 1)), 0);
+            for (size_t i = 0; i < t["corners"].size() && i < d.corners.size(); ++i) d.corners[i] = int16_t(t["corners"][i].integer());
+        }
         // fields: digit rows per resource, or legacy circles (converted to digits)
         for (auto& f : j["fields"].items()) {
             std::string res = f.getStr("resource");
@@ -198,6 +202,11 @@ Json MapDoc::toJson() const {
         Json hs = Json::array();
         for (auto v : d.heights) hs.push(Json::number(int64_t(v)));
         terrain.set("heights", hs);
+    }
+    if (!d.corners.empty()) {
+        Json cs = Json::array();
+        for (auto v : d.corners) cs.push(Json::number(int64_t(v)));
+        terrain.set("corners", cs);
     }
     j.set("terrain", terrain);
     Json fields = Json::array();
@@ -332,6 +341,12 @@ void MapDoc::resize(int w, int h) {
     };
     remap(d.cells, '.'); remap(d.levels, int8_t(0)); remap(d.heights, int16_t(0));
     remap(d.fieldRes, int8_t(-1)); remap(d.fieldAmt, uint8_t(0)); remap(d.regions, '.');
+    if (!d.corners.empty()) {
+        std::vector<int16_t> out(size_t((w + 1) * (h + 1)), 0);
+        for (int y = 0; y <= std::min(h, d.h); ++y)
+            for (int x = 0; x <= std::min(w, d.w); ++x) out[size_t(y * (w + 1) + x)] = d.corners[size_t(y * (d.w + 1) + x)];
+        d.corners.swap(out);
+    }
     d.w = w; d.h = h;
 }
 

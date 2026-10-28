@@ -5,6 +5,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/CAMetalLayer.h>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 
@@ -17,10 +18,55 @@ static char** g_argv = nullptr;
 static std::unique_ptr<gfx::Device> g_device;
 static std::chrono::steady_clock::time_point g_last;
 
-@interface RTSMetalView : UIView
+// The Metal view doubles as the text input client: becoming first responder shows the keyboard,
+// UIKeyInput delivers typed text (any language) and Backspace.
+@interface RTSMetalView : UIView <UIKeyInput>
+@property(nonatomic) UITextAutocorrectionType autocorrectionType;
+@property(nonatomic) UITextAutocapitalizationType autocapitalizationType;
+@property(nonatomic) UITextSpellCheckingType spellCheckingType;
+@property(nonatomic) UITextSmartQuotesType smartQuotesType;
+@property(nonatomic) UITextSmartDashesType smartDashesType;
+@property(nonatomic) UIReturnKeyType returnKeyType;
+@property(nonatomic) UIKeyboardType keyboardType;
 @end
+static __weak RTSMetalView* g_view = nil;
+static bool g_closingKeyboard = false; // resignFirstResponder initiated by stopTextInput()
+
 @implementation RTSMetalView
 + (Class)layerClass { return [CAMetalLayer class]; }
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        // game text (names, chat): no autocorrect surprises, "Done" closes the keyboard
+        _autocorrectionType = UITextAutocorrectionTypeNo;
+        _autocapitalizationType = UITextAutocapitalizationTypeNone;
+        _spellCheckingType = UITextSpellCheckingTypeNo;
+        _smartQuotesType = UITextSmartQuotesTypeNo;
+        _smartDashesType = UITextSmartDashesTypeNo;
+        _returnKeyType = UIReturnKeyDone;
+        _keyboardType = UIKeyboardTypeDefault;
+        NSNotificationCenter* nc = NSNotificationCenter.defaultCenter;
+        [nc addObserver:self selector:@selector(keyboardFrame:) name:UIKeyboardWillChangeFrameNotification object:nil];
+        [nc addObserver:self selector:@selector(keyboardHide:) name:UIKeyboardWillHideNotification object:nil];
+    }
+    return self;
+}
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (BOOL)canBecomeFirstResponder { return state().textInput; }
+- (BOOL)hasText { return YES; } // keep Backspace enabled: the text lives in the game UI, not here
+- (void)insertText:(NSString*)text { detail::dispatchText(text.UTF8String ? text.UTF8String : ""); }
+- (void)deleteBackward { detail::dispatchKeyPress(Key::Backspace); }
+- (BOOL)resignFirstResponder {
+    BOOL r = [super resignFirstResponder];
+    if (r && !g_closingKeyboard) detail::textInputEndedByUser(); // iPad "hide keyboard" key
+    return r;
+}
+- (void)keyboardFrame:(NSNotification*)n {
+    CGRect screenFrame = [n.userInfo[UIKeyboardFrameEndUserInfoKey] CGRectValue];
+    UIScreen* screen = self.window ? self.window.screen : UIScreen.mainScreen;
+    CGRect f = [self convertRect:screenFrame fromCoordinateSpace:screen.coordinateSpace];
+    detail::setKeyboardHeight(float(std::max<CGFloat>(0, CGRectGetMaxY(self.bounds) - CGRectGetMinY(f))));
+}
+- (void)keyboardHide:(NSNotification*)n { detail::setKeyboardHeight(0); }
 - (void)layoutSubviews {
     [super layoutSubviews];
     auto& S = state();
@@ -53,6 +99,7 @@ static std::chrono::steady_clock::time_point g_last;
 - (void)loadView {
     RTSMetalView* v = [[RTSMetalView alloc] initWithFrame:UIScreen.mainScreen.bounds];
     v.multipleTouchEnabled = YES;
+    g_view = v;
     self.view = v;
 }
 - (void)viewDidLoad {
@@ -107,6 +154,20 @@ static std::chrono::steady_clock::time_point g_last;
 @end
 
 namespace rts::platform {
+
+namespace detail {
+void showSoftKeyboard(bool show, const TextInputArea&) {
+    RTSMetalView* v = g_view;
+    if (!v) return;
+    if (show) {
+        if (!v.isFirstResponder) [v becomeFirstResponder];
+    } else if (v.isFirstResponder) {
+        g_closingKeyboard = true;
+        [v resignFirstResponder];
+        g_closingKeyboard = false;
+    }
+}
+} // namespace detail
 
 const char* name() { return "ios"; }
 void setTitle(const std::string&) {}

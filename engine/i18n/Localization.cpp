@@ -401,6 +401,48 @@ std::string Localization::meta(std::string_view key, std::string_view def) const
     return std::string(def);
 }
 
+// ------------------------------------------------------------------ markup
+
+std::vector<std::string> markupKeys(std::string_view m) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < m.size(); ++i) {
+        if (m.compare(i, 4, "<!--") == 0) {   // examples in comments are not keys
+            size_t e = m.find("-->", i);
+            if (e == std::string_view::npos) break;
+            i = e + 2;
+            continue;
+        }
+        char q = m[i];
+        if (q != '\'' && q != '"') continue;
+        size_t end = m.find(q, i + 1);
+        if (end == std::string_view::npos) break;
+        size_t j = end + 1;
+        while (j < m.size() && m[j] == ' ') ++j;
+        bool isTr = j + 1 < m.size() && m[j] == '|';
+        if (isTr) {
+            ++j;
+            while (j < m.size() && m[j] == ' ') ++j;
+            isTr = m.substr(j, 2) == "tr" && (j + 2 >= m.size() || !(std::isalnum(static_cast<unsigned char>(m[j + 2])) || m[j + 2] == '_'));
+        }
+        if (isTr) out.emplace_back(m.substr(i + 1, end - i - 1));
+        i = isTr ? end : i;   // a non-key quote may open an attribute value: keep scanning inside it
+    }
+    return out;
+}
+
+std::string visibleText(std::string_view p) {
+    std::string out;
+    for (size_t i = 0; i < p.size(); ++i) {
+        if ((p[i] == '{' || p[i] == '}') && i + 1 < p.size() && p[i + 1] == p[i]) { out += p[i]; ++i; continue; }
+        if (p[i] == '{') {
+            const size_t end = p.find('}', i + 1);
+            if (end != std::string_view::npos) { i = end; continue; }
+        }
+        out += p[i];
+    }
+    return out;
+}
+
 // ------------------------------------------------------------------ validation
 
 std::vector<Issue> check(const Catalog& base, const std::string& baseLang, const Catalog& lang, const std::string& language) {
@@ -432,8 +474,9 @@ std::vector<Issue> check(const Catalog& base, const std::string& baseLang, const
                 if (!std::binary_search(want.begin(), want.end(), n))
                     add(Issue::Error, key, "unknown placeholder {" + n + "} (" + baseLang + " has " + join(want) + ")");
         }
+        // Only words count: "{name}: {text}" is legitimately the same in every language.
         if (!le->plural && !be.plural && le->text == be.text && baseLanguage(language) != baseLanguage(baseLang) &&
-            le->text.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos)
+            visibleText(le->text).find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") != std::string::npos)
             add(Issue::Warning, key, "same text as in " + baseLang + " (not translated yet?)");
         if (be.plural && !le->plural)
             add(Issue::Warning, key, "is plural in " + baseLang + " but a plain string here");

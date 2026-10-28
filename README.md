@@ -225,6 +225,10 @@ rtsbuild --project ~/RTSGames/dune2 --target macos
 - F8 в клиенте — отладчик RmlUi (дерево элементов, стили, журнал).
 - Тексты в документах пишутся ключами `@menu.play`: перевод берётся из `engine/assets/lang` (и `lang/`
   игры) при загрузке документа, смена языка в меню перезагружает документы.
+- Экранная клавиатура (`engine/ui/UiKeyboard.*`): своя, на RmlUi, открывается при фокусе в поле
+  ввода на сенсорных устройствах (на ПК — `RTS_OSK=1`). Раскладки (en, ru, символы; Shift, Caps по
+  двойному нажатию, смена языка) — в `keyboard.json`, вид — `keyboard.rml` / `keyboard.rcss`; игра
+  заменяет любой из файлов в своей `ui/`. Если курсор внизу экрана, клавиатура встаёт сверху.
 - Сетевая игра (`lobby.rml`, `apps/client/Lobby.cpp`): адрес сервера и имя, быстрая игра по очередям
   сервера, список комнат (войти / смотреть), своя комната (слоты, боты, готовность, старт, чат).
   Матч ведёт `NetClient`: `attach(sim)`, `advance(dt)` вместо `sim.advance(dt)`, команды — от слота
@@ -306,11 +310,13 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 | Что | Смысл |
 |---|---|
 | форматы | WAV, OGG Vorbis, MP3, FLAC; `"synth"` — звук из параметров (`sine/square/saw/triangle/noise`, свип частоты, огибающая, вибрато, фильтр, слои) |
-| шины | `sfx` и `ambient` — позиционные (затухание и панорама от камеры), `voice`, `ui`, `music` — нет |
+| шины | `sfx` и `ambient` — позиционные (3D: затухание, панорама, высота), `voice`, `ui`, `music` — нет |
+| расстояние | `spatial`: модель затухания, дальности, «воздух» (вдали пропадают верха), реверберация растёт с расстоянием, скорость звука; у звука — свои дальности и `far` — дальний вариант с кроссфейдом |
 | `maxInstances`, `cooldown`, `priority` | прореживание в больших боях: 40 лучников не дают 40 одинаковых выстрелов |
 | события (cues) | `attack hit miss died spawned trainStarted ready buildPlaced buildDone gathered captured lost playerDefeated victory defeat notEnough notEnoughSupply noRoom researched levelUp ability readyToPlace sold regionClaimed wave lowPower upgraded message underAttack baseUnderAttack select move attackOrder buildOrder click error` |
 | поиск звука | тип → оружие/способность по id → `events` |
-| музыка | плейлисты `menu`, `match`, `battle` (включается при сильном бое у камеры), `victory`, `defeat`; кроссфейд |
+| музыка | плейлисты `menu`, `match`, `battle`, `victory`, `defeat` (и `match.<карта>`); кроссфейд, интро + бесшовные петли, слои по интенсивности боя, переходы по долям/тактам, стингеры, приглушение под голос |
+| сжатие при сборке | `rtsbuild` перекодирует звук под платформу: ADPCM для эффектов, Vorbis для музыки, понижение частоты, моно; профили `desktop`/`mobile`/`web` в `audio.json` → `build`; `--audio off` — без перекодирования |
 
 Звуки боя слышны только там, где нет тумана войны; «нас атакуют» — с паузой, и только если камера
 смотрит в другое место. Громкость (общая и музыка) — в меню паузы, хранится в `userDataDir/audio.cfg`.
@@ -340,6 +346,29 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 Сломанная модель не ломает игру: тип рисуется фигурой, причина пишется в консоль редактора.
 Просмотр: `rts_modelview модель.glb@Walk` или `rts_modelview --game games/showcase` (все типы игры
 так, как их рисует игра). Пример — `games/showcase`, полный формат — `docs/models.md`.
+
+## Освещение
+
+Динамический свет рассчитан на старые Android (Mali-T, Adreno 3xx/4xx): все источники рисуются в
+маленькую световую карту над видимой землёй, шейдер берёт свет одной выборкой текстуры, сколько бы
+источников ни было. Уровни: `off`, `low` (карта 128², обновление через кадр), `medium` (256²),
+`high` (+ 8 источников попиксельно с бликом). Выбирается по GPU, как тени; вручную: `RTS_LIGHTS=…`.
+
+- **Свет типов и боя** — `view.light` (костры, кузницы, светящиеся грибы), вспышки выстрелов,
+  попаданий, взрывов, свет снарядов (`attackLight`, `projectileLight`, `hitLight`, `deathLight`),
+  ореолы `halo` вместо дорогого bloom. Туман войны скрывает вспышки.
+- **День и ночь, погода** — блок `lighting` в `game.json` или в карте: `time`, `dayLength`,
+  `nightLevel`, `clouds`, `wind`, `storm` (тени облаков и молнии, одинаковые в реплеях). Ночью
+  эмиссивные материалы светятся ярче.
+- **Свет на карте** — массив `lights` в карте (фонари, костры, лава).
+- **Контактные тени и AO** — мягкие пятна под юнитами и вокруг зданий, на всех уровнях
+  (`contactShadow`, `contactShape` у типа).
+- **Редактор** — окно «Lighting»: предпросмотр времени суток и грозы, уровень качества света,
+  список источников. Для агентов: `light_add`, `light_update`, `light_delete`, `light_list`,
+  `lighting_set`, `view_lighting`.
+
+Формат полей — в шапке `modules/rts/view/RtsLights.h`. Тестовые переменные: `RTS_TIME_OF_DAY`,
+`RTS_NIGHT`, `RTS_CLOUDS`, `RTS_STORM`.
 
 ## Проверено / не проверено
 
@@ -377,6 +406,12 @@ node platform/web/smoke.mjs build/web
 ```
 
 Параметры командной строки в web-сборке задаются через URL: `index.html?map=0&spectate` = `--map 0 --spectate`.
+
+Экранная клавиатура: `platform::startTextInput(area)` / `stopTextInput()` открывают и закрывают её на iOS,
+Android и в мобильных браузерах (на десктопе — ничего не делают). Текст приходит событиями `Char`
+на любом языке, Backspace/Enter — как `KeyDown`/`KeyUp`; `softKeyboardHeight()` и событие `KeyboardChanged`
+сообщают, сколько экрана закрыто снизу, `TextInputEnded` — что пользователь сам закрыл клавиатуру.
+UI (`UiLayer`) вызывает это сам при фокусе на `<input type="text|password|search|email|number">` и `<textarea>`.
 Режим скриншота (`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`) шагает ровно по 1/60 с на кадр, поэтому
 кадр N одинаков на любой машине.
 

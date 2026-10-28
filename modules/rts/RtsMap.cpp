@@ -25,6 +25,7 @@ void MapGrid::init(int width, int h_) {
     flags.assign(n, kCellGround);
     level.assign(n, 0);
     height.assign(n, 0);
+    corner.clear();
     blocked.assign(n, 0);
     creep.assign(n, 0);
     fieldRes.assign(n, -1);
