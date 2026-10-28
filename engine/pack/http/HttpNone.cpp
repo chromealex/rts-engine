@@ -1,4 +1,4 @@
-// Placeholder until the platform HTTP fetchers land: file:// and custom schemes already work.
+// Platforms without an HTTP fetcher: file:// paths and game-registered schemes still work.
 #include "Chunks.h"
 
 namespace rts::pack {
