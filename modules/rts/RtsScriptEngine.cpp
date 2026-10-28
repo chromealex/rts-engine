@@ -354,7 +354,7 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
             im.logLine(true, err);
         }
     }
-    static const char* const kStdNames[] = {"victory"};
+    static const char* const kStdNames[] = {"victory", "waves"};
     static_assert(sizeof(kStdNames) / sizeof(kStdNames[0]) == size_t(StdFn::Count));
     lua_getglobal(L, "std");
     for (size_t k = 0; k < size_t(StdFn::Count); ++k) {

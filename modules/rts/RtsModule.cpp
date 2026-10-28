@@ -29,7 +29,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (rules_.settlers) sim.addSystem("settlers", [this](Simulation& s) { sysSettlers(s); });
     if (rules_.lanes.enabled) sim.addSystem("lanes", [this](Simulation& s) { sysLanes(s); });
     sim.addSystem("garrison", [this](Simulation& s) { sysGarrison(s); });
-    sim.addSystem("waves", [this](Simulation& s) { sysWaves(s); });
+    sim.addSystem("waves", [this](Simulation& s) { script_->callStd(s, StdFn::Waves); });   // lua/waves.lua
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
     if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
