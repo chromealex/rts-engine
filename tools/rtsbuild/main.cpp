@@ -3,7 +3,7 @@
 //   rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>
 //            [--engine <engine dir>] [--out <dir>] [--config Debug|Release]
 //            [--generate-only] [--team <Apple team id>] [--jobs N]
-//            [--no-pack] [--pack-level N] [--no-atlas]
+//            [--no-pack] [--pack-level N] [--no-atlas] [--audio auto|off|desktop|mobile|web]
 //            [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]
 //
 // Split builds (game.json "packaging", see splitConfig): the app ships only the base pack with
@@ -15,6 +15,9 @@
 // a size report and writes it to <out>/<target>/size-report.txt (+ size-report.json for the
 // editor). Small 2D images are packed into texture atlases per platform profile (= target; page
 // size limit from game.json "atlas", see docs/game-format.md); --no-atlas ships them as is.
+// Sounds and music are re-encoded per target the same way (audio.json "build" profiles, see
+// tools/audiopack): desktop targets use "desktop", ios/android "mobile", web "web"; --audio
+// <profile> forces one, --audio off ships the files as they are.
 //
 // Outputs (default <project>/../dist/<target>):
 //   macos    <Name>.app                     (universal arm64+x86_64, ad-hoc signed)
@@ -44,6 +47,7 @@
 #include "engine/pack/PackWriter.h"
 #include "engine/pack/Unpacker.h"
 #include "tools/atlas/AtlasBuild.h"
+#include "tools/audiopack/AudioPack.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -75,7 +79,9 @@ struct Options {
     bool atlas = true;
     std::string profile;      // current target: selects the atlas page size
     Json gameJson;
-    std::map<std::string, fs::path> packFiles; // atlas + split settings key -> built pack (shared by targets with equal settings)
+    std::map<std::string, fs::path> packFiles; // atlas + audio + split settings key -> built pack (shared by targets with equal settings)
+    std::string audio = "auto";                 // auto (by target) | off | audio profile name
+    std::map<std::string, fs::path> staged;     // game folder with audio re-encoded, per audio profile
     // Split builds: command-line overrides of game.json "packaging" (-1 / empty = not given).
     int split = -1, fillBase = -1;
     std::string chunkSize, baseSize, totalSize;
@@ -322,21 +328,48 @@ SplitConfig splitConfig(const Options& o) {
     return c;
 }
 
-// Builds <out>/_pack[/<atlas key>][/<split key>]/content.rpak (+ chunks/) from the game folder and
-// engine assets, once per distinct setting (targets with equal settings share one pack).
+// ------------------------------------------------------------------ audio
+std::string audioProfile(const Options& o) {
+    if (o.audio == "off") return "off";
+    return o.audio == "auto" ? rts::audiopack::profileForTarget(o.profile) : o.audio;
+}
+
+// The game folder as it ships for the current target: a copy with sounds and music re-encoded
+// for its audio profile (once per profile), or the project itself with --audio off.
+fs::path gameContent(Options& o) {
+    const std::string profile = audioProfile(o);
+    if (profile == "off") return o.project;
+    if (auto it = o.staged.find(profile); it != o.staged.end()) return it->second;
+    step("Звук: сжатие для профиля " + profile);
+    const fs::path dir = o.out / "_audio" / profile;
+    rts::audiopack::Report report;
+    std::string err;
+    if (!rts::audiopack::stageGame(o.project.string(), dir.string(), profile, report, &err)) die(err);
+    std::stringstream ss(report.items.empty() ? std::string("без изменений\n") : report.text());
+    for (std::string line; std::getline(ss, line);) info(line);
+    writeText(o.out / "_audio" / (profile + "-report.txt"), report.text());
+    o.staged[profile] = dir;
+    return dir;
+}
+
+// Builds <out>/_pack[/<atlas key>][/audio-<profile>][/<split key>]/content.rpak (+ chunks/) from the
+// game folder and engine assets, once per distinct atlas + audio + split setting (targets that agree
+// share one pack).
 fs::path packDir(const Options& o) {
-    std::string key = atlasConfig(o).key();
-    fs::path d = key == "off" ? o.out / "_pack" : o.out / "_pack" / key;
-    std::string sk = splitConfig(o).key();
-    return sk.empty() ? d : d / sk;
+    std::string key = atlasConfig(o).key(), audio = audioProfile(o), split = splitConfig(o).key();
+    fs::path dir = key == "off" ? o.out / "_pack" : o.out / "_pack" / key;
+    if (!(audio == "desktop" || audio == "off")) dir /= "audio-" + audio;
+    return split.empty() ? dir : dir / split;
 }
 
 fs::path contentPack(Options& o) {
     rts::atlas::AtlasConfig ac = atlasConfig(o);
     SplitConfig sc = splitConfig(o);
-    std::string key = ac.key() + "/" + sc.key();
+    const std::string audio = audioProfile(o), key = ac.key() + "|" + audio + "|" + sc.key();
     if (auto it = o.packFiles.find(key); it != o.packFiles.end()) return it->second;
-    step("Контент: сборка ресурс-пака" + (key == "off" ? std::string() : " (атласы: " + o.profile + ", страница до " + std::to_string(ac.pack.maxPage) + ")"));
+    const fs::path game = gameContent(o);
+    step("Контент: сборка ресурс-пака" + (ac.key() == "off" ? std::string() : " (атласы: " + o.profile + ", страница до " + std::to_string(ac.pack.maxPage) + ")") +
+         (audio == "off" ? std::string() : " (звук: " + audio + ")"));
     rts::pack::PackWriter w;
     rts::pack::IgnoreRules rules;
     rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
@@ -347,7 +380,7 @@ fs::path contentPack(Options& o) {
         if (Json::parseFile((o.project / "game.json").string()).getBool("external")) w.markExternal();
     } catch (const std::exception&) {}
     std::string err;
-    if (w.addDirectory(o.project.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
+    if (w.addDirectory(game.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
         die(err);
     rts::atlas::AtlasStats as;
     if (!rts::atlas::applyAtlas(w, ac, as, &err)) die(err);
@@ -421,7 +454,7 @@ void placeContent(Options& o, const fs::path& contentDir) {
         fs::create_directories(contentDir);
         fs::copy_file(contentPack(o), contentDir / "content.rpak", fs::copy_options::overwrite_existing);
     } else {
-        copyDir(o.project, contentDir);
+        copyDir(gameContent(o), contentDir);
         copyDir(o.engine / "engine" / "assets", contentDir / "engine");
     }
 }
@@ -449,6 +482,8 @@ void reportSize(const Options& o, const std::string& target, const fs::path& art
     }
     std::string report = line + "\n";
     if (o.pack && fs::exists(packDir(o) / "size-report.txt", ec)) report += "\nконтент (content.rpak):\n" + readText(packDir(o) / "size-report.txt");
+    if (const std::string p = audioProfile(o); p != "off" && fs::exists(o.out / "_audio" / (p + "-report.txt"), ec))
+        report += "\nзвук (профиль " + p + "):\n" + readText(o.out / "_audio" / (p + "-report.txt"));
     writeText(o.out / target / "size-report.txt", report);
     Json j = Json::object();
     j.set("target", Json::string(target));
@@ -573,7 +608,7 @@ void buildMac(const Game& g, Options& o) {
 
     step("macOS: конфигурация CMake");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, gen) + packVar(o) + " -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), gen) + packVar(o) + " -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
     step("macOS: сборка");
     mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config + " -j " + std::to_string(o.jobs));
     fs::path app = bdir / (g.exe + ".app");
@@ -731,7 +766,7 @@ void buildWeb(const Game& g, Options& o) {
     fs::path out = o.out / "web", bdir = o.out / "_build" / "web";
     step("Web: конфигурация (Emscripten)");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun(quote(emcmake) + " cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, {}) + packVar(o));
+    mustRun(quote(emcmake) + " cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), {}) + packVar(o));
     step("Web: сборка");
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::create_directories(out);
@@ -749,7 +784,7 @@ void buildWindows(const Game& g, Options& o) {
     if (std::string(kHost) == "windows") {
         fs::path bdir = o.out / "_build" / "windows";
         step("Windows: конфигурация (Visual Studio)");
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, o.project, {}) + packVar(o));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, gameContent(o), {}) + packVar(o));
         step("Windows: сборка");
         mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config);
         fs::path dir = bdir / o.config;
@@ -771,7 +806,7 @@ void buildWindows(const Game& g, Options& o) {
                       "set(CMAKE_EXE_LINKER_FLAGS_INIT \"-static -static-libgcc -static-libstdc++\")\n");
         step("Windows: кросс-компиляция (" + cxx + ")");
         std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, o.project, {}) + packVar(o));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, gameContent(o), {}) + packVar(o));
         mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
         fs::remove_all(out / g.exe);
         fs::create_directories(out / g.exe);
@@ -802,7 +837,7 @@ void buildLinux(const Game& g, Options& o) {
     fs::path out = o.out / "linux", bdir = o.out / "_build" / "linux";
     step("Linux: сборка");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, o.project, {}) + packVar(o));
+    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), {}) + packVar(o));
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::remove_all(out / g.exe);
     fs::create_directories(out / g.exe);
@@ -815,7 +850,7 @@ void buildLinux(const Game& g, Options& o) {
 void usage() {
     std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
                  "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
-                 "                [--no-pack] [--pack-level 1..22] [--no-atlas]\n"
+                 "                [--no-pack] [--pack-level 1..22] [--no-atlas] [--audio auto|off|desktop|mobile|web]\n"
                  "                [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]\n";
 }
 
@@ -844,6 +879,7 @@ int main(int argc, char** argv) {
         else if (a == "--base-size") o.baseSize = next();
         else if (a == "--total-size") o.totalSize = next();
         else if (a == "--fill-base") o.fillBase = 1;
+        else if (a == "--audio") o.audio = next();
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { usage(); return 2; }
     }

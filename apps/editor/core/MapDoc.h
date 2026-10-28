@@ -44,6 +44,7 @@ struct MapData {
     std::vector<char> cells;            // '.' ground '~' water '#' blocked ',' no-build '=' shallow '/' ramp 'R' rock
     std::vector<int8_t> levels;         // cliff level 0..9
     std::vector<int16_t> heights;       // fine height, 1/16 units
+    std::vector<int16_t> corners;       // heightfield corner heights (w+1)*(h+1), 1/16 units; empty = none
     std::vector<std::string> fieldResources;  // resource ids used by fields
     std::vector<int8_t> fieldRes;       // index into fieldResources, -1 none
     std::vector<uint8_t> fieldAmt;      // 0..9 (fraction of the resource's cellMax)

@@ -1,0 +1,38 @@
+// On-screen keyboard layouts (engine/ui/UiKeyboard.cpp). A game overrides the whole file with
+// ui/keyboard.json, and the looks with ui/keyboard.rcss / ui/keyboard.rml.
+//
+// Each layout is a list of rows; a row is a string of keys separated by spaces, or an array of keys.
+// A key is the text it types, or a special key in braces:
+//   {shift} (tap: next letter upper case, tap twice: caps lock)  {back}  {enter}  {space}
+//   {lang} (next layout of "order")  {sym} (symbols layout and back)  {hide}  {left}  {right}
+// Optional "shift" rows give the upper case of a layout; without them letters are upper-cased.
+{
+  "order": ["en", "ru"],          // layouts cycled by {lang}; the one matching the UI language opens first
+  "symbols": "sym",
+  "labels": { "shift": "Aa", "back": "«", "enter": "OK", "space": " ", "lang": "{next}", "sym": "123", "abc": "abc",
+              "hide": "×", "left": "‹", "right": "›" },
+  "names": { "en": "EN", "ru": "RU", "sym": "123" },
+  "layouts": {
+    "en": [
+      "1 2 3 4 5 6 7 8 9 0",
+      "q w e r t y u i o p",
+      "a s d f g h j k l",
+      "{shift} z x c v b n m {back}",
+      "{sym} {lang} {space} . {enter} {hide}"
+    ],
+    "ru": [
+      "1 2 3 4 5 6 7 8 9 0",
+      "й ц у к е н г ш щ з х ъ",
+      "ф ы в а п р о л д ж э",
+      "{shift} я ч с м и т ь б ю ё {back}",
+      "{sym} {lang} {space} . {enter} {hide}"
+    ],
+    "sym": [
+      "1 2 3 4 5 6 7 8 9 0",
+      "@ # % & * - + = ( )",
+      "! ? : ; / \\ \" ' _",
+      "{left} , . ~ < > [ ] {right} {back}",
+      "{sym} {space} {enter} {hide}"
+    ]
+  }
+}

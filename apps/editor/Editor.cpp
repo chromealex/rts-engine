@@ -102,6 +102,17 @@ void Editor::init(gfx::Device& dev) {
     view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
     view_.init(dev, rules(), projectReader(ws_.project.dir));
     for (auto& w : view_.warnings()) ws_.log("view", w, true);
+    fxTextures_.init(dev);
+    gameFx_.setQuality(fx::defaultQualityFor(dev, false));
+    gameFx_.setFileReader([this](const std::string& path, std::string& out) { return projectReader(ws_.project.dir)(path, out); });
+    gameFx_.setTextureLoader([this](const std::string& name, fx::FxTexture& out) {
+        render::TextureRef r = fxTextures_.resolve(name, false, ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
+        if (!r.valid()) return false;
+        out = {r.tex, r.u0, r.v0, r.u1, r.v1};
+        return true;
+    });
+    if (!gameFx_.init(&dev)) ws_.log("fx", gameFx_.lastError(), true);
+    reloadFx();
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
     else if (doc().data.cells.empty()) newMap(48, 32);
     ws_.changes.clear();
@@ -116,7 +127,10 @@ void Editor::init(gfx::Device& dev) {
 
 void Editor::shutdown() {
     if (!dev_) return;
+    gameFxBridge_.detach();
     sim_.reset();
+    gameFx_.shutdown();
+    fxTextures_.shutdown();
     windows_.clear(); // windows release their viewports in their destructors via update()? keep simple: textures die with the device
     view_.shutdown(*dev_);
     r3d_.shutdown();
@@ -143,6 +157,21 @@ void Editor::openGame(const std::string& idOrDir) {
     status = "Игра: " + ws_.project.manifest.getStr("name", idOrDir);
 }
 
+void Editor::reloadFx() {
+    fxWarnings.clear();
+    gameFx_.reloadAll();
+    gameFx_.clearErrors();
+    Json bank;
+    std::string text;
+    if (projectReader(ws_.project.dir)("fx/fx.json", text)) {
+        try { bank = Json::parse(text); }
+        catch (const std::exception& e) { fxWarnings.push_back(std::string("fx/fx.json: ") + e.what()); }
+    }
+    std::string err;
+    if (!gameFxBridge_.init(gameFx_, rules(), bank, &err)) fxWarnings.push_back(err);
+    for (auto& w : gameFxBridge_.warnings()) fxWarnings.push_back(w);
+}
+
 void Editor::reloadRules() {
     view_.shutdown(*dev_);
     view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
@@ -150,6 +179,7 @@ void Editor::reloadRules() {
     for (auto& w : view_.warnings()) ws_.log("view", w, true);
     gridRevision_ = ~0ull;
     placeType = std::clamp(placeType, 0, std::max(0, int(rules().types.size()) - 1));
+    reloadFx();
 }
 
 void Editor::newMap(int w, int h) {
@@ -263,6 +293,7 @@ int Editor::pickRoad(const Viewport& vp, const RTSCamera& cam, float sx, float s
 void Editor::syncGrid() {
     const auto& d = doc().data;
     if (grid_.w != d.w || grid_.h != d.h) grid_.init(d.w, d.h);
+    grid_.corner = d.corners;
     for (int i = 0; i < d.w * d.h; ++i) {
         grid_.flags[size_t(i)] = game::cellFlagsFromChar(d.cells[size_t(i)]);
         grid_.height[size_t(i)] = d.heights[size_t(i)];
@@ -378,11 +409,17 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     for (auto& o : sc.objects) o.selected = std::find(gameSelection.begin(), gameSelection.end(), o.entity) != gameSelection.end();
     r3d_.beginScene(cam, vp.w, vp.h);
     view_.draw(r3d_, sc, time_, human_ ? &gs.vision[size_t(human_)] : nullptr, gs.grid);
+    const float fxDt = fxTime_ < 0 || playPaused ? 0.0f : float(time_ - fxTime_) * playSpeed;
+    fxTime_ = time_;
+    gameFx_.setView(cam, r3d_.viewProj(), vp.w, vp.h);
+    if (fxDt > 0) gameFxBridge_.update(*sim_, &sc.objects);
+    gameFx_.update(fxDt);
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
     pass.depthTarget = vp.depth;
     pass.clearColor[0] = 0.55f; pass.clearColor[1] = 0.66f; pass.clearColor[2] = 0.78f;
     r3d_.render(pass);
+    gameFx_.render({r3d_.lighting.fogColor, r3d_.lighting.fogDensity});
     dev_->endPass();
     view_.drawOverlays(cam, sc, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
@@ -425,12 +462,18 @@ void Editor::startPlay(int humanSlot) {
         };
         if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
         sim_->setup(ws_.project.rulesJson, mapJson);
+        view_.lights().configure(ws_.project.manifest["lighting"], mapJson["lighting"], mapJson["lights"]); // day/night, map lights
     } catch (const std::exception& e) {
         status = std::string("Ошибка запуска: ") + e.what();
         sim_.reset();
         return;
     }
     human_ = humanSlot;
+    gameFx_.clear();
+    gameFxBridge_.setHeightFn([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : 0.0f; });
+    gameFxBridge_.setPlayerColorFn([](int p) { return game::RtsView::playerColor(p); });
+    gameFxBridge_.attach(*sim_, uint8_t(human_));
+    fxTime_ = -1;
     bots_.clear();
     for (auto& p : sim_->players()) if (p.slot != human_) bots_.emplace_back(p.slot, sim_->config().seed);
     playPaused = false;
@@ -451,6 +494,8 @@ void Editor::startPlay(int humanSlot) {
 }
 
 void Editor::stopPlay() {
+    gameFxBridge_.detach();
+    gameFx_.clear();
     sim_.reset();
     bots_.clear();
     gameSelection.clear();

@@ -14,6 +14,8 @@
 #include "EditorWindow.h"
 #include "core/Net.h"
 #include "core/Workspace.h"
+#include "engine/fx/ParticleSystem.h"
+#include "engine/render/TextureCache.h"
 #include "engine/gfx/Gfx.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
@@ -22,6 +24,7 @@
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsMap.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/fx/RtsFx.h"
 #include "modules/rts/view/RtsView.h"
 
 namespace rts::editor {
@@ -125,6 +128,11 @@ public:
     void renderScene(Viewport& vp, const render::RTSCamera& cam, bool editOverlays);
     void renderGame(Viewport& vp, const render::RTSCamera& cam);
 
+    // particle effects of the play-test (fx/fx.json + fx/*.json of the open game)
+    fx::ParticleSystem& gameFx() { return gameFx_; }
+    void reloadFx();                           // after fx files changed (Effects window, agents)
+    std::vector<std::string> fxWarnings;       // from the last reloadFx()
+
     // helpers for windows
     bool groundAt(const Viewport& vp, const render::RTSCamera& cam, float sx, float sy, float& x, float& z) const;
     int pickEntity(const Viewport& vp, const render::RTSCamera& cam, float sx, float sy) const;
@@ -188,6 +196,10 @@ private:
     bool sceneFlying_ = false;
     render::float3 sceneGoal_{};
 
+    fx::ParticleSystem gameFx_;
+    game::RtsFx gameFxBridge_;
+    render::TextureCache fxTextures_;          // sprite textures of effects (same loader as sprites)
+    double fxTime_ = -1;
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;
     int human_ = 0;

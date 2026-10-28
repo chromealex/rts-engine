@@ -16,6 +16,7 @@
 //   U3 skin:      vec4 joints[240] (80 joints as 3 rows of a 3x4 matrix)
 // Textures: tex0 shadow map, tex1 base colour (sRGB), tex2 metallic-roughness (G rough, B metal),
 //           tex3 normal, tex4 occlusion (R), tex5 emissive (sRGB), tex6 team mask (R)
+// Dynamic lights (LightShaders.h): U4 light block, tex7 light map.
 #pragma once
 #include "Shaders.h"
 
@@ -87,7 +88,7 @@ void main() {
 )";
 
 inline const char* kModelFS =
-    RTS_GLSL_MODEL_BLOCKS RTS_GLSL_SHADOW
+    RTS_GLSL_MODEL_BLOCKS RTS_GLSL_SHADOW RTS_GLSL_LIGHTS_AT("U4", "tex7")
     R"(
 uniform mediump sampler2D tex1;
 uniform mediump sampler2D tex2;
@@ -156,6 +157,7 @@ void main() {
     float ndl = max(dot(n, L), 0.0);
     float ndv = max(dot(n, V), 1e-4);
     float sh = (ndl > 0.0 && u_draw.x > 0.5) ? shadowAt(v_wpos, normalize(v_nrm)) : 1.0;
+    sh *= cloudShade(v_wpos);
     vec3 sun = u_sunColor.rgb * u_sunColor.rgb * u_sunDir.w;
     vec3 sky = u_skyColor.rgb * u_skyColor.rgb, ground = u_groundColor.rgb * u_groundColor.rgb;
     vec3 amb = mix(ground, sky, n.y * 0.5 + 0.5);
@@ -186,8 +188,9 @@ void main() {
 #endif
     vec3 col = diff * (amb * ao + sun * ndl * sh) + sun * spec * sh + ambSpec * ao;
     col += amb * base.rgb * pow(1.0 - ndv, 3.0) * 0.25;   // rim, keeps silhouettes readable from the RTS camera
+    col += diff * dynamicLight(v_wpos, n, V, (1.0 - rough) * 0.5);   // point lights (Lights.h)
     if (m_uv1.y > 0.5) col = base.rgb;
-    col += emis + u_team.a * vec3(1.0, 0.85, 0.7);
+    col += emis * (1.0 + nightGlow()) + u_team.a * vec3(1.0, 0.85, 0.7);
     float dist = length(u_camPos.xyz - v_wpos);
     col = mix(col, u_fog.rgb * u_fog.rgb, 1.0 - exp(-dist * u_fog.w));
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
@@ -237,7 +240,7 @@ void main() {
 // ---------------------------------------------------------------- MSL
 
 inline const char* kModelMSL =
-    RTS_MSL_MODEL_BLOCKS RTS_MSL_SHADOW
+    RTS_MSL_MODEL_BLOCKS RTS_MSL_SHADOW RTS_MSL_LIGHTS
     R"(
 struct VIn {
     float3 pos [[attribute(0)]];
@@ -297,7 +300,8 @@ fragment float4 fs_main(VOut in [[stage_in]], bool frontFacing [[front_facing]],
                         texture2d<float> tex3 [[texture(3)]], sampler s3 [[sampler(3)]],
                         texture2d<float> tex4 [[texture(4)]], sampler s4 [[sampler(4)]],
                         texture2d<float> tex5 [[texture(5)]], sampler s5 [[sampler(5)]],
-                        texture2d<float> tex6 [[texture(6)]], sampler s6 [[sampler(6)]]) {
+                        texture2d<float> tex6 [[texture(6)]], sampler s6 [[sampler(6)]],
+                        constant LightU& lu [[buffer(5)]], texture2d<float> tex7 [[texture(7)]], sampler s7 [[sampler(7)]]) {
     float4 tb = tex1.sample(s1, in.uv);
     float4 base = m.base * float4(toLinear(tb.rgb), tb.a);
     if (m.misc.w > 0.5) base *= in.col;
@@ -346,6 +350,7 @@ fragment float4 fs_main(VOut in [[stage_in]], bool frontFacing [[front_facing]],
     float ndl = max(dot(n, L), 0.0);
     float ndv = max(dot(n, V), 1e-4);
     float sh = (ndl > 0.0 && u.draw.x > 0.5) ? shadowAt(f, in.wpos, normalize(in.nrm), in.pos.xy, tex0, s0) : 1.0;
+    sh *= cloudShade(lu, in.wpos);
     float3 sun = f.sunColor.rgb * f.sunColor.rgb * f.sunDir.w;
     float3 sky = f.skyColor.rgb * f.skyColor.rgb, ground = f.groundColor.rgb * f.groundColor.rgb;
     float3 amb = mix(ground, sky, n.y * 0.5 + 0.5);
@@ -376,8 +381,9 @@ fragment float4 fs_main(VOut in [[stage_in]], bool frontFacing [[front_facing]],
 #endif
     float3 col = diff * (amb * ao + sun * ndl * sh) + sun * spec * sh + ambSpec * ao;
     col += amb * base.rgb * pow(1.0 - ndv, 3.0) * 0.25;
+    col += diff * dynamicLight(lu, tex7, s7, in.wpos, n, V, (1.0 - rough) * 0.5);
     if (m.uv1.y > 0.5) col = base.rgb;
-    col += emis + u.team.a * float3(1.0, 0.85, 0.7);
+    col += emis * (1.0 + lu.info.w) + u.team.a * float3(1.0, 0.85, 0.7);
     float dist = length(f.camPos.xyz - in.wpos);
     col = mix(col, f.fog.rgb * f.fog.rgb, 1.0 - exp(-dist * f.fog.w));
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
