@@ -541,6 +541,7 @@ struct Rules {
 };
 
 Rules loadRules(const Json& j);        // throws std::runtime_error with a readable message
+void loadFlowFieldRules(const Json& j, FlowFieldRules& out, const std::string& where);   // movement.flowField (rules or map)
 void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loadRules after types are parsed
 // Unit designs (UD): rules "designs": {"chassis": {...}, "parts": {...}} and types with "design": {"chassis", "parts"}
 // expand into plain type blocks. Returns a copy without "designs"; loadRules calls it when the block is present.

@@ -66,6 +66,8 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // planets: HPA* on bodies above the cell threshold (RtsHpaSphere.cpp). RTS_PLANET_HPA=1 / 0 forces it on / off
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;
+    g.flowMaxFields = rules_.movement.flow.maxFields;
+    g.flowBudgetBytes = size_t(rules_.movement.flow.budgetMB) << 20;
     if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
         for (auto& t : rules_.types)
@@ -214,6 +216,9 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
 
     // victory
     gs.victory = map.has("victory") ? loadVictory(map["victory"], rules_.victory) : rules_.victory;
+    // a map may switch flow fields on / tune them for itself ("movement": {"flowField": {...}}): big horde maps
+    if (const Json& ff = map["movement"]["flowField"]; ff.isObject()) loadFlowFieldRules(ff, rules_.movement.flow, "map movement.flowField");
+    else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players
     const size_t np = sim.players().size();

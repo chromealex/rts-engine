@@ -389,6 +389,40 @@ def lastcolony():
                                                                              {"type": "chubby", "count": 4}], "every": 0, "repeats": 0},
     ]
     write("lastcolony", m, "last_valley")
+    lastcolony_horde()
+
+
+def lastcolony_horde():
+    """Big horde map: the infected cross a 192x128 plain with broken walls in waves of up to ~400, marching along
+    shared flow fields (map movement.flowField) instead of one path search per walker."""
+    players = [{"name": "Колония", "team": 1}, {"name": "Орда", "team": 2, "waves": True}]
+    m = Map("Horde Plain", 192, 128, players)
+    m.border()
+    for wx, gaps in ((70, (20, 64, 108)), (110, (40, 88)), (150, (12, 64, 116))):   # broken walls between the hordes and the colony
+        for y in range(1, 127):
+            if all(abs(y - g) > 4 for g in gaps):
+                m.cell(wx, y, '#'); m.cell(wx + 1, y, '#')
+    for (cx, cy, r) in ((90, 30, 6), (90, 98, 6), (130, 64, 8), (170, 30, 5), (170, 98, 5)):
+        m.disc(cx, cy, r, '~', sym=False)
+    m.ent("command_center", 1, [20, 64], sym=False)
+    for k in range(10):
+        m.ent("ranger", 1, [30 + (k % 2), 58 + k], sym=False)
+    for k in range(4):
+        m.ent("ranger", 1, [34, 60 + 2 * k], sym=False)
+    m.ent("stone_quarry", 0, [10.5, 40.5], sym=False)
+    m.ent("stone_quarry", 0, [10.5, 88.5], sym=False)
+    for y in range(20, 108, 2):
+        for x in (3, 5):
+            m.ent("tree", 0, [x + 0.5, y + 0.5], sym=False)
+    m.extra["movement"] = {"flowField": {"waves": True, "minGroup": 12}}
+    m.extra["waves"] = [
+        {"time": 90, "player": 2, "at": [184, 64], "spread": 8, "spawn": [{"type": "walker", "count": 12}], "every": 50, "growth": 1.15, "repeats": 14},
+        {"time": 240, "player": 2, "at": [184, 16], "spread": 6, "spawn": [{"type": "runner", "count": 6}], "every": 80, "growth": 1.15, "repeats": 9},
+        {"time": 240, "player": 2, "at": [184, 112], "spread": 6, "spawn": [{"type": "runner", "count": 6}], "every": 80, "growth": 1.15, "repeats": 9},
+        {"time": 1100, "player": 2, "at": [184, 64], "spread": 10, "spawn": [{"type": "walker", "count": 300}, {"type": "runner", "count": 80},
+                                                                               {"type": "chubby", "count": 8}], "every": 0, "repeats": 0},
+    ]
+    write("lastcolony", m, "horde_plain")
 
 
 def clanlands():
