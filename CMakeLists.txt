@@ -179,8 +179,11 @@ add_library(rts_net_server STATIC
 target_link_libraries(rts_net_server PUBLIC rts_net)
 # Game data on the network side: match loading like the game (tile maps) and the server's verdict
 # (re-simulating a match nobody settled). Server, bot client and net tests share it.
-add_library(rts_net_game STATIC apps/server/GameData.cpp)
-target_link_libraries(rts_net_game PUBLIC rts_net_server rts_game)
+# Not part of the game client: exported source trees (rtsbuild iOS / Android / web) don't ship apps/server.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/apps/server/GameData.cpp")
+    add_library(rts_net_game STATIC apps/server/GameData.cpp)
+    target_link_libraries(rts_net_game PUBLIC rts_net_server rts_game)
+endif()
 
 # ---------------------------------------------------------------------------
 # Audio (presentation only): software mixer, sound banks from data, procedural synth, music
