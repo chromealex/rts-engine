@@ -24,6 +24,9 @@ is optional — the blocks present on a type decide what it can do.
 ```
 `"audio"`: another name for the sound file (default `audio.json`).
 
+`"icons"` and `"splash"`: game icons for every platform and the loading screen — see "Icons and
+splash" below (the old single `"icon"` still works as the master icon).
+
 Optional `"camera"` block (2D games, see "2D games" below):
 `{"projection": "ortho", "pitch": 90, "yaw": 0, "fov": 43, "zoom": 20, "zoomMin": 8, "zoomMax": 40, "pixelsPerCell": 32, "rotate": false}`.
 
@@ -959,6 +962,99 @@ sourceBytes, atlasBytes, storedBytes, bytesSaved, gpuBytesBefore, gpuBytesAfter,
 textureBindsBefore, textureBindsAfter, groups[] {group, textures, unique, pages,
 occupancyPercent}, excluded[] {path, reason}}. Preview: `assetpipe atlas --profile web -o <dir>
 games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and the report.
+
+## Icons and splash (game.json `icons`, `splash`, optional)
+
+Both blocks are read by `rtsbuild` (every size each platform needs, generated on the host without
+sips/iconutil — works from Linux), by the client (the splash) and by the editor window
+**Иконки и заставка** (opened from **Сборка**) / MCP `branding_get`, `branding_set`,
+`icons_preview`, `splash_preview`. Paths are relative to the game folder. Code: `tools/branding`
+(host), `engine/splash` (runtime), `apps/client/ClientSplash.cpp` (startup).
+
+### icons
+
+```json
+"icons": {
+  "default": "branding/icon.png",              // master: square, >= 1024 px (old "icon" is the fallback)
+  "background": "#101a28",                     // for icons that must be opaque (else: the image's edge colour)
+  "padding": 0.0,                              // artwork inset on opaque squares (fraction of the side)
+  "cornerRadius": 0.0,                         // rounding of the Android legacy icon (default 0.12)
+  "ios": "branding/icon_ios.png",              // path, or {"image", "background", "padding"}
+  "macos": {"margin": 0.098, "cornerRadius": 0.225},      // Big Sur grid by default; 0/0 for pre-shaped art
+  "android": {"legacy": "...", "round": "...",            // path or look object
+              "foreground": "branding/icon_foreground.png", // adaptive 108dp layer (centre 72dp visible)
+              "background": "#101a28",                      // colour or image path
+              "monochrome": "branding/icon_monochrome.png", // Android 13 themed icon (alpha is used)
+              "foregroundPadding": 0.17},                   // when the master is used as the foreground
+  "windows": "...", "linux": "...",
+  "web": {"image": "...", "appleTouch": {...}, "maskable": {...}}
+}
+```
+
+A *look* object (any platform) has `image`, `background`, `padding` (inset of the art inside the
+icon body), `margin` (transparent space around the body), `cornerRadius` (fraction of the body),
+`circle`. Warnings (build log, `branding_get`): master missing, smaller than 1024, not square, iOS
+image with transparency (it is flattened on `background`).
+
+| Platform | Generated (rtsbuild) |
+|---|---|
+| iOS | `gen/Assets.xcassets/AppIcon.appiconset`: iPhone 40..180, iPad 20..167, App Store 1024 + `Contents.json` (opaque) |
+| macOS | `gen/AppIcon.iconset` (16..512@2x) and `gen/AppIcon.icns` (written by rtsbuild; `iconutil` re-packs it on a Mac) |
+| Android | `res/mipmap-{mdpi..xxxhdpi}/ic_launcher.png`, `ic_launcher_round.png`, `ic_launcher_foreground.png` (+ `_background`, `_monochrome`), `mipmap-anydpi-v26/ic_launcher(_round).xml`, `values/ic_launcher_background.xml`, `app/src/main/ic_launcher-playstore.png` (512); manifest gets `android:roundIcon` |
+| Windows | `gen/app.ico` (16, 20, 24, 32, 40, 48, 64 BMP + 256 PNG) and `gen/app.rc` (icon resource 1, also the window icon), compiled into the .exe |
+| Web | `favicon.ico` (16/32/48), `favicon-32.png`, `apple-touch-icon.png` (180, opaque), `icons/icon-{192,512}.png`, `icons/maskable-{192,512}.png`, `manifest.webmanifest` (PWA); links injected into `index.html` |
+| Linux | `share/icons/hicolor/<n>x<n>/apps/<exe>.png` (16..512) and `share/applications/<exe>.desktop` next to the executable |
+
+### splash
+
+```json
+"splash": {
+  "background": "#0a0f16",
+  "image": "branding/splash_bg.png", "fit": "cover", "scale": 1,     // base layer (optional)
+  "logos": [
+    {"image": "branding/studio.png", "start": 0, "duration": 2.2, "scale": 0.34,
+     "animation": {"fadeIn": 0.5, "fadeOut": 0.45, "zoom": {"from": 0.85, "duration": 0.8}}},
+    {"image": "branding/logo.png", "start": 2.0, "scale": 0.55, "anchor": [0.5, 0.46],
+     "animation": [{"t": 0, "opacity": 0, "scale": 0.7}, {"t": 0.6, "opacity": 1, "scale": 1, "ease": "out"}]},
+    {"sheet": "branding/coin_sheet.png", "frame": [128, 128], "count": 8, "fps": 14, "start": 2.5, "scale": 0.2}
+  ],
+  "minSeconds": 3.5, "maxSeconds": 6, "loop": false, "skippable": true, "fadeOut": 0.5, "waitForContent": false,
+  "progress": {"show": true, "color": "#e8b640", "track": "#ffffff26", "position": "bottom", "width": 0.36, "height": 5, "offset": 0.08},
+  "native": {"image": "branding/logo.png", "background": "#0a0f16", "scale": 0.35, "androidIcon": "branding/splash_icon.xml"}
+}
+```
+
+- **Layers** (base image first, then `logo` / `logos` in order, later on top): a static `image`, an
+  animation from `frames` (list of images) or a sprite `sheet` (`frame` [w, h], `count`, frames in
+  rows left to right) played at `fps` (`loopFrames`, default true). `fit`: `contain` (default for
+  logos), `cover` (default for the base), `center` (image pixels × dpi), `stretch`; `scale`
+  multiplies the fitted size; `anchor` is the centre on screen (fractions). `start` / `duration`
+  in seconds (duration 0 = until the splash ends).
+- **animation**: keyframes `[{"t", "opacity", "scale", "x", "y", "rotate" (degrees), "ease":
+  linear|in|out|inOut}]` (t from the layer start; a property is interpolated between the keys that
+  set it), or effects `{"fadeIn", "fadeOut", "fade", "pulse": amount | {"amount", "period"},
+  "rotate": deg/s, "slide": "bottom" | {"from", "distance", "duration"}, "zoom": from | {"from",
+  "duration"}, "keyframes": [...]}` — both combine.
+- **Timing**: the splash leaves when loading is done and `minSeconds` have passed (default: the
+  end of the last layer with a duration, so a studio logo → game logo sequence plays once);
+  `maxSeconds` caps that minimum (never the loading). `loop`: repeat the sequence while loading
+  takes longer. `skippable`: a tap / click / key ends the minimum. `fadeOut`: crossfade to the menu.
+- **Progress bar**: real loading progress — the client's startup steps (rules, renderer, models
+  and textures of every type, effects, audio, UI), and with `waitForContent` (split builds) the
+  download of every pack chunk (`platform::contentProgress`).
+- **In-engine splash**: drawn through the RHI from the first frame (`engine/splash`, one textured
+  quad pipeline, GLSL + MSL; images decoded one per frame and capped at 2048 px), so it runs on
+  any GPU. `RTS_SPLASH=off` loads the old way; with `--map` the splash only covers loading
+  (`RTS_SPLASH=full` plays it all).
+- **Native launch screen** (shown by the OS before the engine starts; a static image on a colour —
+  `native`, else the first logo on `background`): iOS `LaunchScreen.storyboard` + `LaunchImage` /
+  `LaunchBackground` in the asset catalog; Android 12+ splash theme (`windowSplashScreenBackground`,
+  `windowSplashScreenAnimatedIcon`: the logo, or your animated vector drawable `androidIcon`) and a
+  pre-12 `windowBackground` drawable, activity theme `@style/RtsLaunchTheme`; web: HTML/CSS splash
+  in `platform/web/shell.html` with the `.data` download progress until the wasm starts; macOS and
+  Windows: the window background colour.
+- Split builds always keep the splash images in the base pack.
+- Sample: `games/skirmish` (art generated by `games/_tools/brandart.py`, CC0).
 
 ## Recipes (mechanics of known games)
 

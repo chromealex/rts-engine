@@ -114,7 +114,11 @@ private:
 
 class GameClient {
 public:
-    void init(gfx::Device& dev);
+    void init(gfx::Device& dev);   // every init step at once
+    // Startup in steps, one per frame, so the splash screen (ClientSplash.h) keeps animating.
+    static constexpr int kInitSteps = 6;
+    void initStep(gfx::Device& dev, int step);
+    static float initWeight(int step);   // share of the loading progress bar
     void frame(gfx::Device& dev, double dt);
     void event(const platform::Event& e);
     void shutdown();
