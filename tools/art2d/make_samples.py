@@ -489,7 +489,7 @@ def km_unit_sheet(weapon):
 
 
 def km_building(fw, fh, wall, roof_h, style):
-    """3/4-view building: ground footprint (fw x fh cells seen at PITCH) + front wall + roof.
+    """3/4-view building: front wall + roof standing on the footprint (fw x fh cells seen at PITCH).
     Image width fw*32, anchor bottom centre = front edge of the footprint. Frames: idle, build 1-4, die 5-7."""
     W = fw * T
     depth = fh * T * math.sin(PITCH)
@@ -516,7 +516,9 @@ def km_building(fw, fh, wall, roof_h, style):
         else:
             front = base
             back = base - depth * S
-            d.polygon([(2, front), (W * S - 2, front), (W * S - 2, back), (2, back)], fill=(122, 104, 78, 255))  # yard
+            # no painted yard: the ground shows through and the engine grounds the building with a
+            # real sun shadow (cast) or a projected blob (low tiers) - a baked plate read as a flat
+            # dark rectangle floating over slopes
             inset = 6 * S
             fl, fr = inset, W * S - inset
             fb = front - 6 * S          # front wall bottom

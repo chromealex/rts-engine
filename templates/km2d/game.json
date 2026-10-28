@@ -14,6 +14,8 @@
   "maps": [
     { "file": "maps/hills.json", "title": "Green Hills (1v1)" }
   ],
+  "sprites": { "shadow": "cast", "lit": true },
+  "lighting": { "sunDir": [-0.7, 1.1, -0.5] },
   "camera": { "projection": "ortho", "pitch": 50, "yaw": 0, "pixelsPerCell": 32, "zoomMin": 8, "zoomMax": 44, "rotate": false },
   "orientation": "landscape"
 }

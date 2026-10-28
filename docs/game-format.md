@@ -1354,12 +1354,50 @@ The editor uses the projection and angle for its Scene and Game views.
 | `anchor` | pivot in the frame, 0..1 from the top-left (default `[0.5, 1]`, ground mode `[0.5, 0.5]`) |
 | `offset` | `[right, front]` cells from the object centre; default for standing structures: the front edge of the footprint, so a 3/4-view drawing stands on its footprint |
 | `team` | `"magenta"` (default): pixels in shades of magenta (r = b, g = 0) become the player's colour times their brightness; `"none"` |
-| `shadow` | soft blob under the sprite (`true`, `false` or `{size, alpha}`; default on for standing units) |
+| `shadow` | `"cast"` (real sun shadow, see below), `"blob"` (soft ellipse under the sprite), `"none"`; `true` = blob, `false` = none; the object form `{"mode", "size": [w, h], "alpha"}` is a blob unless `mode` says otherwise (`size`/`alpha` also shape the blob that replaces a cast shadow on low tiers). Default: the game's `sprites.shadow`; with the default `"blob"` only units get one (as before), ground sprites never cast |
+| `castHeight` | world height of the shadow caster (default: the drawn height). 3/4-view buildings whose drawing includes the roof seen from above cast a long shadow with the full height: give the real wall + roof height |
+| `shadowOffset` | `[right, front]` cells added to the sprite's `offset` for the caster (default: the caster stands where the sprite is drawn — for buildings the front edge of the footprint) |
+| `castDepth` | buildings cast like a box: a second caster this many cells behind the first (default: the footprint depth for structures, 0 for units) |
+| `lit` | override of the game's `sprites.lit` for this type |
 | `depthBias`, `lift` | pull towards the camera so hills don't cut the sprite; air units float `lift` cells (default 1.2) above their shadow |
 
 Sprites are batched (one draw call per sheet), alpha-tested, depth-tested against the 3D scene and
 painter-sorted; textures are read with `platform::readContentFile`. Types without `sprite` keep
 their 3D `view`, so a map can mix both.
+
+### Sprite shadows and lighting (`sprites` block)
+
+Game-wide defaults in `game.json` (wins) or `rules.json`:
+
+```json
+"sprites": { "shadow": "cast", "lit": true }
+```
+
+| key | meaning |
+|---|---|
+| `shadow` | default `shadow` of every sprite type: `"blob"` (default, the classic look), `"cast"`, `"none"` |
+| `lit` | sprites take the scene light (default `false`: painted colours, pixel-art purists): sun and sky colour, day/night and presets, point lights, cloud shadows and (Medium/High) the sun shadows of other objects falling on them. In full default daylight a lit sprite keeps its painted colours |
+
+**Cast shadows**: the sprite is drawn into the sun shadow map as an upright alpha-tested quad
+standing at its foot, facing the camera's yaw (turned towards the sun when the sun shines almost
+along it), current animation frame and facing; the shadow then falls on the terrain, 3D models
+and other lit sprites with the sun direction, softness and PCF tiers of the 3D games.
+
+| `RTS_SHADOWS` / shadow tier | sprites with `"shadow": "cast"` |
+|---|---|
+| Off | blobs only (the classic look, no shadow pass) |
+| Low | buildings cast, units keep blobs; sprites don't sample the shadow map |
+| Medium / High | everything casts (units keep a faint contact blob); lit sprites receive shadows |
+
+Where shadows fall is the sun's direction: `"lighting": {"sunDir": [x, y, z]}` (game.json or the
+map, towards the sun at noon; the day cycle swings around it). Flat drawings hide shadows that
+fall behind them, so sprite games usually want the sun behind the scene (km2d: `[-0.7, 1.1, -0.5]`,
+shadows towards the viewer and to the right).
+
+**Blobs and ground sprites are projected**: a blob (and any `"mode": "ground"` sprite) is cut from
+the ground triangles under it — the exact triangles of the terrain mesh or the tile map — and drawn
+with a depth bias, so it bends over slopes and cliff edges and never z-fights or hovers. Sprite
+types get no extra contact-shadow decal from the lighting system (their blob does that job).
 
 ### Tilesets (`tilesets/<name>.json`)
 

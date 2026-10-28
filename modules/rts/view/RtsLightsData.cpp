@@ -220,6 +220,11 @@ void RtsLights::configure(const Json& game, const Json& map, const Json& lights)
         windX_ = w.size() >= 2 ? float(w[0].fx().toDouble()) : 1.2f;
         windZ_ = w.size() >= 2 ? float(w[1].fx().toDouble()) : 0.5f;
     }
+    {   // sun direction at noon (sprite games pick where shadows fall so they don't hide behind the sprites)
+        const Json& d = map["sunDir"].size() >= 3 ? map["sunDir"] : game["sunDir"];
+        sunDirSet_ = d.size() >= 3;
+        if (sunDirSet_) sunDir_ = normalize(float3{float(d[0].fx().toDouble()), std::max(float(d[1].fx().toDouble()), 0.2f), float(d[2].fx().toDouble())});
+    }
     if (const char* c = std::getenv("RTS_CLOUDS")) { clouds_ = std::clamp(float(std::atof(c)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* st = std::getenv("RTS_STORM")) { storm_ = std::clamp(float(std::atof(st)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* t = std::getenv("RTS_TIME_OF_DAY")) { startTime_ = float(std::atof(t)); cycle_ = true; }
@@ -246,6 +251,7 @@ float RtsLights::lightningAt(double seconds, float storm) {
 
 void RtsLights::updateSky(Lighting& l, double seconds) {
     if (!haveBase_) { base_ = l; haveBase_ = true; }
+    if (sunDirSet_) base_.sunDir = sunDir_;
     const bool cycle = cycle_ || preview_;
     if (!cycle) {
         night_ = dusk_ = 0;
