@@ -34,7 +34,7 @@ float3 jsonColor(const Json& j, float3 def) {
     return {float(j[0].toDouble()), float(j[1].toDouble()), float(j[2].toDouble())};
 }
 
-struct TU0 { float lod[4], mode[4], scale[4], cliff[4], fog[4], tint[4][4], cliffTint[4], fogColor[4], fogGrid[4]; };
+struct TU0 { float lod[4], mode[4], scale[4], cliff[4], fog[4], tint[4][4], cliffTint[4], fogColor[4], fogGrid[4], detail[4], rock[4], blend[4]; };
 
 const char* kKindNames[] = {"grass", "sand", "ramp", "rock", "blocked", "lakebed", "shallows", "dug"};
 } // namespace
@@ -134,6 +134,18 @@ void TerrainRenderer::parseLook(const Json& t) {
     if (const Json& l = t["lod"]; l.type() == Json::Type::Bool) look_.lod = l.boolean() ? 1 : 0;
     else if (l.isString()) look_.lod = l.str() == "on" ? 1 : l.str() == "off" ? 0 : -1;
     if (t.has("lodRange")) look_.lodRange = std::max(16.0f, float(t["lodRange"].toDouble(128)));
+    // detail surface (docs/terrain.md "Detail surface")
+    if (t["style"].isString()) look_.smooth = t["style"].str() == "smooth";
+    if (const Json& d = t["detailLook"]; d.isObject()) {
+        look_.detailScale = std::clamp(int(d.getInt("scale", look_.detailScale)), 1, 8);
+        look_.bevel = std::clamp(float(d["bevel"].toDouble(look_.bevel)), 0.0f, 3.0f);
+        look_.wobble = std::clamp(float(d["wobble"].toDouble(look_.wobble)), 0.0f, 2.0f);
+        look_.roughness = std::clamp(float(d["roughness"].toDouble(look_.roughness)), 0.0f, 1.0f);
+        look_.blendSharpness = std::clamp(float(d["blendSharpness"].toDouble(look_.blendSharpness)), 0.0f, 1.0f);
+        look_.macro = std::clamp(float(d["macro"].toDouble(look_.macro)), 0.0f, 1.0f);
+        look_.detailRange = std::clamp(float(d["lodRange"].toDouble(look_.detailRange)), 4.0f, 1000.0f);
+        if (d["rockColor"].isArray()) { look_.rockColor = jsonColor(d["rockColor"], look_.rockColor); look_.hasRockColor = true; }
+    }
 }
 
 void TerrainRenderer::loadTextures(gfx::Device&) {
@@ -242,9 +254,10 @@ bool TerrainRenderer::build(gfx::Device& dev, const MapGrid& g, bool flatDig) {
     lh_ = rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f;
     heightfield_ = g.hasCorners() && g.corner.size() == size_t((g.w + 1) * (g.h + 1));
     const bool lod = heightfield_ && (look_.lod == 1 || (look_.lod < 0 && std::max(g.w, g.h) > 256));
+    const bool detail = look_.smooth || hasFileDetail_;
     lodLevels_ = lod ? kMaxLod : 1;
     Hasher gh;
-    gh.add(uint64_t(g.w)); gh.add(uint64_t(g.h)); gh.add(uint64_t(heightfield_)); gh.add(uint64_t(lodLevels_));
+    gh.add(uint64_t(g.w)); gh.add(uint64_t(g.h)); gh.add(uint64_t(heightfield_)); gh.add(uint64_t(detail ? 99 : lodLevels_));
     uint32_t lhBits; std::memcpy(&lhBits, &lh_, 4); gh.add(lhBits);
     bool all = gh.h != globalHash_ || !built_;
     if (all) {
@@ -262,6 +275,18 @@ bool TerrainRenderer::build(gfx::Device& dev, const MapGrid& g, bool flatDig) {
     }
     if (!texturesLoaded_) loadTextures(dev);
     stats_.rebuilt = 0;
+    if (detail) { // sub-cell detail surface (RtsTerrainDetailMesh.cpp)
+        updateCellTextures(dev, g, flatDig);
+        const bool changed = buildDetail(dev, g, flatDig, all);
+        updateDynamic(dev, g, true);
+        if (changed) buildWater(dev, g, flatDig);
+        built_ = true;
+        stats_.chunks = int(chunks_.size());
+        stats_.lodMax = lodLevels_;
+        stats_.buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        return changed;
+    }
+    detailOn_ = false;
     for (auto& c : chunks_) {
         uint64_t h = chunkHash(g, c, flatDig);
         if (c.valid && h == c.hash) continue;
@@ -627,6 +652,7 @@ void TerrainRenderer::updateCellTextures(gfx::Device& dev, const MapGrid& g, boo
         td.data = visionPx_.data(); td.label = "terrain vision"; visionTex_ = dev.createTexture(td);
         visionInit_ = false;
     }
+    cellLayerOf_.resize(size_t(W * H));
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
             size_t i = size_t(y * W + x);
@@ -634,6 +660,7 @@ void TerrainRenderer::updateCellTextures(gfx::Device& dev, const MapGrid& g, boo
             uint32_t px = rgbaf({c.x, c.y, c.z, 1});
             std::memcpy(&cellPx_[i * 4], &px, 4);
             int layer = i < materialLayer_.size() && materialLayer_[i] < 4 ? materialLayer_[i] : look_.cellLayer[kindOf(g, i, flatDig)];
+            cellLayerOf_[i] = uint8_t(look_.cellLayer[kindOf(g, i, flatDig)]);
             layer = std::clamp(layer, 0, std::max(0, int(look_.layers.size()) - 1));
             for (int k = 0; k < 4; ++k) splatPx_[i * 4 + size_t(k)] = k == layer ? 255 : 0;
         }
@@ -688,6 +715,13 @@ void TerrainRenderer::updateVision(gfx::Device& dev, const std::vector<uint8_t>&
 
 // ------------------------------------------------------------------ draw
 
+int TerrainRenderer::tierFor0() const {
+    if (const char* e = std::getenv("RTS_TERRAIN")) { std::string v = e; return v == "low" ? 0 : v == "medium" ? 1 : 2; }
+    if (!dev_) return 2;
+    const MaterialQuality q = Renderer3D::defaultMaterialQualityFor(*dev_, platform::isTouchDevice());
+    return q == MaterialQuality::Low ? 0 : q == MaterialQuality::Medium ? 1 : 2;
+}
+
 int TerrainRenderer::tierFor(const Renderer3D& r) const {
     if (!look_.materials()) return 0;   // no materials: vertex colours on every tier
     if (const char* e = std::getenv("RTS_TERRAIN")) {
@@ -701,23 +735,25 @@ int TerrainRenderer::tierFor(const Renderer3D& r) const {
     return std::min(tier(r.materialQuality()), deviceTier);
 }
 
-gfx::PipelineHandle TerrainRenderer::pipeline(gfx::Device& dev, int tier) {
-    for (; tier >= 0; --tier) {
-        if (pipes_[tier].valid()) return pipes_[tier];
-        if (shaderFailed_[tier]) continue;
-        const std::string def = "#define TERRAIN_TIER " + std::to_string(tier) + "\n";
+gfx::PipelineHandle TerrainRenderer::pipeline(gfx::Device& dev, int variant) {
+    const int dbase = variant >= 3 ? 3 : 0;
+    for (int tier = variant - dbase; tier >= 0; --tier) {
+        const int slot = dbase + tier;
+        if (pipes_[slot].valid()) return pipes_[slot];
+        if (shaderFailed_[slot]) continue;
+        const std::string def = "#define TERRAIN_TIER " + std::to_string(tier) + "\n#define TERRAIN_DETAIL " + std::to_string(dbase ? 1 : 0) + "\n";
         const std::string vs = def + shaders::kTerrainVS, fs = def + shaders::kTerrainFS, msl = def + shaders::kTerrainMSL;
         gfx::ShaderDesc sd;
         sd.glslVertex = vs.c_str(); sd.glslFragment = fs.c_str(); sd.msl = msl.c_str();
-        sd.uniformSlots = 3; sd.textureSlots = 16; sd.label = "terrain";
-        shaders_[tier] = dev.createShader(sd);
-        if (!shaders_[tier].valid()) {
-            std::fprintf(stderr, "[terrain] tier %d shader: %s\n", tier, dev.lastError().c_str());
-            shaderFailed_[tier] = true;
+        sd.uniformSlots = 3; sd.textureSlots = dbase ? 18 : 16; sd.label = "terrain";
+        shaders_[slot] = dev.createShader(sd);
+        if (!shaders_[slot].valid()) {
+            std::fprintf(stderr, "[terrain] tier %d%s shader: %s\n", tier, dbase ? " detail" : "", dev.lastError().c_str());
+            shaderFailed_[slot] = true;
             continue;
         }
         gfx::PipelineDesc p;
-        p.shader = shaders_[tier];
+        p.shader = shaders_[slot];
         p.attrs[0] = {0, gfx::VertexFormat::Float3, 0};
         p.attrs[1] = {1, gfx::VertexFormat::Float3, 12};
         p.attrs[2] = {2, gfx::VertexFormat::UByte4N, 24};
@@ -725,9 +761,9 @@ gfx::PipelineHandle TerrainRenderer::pipeline(gfx::Device& dev, int tier) {
         p.attrCount = 4; p.stride = sizeof(TV);
         p.indexType = gfx::IndexType::UInt32;
         p.label = "terrain";
-        pipes_[tier] = dev.createPipeline(p);
-        if (pipes_[tier].valid()) return pipes_[tier];
-        shaderFailed_[tier] = true;
+        pipes_[slot] = dev.createPipeline(p);
+        if (pipes_[slot].valid()) return pipes_[slot];
+        shaderFailed_[slot] = true;
     }
     return {};
 }
@@ -769,18 +805,32 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
         if (lodLevels_ > 1) {
             float3 q = max3(c.bmin, min3(eye, c.bmax));
             float d = length(q - eye);
-            float range = look_.lodRange;
+            // detail mode: level 0 = one quad per detail sample up to detailRange (scaled with the sample size)
+            float range = detailOn_ ? look_.detailRange * 4.0f / float(std::max(detailK_, 1)) : look_.lodRange;
             while (k + 1 < lodLevels_ && d >= range) { ++k; range *= 2; }
             if (k + 1 < lodLevels_) { start = range * 0.75f; end = range; }
         }
+        if (detailOn_ && !c.lods[size_t(k)].indexCount) buildDetailLod(dev, g, c, k);
+        if (detailOn_) c.lastUse[size_t(k)] = frame_;
         const Lod& l = c.lods[size_t(k)];
         if (!l.indexCount) continue;
         items->push_back({&l, start, end});
         ++stats_.drawn;
         stats_.triangles += l.indexCount / 3;
     }
+    ++frame_;
+    if (detailOn_ && geoBytes_ > look_.detailBudgetMB * 1048576.0) { // LRU: drop LOD meshes not drawn for a while
+        for (auto& c : chunks_)
+            for (size_t L = 0; L < c.lods.size(); ++L) {
+                Lod& l = c.lods[L];
+                if (!l.indexCount || c.lastUse[L] + 120 > frame_) continue;
+                geoBytes_ -= std::min<size_t>(geoBytes_, size_t(l.indexCount) * 4 + size_t(l.vertexCount) * sizeof(TV));
+                dev.destroyBuffer(l.vb); dev.destroyBuffer(l.ib); l = {};
+            }
+    }
+    stats_.geometryBytes = geoBytes_;
     const int tier = tierFor(r);
-    gfx::PipelineHandle pipe = pipeline(dev, tier);
+    gfx::PipelineHandle pipe = pipeline(dev, tier + (detailOn_ ? 3 : 0));
     if (!pipe.valid()) return;
     TU0 u{};
     u.lod[2] = float(mapW_); u.lod[3] = float(mapH_);
@@ -807,6 +857,17 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
         u.fogGrid[3] = fogLook_.gridAlpha + (fogLook_.style == FogLook::Grid ? 0.18f : 0.0f);
         if (!fogLook_.show) u.mode[3] = 0.0f;
     }
+    if (detailOn_ && nrmW_ > 1) {
+        // world -> detail texture uv: sample = x * k, texel = sample * (T - 1) / (S - 1)
+        const float tx = float(nrmW_ - 1) / float(detail_.sw() - 1), tz = float(nrmH_ - 1) / float(detail_.sh() - 1);
+        u.detail[0] = float(detail_.k) * tx / float(nrmW_); u.detail[1] = float(detail_.k) * tz / float(nrmH_);
+        u.detail[2] = 0.5f / float(nrmW_); u.detail[3] = 0.5f / float(nrmH_);
+        // slope rock: a cliff texture handles steep slopes on the splat tiers; otherwise a rock colour
+        const bool cliffTex = cliffTex_.valid() && u.mode[1] > 0.5f;
+        u.rock[0] = look_.rockColor.x; u.rock[1] = look_.rockColor.y; u.rock[2] = look_.rockColor.z; u.rock[3] = cliffTex ? 0.0f : 1.0f;
+        if (!cliffTex) { u.cliff[2] = look_.slopeStart; u.cliff[3] = look_.slopeEnd; }
+        u.blend[0] = look_.blendSharpness; u.blend[1] = look_.macro; u.blend[2] = 1.0f;
+    }
     const Lod* apron = apron_.indexCount ? &apron_ : nullptr;
     r.drawCustomOpaque([this, &r, items, u, pipe, apron](gfx::Device& d) {
         d.setPipeline(pipe);
@@ -819,6 +880,7 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
         d.setTexture(13, cliffTex_.valid() ? cliffTex_.tex : gray_);
         d.setTexture(14, cliffNrm_.valid() ? cliffNrm_.tex : flatN_);
         d.setTexture(15, visionTex_);
+        if (detailOn_) { d.setTexture(16, detailNrmTex_); d.setTexture(17, detailSplatTex_); }
         TU0 uu = u;
         auto drawLod = [&](const Lod& l, float s, float e) {
             uu.lod[0] = s; uu.lod[1] = e;
