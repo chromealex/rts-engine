@@ -463,7 +463,11 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     if (!vp.color.valid() || !sim_) return;
     auto& gs = simModule()->state(*sim_);
     // fields / creep changing during play are read by the terrain shader: build once per play session
-    if (!playTerrainBuilt_) { view_.buildTerrain(*dev_, gs.grid); playTerrainBuilt_ = true; }
+    if (!playTerrainBuilt_) {
+        if (const Json* gm = simModule()->generatedMap()) view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h); // map "generate"
+        view_.buildTerrain(*dev_, gs.grid);
+        playTerrainBuilt_ = true;
+    }
     game::RtsScene sc;
     game::sceneFromSim(*sim_, sc, float(sim_->alpha()), uint8_t(human_));
     for (auto& o : sc.objects) o.selected = std::find(gameSelection.begin(), gameSelection.end(), o.entity) != gameSelection.end();
