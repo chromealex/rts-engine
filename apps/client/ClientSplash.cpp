@@ -65,7 +65,6 @@ void ClientBoot::frame(gfx::Device& dev, double dt) {
     const bool leave = mode_ == Mode::LoadingOnly ? loaded && splash_.imagesLoaded() : splash_.readyToLeave(loaded);
     if (leave) {
         for (auto& w : splash_.warnings()) std::fprintf(stderr, "%s\n", w.c_str());
-        std::fprintf(stderr, "splash: loaded, leaving after %.2f s\n", double(splash_.elapsed()));
         if (afterLoad_) afterLoad_();
         phase_ = Phase::Fading;
         fade_ = 1;
