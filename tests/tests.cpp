@@ -7,6 +7,8 @@
 
 #include "engine/core/ECS.h"
 #include "engine/core/Fixed.h"
+#include "engine/core/FixedMath.h"
+#include <cmath>
 #include "engine/core/Random.h"
 #include "engine/data/Json.h"
 #include "engine/sim/Replay.h"
@@ -39,6 +41,41 @@ TEST(fixed_basic_arithmetic) {
     CHECK((Fixed::fromInt(-7) / Fixed::fromInt(2)) == Fixed::fromRatio(-7, 2));
     CHECK(Fixed::fromRatio(-7, 2).toInt() == -3);   // trunc toward zero
     CHECK(Fixed::fromRatio(-7, 2).floorInt() == -4);
+}
+
+TEST(fixed_trig_turns) {
+    // sin/cos over a full turn vs libm (test only), error <= 3 raw Q16 units
+    int worst = 0;
+    for (int64_t r = -70000; r <= 140000; r += 37) {
+        const double a = double(r) / 65536.0 * 6.283185307179586;
+        const int es = int(std::llround(std::sin(a) * 65536.0)), ec = int(std::llround(std::cos(a) * 65536.0));
+        worst = std::max(worst, std::abs(int(fxSinTurns(Fixed::fromRaw(r)).raw) - es));
+        worst = std::max(worst, std::abs(int(fxCosTurns(Fixed::fromRaw(r)).raw) - ec));
+    }
+    CHECK(worst <= 3);
+    CHECK(fxSinTurns(Fixed::fromRatio(1, 4)) == Fixed::fromInt(1));
+    CHECK(fxCosTurns(Fixed::fromRatio(1, 2)) == Fixed::fromInt(-1));
+    // atan2 in all quadrants and scales
+    int worstA = 0;
+    for (int i = 0; i < 360; i += 7)
+        for (int64_t scale : {int64_t(3), int64_t(65536), int64_t(65536) * 900}) {
+            const double a = i * 3.141592653589793 / 180.0;
+            const Fixed x = Fixed::fromRaw(std::llround(std::cos(a) * double(scale)));
+            const Fixed y = Fixed::fromRaw(std::llround(std::sin(a) * double(scale)));
+            if (x.raw == 0 && y.raw == 0) continue;
+            double expect = std::atan2(double(y.raw), double(x.raw)) / 6.283185307179586 * 65536.0;
+            const int got = int(fxAtan2Turns(y, x).raw);
+            int d = std::abs(got - int(std::llround(expect)));
+            d = std::min(d, 65536 - d);
+            if (scale > 3) worstA = std::max(worstA, d);
+        }
+    CHECK(worstA <= 3);
+    CHECK(fxAtan2Turns(Fixed{}, Fixed{}) == Fixed{});
+    CHECK(fxAtan2Turns(Fixed{}, Fixed::fromInt(-5)) == Fixed::fromRatio(1, 2));
+    CHECK(std::abs(int(fxAsinTurns(Fixed::fromInt(1)).raw) - 16384) <= 2);
+    CHECK(std::abs(int(fxAcosTurns(Fixed{}).raw) - 16384) <= 2);
+    const Vec3 n = fxNormalize(Vec3{Fixed::fromInt(3), Fixed{}, Fixed::fromInt(4)});
+    CHECK(std::abs(int(n.x.raw) - 39322) <= 2 && std::abs(int(n.z.raw) - 52429) <= 2);
 }
 
 TEST(fixed_parse_is_float_free) {

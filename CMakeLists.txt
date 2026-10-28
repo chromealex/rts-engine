@@ -62,6 +62,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(rts_engine STATIC
     engine/core/Fixed.cpp
+    engine/core/FixedMath.cpp
     engine/data/Json.cpp
     engine/sim/Simulation.cpp
     engine/sim/Replay.cpp)
