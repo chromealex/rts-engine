@@ -207,6 +207,7 @@ void GameClient::startMatch(size_t idx) {
         if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         SimConfig cfg;
         cfg.seed = uint64_t(std::time(nullptr));
+        if (const char* sd = std::getenv("RTS_SEED")) cfg.seed = uint64_t(std::strtoull(sd, nullptr, 10));   // testing: reproducible matches
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
@@ -234,6 +235,13 @@ void GameClient::startMatch(size_t idx) {
         view_.setTerrainMaterial(vm["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
     }
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
+    if (const char* ff = std::getenv("RTS_FAST_FORWARD")) { // testing (screenshots): bots play N game seconds first
+        const uint32_t ticks = uint32_t(std::max(0.0, std::atof(ff)) * sim_->tickRate());
+        std::vector<RtsAI> ffBots = bots_;   // the human slot is played by a bot too while fast-forwarding
+        if (!spectator_) ffBots.emplace_back(human_, sim_->config().seed, AIConfig{});
+        for (uint32_t i = 0; i < ticks && sim_->result() == 0; ++i) { for (auto& b : ffBots) b.update(*sim_); sim_->step(); }
+        bots_.assign(ffBots.begin(), ffBots.begin() + long(bots_.size()));
+    }
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();
     if (planet()) minimap_.buildPlanet(*dev_, view_); else minimap_.build(*dev_, mod().state(*sim_), rules_);
