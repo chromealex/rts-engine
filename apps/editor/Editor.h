@@ -112,6 +112,7 @@ public:
     std::vector<rts::Entity> gameSelection;
     std::string gameDevice = "none";           // simulator preset (Devices.h)
     bool gameLandscape = true;
+    bool gameSafeArea = false;          // Game window: show the device safe area on top of the picture
     Viewport* gameViewport = nullptr;          // set by the Game window (screenshots crop to it)
     Viewport* sceneViewport = nullptr;
     void issueCommand(Command c);             // from the human player in the Game window
