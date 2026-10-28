@@ -196,8 +196,14 @@ add_library(rts_models STATIC
     engine/render/Model.cpp
     engine/render/ModelGltf.cpp
     engine/render/ModelObj.cpp
+    engine/render/ModelFbx.cpp
     engine/render/Animation.cpp)
-target_link_libraries(rts_models PUBLIC rts_engine)
+# ufbx (MIT / public domain): FBX parser, compiled as its own C library without warnings
+add_library(rts_ufbx STATIC third_party/ufbx/ufbx.c)
+if(NOT MSVC)
+    target_compile_options(rts_ufbx PRIVATE -w)
+endif()
+target_link_libraries(rts_models PUBLIC rts_engine rts_ufbx)
 
 set(RTS_RUNTIME_SRC
     engine/platform/PlatformCommon.cpp
