@@ -11,6 +11,15 @@
 
 namespace rts {
 
+class Json;
+// Tools only (rules_lint, rules_schema): while installed on a thread, every key lookup (has, [],
+// get*) on an object and every walk over an object's members is recorded, so a tool can tell
+// which keys a loader actually reads. Off by default; the simulation never installs one.
+struct JsonAccessLog {
+    std::vector<std::pair<const Json*, std::string>> keys;   // (object, key) lookups, present or not
+    std::vector<const Json*> iterated;                        // objects whose members were walked
+};
+
 class Json {
 public:
     enum class Type { Null, Bool, Number, String, Array, Object };
@@ -28,7 +37,7 @@ public:
     // Object access. Member order is preserved from the file (deterministic iteration).
     bool has(const std::string& key) const;
     const Json& operator[](const std::string& key) const; // returns null Json if missing
-    const std::vector<std::pair<std::string, Json>>& members() const { return object_; }
+    const std::vector<std::pair<std::string, Json>>& members() const { if (accessLog_) noteIterated(); return object_; }
 
     // Array access
     size_t size() const { return type_ == Type::Array ? array_.size() : type_ == Type::Object ? object_.size() : 0; }
@@ -71,7 +80,13 @@ public:
     std::string dump(int indent = 2) const;
     bool operator==(const Json& o) const;
 
+    static void setAccessLog(JsonAccessLog* log) { accessLog_ = log; }   // nullptr: off
+    static JsonAccessLog* accessLog() { return accessLog_; }
+
 private:
+    static thread_local JsonAccessLog* accessLog_;
+    void noteKey(const std::string& key) const;
+    void noteIterated() const;
     void dumpTo(std::string& out, int indent, int depth) const;
     friend class JsonParser;
     Type type_ = Type::Null;

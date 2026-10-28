@@ -478,6 +478,7 @@ void RtsModule::sysTriggers(Simulation& sim) {
         if (d.once && ts.fired[di][player]) return;
         if (!triggerConditions(sim, d, player)) return;
         if (d.once) ts.fired[di][player] = 1;
+        sim.emit({kEvTriggerFired, player, unit, kNullEntity, int64_t(di), where});   // presentation/tools only
         runTriggerActions(sim, di, player, unit, where);
     };
     auto fireGlobal = [&](size_t di) {

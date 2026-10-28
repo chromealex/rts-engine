@@ -102,6 +102,7 @@ enum GameEvent : uint16_t {
     kEvGarrisonChanged, // a = structure, value = units delta (effects)
     kEvTransitStart,  // planets: a = unit, value = target body, pos = departure point
     kEvTransitEnd,    // planets: a = unit, value = body arrived at, pos = arrival point
+    kEvTriggerFired,    // tools/debug: value = trigger index (Rules triggers first, then map), player = triggering slot, a = unit
 };
 
 // ---------------------------------------------------------------- components
