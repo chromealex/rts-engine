@@ -4956,6 +4956,42 @@ TEST(lighting_spot_lights) {
     CHECK(ml.size() == 1 && ml[0].spot && ml[0].x == 4 && ml[0].yaw == 90);
 }
 
+TEST(lighting_reactive_patterns) {
+    using game::RtsLights;
+    auto avg = [](const RtsLights::Glow& g, float hp, bool powered, float night, float* mn = nullptr, float* mx = nullptr) {
+        float sum = 0, lo = 1e9f, hi = -1e9f;
+        for (int i = 0; i < 2000; ++i) { const float v = RtsLights::glowLevel(g, i * 0.01f, 0.3f, hp, powered, night); sum += v; lo = std::min(lo, v); hi = std::max(hi, v); }
+        if (mn) *mn = lo;
+        if (mx) *mx = hi;
+        return sum / 2000;
+    };
+    const RtsLights::Glow steady = RtsLights::parseGlow(Json::parse(R"({})"));
+    CHECK(std::fabs(avg(steady, 1, true, 0) - 1) < 1e-4f);
+    CHECK(std::fabs(avg(steady, 0.1f, false, 0) - 1) < 1e-4f);   // a fire ignores power and damage
+    float lo = 0, hi = 0;
+    avg(RtsLights::parseGlow(Json::parse(R"({"pattern": "pulse", "rate": 1})")), 1, true, 0, &lo, &hi);
+    CHECK(lo > 0.05f && lo < 0.2f && hi > 0.95f);
+    const float strobe = avg(RtsLights::parseGlow(Json::parse(R"({"pattern": "strobe", "rate": 2})")), 1, true, 0);
+    CHECK(strobe > 0.06f && strobe < 0.18f);                     // short flashes
+    const RtsLights::Glow night = RtsLights::parseGlow(Json::parse(R"({"nightOnly": true})"));
+    CHECK(RtsLights::glowLevel(night, 1, 0, 1, true, 0) == 0 && RtsLights::glowLevel(night, 1, 0, 1, true, 1) == 1);
+    const RtsLights::Glow lamp = RtsLights::parseGlow(Json::parse(R"({"electric": true})"));
+    const float brown = avg(lamp, 1, false, 0), broken = avg(lamp, 0.05f, true, 0);
+    CHECK(brown > 0.15f && brown < 0.5f);                        // low power: dim and stuttering
+    CHECK(broken < 0.8f && broken > 0.2f);                       // badly damaged: sparks out now and then
+    CHECK(RtsLights::glowLevel(lamp, 3.21f, 0.5f, 0.05f, false, 0) == RtsLights::glowLevel(lamp, 3.21f, 0.5f, 0.05f, false, 0));
+    CHECK(RtsLights::parseGlow(Json::parse(R"({"type": "spot"})")).electric);
+    // a beacon spot rotates all the way round
+    const RtsLights::Glow beacon = RtsLights::parseGlow(Json::parse(R"({"type": "spot", "pattern": "beacon", "rate": 0.5})"));
+    float minA = 1e9f, maxA = -1e9f;
+    for (int i = 0; i < 100; ++i) {
+        const render::PointLight l = RtsLights::glowLight(beacon, {0, 0, 0}, 0, 1, i * 0.02f, 0);
+        const float a = std::atan2(l.dir.z, l.dir.x) / 0.0174532925f;
+        minA = std::min(minA, a); maxA = std::max(maxA, a);
+    }
+    CHECK(maxA - minA > 300);
+}
+
 TEST(lighting_quality_governor) {
     using render::QualityGovernor;
     auto feed = [](QualityGovernor& g, double ms, double seconds) {
