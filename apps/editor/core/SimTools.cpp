@@ -238,6 +238,13 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
         }
         c.param = need(idx, "ability of the first unit's type", id);
     }
+    if (p.has("resource")) {   // trade / tribute / bounty: readable fields instead of the packed param
+        const int64_t res = need(R.findResource(p.getStr("resource")), "resource", p.getStr("resource"));
+        const int64_t amount = p["amount"].integer(0);
+        if (c.type == kCmdTrade) c.param = res | (p.getBool("sell", false) ? 256 : 0);
+        else if (c.type == kCmdTribute) c.param = res | (p["to"].integer(0) << 8) | (amount << 16);
+        else if (c.type == kCmdBounty) c.param = res | (amount << 8);
+    }
     if (p.has("rect")) {
         const Json& r = p["rect"];
         int extra = int(p["extra"].integer(0));

@@ -761,6 +761,19 @@ TEST(mech_society) {
     CHECK(mechRoundTrip(*sim, rules, map, 60));
 }
 
+TEST(mech_ai_staffing) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(,
+      "types": {
+        "villager": {"tags": ["worker"], "move": {"speed": 3}, "health": {"max": 30}},
+        "mill": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "income": {"gold": 10}, "staff": {"count": 2, "accepts": ["worker"]}}}})";
+    auto sim = makeSimJson(rules, flatMap(30, 20, R"(,"entities":[{"type":"mill","owner":1,"pos":[2,15]},{"type":"mill","owner":2,"pos":[10,4]},
+        {"type":"villager","owner":2,"pos":[20,7]},{"type":"villager","owner":2,"pos":[21,7]},{"type":"villager","owner":2,"pos":[22,7]}])"));
+    game::RtsAI bot(2, 7);
+    for (int i = 0; i < 20 * 10; ++i) { bot.update(*sim); sim->step(); }
+    Entity mill = findType(*sim, "mill", 2);
+    CHECK(mod(*sim).staffFraction(*sim, mill) == Fixed::fromInt(1));
+}
+
 TEST(mech_rounds) {
     std::string rules = std::string(R"({"resources": {"lives": {"start": 3}, "gold": {}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},
       "rounds": {"prepare": 2, "fight": 10, "rounds": 2, "lives": "lives", "damagePerUnit": 1, "income": {"gold": 5}},
@@ -777,4 +790,39 @@ TEST(mech_rounds) {
     CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(5));
     run(*sim, 14);
     CHECK(mod(*sim).state(*sim).mech.roundPhase == 2 && sim->result() == 1);
+}
+
+// ---------------------------------------------------------------- UD: unit designs from chassis + parts
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/SchemaOps.h"
+#endif
+TEST(mech_designs) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 1000}}, )") + kVic + R"(,
+      "designs": {
+        "chassis": {"light": {"move": {"speed": 4}, "health": {"max": 100}, "cost": {"gold": 50}, "sight": 6, "slots": {"weapon": 2, "system": 1}}},
+        "parts": {
+          "laser": {"slot": "weapon", "weapons": [{"range": 5, "damage": 10, "cooldown": 1}], "cost": {"gold": 20}},
+          "plating": {"slot": "system", "add": {"health.max": 60, "move.speed": -1}, "cost": {"gold": 30}, "health": {"armor": 2}}
+        }},
+      "types": {
+        "scout": {"design": {"chassis": "light", "parts": ["laser", "laser", "plating"]}, "sight": 8},
+        "dummy": {"move": {"speed": 1}, "health": {"max": 10}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(20, 20, R"(,"entities":[{"type":"scout","owner":1,"pos":[5,5]}])"));
+    const auto& t = mod(*sim).rules().types[size_t(mod(*sim).rules().findType("scout"))];
+    CHECK(t.weapons.size() == 2 && t.maxHp == Fixed::fromInt(160) && t.speed == Fixed::fromInt(3) && t.sight == Fixed::fromInt(8));
+    CHECK(t.cost.size() == 1 && t.cost[0].value == Fixed::fromInt(120) && t.armor == Fixed::fromInt(2));
+    // too many parts for the slots is a readable load error
+    std::string bad = rules;
+    bad.replace(bad.find(R"(["laser", "laser", "plating"])"), 29, R"(["laser", "laser", "laser"] )");
+    bool threw = false;
+    try { game::loadRules(Json::parse(bad)); } catch (const std::exception& e) { threw = std::string(e.what()).find("slot") != std::string::npos; }
+    CHECK(threw);
+#ifdef RTS_TESTS_EDITOR_CORE
+    // rules_lint reads the expanded types: no false "unknown key" for design / slots
+    std::string err;
+    Json issues = editor::lintGameData(Json::parse(rules), Json::parse(flatMap(20, 20, "")), &err);
+    CHECK(err.empty() && issues.size() == 0);
+    if (issues.size()) std::fprintf(stderr, "%s\n", issues.dump().c_str());
+#endif
 }
