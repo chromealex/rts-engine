@@ -1444,6 +1444,10 @@ The bodies themselves are described in `docs/planets.md` §1-2 (`world.bodies`, 
 - `terrain.faces[f].material`: rows of digits `0`..`3` per face (`.` = by cell kind), like the flat map's
   `terrainMaterial`; painted by `terrain_material` with `body`.
 - Ground look on planets = the visual `terrain` block of the game (layers per cell kind, cliff texture, water colour).
+- Ground overlays on planets use the same visual `terrain.territory` / `dig` / `roads` / `lanes` blocks as flat maps
+  (territory fill and borders, rock blocks with veins / gems and dig marks, road cells, lanes and map `roads` between
+  buildings draped on the surface). Territory, diggable rock (`diggable` characters in `terrain.faces[f].rows`), rooms,
+  claims, capture and lanes work on planets with the same rules keys (docs/planets.md §3).
 - Editor / MCP: `planet_info`; `terrain_sculpt` / `terrain_paint` / `terrain_material` with `body` + `face` + `x`, `y`
   (cells on that face) or `dir` [x, y, z] and `radius` in cells (3D brush, crosses face seams).
 

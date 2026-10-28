@@ -9,6 +9,10 @@
   "sourceLanguage": "ru",
   "languages": ["ru", "en"],
   "rules": "rules.json",
+  "terrain": {
+    "territory": {"fill": 0.24, "border": 0.24, "glow": 0.8, "pulse": true},
+    "roads": {"color": [0.62, 0.6, 0.56], "edge": [0.3, 0.3, 0.3], "width": 0.6, "alpha": 0.95}
+  },
   "maps": [
     {
       "file": "maps/two_worlds.json",
