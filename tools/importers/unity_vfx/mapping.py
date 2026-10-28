@@ -3,7 +3,7 @@ The visual modules (colour / size / rotation over life, noise, texture sheet, re
 trails, lights, sub-emitters) are in mapping_look.py. Frames and value conversion: convert.py."""
 import convert as cv
 import unity_yaml as uy
-from convert import A_Y_TO_Z, Curve, F, P, RAD, W, combine, euler_zxy, is_identity, mm, mt, mv, q_mat, rv, signed_perm
+from convert import Curve, F, P, RAD, W, combine, euler_zxy, is_identity, mm, mt, mv, q_mat, rv, signed_perm
 from materials import sprite_info, sprite_size
 from unity_scene import SysLog, q_euler, q_mul, q_rot, v_len, v_mul
 from unity_yaml import get, hex_color, num
@@ -171,9 +171,9 @@ def map_main(s, em):
         em['space'] = 'local'
     elif space == 2:
         log.drop('main', 'custom simulation space (effects have no runtime transform hierarchy): world space')
-    s.flip = num(main.get('randomizeRotationDirection'), 0)
-    if s.flip > 0:
-        log.approx('main', 'flip rotation %g -> rotation / spin ranges made symmetric' % s.flip)
+    flip = num(main.get('flipRotation'), num(main.get('randomizeRotationDirection'), 0))
+    if flip > 0:
+        em['flipRotation'] = rv(min(1, flip))
 
 
 # ------------------------------------------------------------------------------------------ emission
@@ -312,26 +312,33 @@ def map_shape(s, em):
     if stype in (0, 1):
         em.update(shape='sphere', radius=clampv('radius', radius, log), radial=1, spread=180)
         direction = (0.0, 1.0, 0.0)   # radial: the axis plays no role
+        if arc < 360:                 # the arc turns around Unity's shape Z
+            _rotation(em, mm(M, cv.arc_frame(arc)))
         log.ok('shape', '%s r=%g' % (name, radius))
     elif stype in (2, 3):
         em.update(shape='hemisphere', radius=clampv('radius', radius, log), radial=1, spread=180)
-        _axis_rotation(em, mm(M, A_Y_TO_Z), arc)  # engine dome: effect +Y; Unity dome: shape +Z
+        _axis_rotation(em, mm(M, cv.arc_frame(arc)), arc)   # engine dome: effect +Y; Unity dome: shape +Z
         if 'shapeRotation' in em:
             direction = (0.0, 1.0, 0.0)
         log.ok('shape', '%s r=%g' % (name, radius))
     elif stype in (4, 7, 8, 9):
         em.update(shape='cone', radius=clampv('radius', radius, log), spread=clampv('spread', angle, log))
-        if stype in (8, 9):                        # the cone opens around "direction": its rotation is baked there
+        if stype in (8, 9):
             em['length'] = clampv('length', num(sh.get('length'), 5) * s.shape_scale * abs(sscale[2]), log)
             em['emitFrom'] = 'shell' if stype == 9 else 'volume'
+        if arc < 360:                              # the arc start needs the full rotation: shapeRotation, direction +Y
+            _rotation(em, mm(M, cv.arc_frame(arc)))
+            direction = (0.0, 1.0, 0.0)
         log.ok('shape', '%s angle=%g r=%g' % (name, angle, radius))
-    elif stype in (10, 11):
-        em.update(shape='cone', radius=clampv('radius', radius, log), spread=90, radial=1)
+    elif stype in (10, 11):                        # disc / ring in the effect XZ plane, outward (radial)
+        em.update(shape='disc' if stype == 10 else 'ring', radius=clampv('radius', radius, log), radial=1)
+        _axis_rotation(em, mm(M, cv.arc_frame(arc)), arc)
+        direction = (0.0, 1.0, 0.0)
         log.ok('shape', '%s r=%g' % (name, radius))
     elif stype == 17:
         em.update(shape='donut', radius=clampv('radius', radius, log),
                   donutRadius=clampv('donutRadius', num(sh.get('donutRadius'), 0.2) * s.shape_scale * sscale_mean, log))
-        _axis_rotation(em, mm(M, A_Y_TO_Z), arc)  # engine ring: effect XZ plane around +Y (like disc / ring)
+        _axis_rotation(em, mm(M, cv.arc_frame(arc)), arc)   # engine ring: effect XZ plane around +Y
         direction = (0.0, 1.0, 0.0)
         log.ok('shape', 'Donut r=%g' % radius)
     elif stype in (5, 15, 16, 18, 19, 20):
@@ -367,9 +374,13 @@ def map_shape(s, em):
             log.drop('shape', '%s: %s: sphere of the shape radius' % (name, problem))
         else:
             em.update(shape='mesh', mesh=mesh, emitFrom={0: 'vertex', 1: 'edge', 2: 'triangle'}.get(int(num(sh.get('placementMode'), 0)), 'vertex'))
-            # a model vertex f (engine model space = Unity mesh space, z flipped) lands at R * toEffect(f) = R W f;
-            # Unity puts it at P Rs F f, so R = P Rs F W (identity for an unrotated shape)
-            _rotation(em, mm(mm(M, F), W))
+            # a model vertex f lands at R * toEffect(f) = R W f; Unity puts a built-in mesh vertex m at P Rs m, with
+            # engine built-ins = Unity's under the z mirror (m = F f): R = P Rs F W (identity unrotated). Model files:
+            # Unity mirrors X on import (m = X f), so R = P Rs X W = (P Rs F W) Ry(180).
+            R = mm(mm(M, F), W)
+            if not mesh.startswith('builtin:'):
+                R = mm(R, cv.Y180)
+            _rotation(em, R)
             direction = (0.0, 1.0, 0.0)
             ms = tuple(abs(x) * s.shape_scale for x in sscale)   # "box" scales the mesh (model axes)
             if any(abs(x - 1) > 1e-4 for x in ms):
@@ -400,7 +411,7 @@ def _round_options(s, em, sh, stype, arc, thick):
     log = s.log
     if thick < 1:
         em['thickness'] = clampv('thickness', thick, log)
-    if stype in (1, 3, 7, 11):
+    if stype in (1, 3, 7):
         em['thickness'] = 0
     if arc < 360:
         em['arc'] = clampv('arc', arc, log)
