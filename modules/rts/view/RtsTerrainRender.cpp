@@ -809,6 +809,19 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
         for (auto& it : *items) drawLod(*it.lod, it.morphStart, it.morphEnd);
     });
     if (hasWater_ && water_.indexCount) r.drawMesh(water_, mat4{}, look_.waterColor, kDrawNoCastShadow, 0.9f);
+    // RTS_TERRAIN_STATS=1: chunks / triangles / frame time every 60 frames (stderr; perf checks on big maps)
+    static const bool printStats = std::getenv("RTS_TERRAIN_STATS") != nullptr;
+    if (printStats) {
+        static auto last = std::chrono::steady_clock::now();
+        static int frames = 0;
+        if (++frames == 60) {
+            auto now = std::chrono::steady_clock::now();
+            double ms = std::chrono::duration<double, std::milli>(now - last).count() / frames;
+            std::fprintf(stderr, "[terrain] map %dx%d chunks %d drawn %d lods %d tris %llu frame %.2f ms build %.1f ms\n", mapW_, mapH_,
+                         stats_.chunks, stats_.drawn, lodLevels_, (unsigned long long)stats_.triangles, ms, stats_.buildMs);
+            last = now; frames = 0;
+        }
+    }
 }
 
 } // namespace rts::game
