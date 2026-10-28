@@ -5,6 +5,7 @@
 // loadouts, levels, activation delay, auto skills; smart targeting shared by autocast and the AI.
 #include "RtsInternal.h"
 #include <algorithm>
+#include <cstdio>
 
 namespace rts::game {
 using namespace detail;
@@ -12,7 +13,7 @@ using namespace detail;
 namespace {
 uint32_t ticksOf(Fixed s, uint32_t rate) { return s.raw <= 0 ? 0 : uint32_t((s * int64_t(rate)).toInt()); }
 int portion(Fixed amount, Fixed percent, int of) {
-    Fixed n = amount + percent * of;
+    Fixed n = amount + percent * of + Fixed::fromRaw(32760);   // round to nearest (0.4 * 10 = 4, not 3.99)
     return std::clamp<int>(int(n.floorInt()), 0, 1 << 20);
 }
 bool offensiveKind(EffectKind k) {

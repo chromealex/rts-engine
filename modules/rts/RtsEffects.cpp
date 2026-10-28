@@ -21,7 +21,7 @@ Fixed distToSegment(Vec3 p, Vec3 a, Vec3 b) {
 } // namespace
 
 Fixed RtsModule::rollAmount(Simulation& sim, const EffectDef& e) {
-    if (e.amountMax > e.amount) return e.amount + (e.amountMax - e.amount) * sim.rng().unit();
+    if (e.randomAmount) return e.amount + (e.amountMax - e.amount) * sim.rng().unit();
     return e.amount;
 }
 
@@ -185,7 +185,7 @@ std::vector<Entity> RtsModule::effectTargets(Simulation& sim, const EffectDef& e
 std::vector<uint8_t> RtsModule::effectPlayers(Simulation& sim, const EffectDef& e, const EffectCtx& ctx) {
     World& w = sim.world();
     std::vector<uint8_t> out;
-    if (e.filter.shape == Shape::Target && w.alive(ctx.target) && w.has<Owner>(ctx.target)) {
+    if (e.filter.shape == Shape::Target && e.kind != EffectKind::EqualizeResource && w.alive(ctx.target) && w.has<Owner>(ctx.target)) {
         uint8_t p = w.get<Owner>(ctx.target).player;
         if (p != 0 && p != kHostileNeutral) out.push_back(p);
         return out;
@@ -290,11 +290,12 @@ void RtsModule::tickStatuses(Simulation& sim) {
         for (size_t i = 0; i < st.list.size();) {
             StatusInst& in = st.list[i];
             const StatusDef& d = rules_.statuses[in.def];
-            if (in.until <= tick) { evs.push_back({e, in, true}); st.list.erase(st.list.begin() + long(i)); changed = true; continue; }
-            if (in.nextTick <= tick && (d.tickAmount.raw != 0 || d.tickPayload >= 0 || d.garrisonPerSecond.raw != 0 || in.def == uint16_t(rules_.stLink))) {
+            // a tick that falls on the last tick still happens (duration 3, interval 1 = 3 ticks)
+            if (in.nextTick <= tick && in.nextTick <= in.until && (d.tickAmount.raw != 0 || d.tickPayload >= 0 || d.garrisonPerSecond.raw != 0 || in.def == uint16_t(rules_.stLink))) {
                 in.nextTick = tick + std::max<uint32_t>(1, fxTicks(d.tickInterval, sim.tickRate()));
                 evs.push_back({e, in, false});
             }
+            if (in.until <= tick) { evs.push_back({e, in, true}); st.list.erase(st.list.begin() + long(i)); changed = true; continue; }
             ++i;
         }
         if (changed) { st.flags = 0; for (auto& in : st.list) st.flags |= rules_.statuses[in.def].flags; }
@@ -512,7 +513,10 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
             ++k;
             const UnitType& ht = rules_.types[w.get<Unit>(h).type];
             int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
-            if (!(ht.layer & kLayerAir) && !gs.grid.passable(cx, cy, ht.layer)) continue;
+            if (!(ht.layer & kLayerAir) && !gs.grid.passable(cx, cy, ht.layer)) {
+                if (!gs.grid.nearestPassable(cx, cy, ht.layer, 3)) continue;
+                p = gs.grid.cellCenter(cx, cy);
+            }
             Transform& tr = w.get<Transform>(h);
             tr.pos = p; tr.prevPos = p;
             stopMoving(sim, h);
@@ -716,6 +720,7 @@ void RtsModule::tickAreas(Simulation& sim) {
                         EffectDef tp; tp.kind = EffectKind::Teleport;
                         EffectCtx c2 = ctx; c2.target = c; c2.point = a2.dest;
                         tp.filter.shape = Shape::Target;
+                        tp.filter.allies = tp.filter.enemies = tp.filter.self = tp.filter.neutral = true; // the area's filter already chose
                         applyEffect(sim, tp, -1, -1, c2);
                     }
                     EffectCtx c2 = ctx; c2.target = c; c2.point = w.get<Transform>(c).pos;
