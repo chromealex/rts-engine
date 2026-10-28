@@ -45,6 +45,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     }
     twoD_ = std::make_unique<Rts2DView>();
     if (!twoD_->init(dev, rules, contentBase_)) twoD_.reset();
+    lights_.init(rules);
     return true;
 }
 
@@ -165,6 +166,7 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
             }
         }
     }
+    lights_.draw(r, s, time, vision, grid, *this);
 }
 
 void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, float h, float ox, float oy, void* drawList) {
@@ -256,9 +258,10 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         }
         out.objects.push_back(so);
     });
-    w.each<Projectile, Transform>([&](Entity e, Projectile&, Transform& t) {
+    w.each<Projectile, Transform>([&](Entity e, Projectile& pr, Transform& t) {
         SceneObject so;
         so.entity = e; so.isProjectile = true;
+        if (auto* su = w.tryGet<Unit>(pr.source)) so.shooterType = su->type; // picks the projectile's light
         so.pos = lerp(toF(t.prevPos), toF(t.pos), alpha);
         if (viewer != 0) {
             int x = int(t.pos.x.floorInt()), y = int(t.pos.z.floorInt());

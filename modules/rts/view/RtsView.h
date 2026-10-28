@@ -20,6 +20,7 @@
 #include "../RtsData.h"
 #include "../RtsMap.h"
 #include "Rts2DView.h"
+#include "RtsLights.h"
 
 namespace rts::game {
 
@@ -40,6 +41,7 @@ struct SceneObject {
     bool producing = false;      // structure training / researching
     bool hasTarget = false;      // combat target (turrets aim at it)
     render::float3 target;
+    uint16_t shooterType = UINT16_MAX; // projectiles: type of the unit that fired it (lights)
 };
 
 struct RtsScene {
@@ -82,6 +84,7 @@ public:
     bool hasTiles() const { return twoD_ && twoD_->hasTiles(); }
     // Screen-space hit test for sprite objects (they are drawn above their ground point).
     bool spriteHit(const render::RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const;
+    RtsLights& lights() { return lights_; }
 
 private:
     struct ClipSpec {
@@ -158,6 +161,7 @@ private:
     double lastTime_ = -1;
     uint32_t lastTick_ = ~0u;
     uint64_t frame_ = 0;
+    RtsLights lights_;
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters

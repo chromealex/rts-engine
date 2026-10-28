@@ -41,7 +41,7 @@ ShadowQuality Renderer3D::defaultQualityFor(const gfx::Device& dev, bool mobile)
 bool Renderer3D::init(gfx::Device& dev) {
     dev_ = &dev;
     gfx::ShaderDesc ls; ls.glslVertex = shaders::kLitVS; ls.glslFragment = shaders::kLitFS; ls.msl = shaders::kLitMSL;
-    ls.uniformSlots = 2; ls.textureSlots = 1; ls.label = "lit";
+    ls.uniformSlots = 3; ls.textureSlots = 2; ls.label = "lit"; // U2/tex1: Lights
     litShader_ = dev.createShader(ls);
     gfx::ShaderDesc ss; ss.glslVertex = shaders::kShadowVS; ss.glslFragment = shaders::kShadowFS; ss.msl = shaders::kShadowMSL;
     ss.uniformSlots = 2; ss.label = "shadow";
@@ -91,6 +91,7 @@ bool Renderer3D::init(gfx::Device& dev) {
     triVB_ = dev.createBuffer(vb);
     setShadowQuality(quality_);
     initModels();
+    if (!lights.init(dev)) return false;
     return litPipe_.valid() && shadowPipe_.valid() && linePipe_.valid() && triPipe_.valid();
 }
 
@@ -113,6 +114,7 @@ void Renderer3D::setShadowQuality(ShadowQuality q) {
 void Renderer3D::shutdown() {
     if (!dev_) return;
     shutdownModels();
+    lights.shutdown();
     dev_->destroyTexture(shadowMap_);
     dev_->destroyBuffer(lineVB_); dev_->destroyBuffer(triVB_);
     for (auto p : {litPipe_, litBlendPipe_, shadowPipe_, linePipe_, triPipe_}) dev_->destroyPipeline(p);
@@ -129,6 +131,7 @@ void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
     items_.clear(); lines_.clear(); tris_.clear(); custom_.clear();
     modelItems_.clear(); jointData_.clear();
     computeShadowMatrix(cam, aspect);
+    lights.begin(cam, aspect);
 }
 
 void Renderer3D::computeShadowMatrix(const RTSCamera& cam, float aspect) {
@@ -249,12 +252,15 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         dev_->endPass();
     }
 
+    lights.renderMap();
+
     // ---- main pass (left open for the caller's UI)
     dev_->beginPass(screenPass);
     dev_->setViewport({0, 0, sceneW_ > 0 ? sceneW_ : dev_->framebufferWidth(), sceneH_ > 0 ? sceneH_ : dev_->framebufferHeight()});
     dev_->setPipeline(litPipe_);
     uploadFrameUniforms(false);
     dev_->setTexture(0, shadowMap_);
+    lights.bind();
     auto drawItem = [&](const DrawItem& it) {
         DrawUniforms u{};
         std::memcpy(u.model, it.model.m, sizeof u.model);
@@ -275,7 +281,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     bool any = false;
     for (auto& it : items_) {
         if (it.color.w >= 0.99f) continue;
-        if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); any = true; }
+        if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); lights.bind(); any = true; }
         drawItem(it);
     }
     renderModels(2);
