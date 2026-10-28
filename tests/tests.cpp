@@ -1,3 +1,4 @@
+#include <chrono>
 // Dependency-free unit tests. Run: ctest  (or ./rts_tests)
 #include <filesystem>
 #include <cstdio>
@@ -7721,6 +7722,85 @@ TEST(planet_mapdoc_round_trip_and_validate) {
     bool seam = false, pos = false;
     for (auto& i : issues) { seam |= !i.error && i.text.find("швах") != std::string::npos; pos |= i.error && i.text.find("0..5") != std::string::npos; }
     CHECK(seam && pos);
+}
+#endif
+
+
+// ---------------------------------------------------------------------------------------------
+// Materials on request: procedural textures, material library ops (models agent)
+// ---------------------------------------------------------------------------------------------
+#include "engine/render/TextureGen.h"
+TEST(materials_texture_patterns_tile_and_repeat) {
+    using namespace rts::render;
+    for (const auto& pat : texturePatterns()) {
+        Json spec = Json::object();
+        spec.set("pattern", Json::string(pat));
+        spec.set("size", Json::number(int64_t(64)));
+        spec.set("seed", Json::number(int64_t(7)));
+        Image a, b;
+        generateTexture(spec, a);
+        generateTexture(spec, b);
+        CHECK(a.width == 64 && a.height == 64 && a.rgba.size() == 64u * 64u * 4u && a.rgba == b.rgba);   // deterministic
+        if (pat == "gradient") continue;
+        // tileable: the left column continues the right one about as smoothly as neighbours do
+        long seam = 0, inner = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int c = 0; c < 3; ++c) {
+                seam += std::abs(int(a.rgba[(size_t(y) * 64 + 0) * 4 + size_t(c)]) - int(a.rgba[(size_t(y) * 64 + 63) * 4 + size_t(c)]));
+                inner += std::abs(int(a.rgba[(size_t(y) * 64 + 31) * 4 + size_t(c)]) - int(a.rgba[(size_t(y) * 64 + 32) * 4 + size_t(c)]));
+            }
+        if (seam > inner * 3 + 64 * 3 * 40) std::printf("  pattern %s: seam %ld vs inner %ld\n", pat.c_str(), seam, inner);
+        CHECK(seam <= inner * 3 + 64 * 3 * 40);
+    }
+    Json mask = Json::parse(R"({"pattern": "stripes", "size": 32, "scale": 4, "output": "mask"})");
+    Image m;
+    generateTexture(mask, m);
+    int white = 0;
+    for (size_t i = 0; i < m.rgba.size(); i += 4) white += m.rgba[i] > 128 ? 1 : 0;
+    CHECK(white > 32 * 32 / 4 && white < 32 * 32 * 3 / 4);
+    Json nrm = Json::parse(R"({"pattern": "brick", "size": 32, "output": "normal"})");
+    Image n;
+    generateTexture(nrm, n);
+    CHECK(n.rgba[2] > 127);   // normals point out of the surface
+    bool threw = false;
+    try { Image x; generateTexture(Json::parse(R"({"pattern": "plaid"})"), x); } catch (const std::exception& e) { threw = std::string(e.what()).find("brick") != std::string::npos; }
+    CHECK(threw);
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/Workspace.h"
+TEST(materials_library_ops_round_trip) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / ("rts_mat_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::remove_all(root);
+    fs::create_directories(root / "games");
+    fs::copy(fs::path(RTS_SOURCE_DIR) / "games" / "showcase", root / "games" / "showcase", fs::copy_options::recursive);
+    editor::Workspace ws;
+    ws.engineDir = root.string();
+    std::string err;
+    CHECK(ws.openGame("showcase", &err));
+    auto ok = [](const Json& r) { if (r.has("error")) std::printf("  (op error) %s\n", r.getStr("error").c_str()); return !r.has("error"); };
+    Json r = ws.call("texture_generate", Json::parse(R"({"pattern": "panels", "size": 64, "seed": 4})"));
+    CHECK(ok(r) && r.getStr("path") == "textures/panels_4.png" && fs::file_size(root / "games/showcase/textures/panels_4.png") > 100);
+    CHECK(ok(ws.call("material_set", Json::parse(R"({"name": "steel", "material": {"color": [0.7,0.7,0.75], "metallic": 0.9, "texture": "textures/panels_4.png"}})"))));
+    CHECK(ok(ws.call("material_set", Json::parse(R"({"name": "rust", "material": {"base": "steel", "roughness": 0.9}})"))));
+    CHECK(!ok(ws.call("material_set", Json::parse(R"({"name": "x", "material": {"metallic": 3}})"))));
+    CHECK(!ok(ws.call("material_set", Json::parse(R"({"name": "y", "material": {"base": "nothing"}})"))));
+    Json g = ws.call("material_get", Json::parse(R"({"name": "rust"})"));
+    CHECK(g["resolved"].getStr("texture") == "textures/panels_4.png" && g["chain"].size() == 2);
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "catapult", "node": "Turret", "material": "rust"})"))));
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "footman", "target": "*", "material": {"use": "steel", "roughness": 0.2}})"))));
+    CHECK(ws.project.rulesJson["types"]["catapult"]["view"]["assign"].getStr("Turret") == "rust");
+    CHECK(ws.project.rulesJson["types"]["footman"]["view"]["materials"]["*"].getStr("use") == "steel");
+    Json l = ws.call("material_list", Json::parse(R"({"type": "catapult"})"));
+    CHECK(l["library"].has("steel") && l["types"].size() == 1 && l["types"][size_t(0)]["models"].size() == 2);
+    CHECK(!ok(ws.call("material_delete", Json::parse(R"({"name": "steel"})"))));   // used by rust and footman
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "catapult", "node": "Turret", "remove": true})"))));
+    CHECK(!ws.project.rulesJson["types"]["catapult"]["view"].has("assign"));
+    CHECK(ok(ws.call("material_delete", Json::parse(R"({"name": "rust"})"))));
+    Json saved = Json::parseFile((root / "games/showcase/materials.json").string());
+    CHECK(saved["materials"].has("steel") && !saved["materials"].has("rust"));
+    fs::remove_all(root);
 }
 #endif
 
