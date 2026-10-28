@@ -1,0 +1,27 @@
+// "Clan Lands" — Northgard-like: the map is split into regions; a clan claims neighbouring regions for
+// food (each claim costs more), builds only inside its own regions, hunts deer and cuts birch.
+{
+  "victory": "noStructures",
+  "supplyCap": 40,
+  "regions": {"claimCost": {"food": 80}, "claimCostGrowth": 0.5, "buildOnlyOwned": true},
+  "resources": {"food": {"name": "Пища", "start": 200}, "wood": {"name": "Дерево", "start": 150}},
+  "types": {
+    "longhouse": {"name": "Длинный дом", "structure": {"footprint": [3, 3]}, "health": {"max": 2000, "armor": 3}, "sight": 9, "supply": 6,
+                  "produces": ["thrall"], "dropoff": ["food", "wood"], "income": {"food": 1},
+                  "weapons": [{"range": 5, "damage": 8, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "hall"}},
+    "thrall": {"name": "Трэлл", "health": {"max": 60}, "move": {"speed": 2.5, "radius": 0.3}, "sight": 6, "cost": {"food": 40, "time": 10, "supply": 1},
+               "gather": {"food": {"carry": 10, "time": 3}, "wood": {"carry": 10, "time": 3}}, "builds": ["house", "camp", "barracks", "watchtower"]},
+    "house": {"name": "Дом", "structure": {"footprint": [2, 2]}, "health": {"max": 500}, "cost": {"wood": 40, "time": 15}, "supply": 5, "view": {"shape": "house"}},
+    "camp": {"name": "Стоянка", "structure": {"footprint": [2, 2]}, "health": {"max": 400}, "cost": {"wood": 50, "time": 15}, "dropoff": ["food", "wood"], "view": {"shape": "camp"}},
+    "barracks": {"name": "Тренировочный лагерь", "structure": {"footprint": [3, 3]}, "health": {"max": 900, "armor": 2}, "cost": {"wood": 100, "time": 25},
+                 "produces": ["warrior", "axe_thrower"], "view": {"shape": "barracks"}},
+    "watchtower": {"name": "Дозорная башня", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armor": 3}, "sight": 10, "requires": ["barracks"],
+                   "weapons": [{"range": 6, "damage": 12, "cooldown": 1.2, "projectileSpeed": 14}], "cost": {"wood": 80, "time": 25}, "view": {"shape": "tower"}},
+    "warrior": {"name": "Воин", "health": {"max": 160, "armor": 2}, "move": {"speed": 2.6, "radius": 0.35}, "sight": 7, "weapons": [{"range": 0.5, "damage": 14, "cooldown": 1.2}],
+                "cost": {"food": 60, "wood": 20, "time": 15, "supply": 2}, "view": {"shape": "soldier"}},
+    "axe_thrower": {"name": "Метатель топоров", "health": {"max": 110}, "move": {"speed": 2.6, "radius": 0.35}, "sight": 8,
+                    "weapons": [{"range": 4.5, "damage": 11, "cooldown": 1.4, "projectileSpeed": 14}], "cost": {"food": 50, "wood": 35, "time": 15, "supply": 2}, "view": {"shape": "ranged"}},
+    "deer_herd": {"name": "Олени", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "food", "amount": 2500}, "view": {"shape": "herd"}},
+    "birch": {"name": "Берёза", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 300}, "view": {"shape": "tree"}}
+  }
+}
