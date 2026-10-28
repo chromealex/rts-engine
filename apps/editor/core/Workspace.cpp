@@ -1,4 +1,5 @@
 #include "Workspace.h"
+#include "TileOps.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -155,7 +156,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {

@@ -6,10 +6,13 @@
 //         the main pass is left open so the caller can draw UI, then calls device.endPass()]
 #pragma once
 #include <cstdint>
+#include <functional>
+#include <string>
 #include <vector>
 #include "../gfx/Gfx.h"
 #include "Lights.h"
 #include "Math3D.h"
+#include "Model.h"
 
 namespace rts::render {
 
@@ -43,6 +46,8 @@ public:
     bool empty() const { return idx_.empty(); }
     size_t vertexCount() const { return verts_.size(); }
     void clear() { verts_.clear(); idx_.clear(); }
+    const std::vector<MeshVertex>& vertices() const { return verts_; }
+    const std::vector<uint32_t>& indices() const { return idx_; }
 
     // raw access for terrain-like meshes
     uint32_t addVertex(float3 p, float3 n, uint32_t c) { verts_.push_back({p, n, c}); return uint32_t(verts_.size() - 1); }
@@ -71,6 +76,22 @@ struct Lighting {
 };
 
 enum class ShadowQuality { Off, Low, Medium, High };
+// Model materials: Low = Blinn-Phong with material factors and base colour texture only;
+// Medium = GGX + metallic-roughness, normal and emissive maps; High = + occlusion maps.
+enum class MaterialQuality { Low, Medium, High };
+
+// One model instance. Node matrices come from an animated pose (Animation.h) or the bind pose.
+struct ModelDraw {
+    const Model* model = nullptr;
+    mat4 world;                                    // model space -> world
+    const std::vector<mat4>* nodeWorld = nullptr;  // pose, model space; null = bind pose
+    const std::vector<Material>* materials = nullptr; // per-instance override (same size as model->materials)
+    float4 tint{1, 1, 1, 1};                       // rgb multiply (linear), a = opacity (< 1 draws blended)
+    float3 team{1, 1, 1};                          // team colour, linear
+    float flash = 0;                               // additive highlight (hit feedback)
+    int variant = -1;                              // KHR_materials_variants index
+    uint32_t flags = 0;                            // DrawFlags (no cast / no receive shadow)
+};
 
 enum DrawFlags : uint32_t {
     kDrawUnlit = 1,
@@ -92,7 +113,21 @@ public:
     void triangle(float3 a, float3 b, float3 c, uint32_t color);    // flat, alpha-blended
     void quadXZ(float3 a, float3 b, float width, uint32_t color, float y = 0.02f);
     void circleXZ(float3 c, float radius, uint32_t color, int segments = 40, float y = 0.03f);
+    void drawModel(const ModelDraw& d);
     void render(const gfx::PassDesc& screenPass); // shadow pass + opens the main pass and draws everything
+    // Extra renderers (sprites, tiles) that draw with their own pipelines inside the main pass: run
+    // after opaque and translucent meshes, before overlays (fog of war stays on top).
+    // Cleared by beginScene.
+    using CustomDraw = std::function<void(gfx::Device&)>;
+    void drawCustom(CustomDraw fn) { custom_.push_back(std::move(fn)); }
+    const RTSCamera& camera() const { return cam_; }
+    int sceneWidth() const { return sceneW_; }
+    int sceneHeight() const { return sceneH_; }
+
+    void setMaterialQuality(MaterialQuality q);
+    MaterialQuality materialQuality() const { return matQuality_; }
+    static MaterialQuality defaultMaterialQualityFor(const gfx::Device& dev, bool mobile);
+    const std::string& modelError() const { return modelError_; }   // last model shader failure
 
     const mat4& viewProj() const { return viewProj_; }
     Lighting lighting;
@@ -101,6 +136,17 @@ public:
 
 private:
     struct DrawItem { const Mesh* mesh; mat4 model; float4 color; uint32_t flags; float specular, emissive; };
+    struct ModelItem {
+        const Model* model; const Primitive* prim; const Material* mat;
+        mat4 world; float4 tint; float3 team; float flash; uint32_t flags;
+        int32_t joints;     // offset into jointData_ (floats), -1 when not skinned
+        bool inView, inShadow; float depth;
+    };
+    void initModels();
+    void shutdownModels();
+    gfx::PipelineHandle modelPipeline(const ModelItem& it, bool shadow);
+    void drawModelItem(const ModelItem& it, bool shadow, const ModelItem*& lastMat);
+    void renderModels(int phase);   // 0 shadow, 1 opaque, 2 blended
     void computeShadowMatrix(const RTSCamera& cam, float aspect);
     void uploadFrameUniforms(bool forShadow);
 
@@ -115,10 +161,25 @@ private:
     ShadowQuality quality_ = ShadowQuality::Medium;
     std::vector<DrawItem> items_;
     std::vector<ColorVertex> lines_, tris_;
+    std::vector<CustomDraw> custom_;
+    RTSCamera cam_;
     mat4 viewProj_, lightViewProj_;
     float3 camPos_;
     uint32_t drawCalls_ = 0;
     int sceneW_ = 0, sceneH_ = 0;
+
+    // models
+    MaterialQuality matQuality_ = MaterialQuality::High;
+    std::vector<ModelItem> modelItems_;
+    std::vector<float> jointData_;
+    std::vector<mat4> palette_;
+    std::vector<uint32_t> order_;
+    struct ShaderEntry { gfx::ShaderHandle shader; bool failed = false; };
+    std::vector<std::pair<uint32_t, ShaderEntry>> modelShaders_;
+    std::vector<std::pair<uint32_t, gfx::PipelineHandle>> modelPipes_;
+    gfx::TextureHandle white_, black_, flatNormal_;
+    gfx::PipelineHandle currentPipe_;
+    std::string modelError_;
 };
 
 } // namespace rts::render

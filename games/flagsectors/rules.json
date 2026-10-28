@@ -1,0 +1,23 @@
+// "Flag Sectors" — Z-like: the map is a row of sectors; standing at a sector's flag captures the sector and
+// every factory in it; each owned sector beyond the first speeds up all production.
+{
+  "victory": "noStructures",
+  "supplyCap": 60,
+  "regions": {"buildOnlyOwned": true, "productionPerRegion": 0.15},
+  "resources": {},
+  "types": {
+    "fort": {"name": "Форт", "structure": {"footprint": [3, 3]}, "health": {"max": 3000, "armor": 4}, "sight": 9, "supply": 30, "produces": ["robot", "sniper"],
+             "weapons": [{"range": 6, "damage": 15, "cooldown": 1, "projectileSpeed": 18}], "view": {"shape": "hall"}},
+    "factory": {"name": "Завод", "structure": {"footprint": [3, 3]}, "health": {"max": 1500, "armor": 3}, "capturable": true, "invulnerable": true, "sight": 6,
+                "produces": ["robot", "jeep", "light_tank"], "supply": 10, "view": {"shape": "workshop"}},
+    "flag": {"name": "Флаг", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 6, "radius": 2.5, "region": true}, "view": {"shape": "flag"}},
+    "robot": {"name": "Робот", "health": {"max": 70}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 8, "weapons": [{"range": 4.5, "damage": 7, "cooldown": 0.8}],
+              "cost": {"time": 12, "supply": 1}, "view": {"shape": "soldier"}},
+    "sniper": {"name": "Снайпер", "health": {"max": 50}, "move": {"speed": 2.4, "radius": 0.3}, "sight": 11, "weapons": [{"range": 8, "damage": 25, "cooldown": 2.5}],
+               "cost": {"time": 20, "supply": 1}, "view": {"shape": "ranged"}},
+    "jeep": {"name": "Джип", "health": {"max": 160, "armor": 1}, "move": {"speed": 4.2, "radius": 0.5}, "sight": 9, "weapons": [{"range": 5, "damage": 8, "cooldown": 0.5}],
+             "cost": {"time": 18, "supply": 2}, "view": {"shape": "vehicle"}},
+    "light_tank": {"name": "Лёгкий танк", "health": {"max": 400, "armor": 3}, "move": {"speed": 2.4, "radius": 0.6}, "sight": 8,
+                   "weapons": [{"range": 5.5, "damage": 30, "cooldown": 1.8, "projectileSpeed": 16}], "cost": {"time": 30, "supply": 3}, "view": {"shape": "vehicle"}}
+  }
+}

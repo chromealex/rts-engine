@@ -9,12 +9,29 @@
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
+#include "modules/rts/RtsTiles.h"
+#include "modules/rts/view/RtsCamera.h"
+#include <sstream>
 
 namespace fs = std::filesystem;
 
 namespace rts::editor {
 
 using namespace render;
+
+namespace {
+// Models / textures of the open game (view blocks reference them relative to the game folder).
+FileReader projectReader(const std::string& dir) {
+    return [dir](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return platform::readContentFile(p, out);
+        std::stringstream ss; ss << f.rdbuf(); out = ss.str();
+        return true;
+    };
+}
+} // namespace
 
 // ============================ viewport ============================
 
@@ -81,7 +98,9 @@ void Editor::init(gfx::Device& dev) {
         std::string err;
         if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
     } else showPicker_ = true;
-    view_.init(dev, rules());
+    view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
+    view_.init(dev, rules(), projectReader(ws_.project.dir));
+    for (auto& w : view_.warnings()) ws_.log("view", w, true);
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
     else if (doc().data.cells.empty()) newMap(48, 32);
     ws_.changes.clear();
@@ -125,7 +144,9 @@ void Editor::openGame(const std::string& idOrDir) {
 
 void Editor::reloadRules() {
     view_.shutdown(*dev_);
-    view_.init(*dev_, rules());
+    view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
+    view_.init(*dev_, rules(), projectReader(ws_.project.dir));
+    for (auto& w : view_.warnings()) ws_.log("view", w, true);
     gridRevision_ = ~0ull;
     placeType = std::clamp(placeType, 0, std::max(0, int(rules().types.size()) - 1));
 }
@@ -175,6 +196,10 @@ void Editor::fitScene() {
     sceneCam.minDistance = 3.0f;
     sceneCam.distance = std::clamp(float(std::max(d.w, d.h)) * 0.95f + 8, sceneCam.minDistance, sceneCam.maxDistance);
     sceneFlying_ = false;
+    // 2D games: projection and angle of game.json "camera" (zoom stays the editor's)
+    game::CameraSetup cs = game::cameraSetupFrom(ws_.project.manifest);
+    sceneCam.ortho = cs.ortho;
+    if (cs.present) { sceneCam.pitch = std::min(cs.pitch, 1.5707f); sceneCam.yaw = cs.yaw; sceneCam.fovY = cs.fovY; }
 }
 
 void Editor::focusScene(float x, float z, float distance) {
@@ -246,6 +271,7 @@ void Editor::syncGrid() {
         grid_.fieldRes[size_t(i)] = fr >= 0 ? int16_t(std::max(0, rules().findResource(d.fieldResources[size_t(fr)]))) : int16_t(-1);
         grid_.fieldAmt[size_t(i)] = Fixed::fromInt(d.fieldAmt[size_t(i)]);
     }
+    view_.setTiles(d.extra["tiles"]);
     view_.buildTerrain(*dev_, grid_);
     gridRevision_ = doc().revision;
 }
@@ -388,7 +414,16 @@ void Editor::startPlay(int humanSlot) {
         SimConfig cfg;
         cfg.seed = uint64_t(std::time(nullptr));
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
-        sim_->setup(ws_.project.rulesJson, doc().toJson());
+        Json mapJson = doc().toJson();
+        std::string terr, dir = ws_.project.dir;
+        auto read = [&dir](const std::string& p, std::string& out) {
+            std::ifstream f(dir + "/" + p, std::ios::binary);
+            if (!f) return false;
+            out.assign(std::istreambuf_iterator<char>(f), {});
+            return true;
+        };
+        if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
+        sim_->setup(ws_.project.rulesJson, mapJson);
     } catch (const std::exception& e) {
         status = std::string("Ошибка запуска: ") + e.what();
         sim_.reset();
@@ -409,6 +444,7 @@ void Editor::startPlay(int humanSlot) {
         if (size_t(human_ - 1) < d.players.size() && d.players[size_t(human_ - 1)].hasStart) gameCam.target = {d.players[size_t(human_ - 1)].startX, 0, d.players[size_t(human_ - 1)].startZ};
         gameCam.distance = 24;
     }
+    game::applyCameraSetup(game::cameraSetupFrom(ws_.project.manifest), gameCam, 720.0f);
     if (auto* w = window("game")) { w->open = true; ImGui::SetWindowFocus(w->title()); }
     status = human_ ? "Тест: вы играете за игрока " + std::to_string(human_) : "Тест: боты играют на карте";
 }

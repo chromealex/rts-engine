@@ -77,6 +77,10 @@ add_library(rts_game STATIC
     modules/rts/RtsCombat.cpp
     modules/rts/RtsWorld.cpp
     modules/rts/RtsTriggers.cpp
+    modules/rts/RtsDungeon.cpp
+    modules/rts/RtsSettlers.cpp
+    modules/rts/RtsLanes.cpp
+    modules/rts/RtsAvoidance.cpp
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 
@@ -217,9 +221,20 @@ if(NOT MSVC)
     target_compile_options(rts_imgui PRIVATE -w)
 endif()
 
+# Models (models agent): glTF / OBJ / procedural models, PBR materials, skeletal and procedural
+# animation. CPU side only (no platform code), so tests and tools can load models too.
+add_library(rts_models STATIC
+    engine/render/MeshBuilder.cpp
+    engine/render/Model.cpp
+    engine/render/ModelGltf.cpp
+    engine/render/ModelObj.cpp
+    engine/render/Animation.cpp)
+target_link_libraries(rts_models PUBLIC rts_engine)
+
 set(RTS_RUNTIME_SRC
     engine/platform/PlatformCommon.cpp
     engine/render/Renderer3D.cpp
+    engine/render/Renderer3DModels.cpp
     engine/render/Lights.cpp
     engine/render/ImGuiLayer.cpp)
 
@@ -240,7 +255,7 @@ endif()
 # The platform files define main(); they are compiled into each executable through an OBJECT
 # library so that the entry point lands in the final binary on every toolchain.
 add_library(rts_runtime OBJECT ${RTS_RUNTIME_SRC})
-target_link_libraries(rts_runtime PUBLIC rts_engine rts_imgui rts_pack rts_zstd_dec)
+target_link_libraries(rts_runtime PUBLIC rts_engine rts_models rts_imgui rts_pack rts_zstd_dec)
 if(APPLE)
     set_source_files_properties(engine/platform/macos/PlatformMac.mm engine/platform/ios/PlatformIOS.mm
         engine/gfx/metal/GfxMetal.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
@@ -263,8 +278,10 @@ else()
     target_link_libraries(rts_runtime PUBLIC X11 EGL GLESv2)
 endif()
 
-add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp modules/rts/view/RtsLights.cpp)
-target_link_libraries(rts_game_view PUBLIC rts_game rts_imgui)
+add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
+    modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
+    modules/rts/view/RtsLights.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
 function(rts_package_app target)
@@ -397,6 +414,12 @@ if(RTS_BUILD_TOOLS)
     target_compile_definitions(rtsmcp PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
+# Model viewer (models agent): models, materials, clips and quality tiers as the game renders them.
+if(RTS_BUILD_TOOLS AND RTS_DESKTOP)
+    add_executable(rts_modelview apps/modelview/main.cpp apps/modelview/Gallery.cpp $<TARGET_OBJECTS:rts_runtime>)
+    target_link_libraries(rts_modelview PRIVATE rts_runtime rts_game_view)
+endif()
+
 if(RTS_BUILD_TOOLS)
     add_executable(rts_i18n_tool tools/i18n/main.cpp)
     set_target_properties(rts_i18n_tool PROPERTIES OUTPUT_NAME rts_i18n)
@@ -413,17 +436,17 @@ if(RTS_BUILD_SERVER)
     add_executable(rts_server apps/server/main.cpp)
     target_link_libraries(rts_server PRIVATE rts_net_server)
     add_executable(rts_netbot apps/netbot/main.cpp)
-    target_link_libraries(rts_netbot PRIVATE rts_net rts_game)
+    target_link_libraries(rts_netbot PRIVATE rts_net rts_game rts_i18n)
 endif()
 
 if(RTS_BUILD_TESTS)
     enable_testing()
     add_executable(rts_net_tests tests/net_tests.cpp)
-    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game)
+    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game rts_i18n)
     target_compile_definitions(rts_net_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
-    target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
@@ -447,10 +470,23 @@ add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_link_libraries(rts_ui PUBLIC rts_rmlui)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp)
-    target_link_libraries(rts_client PRIVATE rts_ui)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
+    target_link_libraries(rts_client PRIVATE rts_ui rts_net)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp)
-    target_link_libraries(main PRIVATE rts_ui)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
+    target_link_libraries(main PRIVATE rts_ui rts_net)
+endif()
+
+# ---------------------------------------------------------------------------
+# 2D games (2D-mode agent): tile maps + autotiling (deterministic, part of the game library),
+# sprite batch + textures (RHI only), sprite/tile presentation in the RTS view.
+# ---------------------------------------------------------------------------
+target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
+add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
+target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_render2d)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
 endif()
