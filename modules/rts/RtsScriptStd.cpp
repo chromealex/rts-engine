@@ -714,6 +714,85 @@ int rCastPlayerAbility(lua_State* L, Vm& vm) {
 int rHostile(lua_State* L, Vm& vm) { lua_pushboolean(L, vm.module->hostile(*vm.sim, uint8_t(intArg(L, 1)), uint8_t(intArg(L, 2)))); return 1; }
 int rRatio(lua_State* L, Vm&) { pushFx(L, Fixed::fromRatio(intArg(L, 1), intArg(L, 2))); return 1; }
 
+// ---------------------------------------------------------------- commands (lua/commands.lua)
+void pushCost(lua_State* L, const std::vector<Amount>& cost) {
+    lua_createtable(L, int(cost.size()), 0);
+    for (size_t i = 0; i < cost.size(); ++i) {
+        lua_createtable(L, 2, 0);
+        lua_pushinteger(L, cost[i].res); lua_rawseti(L, -2, 1);
+        pushFx(L, cost[i].value); lua_rawseti(L, -2, 2);
+        lua_rawseti(L, -2, lua_Integer(i + 1));
+    }
+}
+std::vector<Amount> readCost(lua_State* L, int idx) {
+    std::vector<Amount> out;
+    if (!lua_istable(L, idx)) return out;
+    const lua_Integer n = lua_Integer(lua_rawlen(L, idx));
+    for (lua_Integer i = 1; i <= n; ++i) {
+        lua_rawgeti(L, idx, i);
+        lua_rawgeti(L, -1, 1); lua_rawgeti(L, -2, 2);
+        out.push_back({uint16_t(intArg(L, -2)), fxArg(L, -1)});
+        lua_pop(L, 3);
+    }
+    return out;
+}
+int rAutoBuildRules(lua_State* L, Vm& vm) {
+    const Rules& R = vm.module->rules();
+    lua_createtable(L, 0, 3);
+    lua_createtable(L, int(R.autoBuildPool.size()), 0);
+    for (size_t i = 0; i < R.autoBuildPool.size(); ++i) { lua_pushinteger(L, R.autoBuildPool[i]); lua_rawseti(L, -2, lua_Integer(i + 1)); }
+    lua_setfield(L, -2, "pool");
+    if (!R.autoBuildCost.empty()) { pushCost(L, R.autoBuildCost); lua_setfield(L, -2, "cost"); }
+    pushFx(L, R.autoBuildGrowth); lua_setfield(L, -2, "growth");
+    return 1;
+}
+int rTypeCost(lua_State* L, Vm& vm) {
+    const auto& types = vm.module->rules().types;
+    const size_t t = size_t(intArg(L, 1));
+    if (t >= types.size()) return 0;
+    pushCost(L, types[t].cost);
+    return 1;
+}
+int rAutoBuilt(lua_State* L, Vm& vm) {
+    auto& v = vm.module->state(*vm.sim).autoBuilt;
+    const size_t p = size_t(intArg(L, 1));
+    if (p >= v.size()) { lua_pushinteger(L, 0); return 1; }
+    if (!lua_isnone(L, 2)) v[p] = int(intArg(L, 2));
+    lua_pushinteger(L, v[p]);
+    return 1;
+}
+int rCanTrain(lua_State* L, Vm& vm) { lua_pushboolean(L, vm.module->canTrain(*vm.sim, uint8_t(intArg(L, 1)), uint16_t(intArg(L, 2)))); return 1; }
+int rFindAutoSpot(lua_State* L, Vm& vm) {
+    Vec3 spot;
+    if (!vm.module->findAutoSpot(*vm.sim, uint8_t(intArg(L, 1)), uint16_t(intArg(L, 2)), spot)) return 0;
+    pushV3(L, spot);
+    return 3;
+}
+// (player, cost) -> paid; emits "not enough" on failure like every other purchase
+int rPay(lua_State* L, Vm& vm) { lua_pushboolean(L, vm.module->pay(*vm.sim, uint8_t(intArg(L, 1)), readCost(L, 2), {})); return 1; }
+int rRefund(lua_State* L, Vm& vm) { vm.module->refund(*vm.sim, uint8_t(intArg(L, 1)), readCost(L, 2), fxArg(L, 3)); return 0; }
+int rPlaceStructure(lua_State* L, Vm& vm) {   // (player, type, x, y, z, complete) -> handle
+    pushEntity(L, vm.module->placeStructure(*vm.sim, uint8_t(intArg(L, 1)), uint16_t(intArg(L, 2)), {fxArg(L, 3), fxArg(L, 4), fxArg(L, 5)},
+                                            kNullEntity, lua_toboolean(L, 6)));
+    return 1;
+}
+// Static per-type data for sell rules: {structure, sellable, max_hp} by type index + 1
+int rSellRules(lua_State* L, Vm& vm) {
+    const Rules& R = vm.module->rules();
+    lua_createtable(L, 0, 4);
+    pushFx(L, R.sellRefund); lua_setfield(L, -2, "refund");
+    lua_createtable(L, int(R.types.size()), 0);
+    for (size_t i = 0; i < R.types.size(); ++i) {
+        lua_createtable(L, 0, 3);
+        lua_pushboolean(L, R.types[i].structure && R.types[i].sellable); lua_setfield(L, -2, "sellable");
+        pushFx(L, R.types[i].maxHp); lua_setfield(L, -2, "max_hp");
+        lua_rawseti(L, -2, lua_Integer(i + 1));
+    }
+    lua_setfield(L, -2, "types");
+    return 1;
+}
+int rUnitType(lua_State* L, Vm& vm) { auto* u = vm.sim->world().tryGet<Unit>(entArg(L, 1)); if (!u) return 0; lua_pushinteger(L, u->type); return 1; }
+
 } // namespace
 
 void openStdApi(Vm& vm) {
@@ -742,6 +821,9 @@ void openStdApi(Vm& vm) {
         {"set_region_owner_by_name", bind<rSetRegionOwnerByName>}, {"regions_owned", bind<rRegionsOwned>},
         {"nearest_enemy_structure", bind<rNearestEnemyStructure>}, {"cast_player_ability", bind<rCastPlayerAbility>},
         {"hostile", bind<rHostile>}, {"ratio", bind<rRatio>},
+        {"auto_build_rules", bind<rAutoBuildRules>}, {"type_cost", bind<rTypeCost>}, {"auto_built", bind<rAutoBuilt>},
+        {"can_train", bind<rCanTrain>}, {"find_auto_spot", bind<rFindAutoSpot>}, {"pay", bind<rPay>}, {"refund", bind<rRefund>},
+        {"place_structure", bind<rPlaceStructure>}, {"sell_rules", bind<rSellRules>}, {"unit_type", bind<rUnitType>},
         {nullptr, nullptr}};
     luaL_newlib(vm.L, funcs);
     lua_pushinteger(vm.L, kPresAny); lua_setfield(vm.L, -2, "PRES_ANY");
@@ -755,7 +837,7 @@ void openStdApi(Vm& vm) {
         {"EV_WAVE", kEvWave}, {"EV_TRAIN_DONE", kEvTrainDone}, {"EV_PLAYER_DEFEATED", kEvPlayerDefeated}, {"EV_MESSAGE", kEvMessage},
         {"EV_PLAYER_ABILITY", kEvPlayerAbility}, {"EV_DIED", kEvDied}, {"EV_BUILD_DONE", kEvBuildDone}, {"EV_RESEARCHED", kEvResearched},
         {"EV_CAPTURED", kEvCaptured}, {"EV_REGION_CLAIMED", kEvRegionClaimed}, {"EV_ABILITY", kEvAbility}, {"EV_LEVEL_UP", kEvLevelUp},
-        {"UNIT_SILENT", kUnitSilent}, {"STAT_MAX_HP", int(Stat::MaxHp)}, {"HOSTILE_NEUTRAL", kHostileNeutral},
+        {"UNIT_SILENT", kUnitSilent}, {"EV_NOT_ENOUGH", kEvNotEnough}, {"EV_SOLD", kEvSold}, {"STAT_MAX_HP", int(Stat::MaxHp)}, {"HOSTILE_NEUTRAL", kHostileNeutral},
         {"ORDER_MOVE", int(OrderType::Move)}, {"ORDER_ATTACK_MOVE", int(OrderType::AttackMove)}, {"ORDER_ATTACK", int(OrderType::Attack)}};
     for (auto& [k, v] : ids) { lua_pushinteger(vm.L, v); lua_setfield(vm.L, -2, k); }
     lua_setglobal(vm.L, "rts");

@@ -6401,6 +6401,25 @@ TEST(script_view_scripts) {
     CHECK(vs.log().empty());
 }
 
+TEST(script_std_sell_refund) {   // lua/commands.lua: same formula as the former C++ (cost * sellRefund * hp / maxHp)
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 3);
+    auto& m = mod(*sim);
+    Entity hall = findType(*sim, "townhall", 1);
+    CHECK(hall.valid());
+    auto& u = sim->world().get<game::Unit>(hall);
+    u.hp = u.hp / 3;
+    const game::UnitType& t = m.rules().types[u.type];
+    const Fixed frac = m.rules().sellRefund * (u.hp / fxMax(t.maxHp, Fixed::fromInt(1)));
+    const Fixed g0 = gold(*sim, 1);
+    Fixed expect = g0;
+    for (auto& c : t.cost) if (m.rules().resources[c.res].id == "gold") expect += c.value * frac;
+    Command c; c.player = 1; c.type = game::kCmdSell; c.units = {hall};
+    m.applyCommand(*sim, c);
+    CHECK(gold(*sim, 1) == expect && expect > g0);
+    CHECK(sim->world().get<game::Unit>(hall).hp.raw == 0);
+    CHECK(m.scripts()->errorCount() == 0);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

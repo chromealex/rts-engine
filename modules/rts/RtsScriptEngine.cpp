@@ -357,7 +357,7 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
             im.logLine(true, err);
         }
     }
-    static const char* const kStdNames[] = {"victory", "waves", "triggers"};
+    static const char* const kStdNames[] = {"victory", "waves", "triggers", "auto_build", "sell"};
     static_assert(sizeof(kStdNames) / sizeof(kStdNames[0]) == size_t(StdFn::Count));
     // modules schedule themselves: std.period.<name> = N (every N ticks, 0 = not needed by this game)
     lua_getglobal(L, "std");
@@ -505,7 +505,7 @@ void ScriptEngine::tick(Simulation& sim) {
     im.commit(sim);
 }
 
-void ScriptEngine::callStd(Simulation& sim, StdFn fn) {
+void ScriptEngine::callStd(Simulation& sim, StdFn fn, std::initializer_list<int64_t> args) {
     Impl& im = *impl_;
     const int ref = im.stdRefs[size_t(fn)];
     const uint32_t period = im.stdPeriod[size_t(fn)];
@@ -515,7 +515,8 @@ void ScriptEngine::callStd(Simulation& sim, StdFn fn) {
     lua_sethook(L, nullptr, 0, 0);   // engine code: no instruction budget (user calls set it again)
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
     lua_pushinteger(L, sim.tick());
-    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+    for (int64_t a : args) lua_pushinteger(L, a);
+    if (lua_pcall(L, 1 + int(args.size()), 0, 0) != LUA_OK) {
         if (!im.stdFailed[size_t(fn)]) {
             im.stdFailed[size_t(fn)] = true;
             im.logLine(true, std::string("standard library: ") + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "error"));
