@@ -71,7 +71,7 @@ public:
     void update(Simulation& sim, const std::vector<SceneObject>* scene);
 
     int played() const { return played_; }
-    int rejected() const { return rejected_; }   // curved worlds: events the place function did not show   // effects started by events since attach (tests, overlay)
+    int rejected() const { return rejected_; }   // curved worlds: events the place function did not show
 
     static constexpr float kAirHeight = 2.4f;   // RtsView draws flyers this high
 

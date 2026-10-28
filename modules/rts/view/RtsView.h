@@ -44,6 +44,7 @@ struct SceneObject {
     float carry = 0;             // > 0: carrying resources
     int16_t carryRes = -1;       // resource index of the cargo
     bool selected = false, hovered = false, visible = true, isProjectile = false;
+    bool unpowered = false;      // disabled by a power deficit / owner in low power (electric lights dim)
     uint8_t action = 0;          // SpriteAction (sprite animations): idle, move, attack, work
     // animation hints (sceneFromSim fills them; editor placements leave the defaults)
     uint8_t order = 0;           // current order: 0 none, else OrderType + 1
@@ -68,6 +69,10 @@ struct RtsScene {
     std::vector<SimEvent> events;
     uint32_t tick = 0;
     double seconds = 0;          // game time (tick / tick rate): drives the day/night cycle
+    // Day/night phase from the simulation (0..1, 0 = midnight, 0.5 = noon), when a gameplay day cycle
+    // exists (mechanic E, rules.cycle); < 0: the lighting block's own clock. Visual and gameplay
+    // night then always agree.
+    float cycle = -1;
     // ground overlays (RtsGroundFx): the fog-of-war viewer (0 = everything) and the sim's lanes (read only)
     uint8_t viewer = 0;
     const std::vector<Lane>* lanes = nullptr;

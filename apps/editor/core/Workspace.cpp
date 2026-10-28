@@ -1,4 +1,8 @@
 #include "Workspace.h"
+#include "ScenarioOps.h"
+#include "SchemaOps.h"
+namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // CampaignOps.cpp
+#include "SimTools.h"
 #include "TileOps.h"
 #include "TerrainOps.h"
 #include "GenOps.h"
@@ -18,6 +22,7 @@
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include "engine/pack/FileCopy.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
@@ -83,11 +88,6 @@ bool erasePath(Json& j, const std::string& path) {
     }
     if (last.index >= 0) { if (!parent->isArray() || size_t(last.index) >= parent->size()) return false; parent->eraseAt(size_t(last.index)); return true; }
     return parent->erase(last.key);
-}
-std::string readText(const std::string& f) {
-    std::ifstream in(f, std::ios::binary);
-    std::stringstream ss; ss << in.rdbuf();
-    return ss.str();
 }
 bool writeText(const std::string& f, const std::string& text, std::string* err) {
     std::ofstream out(f, std::ios::binary);
@@ -170,7 +170,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -222,7 +222,7 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
         }
         lf.close();
         std::error_code ec;
-        if (!estimate) fs::copy_file(logFile, logFile.parent_path() / "build-last.log", fs::copy_options::overwrite_existing, ec);
+        if (!estimate) rts::pack::copyFileReplace(logFile, logFile.parent_path() / "build-last.log", ec);
         building_ = false;
     });
 }
@@ -465,14 +465,6 @@ void Workspace::registerCoreOps() {
         });
 
     // ---------------------------------------------------------------- rules
-    add("rules_schema", "Reference of the game data format: every rules/map block and field, with examples. Read this before editing rules.", "{}",
-        [this](const Json&) {
-            std::string text = readText(engineDir + "/docs/game-format.md");
-            if (text.empty()) text = "docs/game-format.md not found in " + engineDir;
-            Json r = Json::object();
-            r.set("text", str(text));
-            return r;
-        });
     add("rules_get", "Read rules.json or a part of it by path (e.g. 'types.footman', 'resources', 'triggers[0]'). No path = whole file.",
         R"({"properties": {"path": {"type": "string"}}})", [this, needProject](const Json& p) {
             needProject();
@@ -1132,15 +1124,19 @@ void Workspace::registerCoreOps() {
 
     // ---------------------------------------------------------------- testing
     add("match_run", "Run a fast bot-vs-bot match on the open map (headless, deterministic) and report the outcome: winner, duration, "
-        "per-player economy/army timeline and event counts. Use it to balance and to verify a map is playable.",
+        "per-player economy/army timeline, event counts and fired triggers; optional event log. Use it to balance and to verify a map is playable.",
         R"({"properties": {"seconds": {"type": "number", "description": "time limit, default 900"}, "seed": {"type": "integer"},
-            "difficulty": {"type": "integer", "description": "0 easy, 1 normal, 2 hard"}}})",
+            "difficulty": {"type": "integer", "description": "0 easy, 1 normal, 2 hard"},
+            "events": {"description": "true = log every event (with time, players, objects), or a list of event names"},
+            "maxEvents": {"type": "integer"},
+            "saveCheck": {"type": "number", "description": "at this second: save, load into a fresh simulation and run both 10 s without bots; reports whether they stay identical"}}})",
         [this, needProject](const Json& p) {
             needProject();
             SimConfig cfg;
             cfg.seed = uint64_t(std::max(0, pi(p, "seed", 1)));
             Simulation sim(cfg, std::make_unique<game::RtsModule>());
-            sim.setup(project.rulesJson, map.toJson());
+            const Json simMap = mapForSim(map.toJson(), project.dir);
+            sim.setup(project.rulesJson, simMap);
             auto& mod = *dynamic_cast<game::RtsModule*>(&sim.module());
             game::AIConfig ai;
             int diff = pi(p, "difficulty", 1);
@@ -1150,12 +1146,53 @@ void Workspace::registerCoreOps() {
             const uint32_t limit = uint32_t(pf(p, "seconds", 900) * float(sim.tickRate()));
             Json timeline = Json::array();
             std::map<std::string, int64_t> events;
-            static const char* evNames[] = {"", "spawned", "died", "attack", "hit", "trainStarted", "trained", "buildPlaced", "built", "gathered", "captured",
-                                            "defeated", "notEnough", "researched", "levelUp", "ability", "miss", "readyToPlace", "sold", "regionClaimed", "wave", "lowPower", "upgraded", "message"};
+            SimRefs refs{sim, mod, mapEntityIds(sim, mod, simMap)};
+            std::vector<int> logTypes;
+            const bool logAll = (p["events"].type() == Json::Type::Bool) && p["events"].boolean();
+            for (auto& e : p["events"].items()) {
+                int t = simEventByName(e.str());
+                if (t < 0) throw std::runtime_error("events: unknown event '" + e.str() + "' (" + simEventNames() + ")");
+                logTypes.push_back(t);
+            }
+            const size_t maxLog = size_t(std::clamp<int64_t>(p["maxEvents"].integer(300), 1, 5000));
+            Json eventLog = Json::array(), triggerLog = Json::array();
+            Json saveCheck;
+            const uint32_t saveTick = p.has("saveCheck") ? uint32_t(pf(p, "saveCheck", 0) * float(sim.tickRate())) : 0;
             while (sim.tick() < limit && sim.result() == 0) {
+                if (saveTick && sim.tick() == saveTick) {   // save state check (agent-mech): load into a twin and compare
+                    saveCheck = Json::object();
+                    const std::string bytes = sim.serialize();
+                    saveCheck.set("bytes", Json::number(int64_t(bytes.size())));
+                    Simulation twin(cfg, std::make_unique<game::RtsModule>()), copy(cfg, std::make_unique<game::RtsModule>());
+                    twin.setup(project.rulesJson, simMap);
+                    copy.setup(project.rulesJson, simMap);
+                    std::string err;
+                    bool ok = !bytes.empty() && twin.deserialize(bytes, &err) && copy.deserialize(bytes, &err);
+                    int diverged = -1;
+                    for (int i = 0; ok && i < int(sim.tickRate()) * 10; ++i) { twin.step(); copy.step(); if (twin.checksum() != copy.checksum()) { diverged = i; break; } }
+                    saveCheck.set("ok", Json::fromBool(ok && diverged < 0));
+                    if (!err.empty()) saveCheck.set("error", str(err));
+                    if (diverged >= 0) saveCheck.set("divergedAfterTicks", Json::number(int64_t(diverged)));
+                }
                 for (auto& b : bots) b.update(sim);
                 sim.step();
-                for (auto& ev : sim.events()) if (ev.type < sizeof(evNames) / sizeof(evNames[0])) events[evNames[ev.type]]++;
+                for (auto& ev : sim.events()) {
+                    events[simEventName(ev.type)]++;
+                    const double t = double(sim.tick()) / sim.tickRate();
+                    if (ev.type == game::kEvTriggerFired && triggerLog.size() < 300) {
+                        const auto& defs = mod.triggers().defs;
+                        Json tj = Json::object();
+                        tj.set("t", Json::number(t, 2));
+                        tj.set("trigger", str(ev.value >= 0 && size_t(ev.value) < defs.size() && !defs[size_t(ev.value)].id.empty() ? defs[size_t(ev.value)].id : "#" + std::to_string(ev.value)));
+                        tj.set("player", Json::number(int64_t(ev.player)));
+                        triggerLog.push(tj);
+                    }
+                    if ((logAll || std::find(logTypes.begin(), logTypes.end(), int(ev.type)) != logTypes.end()) && eventLog.size() < maxLog) {
+                        Json ej = eventJson(refs, ev);
+                        ej.set("t", Json::number(t, 2));
+                        eventLog.push(ej);
+                    }
+                }
                 if (sim.tick() % (sim.tickRate() * 60) == 0) {
                     Json snap = Json::object();
                     snap.set("t", Json::number(int64_t(sim.tick() / sim.tickRate())));
@@ -1185,8 +1222,11 @@ void Workspace::registerCoreOps() {
             r.set("seconds", Json::number(int64_t(sim.tick() / sim.tickRate())));
             r.set("timeline", timeline);
             Json ev = Json::object();
-            for (auto& [k, v] : events) ev.set(k, Json::number(v));
+            for (auto& [k, v] : events) if (!k.empty()) ev.set(k, Json::number(v));
             r.set("events", ev);
+            if (eventLog.size()) r.set("eventLog", eventLog);
+            if (triggerLog.size()) r.set("triggers", triggerLog);
+            if (saveCheck.isObject()) r.set("saveCheck", saveCheck);
             char cs[32]; std::snprintf(cs, sizeof cs, "%016llx", (unsigned long long)sim.checksum());
             r.set("checksum", str(cs));
             r.set("summary", str("Тестовый матч: победа " + winner + " за " + std::to_string(sim.tick() / sim.tickRate()) + " с"));
@@ -1202,7 +1242,8 @@ void Workspace::registerCoreOps() {
             fs::path canon = fs::weakly_canonical(dst);
             if (canon.string().rfind(fs::weakly_canonical(project.dir).string(), 0) != 0) throw std::runtime_error("dest must stay inside the game folder");
             fs::create_directories(dst.parent_path());
-            fs::copy_file(ps(p, "source"), dst, fs::copy_options::overwrite_existing);
+            std::error_code ec;   // re-import over an existing file: MinGW-safe copy (FileCopy.h)
+            if (!rts::pack::copyFileReplace(ps(p, "source"), dst, ec)) throw std::runtime_error("copy " + ps(p, "source") + ": " + ec.message());
             Json r = ok();
             r.set("summary", str("Импортирован " + ps(p, "dest")));
             return r;
@@ -1259,6 +1300,12 @@ void Workspace::registerCoreOps() {
         R"({"properties": {"speed": {"type": "number"}, "human": {"type": "integer", "description": "player slot controlled by the user, 0 = bots only"}, "device": {"type": "string"}}})");
     gui("play_stop", "Stop the play-test and return to editing.", "{}");
     gui("play_status", "Current play-test state: time, players, resources, units, result.", "{}");
+    gui("play_units", "Live objects of the running play-test: id (for play_command), map name, type, owner, position, hp, orders, statuses. "
+        "Filter by owner / type; at most 'limit' (default 200).",
+        R"({"properties": {"owner": {"type": "integer"}, "type": {"type": "string"}, "limit": {"type": "integer"}}})");
+    registerOp({"play_command", "Issue a player command in the running play-test, exactly like player input (the user sees it live). command: " +
+        commandNames() + ". " + kCommandHelp, schema((std::string(R"({"properties": {)") + commandSchemaProps() + R"(}, "required": ["command"]})").c_str()),
+        [](const Json&) -> Json { throw std::runtime_error("this tool needs the editor window (start rts_editor)"); }, true});
     gui("device_list", "Device presets for the simulator (phones, tablets, desktops).", "{}");
     gui("device_set", "Show the viewport in a device frame (resolution, notch/safe area, orientation) like a phone simulator. 'none' turns it off.",
         R"({"properties": {"device": {"type": "string"}, "orientation": {"type": "string", "enum": ["portrait", "landscape"]}}, "required": ["device"]})");

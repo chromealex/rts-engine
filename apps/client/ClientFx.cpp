@@ -1,6 +1,7 @@
 #include "ClientFx.h"
 #include <cstdio>
 #include <cstdlib>
+#include "engine/fx/FxModelMesh.h"
 #include "engine/platform/Platform.h"
 
 namespace rts::client {
@@ -14,6 +15,9 @@ void ClientFx::init(gfx::Device& dev, const game::Rules& rules) {
         if (!r.valid()) return false;
         out = {r.tex, r.u0, r.v0, r.u1, r.v1};
         return true;
+    });
+    ps_.setMeshLoader([](const std::string& name, fx::FxMesh& out) {   // mesh particles: FBX / OBJ / glTF of the game
+        return fx::meshFromModelFile(name, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, out);
     });
     if (!ps_.init(&dev)) std::fprintf(stderr, "fx: %s\n", ps_.lastError().c_str());
     std::string text;
@@ -81,6 +85,9 @@ void ClientFx::addLights(render::LightSystem& lights) {
     for (auto& l : lightBuf_) lights.add(planet_ ? space_.transformPoint(l.pos) : l.pos, l.radius, l.color, l.intensity);
 }
 
-void ClientFx::render(const render::Lighting& lighting) { ps_.render({lighting.fogColor, lighting.fogDensity}); }
+void ClientFx::render(const render::Lighting& lighting) {
+    ps_.setLightDir(lighting.sunDir);   // shading of mesh particles
+    ps_.render({lighting.fogColor, lighting.fogDensity});
+}
 
 } // namespace rts::client

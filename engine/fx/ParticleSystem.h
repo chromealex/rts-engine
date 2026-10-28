@@ -48,6 +48,14 @@ struct FxTexture {
 // Loads a sprite for a particle texture name (not "builtin:*"). The apps connect
 // render::TextureCache::resolve here — the same loader (and future atlas packer) as every sprite.
 using TextureLoader = std::function<bool(const std::string& name, FxTexture& out)>;
+// A mesh for mesh particles and the "mesh" shape: engine model space (Y up, right-handed, metres).
+struct FxMesh {
+    std::vector<float3> pos, nrm;     // nrm may be empty (computed)
+    std::vector<float2> uv;           // may be empty
+    std::vector<uint32_t> idx;        // triangles
+};
+// Loads a mesh by name (not "builtin:*"): the apps connect render::loadModel here (FBX / OBJ / glTF).
+using MeshLoader = std::function<bool(const std::string& name, FxMesh& out)>;
 // Reads a content file (`fx/<name>.json`): platform::readContentFile in the apps.
 using FileReader = std::function<bool(const std::string& path, std::string& out)>;
 
@@ -62,9 +70,13 @@ struct FxFog { float3 color{0.62f, 0.70f, 0.80f}; float density = 0; };  // Rend
 // A light carried by particles ("light" module): the apps add these to Renderer3D::lights.
 struct FxPointLight { float3 pos; float radius = 1; float3 color{1, 1, 1}; float intensity = 1; };
 
+// A live particle as seen from outside (tests, tools).
+struct FxParticleInfo { float3 pos, vel; float size = 0, age = 0, life = 0, rotation = 0; float4 color; int effect = -1, emitter = 0; };
+
 struct FxStats {
     int particles = 0, instances = 0, drawn = 0, batches = 0, drawCalls = 0;
     int trailQuads = 0;     // ribbon segments drawn (included in drawn)
+    int meshVerts = 0;      // vertices of mesh particles drawn
     int dropped = 0;        // spawns refused by the budget (since the last resetStats)
     int culled = 0;         // one-shots not started: off-screen or too far
     float fill = 0;         // drawn particle area / screen area: the overdraw particles add
@@ -86,14 +98,19 @@ public:
     FxQuality quality() const { return quality_; }
     void setFileReader(FileReader r) { reader_ = std::move(r); }
     void setTextureLoader(TextureLoader l);
+    void setMeshLoader(MeshLoader l);
     // Ground height for "collision" (world y = 0 without it): RtsView::heightAt in the apps.
     void setGroundHeight(std::function<float(float x, float z)> fn);
+    // Wind (world units / s^2) acting on emitters with "externalForces" (Unity wind zones).
+    void setWind(float3 wind);
+    // Towards the sun: shading of mesh particles (Renderer3D::lighting.sunDir).
+    void setLightDir(float3 dir);
     // Curved worlds (planets), all optional; unset = the flat behaviour, unchanged:
-    //  - up(pos): local "up" at a position of the simulation space. Gravity / speed vectors of effects are
-    //    given with +Y up and get rotated onto it; ground-aligned / upright particles follow it.
-    //  - altitude(pos): height above the ground along up (collision instead of the ground height).
-    //  - view space: particles live in a stable space (planets: body-local of the camera's body) and are drawn
-    //    through `toView` (that space -> the renderer's world); setView() takes the renderer's camera.
+    //  - up(pos): local "up" at a particle position. Gravity / wind (given with +Y up) turn onto it;
+    //    ground-aligned / upright particles follow it.
+    //  - altitude(pos): height above the ground along up ("collision" ground instead of setGroundHeight).
+    //  - view space: particles live in their own stable space (planets: body-local of the camera's body) and
+    //    are drawn through `toView` (that space -> the renderer's world); setView() takes the renderer's camera.
     void setUpFunction(std::function<float3(float3 pos)> fn);
     void setAltitudeFunction(std::function<float(float3 pos)> fn);
     void setViewSpace(const render::mat4* toView);
@@ -118,7 +135,8 @@ public:
     void move(FxHandle h, float3 pos, float3 dir);
     void stop(FxHandle h);                             // stops emitting; live particles fade out
     void kill(FxHandle h);                             // stops and removes its particles at once
-    bool playing(FxHandle h) const;
+    bool playing(FxHandle h) const;                    // still emitting (its particles may outlive it)
+    void emitManual(FxHandle h);                       // fires the "manual" sub-emitters of its live particles
     void clear();                                      // everything (new match)
 
     void setView(const render::RTSCamera& cam, const render::mat4& viewProj, int fbW, int fbH);
@@ -128,11 +146,14 @@ public:
     // in total (fewer on low tiers). Call between Renderer3D::beginScene and render.
     void collectLights(std::vector<FxPointLight>& out, int maxLights = 32) const;
 
+    void snapshot(std::vector<FxParticleInfo>& out) const;   // every live particle (current size and colour)
     const FxStats& stats() const { return stats_; }
     void resetStats() { stats_.dropped = stats_.culled = 0; }
 
     // Built-in texture names (always available, no files): soft, spark, ring, smoke.
     static const std::vector<std::string>& builtinTextures();
+    // Built-in meshes ("builtin:<name>"): cube, sphere, capsule, cylinder, plane, quad (Unity's primitives).
+    static const std::vector<std::string>& builtinMeshes();
 
 private:
     struct Impl;
