@@ -6061,6 +6061,8 @@ TEST(tools_trigger_fired_event) {
     CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(3));
 }
 
+#include "tests_mech.inc"   // agent-mech
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

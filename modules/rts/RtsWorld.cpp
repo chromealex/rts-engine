@@ -94,7 +94,7 @@ void RtsModule::sysVision(Simulation& sim) {
             });
     }
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
-        if (o.player == 0 || o.player >= np || (u.flags & kUnitInHand)) return;
+        if (o.player == 0 || o.player >= np || (u.flags & kUnitOffMap)) return;
         const UnitType& t = rules_.types[u.type];
         int r = int(stat(sim, e, Stat::Sight).toInt());
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());

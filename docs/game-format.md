@@ -820,6 +820,39 @@ Garrison structures, groups and lanes come from `garrison`, `kCmdSend` and `lane
 Still needs code: **flying towers moving between points** (garrisons are fixed structures; a mobile
 garrison would need garrisons on units).
 
+## Army control (agent-mech): stances, retreat, transports
+
+Optional blocks; a game without them plays exactly as before (stances and retreat commands work in any game).
+
+```json
+"stances": {"defendRadius": 6},                          // defensive stance: chase at most this far from where it stood
+"retreat": {"speed": 1.25, "damageTaken": 0.75},          // the Retreat command (Company of Heroes / Dawn of War II)
+"types": {
+  "hq":     {"retreatPoint": true, ...},                  // retreating units run to the nearest own one (else key / producer)
+  "archer": {"stance": "defensive", ...},                 // default stance of the type: aggressive | defensive | hold | passive
+  "apc":    {"transport": {"slots": 8, "accepts": ["infantry"], "layers": ["ground"], "unloadInterval": 0.5, "killOnDeath": 1}},
+  "bunker": {"transport": {"slots": 4, "fireFrom": 4, "heal": 2}},                 // passengers shoot from inside
+  "town_center": {"transport": {"slots": 15, "damagePerCargo": 0.2, "accepts": ["villager"]}},   // AoE: more arrows per garrisoned unit
+  "ifv":    {"transport": {"slots": 1, "weaponFromCargo": true}},                  // the passenger's weapon fires (RA2 IFV)
+  "tank":   {"cargoSize": 4, ...}                                                  // slots a passenger takes (default 1)
+}
+```
+
+- **Stances** (command `kCmdStance`, param 0 aggressive, 1 defensive, 2 hold, 3 passive): aggressive = default behaviour;
+  defensive = fights enemies within `stances.defendRadius` of its spot and walks back; hold = never moves on its own
+  (persistent `kCmdHold`); passive = never attacks on its own (explicit attack orders still work).
+- **Retreat** (`kCmdRetreat`, needs a `retreat` block): the units run to the nearest own `retreatPoint` (else a `key`
+  structure, else a producer) with `speed` x speed and `damageTaken` x damage, without fighting; any new order ends it.
+  The AI retreats fighters below 30% hp that see an enemy.
+- **Transports** (`transport` on units or structures): `kCmdLoad` (units = passengers, target = transport; a right click
+  on an own transport does the same), `kCmdUnload` (units = transports; param 1 + point: drive there first). Passengers
+  are off the map (`kUnitInCargo`): not targetable, not drawn, not pushing; they ride with the carrier. `accepts`
+  (type tags) and `layers` filter passengers, `fireFrom` passengers with weapons shoot from inside at the carrier's
+  position, `damagePerCargo` raises the carrier's own damage per passenger, `heal` hp/s inside. When the carrier
+  dies, `killOnDeath` of the passengers die with it (default 1 for units, 0 for structures) and the rest get out.
+  Events `kEvLoaded` / `kEvUnloaded` (a = passenger, b = transport). The AI mans shooting structures (`fireFrom`:
+  fighters; `damagePerCargo`: workers) when enemies are within 10 cells and lets workers out when it is safe.
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
@@ -827,7 +860,8 @@ Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player i
 room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
 optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
-`kCmdConnectRoad` (units = own structures). `kCmdPlayerAbility` with a `structure` / `group` / `player`
+`kCmdConnectRoad` (units = own structures), `kCmdStance` (param = stance), `kCmdRetreat`, `kCmdLoad` (target = transport),
+`kCmdUnload` (param 1 = drive to point first). `kCmdPlayerAbility` with a `structure` / `group` / `player`
 ability takes the clicked object in `target` (or the nearest one to `point`).
 
 ## Triggers
