@@ -371,9 +371,16 @@ bool MapGrid::flowSteer(int fi, Vec3 from, Vec3 goalPos, std::vector<Vec3>& out,
         if (flowValue(fi, cur) == 0) break;
     }
     if (cells.size() < 2) return false;
-    size_t j = cells.size() - 1;
-    while (j > 1 && !flowLine(s, cells[j], layer)) --j;
-    out.push_back(centerOf(cells[j]));
+    // farthest visible descent cell: doubling then bisection (a few line tests instead of one per cell)
+    size_t ok = 1, lo = 1, hi = cells.size() - 1;
+    for (size_t step = 4; ; step *= 2) {
+        const size_t j = std::min(hi, step);
+        if (!flowLine(s, cells[j], layer)) { hi = j; break; }
+        ok = lo = j;
+        if (j == hi) { hi = j + 1; break; }
+    }
+    while (hi - lo > 1) { const size_t mid = (lo + hi) / 2; if (flowLine(s, cells[mid], layer)) ok = lo = mid; else hi = mid; }
+    out.push_back(centerOf(cells[ok]));
     return true;
 }
 
