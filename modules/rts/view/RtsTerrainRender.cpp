@@ -901,8 +901,9 @@ void TerrainRenderer::draw(Renderer3D& r, const MapGrid& g, const std::vector<ui
         if (++frames == 60) {
             auto now = std::chrono::steady_clock::now();
             double ms = std::chrono::duration<double, std::milli>(now - last).count() / frames;
-            std::fprintf(stderr, "[terrain] map %dx%d chunks %d drawn %d lods %d tris %llu frame %.2f ms build %.1f ms\n", mapW_, mapH_,
-                         stats_.chunks, stats_.drawn, lodLevels_, (unsigned long long)stats_.triangles, ms, stats_.buildMs);
+            std::fprintf(stderr, "[terrain] map %dx%d chunks %d drawn %d lods %d tris %llu frame %.2f ms build %.1f ms detail k=%d tex %dx%d geo %.1f MB\n", mapW_, mapH_,
+                         stats_.chunks, stats_.drawn, lodLevels_, (unsigned long long)stats_.triangles, ms, stats_.buildMs,
+                         detailOn_ ? detailK_ : 0, nrmW_, nrmH_, double(geoBytes_) / 1048576.0);
             last = now; frames = 0;
         }
     }
