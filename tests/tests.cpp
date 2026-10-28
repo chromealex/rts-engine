@@ -8676,7 +8676,7 @@ TEST(script_data_hooks) {
 }
 
 static std::unique_ptr<Simulation> scriptedGame(uint64_t seed) {
-    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/scripted";
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/scripted";
     Json rules = Json::parseFile(dir + "/rules.json");
     Json map = Json::parseFile(dir + "/maps/valley.json");
     std::string err;
