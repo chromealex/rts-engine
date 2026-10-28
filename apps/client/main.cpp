@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "engine/render/TextureCache.h"
 #include "ClientSplash.h"
 #include "GameClient.h"
 #include "modules/rts/RtsLocalize.h"
@@ -81,6 +82,13 @@ void GameClient::initStep(gfx::Device& dev, int step) {
         r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
         r3d_.setMaterialQuality(Renderer3D::defaultMaterialQualityFor(dev, platform::isTouchDevice()));
         r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
+        postFx_.init(dev);
+        postFxBase_ = render::PostFx::defaultQualityFor(dev, platform::isTouchDevice());
+        postFx_.setQuality(postFxBase_);
+        postFx_.setImageLoader([](const std::string& path, int& w, int& h, std::vector<uint8_t>& rgba) {
+            std::string bytes;
+            return platform::readContentFile(path, bytes) && render::decodeImage(bytes, w, h, rgba);
+        });
         break;
     case 2: view_.init(dev, rules_); break;     // models, textures, atlases of every type
     case 3: fx_.init(dev, rules_); break;
@@ -190,10 +198,16 @@ void GameClient::shutdown() {
     sound_.detach();
     audio_.shutdown();
     view_.shutdown(*dev_);
+    postFx_.shutdown();
     r3d_.shutdown();
     shutdownUi();
     minimap_.release(*dev_);
     overlay_.shutdown();
+}
+
+void GameClient::configurePostFx(const Json& map) {
+    postFx_.configure(manifest_["postfx"], map["postfx"]);
+    postFx_.setQuality(postFxBase_);
 }
 
 void GameClient::startMatch(size_t idx) {
@@ -211,6 +225,7 @@ void GameClient::startMatch(size_t idx) {
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
+        configurePostFx(map);
         quality_.reset(int(r3d_.shadowQuality()), int(r3d_.lights.quality()));
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
@@ -672,6 +687,9 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             r3d_.setShadowQuality(ShadowQuality(quality_.shadows()));
             r3d_.lights.setQuality(rts::render::LightQuality(quality_.lights()));
             shadowQuality_ = boundShadowQuality_ = quality_.shadows();
+            // post effects follow: one tier down per governor step, but keep the cheap look (low)
+            if (postFxBase_ != render::PostFxQuality::Off)
+                postFx_.setQuality(render::PostFxQuality(std::max(1, int(postFxBase_) - quality_.stepsDown())));
         }
 
         steerPossessed();
@@ -748,8 +766,9 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             }
         }
         drawToolPreview();
-        r3d_.render(pass);
+        r3d_.render(pass, &postFx_);
         if (!planet()) fx_.render(r3d_.lighting);
+        r3d_.resolvePostFx();   // post effects (if any) under the HUD
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;

@@ -8939,6 +8939,81 @@ TEST(pack_file_copy_into_existing) {
 
 #include "tests_mech.inc"   // agent-mech
 
+// ---- post-processing data (postfx agent): parsing, map overrides, cost model, presets
+#include "engine/render/PostFxData.h"
+TEST(postfx_parse_merge_and_cost) {
+    using namespace rts::render;
+    Json game = Json::parse(R"({"effects": [{"type": "bloom", "intensity": 1.5}, {"type": "vignette"}, {"type": "colorGrade", "saturation": 9}]})");
+    Json map = Json::parse(R"({"effects": [{"type": "bloom", "threshold": 0.5}, {"type": "vignette", "enabled": false}, {"type": "grain"}]})");
+    std::vector<std::string> issues;
+    PostFxSettings s = parsePostFx(game, map, &issues);
+    CHECK(s.effects.size() == 4);
+    const PostFxEffect* b = s.find(PostFxType::Bloom);
+    CHECK(b && std::fabs(b->get("intensity") - 1.5f) < 1e-4f && std::fabs(b->get("threshold") - 0.5f) < 1e-4f);   // map overlays params
+    CHECK(b && b->minQuality == PostFxQuality::Medium);                     // heavy: skipped on weak phones by default
+    CHECK(s.find(PostFxType::Vignette) && !s.find(PostFxType::Vignette)->enabled);
+    CHECK(std::fabs(s.find(PostFxType::ColorGrade)->get("saturation") - 2.0f) < 1e-4f && !issues.empty());   // clamped + reported
+    CHECK(s.effects[0].type == PostFxType::Bloom && s.effects.back().type == PostFxType::Grain);   // catalog order
+    CHECK(s.activeAt(PostFxQuality::Low).size() == 2 && s.activeAt(PostFxQuality::High).size() == 3);
+    CHECK(s.activeAt(PostFxQuality::Off).empty());
+    // replace + disable on the map
+    PostFxSettings r = parsePostFx(game, Json::parse(R"({"replace": true, "effects": [{"type": "fade"}]})"));
+    CHECK(r.effects.size() == 1 && r.effects[0].type == PostFxType::Fade);
+    CHECK(!parsePostFx(game, Json::parse(R"({"enabled": false})")).anyActive(PostFxQuality::High));
+    CHECK(!parsePostFx(Json(), Json()).anyActive(PostFxQuality::High));   // no block: no post pass at all
+    // strict validation (MCP)
+    bool threw = false;
+    try { parsePostFxEffect(Json::parse(R"({"type": "bloom", "strength": 1})"), true); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { parsePostFxEffect(Json::parse(R"({"type": "nope"})"), true); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    // JSON round trip keeps only non-defaults
+    Json j = postFxEffectJson(*b);
+    CHECK(j.getStr("type") == "bloom" && j.has("intensity") && !j.has("knee") && !j.has("minQuality"));
+    // cost: heavy > cheap, tiers grow, heavy effects warn, cheap ones don't
+    const auto& weak = postFxProfiles()[0];
+    PostFxEffect vg = defaultPostFxEffect(PostFxType::Vignette), bl = defaultPostFxEffect(PostFxType::Bloom);
+    CHECK(postFxMs(postFxEffectWork(bl, PostFxQuality::Low, true), weak) > 5 * postFxMs(postFxEffectWork(vg, PostFxQuality::Low, true), weak));
+    CHECK(postFxEffectWork(bl, PostFxQuality::High).units > postFxEffectWork(bl, PostFxQuality::Medium).units);
+    CHECK(postFxEffectWork(bl, PostFxQuality::Low).units == 0);   // minQuality medium
+    CHECK(!postFxEffectWarnings(bl).empty() && postFxEffectWarnings(vg).empty());
+    bl.minQuality = PostFxQuality::Low;
+    CHECK(postFxEffectWarnings(bl)[0].find("forces it onto weak phones") != std::string::npos);
+    Json rep = postFxCostReport(s);
+    CHECK(rep["total"]["weakPhone"]["ms"].toDouble() > 0 && rep["total"]["desktop"]["passes"].integer() > 1);
+    for (auto& p : postFxPresets()) {   // every preset parses cleanly
+        Json g = Json::object();
+        g.set("effects", Json::parse(p.effectsJson));
+        std::vector<std::string> pi;
+        CHECK(!parsePostFx(g, Json(), &pi).effects.empty() && pi.empty());
+    }
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/PostFxOps.h"
+TEST(postfx_neutral_lut_png) {
+    const std::vector<uint8_t> px = rts::editor::neutralLut(16);
+    CHECK(px.size() == 256u * 16u * 4u);
+    const std::string png = rts::editor::encodePngRgba(256, 16, px);
+    CHECK(png.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0 && png.find("IHDR") == 12 && png.find("IEND") != std::string::npos);
+    // IDAT = zlib header + stored blocks: unpack and compare with the filter-0 rows
+    const size_t at = png.find("IDAT");
+    const uint32_t len = (uint32_t(uint8_t(png[at - 4])) << 24) | (uint32_t(uint8_t(png[at - 3])) << 16) | (uint32_t(uint8_t(png[at - 2])) << 8) | uint8_t(png[at - 1]);
+    std::string z = png.substr(at + 4, len), raw;
+    for (size_t q = 2; q + 5 <= z.size() - 4;) {
+        const size_t n = size_t(uint8_t(z[q + 1])) | (size_t(uint8_t(z[q + 2])) << 8);
+        raw += z.substr(q + 5, n);
+        const bool last = z[q] & 1;
+        q += 5 + n;
+        if (last) break;
+    }
+    CHECK(raw.size() == 16u * (256u * 4u + 1u) && raw[0] == 0 && std::memcmp(raw.data() + 1, px.data(), 1024) == 0);
+    // Unreal layout: red grows inside a square, blue per square, green down the rows
+    CHECK(px[(0 * 256 + 15) * 4 + 0] == 255 && px[(0 * 256 + 16) * 4 + 2] == 17 && px[(15 * 256 + 0) * 4 + 1] == 255);
+}
+#endif
+
 
 TEST(gen_planet_world_players) {
     // a whole planet map from a planet preset: players, kit, objects, moons, engine-path fairness, determinism
