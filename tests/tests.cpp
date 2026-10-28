@@ -8794,6 +8794,92 @@ TEST(pack_file_copy_into_existing) {
 
 #include "tests_mech.inc"   // agent-mech
 
+// ---- toolchains agent: what each build target needs (tools/rtsbuild/Toolchains.h), fake HOME
+#include "tools/rtsbuild/Toolchains.h"
+TEST(toolchain_detection_fake_home) {
+    namespace fs = std::filesystem;
+    using namespace rts::build;
+    fs::path home = fs::temp_directory_path() / "rts_toolchain_test";
+    std::error_code ec;
+    fs::remove_all(home, ec);
+    fs::create_directories(home / "bin");
+    auto touch = [](const fs::path& p, const std::string& text = "") { fs::create_directories(p.parent_path()); std::ofstream(p) << text; };
+    ToolEnv env;
+    env.host = "linux";
+    env.home = home;
+    env.inherit = false;   // nothing from the real machine: no PATH, no system folders, no probing
+    env.probe = false;
+    env.vars["PATH"] = (home / "bin").string();
+
+    ToolchainStatus st = checkToolchain("web", env);
+    CHECK(!st.ok());
+    CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN web: cmake,python3,emsdk");   // ninja is optional
+    CHECK(st.find("emsdk") && st.find("emsdk")->autoInstall && !st.find("emsdk")->size.empty());
+    CHECK(st.toJson()["missing"].size() == 3);
+
+    // a not activated emsdk in ~/emsdk is reported, not used
+    touch(home / "emsdk" / "emsdk.py");
+    touch(home / "emsdk" / "upstream" / "emscripten" / "emcc");
+    st = checkToolchain("web", env);
+    CHECK(!st.find("emsdk")->found && st.find("emsdk")->detail.find("emsdk install") != std::string::npos);
+
+    // what our installers leave in ~/.rtsengine/toolchains
+    const fs::path tcd = home / ".rtsengine" / "toolchains";
+    CHECK(toolchainsDir(env) == tcd);
+    touch(tcd / "py" / "bin" / "cmake");
+    touch(tcd / "py" / "bin" / "ninja");
+    touch(home / "bin" / "python3");
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emcc");
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emscripten-version.txt", "\"3.1.70\"\n");
+    touch(tcd / "emsdk" / ".emscripten");
+    fs::create_directories(tcd / "emsdk" / "node" / "20.18.0_64bit" / "bin");
+    st = checkToolchain("web", env);
+    CHECK(st.ok());
+    CHECK(st.find("emsdk")->version == "3.1.70" && st.find("emsdk")->path == (tcd / "emsdk").string());
+    CHECK(st.find("cmake")->path == (tcd / "py" / "bin" / "cmake").string());
+    CHECK(st.env["EMSDK"] == (tcd / "emsdk").string() && st.env.count("EM_CONFIG"));
+    CHECK(std::find(st.binDirs.begin(), st.binDirs.end(), tcd / "emsdk" / "node" / "20.18.0_64bit" / "bin") != st.binDirs.end());
+    CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN web:");
+
+    // RTS_TOOLCHAINS_DIR moves our folder
+    env.vars["RTS_TOOLCHAINS_DIR"] = (home / "elsewhere").string();
+    CHECK(toolchainsDir(env) == home / "elsewhere");
+    CHECK(checkToolchain("web", env).find("cmake")->found == false);
+    env.vars.erase("RTS_TOOLCHAINS_DIR");
+
+    // Android: a too new JAVA_HOME is skipped for our JDK 17; newest NDK wins
+    CHECK(javaMajorFromRelease("JAVA_VERSION=\"17.0.12\"") == 17 && javaMajorFromRelease("JAVA_VERSION=\"1.8.0_392\"") == 8);
+    touch(home / "jdk25" / "release", "JAVA_VERSION=\"25\"\n");
+    touch(home / "jdk25" / "bin" / "java");
+    env.vars["JAVA_HOME"] = (home / "jdk25").string();
+    st = checkToolchain("android", env);
+    CHECK(!st.find("jdk")->found && st.find("jdk")->detail.find("25") != std::string::npos);
+    touch(tcd / "jdk-17" / "Contents" / "Home" / "release", "JAVA_VERSION=\"17.0.12\"\n");   // macOS layout
+    touch(tcd / "jdk-17" / "Contents" / "Home" / "bin" / "java");
+    const fs::path sdk = home / "Android" / "Sdk";
+    fs::create_directories(sdk / "platforms" / "android-35");
+    fs::create_directories(sdk / "build-tools" / "35.0.0");
+    fs::create_directories(sdk / "platform-tools");
+    fs::create_directories(sdk / "ndk" / "25.1.8937393");
+    fs::create_directories(sdk / "ndk" / "27.0.12077973");
+    st = checkToolchain("android", env);
+    CHECK(st.find("jdk")->found && st.find("jdk")->version == "17" && st.env["JAVA_HOME"] == (tcd / "jdk-17" / "Contents" / "Home").string());
+    CHECK(st.find("android-sdk")->found && st.env["ANDROID_HOME"] == sdk.string());
+    CHECK(st.find("android-ndk")->version == "27.0.12077973");
+    CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN android: android-cmake,gradle");
+    fs::create_directories(sdk / "cmake" / "3.22.1");
+    touch(tcd / "gradle-8.10.2" / "bin" / "gradle");
+    st = checkToolchain("android", env);
+    CHECK(st.ok() && st.find("gradle")->version == "8.10.2");
+
+    // targets this host can't build are not "missing"
+    st = checkToolchain("macos", env);
+    CHECK(!st.hostSupported && st.ok());
+    st = checkToolchain("linux", env);
+    CHECK(!st.ok() && st.find("cxx") && !st.find("cxx")->autoInstall);
+    fs::remove_all(home, ec);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
