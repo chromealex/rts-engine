@@ -1,0 +1,10 @@
+newmtl Rock
+Kd 1 1 1
+Ns 10
+map_Kd crystal_rock.png
+
+newmtl Crystal
+Kd 0.45 0.75 1.0
+d 0.7
+Ns 400
+Ke 0.15 0.35 0.6

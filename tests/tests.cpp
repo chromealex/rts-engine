@@ -13,6 +13,7 @@
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/RtsTiles.h"
 #include <algorithm>
 
 using namespace rts;
@@ -963,7 +964,10 @@ TEST(audio_bank_errors_are_readable) {
     CHECK(a->warnings().size() == 2);                               // missing file + unknown key 'volum'
     CHECK(a->play("boom") == audio::kNoVoice && a->play("beep") != audio::kNoVoice);
     // a failed load keeps the previous bank
+    CHECK(loadBank(*a, R"({"sounds":{"beep":{"synth":{}}}})", &err));
     CHECK(!loadBank(*a, R"({"sounds":{"y":{}}})", &err) && a->find("beep") != audio::kNoSound);
+    // a typo in a section name is reported instead of silently producing a game without sound
+    CHECK(loadBank(*a, R"({"sound":{}})", &err) && a->warnings().size() == 1 && a->warnings()[0].find("'sound'") != std::string::npos);
 }
 
 TEST(audio_voice_limits_and_cooldown) {
@@ -1371,6 +1375,1015 @@ TEST(importer_dune2_rules_and_synthetic_scenario) {
     }
     std::error_code ec;
     tfs::remove_all(d, ec);
+}
+
+// ------------------------------------------------------------------ unpacker plugins (foreign archives)
+
+#include <filesystem>
+#include <fstream>
+#include "engine/pack/Unpacker.h"
+
+namespace {
+namespace tfs = std::filesystem;
+
+tfs::path testDir(const std::string& name) {
+    tfs::path d = tfs::temp_directory_path() / ("rts_tests_" + name);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+    tfs::create_directories(d);
+    return d;
+}
+void writeFile(const tfs::path& p, const std::string& s) {
+    tfs::create_directories(p.parent_path());
+    std::ofstream f(p, std::ios::binary);
+    f << s;
+}
+bool havePython() {
+#if defined(_WIN32)
+    return std::system("py -3 --version >NUL 2>&1") == 0;
+#else
+    return std::system("python3 --version >/dev/null 2>&1") == 0;
+#endif
+}
+std::string le32(uint32_t v) { std::string s; for (int i = 0; i < 4; ++i) s += char(uint8_t(v >> (8 * i))); return s; }
+} // namespace
+
+TEST(pack_external_flag_and_merge) {
+    using namespace rts::pack;
+    PackWriter a;
+    a.addData("x.txt", "hello");
+    WriteOptions ext; ext.external = true;
+    std::string bytes;
+    CHECK(a.writeToString(bytes, ext));
+    auto pa = Pack::open(memorySource(bytes));
+    CHECK(pa && pa->external());
+    PackWriter b;
+    b.addData("own.json", "{}");
+    CHECK(b.addPack(*pa, "imported/a") == 1);
+    CHECK(b.external());                              // external-ness is contagious
+    std::string merged;
+    CHECK(b.writeToString(merged, WriteOptions{}));
+    auto pm = Pack::open(memorySource(merged));
+    std::string out;
+    CHECK(pm && pm->external() && pm->read("imported/a/x.txt", out) && out == "hello");
+    PackWriter c;
+    c.addData("y", "z");
+    CHECK(c.writeToString(bytes, WriteOptions{}));
+    CHECK(!Pack::open(memorySource(bytes))->external());
+}
+
+TEST(unpacker_manifests_are_validated) {
+    using namespace rts::pack;
+    tfs::path d = testDir("manifests");
+    writeFile(d / "good" / "unpacker.json", R"({"protocol":1,"name":"good","extensions":["ABC"],"magic":[{"offset":-4,"ascii":"TAIL"}],"command":["tool"]})");
+    writeFile(d / "oldproto" / "unpacker.json", R"({"protocol":7,"name":"old","extensions":[".x"],"command":["t"]})");
+    writeFile(d / "nocmd" / "unpacker.json", R"({"protocol":1,"name":"nocmd","extensions":[".x"]})");
+    writeFile(d / "reserved" / "unpacker.json", R"({"protocol":1,"name":"rpak","extensions":[".x"],"command":["t"]})");
+    writeFile(d / "undetectable" / "unpacker.json", R"({"protocol":1,"name":"nothing","command":["t"]})");
+    writeFile(d / "badhex" / "unpacker.json", R"({"protocol":1,"name":"badhex","magic":[{"hex":"zz"}],"command":["t"]})");
+    writeFile(d / "broken" / "unpacker.json", R"({"protocol":1, oops)");
+    UnpackerRegistry reg;
+    reg.addSearchDir(d.string());
+    CHECK(reg.errors().size() == 6);
+    const UnpackerInfo* g = reg.byName("good");
+    CHECK(g && g->extensions.size() == 1 && g->extensions[0] == ".abc" && g->external && g->magic[0].offset == -4);
+    CHECK(reg.byName("rpak") && reg.byName("rpak")->builtin);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+TEST(unpacker_plugins_import_synthetic_archives) {
+    using namespace rts::pack;
+    if (!havePython()) { std::printf("  (python3 not found: plugin tests skipped)\n"); return; }
+    tfs::path d = testDir("plugins");
+    UnpackerRegistry reg;
+    reg.addDefaultDirs(RTS_SOURCE_DIR);
+    CHECK(reg.errors().empty());
+    for (const char* n : {"zip", "tar", "war", "zpac", "zrsc", "dmg"}) {
+        const UnpackerInfo* u = reg.byName(n);
+        std::string err;
+        CHECK(u && reg.handshake(*u, &err));
+    }
+    // zip with hostile names: everything must land inside the pack namespace, sanitized.
+    std::string py = "python3 -c \"import zipfile; z=zipfile.ZipFile(r'" + (d / "t.zip").string() +
+                     "','w'); z.writestr('a/b.txt','bee'); z.writestr('../evil.txt','e'); z.writestr('/abs.txt','abs'); z.close()\"";
+    CHECK(std::system(py.c_str()) == 0);
+    // Warcraft-style archive: one stored entry, one placeholder, one LZ entry (8 literals + ref).
+    std::string war = le32(0x19) + std::string("\x03\x00\xe8\x03", 4);
+    uint32_t base = 8 + 12;
+    std::string e0 = le32(5) + "hello";
+    std::string e2 = le32(0x20000000u | 11) + std::string("\xff", 1) + "RIFFabcd" + std::string("\x00", 1) + std::string("\x00\x00", 2);
+    war += le32(base) + le32(base + uint32_t(e0.size())) + le32(base + uint32_t(e0.size()) + 1);
+    war += e0 + "x" + e2;
+    writeFile(d / "T.WAR", war);
+    // Z .PAC: zero header, LZSS with MSB-first flags: 4 literals, a 3-byte ref to ring pos 1.
+    writeFile(d / "T.PAC", std::string("\0\0\0\0", 4) + std::string("\xf0", 1) + "abcd" + std::string("\x11\x00", 2));
+    PackWriter w;
+    std::string err;
+    ImportResult r1, r2, r3;
+    ImportOptions o1; o1.prefix = "z";
+    CHECK(importArchive(reg, (d / "t.zip").string(), o1, w, &r1, &err));
+    ImportOptions o2; o2.prefix = "w";
+    CHECK(importArchive(reg, (d / "T.WAR").string(), o2, w, &r2, &err));
+    ImportOptions o3; o3.prefix = "p";
+    CHECK(importArchive(reg, (d / "T.PAC").string(), o3, w, &r3, &err));
+    CHECK(r1.format == "zip" && r1.files == 3 && r2.format == "war" && r2.files == 2 && r3.format == "zpac" && r1.external);
+    std::string bytes;
+    CHECK(w.writeToString(bytes, WriteOptions{}));
+    auto p = Pack::open(memorySource(bytes));
+    std::string out;
+    CHECK(p && p->external());
+    CHECK(p && p->read("z/a/b.txt", out) && out == "bee");
+    CHECK(p && p->read("z/evil.txt", out) && out == "e" && p->read("z/abs.txt", out) && out == "abs");
+    CHECK(p && p->read("w/0000.bin", out) && out == "hello");
+    CHECK(p && p->read("w/0002.wav", out) && out == "RIFFabcdRIF");   // ref copies ring[0..2]
+    CHECK(p && p->read("p/T.bin", out) && out == "abcdabc");        // pos 1 = first output byte
+    // Unknown data is refused with a readable reason.
+    writeFile(d / "mystery.qqq", "????");
+    CHECK(!importArchive(reg, (d / "mystery.qqq").string(), ImportOptions{}, w, nullptr, &err) && err.find("no unpacker") != std::string::npos);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+#if !defined(_WIN32)
+TEST(unpacker_hostile_plugin_is_contained) {
+    using namespace rts::pack;
+    if (!havePython()) return;
+    tfs::path d = testDir("hostile");
+    writeFile(d / "plug" / "unpacker.json", R"({"protocol":1,"name":"evil","extensions":[".evil"],"command":["python3","p.py"]})");
+    writeFile(d / "plug" / "p.py", R"(import json, os, sys
+m = sys.argv[1]
+req = json.load(open(sys.argv[2]))
+if m == 'info': print(json.dumps({'protocol': 1, 'name': 'evil'}))
+elif m == 'probe': print(json.dumps({'match': 'fail' not in req['archive']}))
+elif m == 'extract':
+    if 'fail' in req['archive'] or 'bad' in req['archive']: pass
+    out = req['out']; os.makedirs(out, exist_ok=True)
+    open(os.path.join(out, 'ok.txt'), 'w').write('ok')
+    os.symlink('/etc/hosts', os.path.join(out, 'link.txt'))
+    os.symlink('/etc', os.path.join(out, 'linkdir'))
+    print('library noise')
+    print(json.dumps({'files': 3}))
+)");
+    writeFile(d / "plug2" / "unpacker.json", R"({"protocol":1,"name":"broken","extensions":[".broken"],"command":["python3","p.py"]})");
+    writeFile(d / "plug2" / "p.py", "import sys\nprint('{\"error\": {\"message\": \"bad header\"}}'); sys.exit(1)\n");
+    writeFile(d / "a.evil", "x");
+    writeFile(d / "a.broken", "x");
+    UnpackerRegistry reg;
+    reg.addSearchDir(d.string());
+    CHECK(reg.errors().empty());
+    PackWriter w;
+    std::string err;
+    ImportResult r;
+    CHECK(importArchive(reg, (d / "a.evil").string(), ImportOptions{}, w, &r, &err));
+    CHECK(r.files == 1 && w.size() == 1);                           // symlinks never followed
+    CHECK(!importArchive(reg, (d / "a.broken").string(), ImportOptions{"broken", "", {}, "", false}, w, nullptr, &err));
+    CHECK(err.find("bad header") != std::string::npos);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+#endif
+
+TEST(unpacker_westwood_pak) {
+    using namespace rts::pack;
+    if (!havePython()) return;
+    tfs::path d = testDir("wwpak");
+    // Dune II layout: (offset, name\0)... 0 terminator, then data.
+    std::string a = "AAAA", b = "Creative Voice File";
+    uint32_t hdr = 4 + 6 + 4 + 6 + 4;            // "A.CPS\0" and "B.VOC\0"
+    std::string pak = le32(hdr) + std::string("A.CPS\0", 6) + le32(hdr + 4) + std::string("B.VOC\0", 6) + le32(0) + a + b;
+    writeFile(d / "T.PAK", pak);
+    writeFile(d / "Q.PAK", "PACK" + std::string(12, '\0'));  // Quake pak must not be taken for Westwood
+    UnpackerRegistry reg;
+    reg.addDefaultDirs(RTS_SOURCE_DIR);
+    std::string why;
+    const UnpackerInfo* u = reg.detect((d / "T.PAK").string(), &why);
+    CHECK(u && u->name == "wwpak");
+    CHECK(!reg.detect((d / "Q.PAK").string(), &why));
+    PackWriter w;
+    ImportResult r;
+    std::string err;
+    CHECK(importArchive(reg, (d / "T.PAK").string(), ImportOptions{}, w, &r, &err) && r.files == 2);
+    std::string bytes, out;
+    CHECK(w.writeToString(bytes, WriteOptions{}));
+    auto p = Pack::open(memorySource(bytes));
+    CHECK(p && p->read("A.CPS", out) && out == a && p->read("B.VOC", out) && out == b);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+TEST(mech_surrender_ends_match_and_replays) {
+    auto play = [](std::vector<Command>* cmds, uint32_t* end, bool* surrenderEvent) {
+        auto sim = makeSim(kSkirmish, "maps/valley.json", 9);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, 9);
+        for (uint32_t t = 0; t < 20 * 60 && sim->result() == 0; ++t) {
+            for (auto& b : bots) b.update(*sim);
+            if (sim->tick() == 20 * 30) { Command c; c.player = 2; c.type = game::kCmdSurrender; sim->submit(c); }
+            sim->step();
+            for (auto& ev : sim->events())
+                if (ev.type == game::kEvPlayerDefeated && ev.player == 2 && ev.value == game::kDefeatSurrendered) *surrenderEvent = true;
+        }
+        *cmds = sim->executedCommands();
+        *end = sim->tick();
+        return std::pair{sim->checksum(), sim->result()};
+    };
+    std::vector<Command> cmds;
+    uint32_t end = 0;
+    bool ev = false;
+    auto live = play(&cmds, &end, &ev);
+    CHECK(ev);
+    CHECK(live.second == 1);                                   // team of player 1 wins by surrender
+    CHECK(end > 20 * 30 && end < 20 * 32);
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 9);
+    for (auto& c : cmds) sim->submit(c);
+    while (sim->tick() < end) sim->step();
+    CHECK(sim->checksum() == live.first && sim->result() == 1);
+}
+
+// ------------------------------------------------------------------ dungeon management (Dungeon Keeper class)
+
+static const char* kDungeonRules = R"({
+  "resources": {"gold": {"start": 1000}, "food": {"start": 0}, "research": {"start": 0}},
+  "diggable": {"D": {"hardness": 2}, "G": {"hardness": 2, "yields": {"gold": 150}}},
+  "territory": {"startRadius": 2, "buildOnlyOwned": true},
+  "hand": {"max": 4, "slapDamage": 5},
+  "possession": {"cost": {"gold": 10}},
+  "victory": "keyUnits",
+  "rooms": {
+    "lair": {"cost": {"gold": 10}, "supply": 1},
+    "hatchery": {"cost": {"gold": 10}, "income": {"food": 0.5}},
+    "library": {"cost": {"gold": 20}, "work": {"yields": {"research": 1}}}
+  },
+  "types": {
+    "heart": {"structure": {"footprint": [2, 2]}, "health": {"max": 3000}, "key": true, "sight": 12, "produces": ["imp"]},
+    "shrine": {"structure": {"footprint": [1, 1]}},
+    "imp": {"move": {"speed": 4}, "digs": {"rate": 2}, "claimer": {"time": 0.5}, "health": {"max": 60}, "sight": 6},
+    "portal": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "claimedByTerritory": true, "portal": {"interval": 3}},
+    "goblin": {"move": {"speed": 3}, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 8}], "cost": {"supply": 1}, "sight": 6,
+               "attractedBy": {"rooms": {"lair": 1}},
+               "needs": {"hunger": {"interval": 5, "room": "hatchery", "time": 1, "cost": {"food": 1}},
+                         "pay": {"interval": 4, "amount": {"gold": 30}}, "works": ["library"],
+                         "happiness": {"unpaid": 0.5, "leaveBelow": 0.3, "leaveAfter": 2}}}
+  }})";
+
+// 24x12: own pocket on the left (x 1..9), dirt wall with a gold vein at x 10..13, open ground on the right.
+static std::string dungeonMap(const std::string& entities) {
+    std::string rows;
+    for (int y = 0; y < 12; ++y) {
+        std::string r(24, '.');
+        r[0] = r[23] = '#';
+        if (y == 0 || y == 11) r = std::string(24, '#');
+        else for (int x = 10; x <= 13; ++x) r[size_t(x)] = (x == 10 && y == 6) ? 'G' : 'D';
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+    }
+    return R"({"size":[24,12],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":[)" + rows + "]},\"entities\":[" +
+           R"({"type":"heart","owner":1,"pos":[4,6]},{"type":"heart","owner":2,"pos":[20,6]})" + entities + "]}";
+}
+static Command rectCmd(uint8_t player, uint16_t type, int x, int y, int w, int h, int extra) {
+    Command c; c.player = player; c.type = type;
+    c.point = {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)};
+    c.param = game::rectParam(w, h, extra);
+    return c;
+}
+
+TEST(mech_dungeon_dig_and_claim) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"imp","owner":1,"pos":[7,6]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    auto& g = gs.grid;
+    CHECK(g.dig[size_t(g.index(10, 6))] == 2 && !g.passable(10, 6, game::kLayerGround));   // gold vein, solid
+    CHECK(g.territory[size_t(g.index(4, 6))] == 1 && g.territory[size_t(g.index(8, 6))] == 0); // start radius around the heart
+    int before = m.territoryOf(*sim, 1);
+    Fixed gold = stockOf(*sim, 1, "gold");
+    sim->submit(rectCmd(1, game::kCmdDig, 10, 5, 2, 3, 0));
+    sim->submit(rectCmd(2, game::kCmdDig, 12, 5, 1, 1, 0));                                   // B's mark is not A's job
+    run(*sim, 60);
+    CHECK(g.dig[size_t(g.index(10, 6))] == 0 && g.passable(10, 6, game::kLayerGround));      // dug out
+    CHECK(g.dig[size_t(g.index(11, 5))] == 0 && g.dig[size_t(g.index(11, 7))] == 0);
+    CHECK(g.dig[size_t(g.index(12, 5))] != 0);                                                // only own marks
+    CHECK(stockOf(*sim, 1, "gold") == gold + Fixed::fromInt(150));                            // vein yield
+    CHECK(m.territoryOf(*sim, 1) > before + 10);                                              // claimed the pocket and the tunnel
+    CHECK(g.territory[size_t(g.index(9, 6))] == 1 && g.territory[size_t(g.index(11, 6))] == 1);
+    std::vector<Vec3> path;                                                                   // pathfinding sees the tunnel
+    CHECK(g.findPath(g.cellCenter(7, 6), g.cellCenter(11, 7), game::kLayerGround, path));
+    // build only on own territory
+    std::string why;
+    bool ok = m.canPlace(*sim, 1, uint16_t(m.rules().findType("shrine")), g.cellCenter(8, 3), kNullEntity, &why);
+    if (!ok) std::printf("    canPlace: %s (territory %d)\n", why.c_str(), g.territory[size_t(g.index(8, 3))]);
+    CHECK(ok);
+    CHECK(!m.canPlace(*sim, 1, uint16_t(m.rules().findType("shrine")), g.cellCenter(16, 3)));
+}
+
+TEST(mech_dungeon_rooms_portal_recruit) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"portal","owner":0,"pos":[8,9]},{"type":"imp","owner":1,"pos":[7,6]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    run(*sim, 6);
+    Entity portal = findType(*sim, "portal", 1);
+    CHECK(portal.valid());                                    // claimed when the imp claimed the floor next to it
+    CHECK(countType(*sim, "goblin", 1) == 0);                 // no lair: nothing is attracted
+    Fixed gold = stockOf(*sim, 1, "gold");
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, m.rules().findRoom("lair")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 15, 3, 2, 2, m.rules().findRoom("lair"))); // not own floor: ignored
+    run(*sim, 0.5);
+    CHECK(m.roomCellsOf(*sim, 1, m.rules().findRoom("lair")) == 4);
+    CHECK(stockOf(*sim, 1, "gold") == gold - Fixed::fromInt(40));
+    CHECK(gs.players[1].supplyCap == Fixed::fromInt(4));       // lair capacity per cell
+    run(*sim, 12);
+    int goblins = countType(*sim, "goblin", 1);
+    CHECK(goblins >= 1 && goblins <= 4);                       // recruited up to the lair capacity
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, -1)); // erase: refunds half
+    run(*sim, 0.5);
+    CHECK(m.roomCellsOf(*sim, 1, m.rules().findRoom("lair")) == 0);
+    CHECK(gs.roomZones.empty());
+}
+
+TEST(mech_dungeon_needs_work_and_leaving) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"portal","owner":1,"pos":[8,9]},{"type":"goblin","owner":1,"pos":[6,4]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, m.rules().findRoom("lair")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 7, 2, 2, m.rules().findRoom("hatchery")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 5, 3, 2, 2, m.rules().findRoom("library")));
+    run(*sim, 4);
+    CHECK(stockOf(*sim, 1, "research") > Fixed{});            // works in the library when idle
+    CHECK(stockOf(*sim, 1, "food") > Fixed{});                // hatchery produces food per cell
+    Fixed gold = stockOf(*sim, 1, "gold");
+    run(*sim, 6);
+    Entity gob = findType(*sim, "goblin", 1);
+    CHECK(gob.valid());
+    CHECK(stockOf(*sim, 1, "gold") <= gold - Fixed::fromInt(30)); // payday
+    auto& nd = sim->world().get<game::Needs>(gob);
+    CHECK(nd.hunger < Fixed::fromInt(1));                      // ate in the hatchery
+    CHECK(nd.happiness > Fixed::fromRatio(9, 10));
+    // unpaid wages make it unhappy; it walks out through the portal
+    gs.players[1].stock[size_t(m.rules().findResource("gold"))] = Fixed{};
+    bool left = false;
+    for (int i = 0; i < 20 * 20 && !left; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvCreatureLeft && ev.a == gob) left = true; }
+    CHECK(left);
+    run(*sim, 0.2);
+    CHECK(!sim->world().alive(gob));
+}
+
+TEST(mech_dungeon_hand_slap_possess) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"goblin","owner":1,"pos":[6,4]},{"type":"goblin","owner":2,"pos":[18,4]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    World& w = sim->world();
+    Entity gob = findType(*sim, "goblin", 1), enemy = findType(*sim, "goblin", 2);
+    run(*sim, 0.5);
+    Command pick; pick.player = 1; pick.type = game::kCmdPickUp; pick.units = {gob, enemy};
+    sim->submit(pick);
+    run(*sim, 0.2);
+    CHECK(gs.hand[1].size() == 1 && (w.get<game::Unit>(gob).flags & game::kUnitInHand));
+    CHECK(!(w.get<game::Unit>(enemy).flags & game::kUnitInHand));
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {gob}; mv.point = {Fixed::fromInt(2), Fixed{}, Fixed::fromInt(8)};
+    sim->submit(mv);                                           // units in the hand ignore orders
+    sim->submit(rectCmd(1, game::kCmdDrop, 16, 4, 1, 1, 0));    // not own floor: refused
+    run(*sim, 0.5);
+    CHECK(gs.hand[1].size() == 1);
+    sim->submit(rectCmd(1, game::kCmdDrop, 2, 8, 1, 1, 0));
+    run(*sim, 0.2);
+    CHECK(gs.hand[1].empty() && !(w.get<game::Unit>(gob).flags & game::kUnitInHand));
+    CHECK((w.get<Transform>(gob).pos - Vec3{Fixed::fromRatio(5, 2), Fixed{}, Fixed::fromRatio(17, 2)}).xz().length() < Fixed::fromInt(1));
+    Fixed speed = m.stat(*sim, gob, game::Stat::Speed);
+    Command slap; slap.player = 1; slap.type = game::kCmdSlap; slap.units = {gob};
+    sim->submit(slap);
+    run(*sim, 0.2);
+    CHECK(w.get<game::Unit>(gob).hp == Fixed::fromInt(95));
+    CHECK(m.stat(*sim, gob, game::Stat::Speed) > speed);
+    CHECK(w.get<game::Needs>(gob).happiness < Fixed::fromInt(1));
+    // possession: direct steering, AI-style orders ignored
+    Command pos; pos.player = 1; pos.type = game::kCmdPossess; pos.units = {gob};
+    sim->submit(pos);
+    run(*sim, 0.2);
+    CHECK(gs.possessed[1] == gob && (w.get<game::Unit>(gob).flags & game::kUnitPossessed));
+    Fixed x0 = w.get<Transform>(gob).pos.x;
+    for (int i = 0; i < 20; ++i) {
+        Command d; d.player = 1; d.type = game::kCmdDirect; d.point = {Fixed::fromInt(1), Fixed{}, Fixed{}};
+        sim->submit(d);
+        sim->step();
+    }
+    CHECK(w.get<Transform>(gob).pos.x > x0 + Fixed::fromInt(2));
+    Command rel; rel.player = 1; rel.type = game::kCmdPossess;
+    sim->submit(rel);
+    run(*sim, 0.2);
+    CHECK(!gs.possessed[1].valid() && !(w.get<game::Unit>(gob).flags & game::kUnitPossessed));
+}
+
+// ------------------------------------------------------------------ territory war (State.io style)
+
+static const char* kTerritoryRules = R"({
+  "resources": {"money": {"start": 300}},
+  "territory": {"claimBy": "units", "startFromRegions": true},
+  "victory": {"mode": "territory", "share": 0.8},
+  "playerAbilities": [{"id": "strike", "cost": {"money": 50}, "cooldown": 2, "charges": {"max": 1, "rearmCost": {"money": 20}, "rearmTime": 3},
+                       "effects": [{"type": "damage", "amount": 500, "radius": 2}]}],
+  "techs": {"drill": {"cost": {"money": 10, "time": 0.5}, "levels": 3, "costGrowth": 1, "effects": [{"type": "soldier", "stat": "damage", "mul": 1.5}]}},
+  "types": {
+    "barracks": {"structure": {"footprint": [2, 2]}, "capturable": true, "health": {"max": 800}, "supply": 10,
+                 "autoTrain": {"unit": "soldier", "interval": 1}, "researches": ["drill"]},
+    "town": {"structure": {"footprint": [2, 2]}, "capturable": true, "invulnerable": true},
+    "soldier": {"move": {"speed": 3}, "health": {"max": 50}, "weapons": [{"range": 1.5, "damage": 6}], "cost": {"supply": 1}, "claim": {"radius": 1.5, "rate": 4}},
+    "ghost": {"move": {"speed": 1}, "invulnerable": true}
+  }})";
+
+static std::string territoryMap(const std::string& entities, const std::string& regionRow) {
+    std::string regions;
+    for (int y = 0; y < 8; ++y) regions += std::string(y ? "," : "") + "\"" + regionRow + "\"";
+    return flatMap(24, 8, ",\"regions\":{\"rows\":[" + regions + "]},\"entities\":[" + entities + "]");
+}
+
+TEST(mech_territory_front_line_and_contested_cells) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"town","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[21,4]},{"type":"soldier","owner":1,"pos":[8.5,4.5]},{"type":"ghost","owner":2,"pos":[11.5,1.5]})",
+        "AAAAAAAANNNNNNNNNNNNBBBB"));
+    auto& m = mod(*sim);
+    auto& g = m.state(*sim).grid;
+    CHECK(m.territoryOf(*sim, 1) == 64 && m.territoryOf(*sim, 2) == 32 && m.state(*sim).territoryTotal == 192);
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {findType(*sim, "soldier", 1)}; mv.point = {Fixed::fromRatio(23, 2), Fixed{}, Fixed::fromRatio(7, 2)};
+    sim->submit(mv);
+    run(*sim, 8);
+    CHECK(g.territory[size_t(g.index(8, 4))] == 1 && g.territory[size_t(g.index(10, 4))] == 1 && g.territory[size_t(g.index(11, 3))] == 1);
+    CHECK(g.territory[size_t(g.index(11, 1))] == 0);           // contested: an enemy stands there
+    CHECK(g.territory[size_t(g.index(16, 4))] == 0);           // only cells touching own territory near the unit
+    CHECK(m.territoryOf(*sim, 1) > 64);
+}
+
+TEST(mech_territory_autotrain_capture_victory) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"barracks","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[16,4]})", "AAAAAAAAAAAABBBBBBBBBBBB"));
+    auto& m = mod(*sim);
+    run(*sim, 5);
+    int soldiers = countType(*sim, "soldier", 1);
+    CHECK(soldiers >= 3 && soldiers <= 10);
+    bool captured = false;
+    for (int i = 0; i < 20 * 120 && sim->result() == 0; ++i) {
+        sim->step();
+        for (auto& ev : sim->events()) if (ev.type == game::kEvCaptured && ev.player == 1) captured = true;
+    }
+    CHECK(countType(*sim, "soldier", 1) <= 10);                // population cap
+    CHECK(captured && sim->world().get<Owner>(findType(*sim, "town", 1)).player == 1);
+    CHECK(sim->result() == 1);                                 // 80% share
+    CHECK(m.territoryOf(*sim, 1) * 10 >= m.state(*sim).territoryTotal * 8);
+}
+
+TEST(mech_player_abilities_and_tech_levels) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"town","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[21,4]},{"type":"soldier","owner":2,"pos":[12,4]},{"type":"soldier","owner":2,"pos":[12.5,5]},{"type":"barracks","owner":1,"pos":[6,4]})",
+        "AAAAAAAAAAAABBBBBBBBBBBB"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    gs.players[1].stock[0] = Fixed::fromInt(300);
+    Command a; a.player = 1; a.type = game::kCmdPlayerAbility; a.param = 0; a.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromRatio(9, 2)};
+    CHECK(m.canUsePlayerAbility(*sim, 1, 0));
+    sim->submit(a);
+    run(*sim, 0.2);
+    CHECK(countType(*sim, "soldier", 2) == 0);
+    CHECK(gs.playerAbilities[1][0].charges == 0 && !m.canUsePlayerAbility(*sim, 1, 0));
+    Fixed money = stockOf(*sim, 1, "money");
+    run(*sim, 3.5);
+    CHECK(gs.playerAbilities[1][0].charges == 1 && stockOf(*sim, 1, "money") == money - Fixed::fromInt(20)); // rearmed for a cost
+    // repeatable tech: 3 levels, cost 10, 20, 30, effects compound
+    Entity br = findType(*sim, "barracks", 1);
+    int drill = m.rules().findTech("drill");
+    for (int lv = 0; lv < 4; ++lv) {
+        Command r; r.player = 1; r.type = game::kCmdResearch; r.units = {br}; r.param = drill;
+        sim->submit(r);
+        run(*sim, 1);
+    }
+    CHECK(gs.players[1].researched[size_t(drill)] == 3);
+    CHECK(stockOf(*sim, 1, "money") == money - Fixed::fromInt(20 + 60));
+    Entity sol = findType(*sim, "soldier", 1);
+    CHECK(sol.valid() && m.stat(*sim, sol, game::Stat::Damage) == Fixed::parse("3.375"));
+}
+
+// ------------------------------------------------------------------ settlers economy (Knights and Merchants style)
+
+static const char* kSettlersRules = R"({
+  "storage": "buildings",
+  "roadNetwork": {"cost": {"stone": 0.1}, "speed": 1.5},
+  "resources": {"wood": {}, "planks": {"start": 10}, "stone": {"start": 20}, "food": {}, "sword": {"start": 2}, "gold": {"global": true, "start": 100}},
+  "types": {
+    "store": {"structure": {"footprint": [2, 2]}, "storehouse": {"capacity": 500}, "health": {"max": 1000}},
+    "tree": {"invulnerable": true, "structure": {"footprint": [1, 1]}, "resourceNode": {"resource": "wood", "amount": 50}},
+    "woodcutter": {"structure": {"footprint": [2, 2]}, "recipe": {"out": {"wood": 1}, "time": 2, "from": "wood", "radius": 8}, "cost": {"planks": 2, "gold": 10, "time": 2}},
+    "sawmill": {"structure": {"footprint": [2, 2]}, "recipe": {"in": {"wood": 1}, "out": {"planks": 2}, "time": 2}},
+    "inn": {"structure": {"footprint": [2, 2]}},
+    "barracks": {"structure": {"footprint": [2, 2]}, "produces": ["soldier"]},
+    "serf": {"move": {"speed": 4}, "carrier": {"capacity": 1}},
+    "builder": {"move": {"speed": 3}, "builds": ["woodcutter"]},
+    "recruit": {"move": {"speed": 3}},
+    "soldier": {"move": {"speed": 3}, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 5}], "trainFrom": "recruit", "cost": {"sword": 1, "time": 1},
+                "needs": {"hunger": {"interval": 3, "at": "inn", "time": 0.5, "cost": {"food": 1}, "starve": 10}}}
+  }})";
+
+static Command connectCmd(Simulation& sim, std::vector<Entity> units) {
+    (void)sim;
+    Command c; c.player = 1; c.type = game::kCmdConnectRoad; c.units = std::move(units);
+    return c;
+}
+
+TEST(mech_settlers_chain_carriers_roads) {
+    auto sim = makeSimJson(kSettlersRules, flatMap(32, 14, R"(,"entities":[
+        {"type":"store","owner":1,"pos":[4,6]},{"type":"woodcutter","owner":1,"pos":[14,6]},{"type":"sawmill","owner":1,"pos":[9,11]},
+        {"type":"tree","owner":0,"pos":[18.5,4.5]},{"type":"tree","owner":0,"pos":[18.5,8.5]},
+        {"type":"serf","owner":1,"pos":[6,9]},{"type":"serf","owner":1,"pos":[7,9]},{"type":"store","owner":2,"pos":[29,2]}])"));
+    auto& m = mod(*sim);
+    World& w = sim->world();
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(10));           // starting goods are in the storehouse
+    CHECK(w.get<game::Inventory>(findType(*sim, "store", 1)).have[size_t(m.rules().findResource("planks"))] == Fixed::fromInt(10));
+    Entity wc = findType(*sim, "woodcutter", 1), saw = findType(*sim, "sawmill", 1), store = findType(*sim, "store", 1);
+    sim->submit(connectCmd(*sim, {wc}));                                 // the sawmill stays off the road network
+    run(*sim, 20);
+    CHECK(m.roadConnected(*sim, wc, store) && !m.roadConnected(*sim, saw, store));
+    CHECK(stockOf(*sim, 1, "stone") < Fixed::fromInt(20));               // roads cost stone
+    CHECK(stockOf(*sim, 1, "wood") >= Fixed::fromInt(2));                 // wood hauled to the store
+    CHECK(w.get<game::Inventory>(saw).have[size_t(m.rules().findResource("wood"))] == Fixed{}); // unconnected: no deliveries
+    sim->submit(connectCmd(*sim, {saw}));
+    Fixed planks = stockOf(*sim, 1, "planks");
+    run(*sim, 30);
+    CHECK(m.roadConnected(*sim, saw, store));
+    CHECK(stockOf(*sim, 1, "planks") > planks);                          // wood -> planks -> store
+    int trees = countType(*sim, "tree", 0);
+    CHECK(trees == 2);
+    Fixed left{};
+    w.each<game::ResourceStock>([&](Entity, game::ResourceStock& rs) { left += rs.amount; });
+    CHECK(left < Fixed::fromInt(100));                                    // raw producer depletes the trees
+}
+
+TEST(mech_settlers_construction_materials_and_recruits) {
+    auto sim = makeSimJson(kSettlersRules, flatMap(32, 14, R"(,"entities":[
+        {"type":"store","owner":1,"pos":[4,6]},{"type":"barracks","owner":1,"pos":[4,11]},{"type":"inn","owner":1,"pos":[9,3]},
+        {"type":"builder","owner":1,"pos":[7,7]},{"type":"serf","owner":1,"pos":[6,9]},{"type":"recruit","owner":1,"pos":[6,12]},
+        {"type":"store","owner":2,"pos":[29,2]}])"));
+    auto& m = mod(*sim);
+    World& w = sim->world();
+    Command b; b.player = 1; b.type = game::kCmdBuild; b.units = {findType(*sim, "builder", 1)}; b.param = m.rules().findType("woodcutter");
+    b.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromInt(7)};
+    sim->submit(b);
+    run(*sim, 2);
+    Entity site = findType(*sim, "woodcutter", 1);
+    CHECK(site.valid() && w.has<game::Construction>(site));
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(90));               // coins paid at once, planks delivered
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(10));
+    run(*sim, 3);
+    CHECK(w.has<game::Construction>(site));                              // no road yet: nothing delivered, no progress past 0
+    sim->submit(connectCmd(*sim, {site}));
+    run(*sim, 25);
+    CHECK(countType(*sim, "woodcutter", 1) == 1);                         // built once the planks arrived
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(8));
+    // soldiers are made from a recruit plus a sword
+    Entity br = findType(*sim, "barracks", 1);
+    Command t; t.player = 1; t.type = game::kCmdTrain; t.units = {br}; t.param = m.rules().findType("soldier");
+    sim->submit(t);
+    sim->submit(t);                                                      // second one: no recruit left
+    run(*sim, 2);
+    CHECK(countType(*sim, "soldier", 1) == 1 && countType(*sim, "recruit", 1) == 0);
+    CHECK(stockOf(*sim, 1, "sword") == Fixed::fromInt(1));
+    // food: no food in the store -> the soldier starves
+    Entity sol = findType(*sim, "soldier", 1);
+    run(*sim, 5);
+    CHECK(w.get<game::Unit>(sol).hp < Fixed::fromInt(100));
+    m.addResource(*sim, 1, uint16_t(m.rules().findResource("food")), Fixed::fromInt(5));
+    CHECK(stockOf(*sim, 1, "food") == Fixed::fromInt(5));
+    run(*sim, 4);
+    CHECK(stockOf(*sim, 1, "food") < Fixed::fromInt(5));                  // ate at the inn
+}
+
+// ------------------------------------------------------------------ Mushroom Wars 2 lanes
+
+TEST(mech_lanes_generated_and_followed) {
+    const char* rules = R"({
+      "lanes": {"left": 2, "right": 1, "spacing": 0.4},
+      "types": {
+        "village": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "garrison": {"max": 30, "unit": "shroom", "interval": 1}},
+        "shroom": {"move": {"speed": 3}, "entersGarrison": true}
+      }})";
+    std::string rows;
+    for (int y = 0; y < 16; ++y) {
+        std::string r(32, '.');
+        if (y >= 4 && y <= 11) for (int x = 15; x <= 16; ++x) r[size_t(x)] = '#';   // a rock between the villages
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+    }
+    std::string map = R"({"size":[32,16],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":[)" + rows + R"(]},
+        "entities":[{"type":"village","owner":1,"pos":[5,8],"garrison":20},{"type":"village","owner":0,"pos":[27,8],"garrison":0},{"type":"village","owner":2,"pos":[16,1],"garrison":5}]})";
+    auto sim = makeSimJson(rules, map);
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    World& w = sim->world();
+    run(*sim, 0.1);
+    CHECK(gs.lanes.size() == 3 * 4);                                     // 3 pairs x (1 main + 2 left + 1 right)
+    Entity a, b;
+    w.each<game::Garrison, Owner, Transform>([&](Entity e, game::Garrison&, Owner& o, Transform& t) {
+        if (o.player == 1) a = e;
+        if (o.player == 0 && t.pos.x > Fixed::fromInt(20)) b = e;
+    });
+    auto lanes = m.lanesBetween(*sim, a, b);
+    CHECK(lanes.size() == 4 && gs.lanes[size_t(lanes[0])].offset == 0);
+    bool clear = true, apart = false;
+    for (int li : lanes) {
+        const auto& L = gs.lanes[size_t(li)];
+        for (auto& p : L.points) {
+            int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+            if (cx >= 15 && cx <= 16 && cy >= 4 && cy <= 11) clear = false;  // never through the rock
+        }
+        if (L.offset != 0 && (L.points[L.points.size() / 2] - gs.lanes[size_t(lanes[0])].points[gs.lanes[size_t(lanes[0])].points.size() / 2]).xz().length() > Fixed::fromRatio(3, 10)) apart = true;
+    }
+    CHECK(clear && apart);
+    Command c; c.player = 1; c.type = game::kCmdSend; c.units = {a}; c.target = b; c.param = 50;
+    sim->submit(c);
+    run(*sim, 1.5);
+    std::vector<int> used(gs.lanes.size(), 0);
+    int walkers = 0;
+    w.each<game::LaneWalker>([&](Entity, game::LaneWalker& lw) { used[size_t(lw.lane)]++; ++walkers; });
+    int lanesUsed = 0;
+    for (int li : lanes) if (used[size_t(li)]) ++lanesUsed;
+    CHECK(walkers > 4 && lanesUsed == 4);                               // round-robin over all lanes
+    run(*sim, 15);
+    CHECK(w.get<Owner>(b).player == 1);                                  // arrived and captured the empty village
+}
+
+// ------------------------------------------------------------------ movement: bodies, surround, avoidance
+
+TEST(mech_melee_surround_big_target) {
+    const char* rules = R"({
+      "victory": "noUnits",
+      "types": {
+        "grunt": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 100}, "weapons": [{"range": 0.5, "damage": 1, "cooldown": 0.5}]},
+        "titan": {"move": {"speed": 0.01, "radius": 1.5, "mass": 50}, "health": {"max": 100000}}
+      }})";
+    std::string ents;
+    for (int i = 0; i < 10; ++i) ents += std::string(",") + R"({"type":"grunt","owner":1,"pos":[)" + std::to_string(3 + (i / 3)) + "." + "5," + std::to_string(9 + (i % 3)) + R"(.5]})";
+    auto play = [&](bool print) {
+        auto sim = makeSimJson(rules, flatMap(32, 20, ",\"entities\":[{\"type\":\"titan\",\"owner\":2,\"pos\":[16,10]}" + ents + "]"));
+        Command c; c.player = 1; c.type = game::kCmdAttack; c.target = findType(*sim, "titan", 2);
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit&, Owner& o) { if (o.player == 1) c.units.push_back(e); });
+        sim->submit(c);
+        run(*sim, 6);
+        std::vector<uint64_t> hitters;
+        for (int i = 0; i < 40; ++i) {
+            sim->step();
+            for (auto& ev : sim->events())
+                if (ev.type == game::kEvAttack && ev.player == 1 && std::find(hitters.begin(), hitters.end(), ev.a.packed()) == hitters.end()) hitters.push_back(ev.a.packed());
+        }
+        if (print) std::printf("    %zu of 10 attackers hitting\n", hitters.size());
+        return std::pair{hitters.size(), sim->checksum()};
+    };
+    auto a = play(true), b = play(false);
+    CHECK(a.first >= 6);                                        // they spread around instead of queueing
+    CHECK(a == b);
+}
+
+TEST(mech_rvo_corridor_pass_through_idle_units) {
+    const char* rules = R"({"victory": "noUnits", "types": {"walker": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 50}}}})";
+    std::string map = R"({"size":[20,5],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":["####################","....................","....................","....................","####################"]},
+      "entities":[{"type":"walker","owner":1,"pos":[10.5,1.5]},{"type":"walker","owner":1,"pos":[10.5,2.5]},{"type":"walker","owner":1,"pos":[10.5,3.5]},
+                  {"type":"walker","owner":1,"pos":[2.5,2.5]},{"type":"walker","owner":2,"pos":[19.5,3.5]}]})";
+    auto play = [&]() {
+        auto sim = makeSimJson(rules, map);
+        Entity mover;
+        sim->world().each<game::Unit, Owner, Transform>([&](Entity e, game::Unit&, Owner& o, Transform& t) { if (o.player == 1 && t.pos.x < Fixed::fromInt(5)) mover = e; });
+        Command c; c.player = 1; c.type = game::kCmdMove; c.units = {mover}; c.point = {Fixed::fromRatio(35, 2), Fixed{}, Fixed::fromRatio(5, 2)};
+        sim->submit(c);
+        uint32_t arrived = 0;
+        for (int i = 0; i < 20 * 15 && !arrived; ++i) {
+            sim->step();
+            if ((sim->world().get<Transform>(mover).pos - c.point).xz().length() < Fixed::fromRatio(6, 10)) arrived = sim->tick();
+        }
+        return std::pair{arrived, sim->checksum()};
+    };
+    auto a = play(), b = play();
+    std::printf("    corridor: arrived at tick %u\n", a.first);
+    CHECK(a.first > 0 && a.first < 20 * 10);                   // got through the three standing units within 10 s
+    CHECK(a == b);
+}
+
+// ------------------------------------------------------------------ sample games: short bot matches are deterministic
+
+TEST(sample_games_bot_matches_deterministic) {
+    const char* games[][2] = {
+        {"frostcrown", "maps/frozen_pass.json"}, {"starfall", "maps/twin_plateaus.json"}, {"ironfront", "maps/ore_valley.json"},
+        {"ambersands", "maps/spice_basin.json"}, {"metaltide", "maps/twin_craters.json"}, {"fourages", "maps/highland.json"},
+        {"holdtheline", "maps/crossroads.json"}, {"lastcolony", "maps/last_valley.json"}, {"clanlands", "maps/fjords.json"},
+        {"flagsectors", "maps/sector_strip.json"}, {"laneclash", "maps/long_lane.json"}, {"underlord", "maps/two_keeps.json"},
+        {"borderrush", "maps/five_lands.json"}, {"hearthhaul", "maps/green_dale.json"}, {"sporelanes", "maps/spore_field.json"}};
+    for (auto& g : games) {
+        std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g[0];
+        std::vector<Command> cmds;
+        uint64_t a = botMatch(dir, g[1], 3, 20 * 60, &cmds), b = botMatch(dir, g[1], 3, 20 * 60);
+        bool ok = a == b && !cmds.empty();
+        if (!ok) std::printf("    %s: not deterministic or idle bots\n", g[0]);
+        CHECK(ok);
+    }
+}
+
+// ---------------- 2D games: tilesets, autotiling, tile terrain (2D-mode agent) ----------------
+static const char* kTestTileset = R"({"name": "t", "atlas": "a.png", "tileSize": [16, 16], "columns": 8, "terrains": [
+    {"id": "sand", "char": "s", "cell": ".", "tiles": [0, {"tile": 1, "weight": 0.5}]},
+    {"id": "ore", "char": "o", "cell": ".", "field": {"resource": "ore", "density": 5}, "under": "sand", "tiles": [2], "autotile": {"type": "corner16", "first": 100}},
+    {"id": "high", "char": "h", "cell": "R", "level": 1, "under": "sand", "autotile": {"type": "blob47", "first": 10}},
+    {"id": "wall", "char": "w", "cell": "#", "autotile": {"type": "mask16", "first": 60}}]})";
+
+TEST(tiles2d_tileset_and_autotile) {
+    game::Tileset ts = game::loadTileset(Json::parse(kTestTileset));
+    CHECK(ts.terrains.size() == 4 && ts.find("high") == 2 && ts.findChar('w') == 3);
+    // canonical blob order: 47 shapes, isolated = 0, full = 46, corners without both edges don't count
+    std::vector<int> seen;
+    for (int m = 0; m < 256; ++m) { int i = game::blob47Index(m); if (std::find(seen.begin(), seen.end(), i) == seen.end()) seen.push_back(i); }
+    CHECK(seen.size() == 47 && game::blob47Index(0) == 0 && game::blob47Index(255) == 46 && game::blob47Index(2) == 0);
+    Json tiles = Json::parse(R"({"tileset": "x", "rows": ["sssss", "shhhs", "shhhs", "shhhs", "swwws"]})");
+    game::TileLayer L = game::loadTileLayer(tiles, ts, 5, 5);
+    game::CellTiles c = game::resolveCell(ts, L, 2, 2);          // interior of the plateau: full mask, no base tiles -> blob tile 46
+    CHECK(c.top == 10 + 46 && c.under == -1);
+    c = game::resolveCell(ts, L, 1, 1);                           // NW corner of the plateau: E, S, SE set
+    CHECK(c.top == 10 + game::blob47Index(4 | 8 | 16) && (c.under == 0 || c.under == 1));
+    c = game::resolveCell(ts, L, 1, 4);                           // wall row: E neighbour + map edge below (S counts as same)
+    CHECK(c.top == 60 + (2 | 4));
+    // deterministic variants
+    CHECK(game::resolveCell(ts, L, 0, 0).top == game::resolveCell(ts, L, 0, 0).top);
+    bool threw = false;
+    try { game::loadTileset(Json::parse(R"({"atlas": "a.png", "terrains": [{"id": "a", "under": "zz", "tiles": [0]}]})")); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+}
+
+TEST(tiles2d_terrain_applied_to_map_idempotent) {
+    game::Tileset ts = game::loadTileset(Json::parse(kTestTileset));
+    Json map = Json::parse(R"({"size": [4, 2], "terrain": {"rows": ["....", "...."]},
+        "fields": [{"resource": "ore", "rows": ["9999", "0000"]}],
+        "tiles": {"tileset": "x", "rows": ["show", "ssss"]}})");
+    game::applyTilesToMap(map, ts);
+    CHECK(map["terrain"]["rows"][0].str() == ".R.#" && map["terrain"]["levels"][0].str() == "0100");
+    std::string once = map.dump();
+    game::applyTilesToMap(map, ts);
+    CHECK(map.dump() == once);                                     // loading twice gives the same map
+    // the tiles own their cells' fields: hand-painted digits there are cleared, others kept
+    CHECK(map["fields"][0]["rows"][0].str() == "9909" && map["fields"][1]["rows"][0].str() == "0050");
+    Json old = Json::parse(R"({"size": [4, 2], "terrain": {"rows": ["....", "~~~~"]}})");
+    std::string before = old.dump();
+    game::applyTilesToMap(old, ts);
+    CHECK(old.dump() == before);                                   // maps without tiles are untouched
+}
+
+TEST(tiles2d_sample_games_deterministic) {
+    for (const char* g : {"tiles2d", "km2d"}) {
+        std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g;
+        Json manifest = Json::parseFile(dir + "/game.json");
+        auto run = [&] {
+            Json map = Json::parseFile(dir + "/" + manifest["maps"][size_t(0)].getStr("file"));
+            std::string err;
+            bool ok = game::applyTilesToMap(map, [&](const std::string& p, std::string& out) {
+                std::ifstream f(dir + "/" + p, std::ios::binary);
+                if (!f) return false;
+                out.assign(std::istreambuf_iterator<char>(f), {});
+                return true;
+            }, &err);
+            CHECK(ok);
+            SimConfig cfg; cfg.seed = 5;
+            Simulation sim(cfg, std::make_unique<game::RtsModule>());
+            sim.setup(Json::parseFile(dir + "/rules.json"), map);
+            std::vector<game::RtsAI> bots;
+            for (auto& p : sim.players()) bots.emplace_back(p.slot, 5);
+            for (int i = 0; i < 20 * 120; ++i) { for (auto& b : bots) b.update(sim); sim.step(); }
+            return sim.checksum();
+        };
+        uint64_t a = run(), b = run();
+        CHECK(a == b);
+    }
+}
+
+// ---------------- models (models agent): loaders, animation, procedural ----------------
+#include "engine/render/Animation.h"
+#include <cmath>
+#include <cstring>
+#include <fstream>
+#include <map>
+#include <sstream>
+
+namespace modeltest {
+using namespace rts::render;
+inline bool near(float a, float b, float eps = 1e-3f) { return std::fabs(a - b) <= eps; }
+inline std::string b64(const std::string& in) {
+    static const char* a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    size_t i = 0;
+    for (; i + 2 < in.size(); i += 3) {
+        uint32_t v = (uint8_t(in[i]) << 16) | (uint8_t(in[i + 1]) << 8) | uint8_t(in[i + 2]);
+        out += a[v >> 18]; out += a[(v >> 12) & 63]; out += a[(v >> 6) & 63]; out += a[v & 63];
+    }
+    if (i + 1 == in.size()) { uint32_t v = uint8_t(in[i]) << 16; out += a[v >> 18]; out += a[(v >> 12) & 63]; out += "=="; }
+    else if (i + 2 == in.size()) { uint32_t v = (uint8_t(in[i]) << 16) | (uint8_t(in[i + 1]) << 8); out += a[v >> 18]; out += a[(v >> 12) & 63]; out += a[(v >> 6) & 63]; out += '='; }
+    return out;
+}
+template <class T> void put(std::string& b, std::initializer_list<T> v) { for (T x : v) b.append(reinterpret_cast<const char*>(&x), sizeof x); }
+inline FileReader mapReader(std::map<std::string, std::string> files) {
+    return [files](const std::string& p, std::string& out) { auto it = files.find(p); if (it == files.end()) return false; out = it->second; return true; };
+}
+inline FileReader diskReader() {
+    return [](const std::string& p, std::string& out) { std::ifstream f(p, std::ios::binary); if (!f) return false; std::stringstream ss; ss << f.rdbuf(); out = ss.str(); return true; };
+}
+// Minimal skinned + animated glTF with an embedded data-URI buffer.
+inline std::string skinnedGltf(const char* extraRequired = "") {
+    std::string bin;
+    put<float>(bin, {0, 0, 0, 1, 0, 0, 0, 1, 0});                       // 0: positions (36)
+    put<uint8_t>(bin, {0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0});            // 36: joints (12)
+    put<float>(bin, {1, 0, 0, 0, 1, 0, 0, 0, 0.5f, 0.5f, 0, 0});        // 48: weights (48)
+    put<uint16_t>(bin, {0, 1, 2, 0});                                    // 96: indices (6 + pad)
+    put<float>(bin, {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,    // 104: inverse bind (128)
+                     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1});
+    put<float>(bin, {0, 1});                                             // 232: times (8)
+    const float s = std::sin(0.785398f), c = std::cos(0.785398f);        // 90 deg about Y
+    put<float>(bin, {0, 0, 0, 1, 0, s, 0, c});                           // 240: rotations (32)
+    put<float>(bin, {0, 0, 0, 5, 0, 0});                                 // 272: translations (24)
+    std::string j = R"({"asset":{"version":"2.0"},"extensionsRequired":[)" + std::string(extraRequired) + R"(],
+      "buffers":[{"byteLength":296,"uri":"data:application/octet-stream;base64,)" + b64(bin) + R"("}],
+      "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":12},
+        {"buffer":0,"byteOffset":48,"byteLength":48},{"buffer":0,"byteOffset":96,"byteLength":6},
+        {"buffer":0,"byteOffset":104,"byteLength":128},{"buffer":0,"byteOffset":232,"byteLength":8},
+        {"buffer":0,"byteOffset":240,"byteLength":32},{"buffer":0,"byteOffset":272,"byteLength":24}],
+      "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5121,"count":3,"type":"VEC4"},
+        {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},
+        {"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},
+        {"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},
+        {"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"},
+        {"bufferView":6,"componentType":5126,"count":2,"type":"VEC4"},
+        {"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"}],
+      "materials":[{"name":"TeamCloth","alphaMode":"MASK","alphaCutoff":0.3,"doubleSided":true,
+        "pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,1,1],"metallicFactor":0.2}}],
+      "meshes":[{"name":"m","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0}]}],
+      "nodes":[{"name":"root","children":[1]},{"name":"bone","translation":[0,1,0]},{"name":"skinned","mesh":0,"skin":0}],
+      "skins":[{"joints":[0,1],"inverseBindMatrices":4}],
+      "scenes":[{"nodes":[0,2]}],
+      "animations":[{"name":"Spin","samplers":[{"input":5,"output":6},{"input":5,"output":7,"interpolation":"STEP"}],
+        "channels":[{"sampler":0,"target":{"node":1,"path":"rotation"}},{"sampler":1,"target":{"node":0,"path":"translation"}}]}]})";
+    return j;
+}
+} // namespace modeltest
+
+TEST(models_quat_matches_matrices) {
+    using namespace modeltest;
+    quat q = quat::axisAngle({0, 1, 0}, 0.7f);
+    float3 v{1, 0.5f, -2};
+    float3 a = q.rotate(v), b = mat4::rotateY(0.7f).transformPoint(v), c = mat4::rotate(q).transformPoint(v);
+    CHECK(near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z));
+    CHECK(near(c.x, b.x) && near(c.y, b.y) && near(c.z, b.z));
+    quat h = slerp(quat{}, quat::axisAngle({0, 1, 0}, 1.0f), 0.5f), e = quat::axisAngle({0, 1, 0}, 0.5f);
+    CHECK(near(h.y, e.y) && near(h.w, e.w));
+    mat4 t = mat4::trs({1, 2, 3}, q, {2, 2, 2});
+    float3 p = t.transformPoint({1, 0, 0}), r = q.rotate({2, 0, 0});
+    CHECK(near(p.x, r.x + 1) && near(p.y, r.y + 2) && near(p.z, r.z + 3));
+    mat4 n = mat4::scale({2, 1, 1}).normalMatrix();
+    CHECK(near(n.at(0, 0), 0.5f) && near(n.at(1, 1), 1.0f));
+}
+
+TEST(models_gltf_skin_and_clips) {
+    using namespace modeltest;
+    std::vector<std::string> warn;
+    auto m = loadGltf("t.gltf", skinnedGltf(), mapReader({}), &warn);
+    CHECK(m->nodes.size() == 3 && m->skins.size() == 1 && m->clips.size() == 1);
+    CHECK(m->meshes.size() == 1 && m->meshes[0].primitives.size() == 1);
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(p.indexCount == 3 && p.jointPalette.size() == 2);
+    const Material& mt = m->materials[size_t(p.material)];
+    CHECK(mt.name == "TeamCloth" && mt.alpha == AlphaMode::Mask && near(mt.alphaCutoff, 0.3f) && mt.doubleSided && near(mt.metallic, 0.2f));
+    CHECK(near(mt.baseColor.y, 0.25f));
+    // weights normalized to bytes, palette slots resolve to the skin joints
+    const ModelVertex& v2 = m->vertices[m->indices[p.firstIndex + 2]];
+    CHECK(v2.weights[0] + v2.weights[1] >= 254 && v2.weights[0] + v2.weights[1] <= 256);
+    // bind pose: joint world * inverse bind = identity
+    std::vector<mat4> pal;
+    paletteMatrices(*m, m->skins[0], p, m->bindWorld, pal);
+    bool identity = true;
+    for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+    CHECK(identity);
+    // clip sampling: linear rotation at half time, step translation
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.5f, pose);
+    quat e = quat::axisAngle({0, 1, 0}, 0.785398f);
+    CHECK(near(std::fabs(pose[1].r.y), e.y, 2e-3f) && near(pose[0].t.x, 0));
+    sampleClip(m->clips[0], 1.0f, pose);
+    CHECK(near(pose[0].t.x, 5));
+    CHECK(near(m->clips[0].duration, 1));
+    CHECK(m->findClip("spin") == 0 && m->findNode("bone") == 1);
+}
+
+TEST(models_gltf_readable_errors) {
+    using namespace modeltest;
+    bool threw = false;
+    try { loadGltf("bad.gltf", skinnedGltf(R"("KHR_draco_mesh_compression")"), mapReader({}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("KHR_draco_mesh_compression") != std::string::npos && std::string(e.what()).find("bad.gltf") == 0; }
+    CHECK(threw);
+    threw = false;
+    try { loadModel("missing.glb", mapReader({}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("missing.glb") != std::string::npos; }
+    CHECK(threw);
+    threw = false;
+    try { loadModel("x.fbx", mapReader({{"x.fbx", "data"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("unsupported model format") != std::string::npos; }
+    CHECK(threw);
+    // accessor pointing past its buffer view
+    std::string g = skinnedGltf();
+    size_t at = g.find(R"("bufferView":0,"componentType":5126,"count":3)");
+    g.replace(at, std::strlen(R"("bufferView":0,"componentType":5126,"count":3)"), R"("bufferView":0,"componentType":5126,"count":9)");
+    threw = false;
+    try { loadGltf("range.gltf", g, mapReader({}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("out of range") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(models_obj_and_mtl) {
+    using namespace modeltest;
+    std::string obj = "mtllib m.mtl\no Box\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+                      "usemtl Glass\nf 1/1/1 2/2/1 3/3/1 4/4/1\nusemtl Missing\nf -4 -3 -2\n";
+    std::string mtl = "newmtl Glass\nKd 0.2 0.4 0.6\nd 0.5\nNs 98\nKe 1 0 0\n";
+    std::vector<std::string> warn;
+    auto m = loadModel("dir/x.obj", mapReader({{"dir/x.obj", obj}, {"dir/m.mtl", mtl}}), &warn);
+    CHECK(m->materials.size() >= 2);
+    int glass = m->findMaterial("Glass");
+    CHECK(glass >= 0);
+    if (glass >= 0) {
+        const Material& g = m->materials[size_t(glass)];
+        CHECK(g.alpha == AlphaMode::Blend && near(g.baseColor.w, 0.5f) && near(g.roughness, 0.1414f, 1e-3f) && near(g.emissive.x, 1));
+    }
+    size_t tris = 0;
+    for (auto& md : m->meshes) for (auto& p : md.primitives) tris += p.indexCount / 3;
+    CHECK(tris == 3);                       // quad -> 2 triangles + 1 triangle with negative indices
+    CHECK(!warn.empty());                   // unknown material 'Missing'
+    CHECK(near(m->boundsMax.x, 1) && near(m->boundsMax.y, 1));
+}
+
+TEST(models_animator_crossfade_and_layers) {
+    using namespace modeltest;
+    auto m = loadGltf("t.gltf", skinnedGltf(), mapReader({}), nullptr);
+    // second clip: translate the bone up
+    AnimClip up;
+    up.name = "Up"; up.duration = 1;
+    AnimChannel ch; ch.node = 1; ch.path = AnimChannel::Translation; ch.times = {0, 1}; ch.values = {0, 3, 0, 0, 3, 0};
+    up.channels.push_back(ch);
+    m->clips.push_back(up);
+    Animator a;
+    a.setModel(m.get());
+    Animator::Play p; p.fade = 0.5f;
+    a.play(0, 0, p);
+    a.update(0.1f);
+    a.play(0, 1, p);                        // cross-fade Spin -> Up over 0.5 s
+    a.update(0.25f);
+    Pose pose;
+    a.evaluate(pose);
+    CHECK(pose[1].t.y > 1.5f && pose[1].t.y < 2.5f);   // halfway between bind (1) and Up (3)
+    a.update(0.5f);
+    a.evaluate(pose);
+    CHECK(near(pose[1].t.y, 3));
+    // overlay restricted to the root's subtree: node 2 (mesh node) stays untouched
+    Animator::Play once; once.loop = false; once.fade = 0;
+    a.play(1, 0, once);
+    a.setMask(1, 1);
+    a.update(2.0f);
+    CHECK(a.finished(1));
+    a.evaluate(pose);
+    CHECK(near(pose[0].t.x, 0));            // root not in the mask: the step translation is not applied
+}
+
+TEST(models_procedural_modifiers) {
+    using namespace modeltest;
+    std::vector<ProcAnim> mods(3);
+    mods[0].channel = ProcAnim::Translate; mods[0].axis = {0, 1, 0}; mods[0].amp = 0.5f; mods[0].wave = ProcAnim::Const; mods[0].fade = 0; mods[0].randomPhase = false;
+    mods[1].special = ProcAnim::Aim; mods[1].channel = ProcAnim::Rotate; mods[1].node = 0; mods[1].turnSpeed = 100; mods[1].limit = 3;
+    mods[2].special = ProcAnim::Fall; mods[2].channel = ProcAnim::Rotate; mods[2].axis = {1, 0, 0}; mods[2].amp = 1.5f; mods[2].on = kProcEvDeath; mods[2].decay = 1; mods[2].node = 0; mods[2].fade = 0;
+    ProcInputs in;
+    in.dt = 0.1f; in.hasTarget = true; in.aimYaw = 0.6f;
+    in.eventAge[kProcEvDeath] = 0.5f;
+    std::vector<ProcRuntime> rt;
+    Pose pose(1);
+    mat4 obj;
+    applyProcedural(mods, in, rt, pose, obj);
+    CHECK(near(obj.at(1, 3), 0.5f));        // whole-object translation
+    CHECK(near(rt[1].aim, 0.6f));           // turret reached the target angle
+    // fall: half way through (age 0.5 of 1 s) with ease-in -> amp * 0.25 on top of the aim rotation
+    float3 f = pose[0].r.rotate({0, 1, 0});
+    CHECK(f.y < 0.99f);
+}
+
+TEST(models_sample_assets_load) {
+    using namespace modeltest;
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    std::vector<std::string> warn;
+    auto golem = loadModel(dir + "golem.glb", diskReader(), &warn);
+    CHECK(golem->clips.size() == 4 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
+    CHECK(golem->findClip("Death") >= 0 && golem->images.size() == 3);
+    auto tank = loadModel(dir + "tank.glb", diskReader(), &warn);
+    CHECK(tank->variants.size() == 2 && tank->findNode("Turret") >= 0 && tank->findVariant("winter") == 1);
+    auto mill = loadModel(dir + "windmill.gltf", diskReader(), &warn);
+    int sail = mill->findMaterial("Sail");
+    CHECK(sail >= 0 && mill->materials[size_t(sail)].alpha == AlphaMode::Mask && mill->materials[size_t(sail)].baseTex >= 0);
+    if (sail >= 0) CHECK(near(mill->materials[size_t(sail)].uvScale.y, 2));
+    auto crystal = loadModel(dir + "crystal.obj", diskReader(), &warn);
+    CHECK(crystal->findMaterial("Crystal") >= 0 && crystal->images.size() == 1);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
 }
 
 int main() {

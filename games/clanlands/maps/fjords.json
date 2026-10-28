@@ -1,0 +1,342 @@
+{
+ "name": "Fjords",
+ "size": [
+  48,
+  36
+ ],
+ "players": [
+  {
+   "name": "Синие",
+   "team": 1
+  },
+  {
+   "name": "Красные",
+   "team": 2
+  }
+ ],
+ "terrain": {
+  "rows": [
+   "################################################",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............#...............#...............#",
+   "#..............#...............#...............#",
+   "#..............#...............#...............#",
+   "#..............#...............#...............#",
+   "#..............#...............#...............#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "#...............#...............#..............#",
+   "#...............#...............#..............#",
+   "#...............#...............#..............#",
+   "#...............#...............#..............#",
+   "#...............#...............#..............#",
+   "#..............................................#",
+   "#..............................................#",
+   "#..............................................#",
+   "################################################"
+  ]
+ },
+ "regions": {
+  "rows": [
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "AAAAAAAAAAAAAAAABBBBBBBBBBBBBBBBCCCCCCCCCCCCCCCC",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "DDDDDDDDDDDDDDDDEEEEEEEEEEEEEEEEFFFFFFFFFFFFFFFF",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII",
+   "GGGGGGGGGGGGGGGGHHHHHHHHHHHHHHHHIIIIIIIIIIIIIIII"
+  ],
+  "names": {
+   "A": "Родной фьорд",
+   "B": "Северный лес",
+   "C": "Ледяной склон",
+   "D": "Западная долина",
+   "E": "Сердце земли",
+   "F": "Восточная долина",
+   "G": "Склон теней",
+   "H": "Южный лес",
+   "I": "Чужой фьорд"
+  }
+ },
+ "entities": [
+  {
+   "type": "longhouse",
+   "owner": 1,
+   "pos": [
+    7,
+    6
+   ]
+  },
+  {
+   "type": "longhouse",
+   "owner": 2,
+   "pos": [
+    41,
+    30
+   ]
+  },
+  {
+   "type": "thrall",
+   "owner": 1,
+   "pos": [
+    11,
+    4
+   ]
+  },
+  {
+   "type": "thrall",
+   "owner": 2,
+   "pos": [
+    37,
+    32
+   ]
+  },
+  {
+   "type": "thrall",
+   "owner": 1,
+   "pos": [
+    11,
+    5
+   ]
+  },
+  {
+   "type": "thrall",
+   "owner": 2,
+   "pos": [
+    37,
+    31
+   ]
+  },
+  {
+   "type": "thrall",
+   "owner": 1,
+   "pos": [
+    11,
+    6
+   ]
+  },
+  {
+   "type": "thrall",
+   "owner": 2,
+   "pos": [
+    37,
+    30
+   ]
+  },
+  {
+   "type": "deer_herd",
+   "owner": 0,
+   "pos": [
+    24,
+    6
+   ]
+  },
+  {
+   "type": "deer_herd",
+   "owner": 0,
+   "pos": [
+    24,
+    30
+   ]
+  },
+  {
+   "type": "deer_herd",
+   "owner": 0,
+   "pos": [
+    8,
+    18
+   ]
+  },
+  {
+   "type": "deer_herd",
+   "owner": 0,
+   "pos": [
+    40,
+    18
+   ]
+  },
+  {
+   "type": "deer_herd",
+   "owner": 0,
+   "pos": [
+    24,
+    18
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    18.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    29.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    19.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    28.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    20.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    27.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    21.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    26.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    22.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    25.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    23.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    24.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    24.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    23.5,
+    33.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    25.5,
+    2.5
+   ]
+  },
+  {
+   "type": "birch",
+   "owner": 0,
+   "pos": [
+    22.5,
+    33.5
+   ]
+  }
+ ]
+}

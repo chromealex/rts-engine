@@ -8,6 +8,7 @@
 // Units: the context works in framebuffer pixels; stylesheets should use `dp` so the layout scales
 // with the display density (dp ratio = platform::dpiScale()).
 #pragma once
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -42,6 +43,10 @@ public:
     // Exposes a texture owned by the caller to documents as <img src="#name"/> or
     // `decorator: image(#name)`. The caller may update its pixels every frame.
     void setDynamicTexture(const std::string& name, gfx::TextureHandle tex, int width, int height);
+
+    // Localized documents: text nodes and attribute values that are exactly "@some.key" are passed
+    // to `fn` while a document loads. After a language change, reload the documents.
+    void setTranslator(std::function<std::string(const std::string& key)> fn);
 
     float dpRatio() const;              // framebuffer pixels per dp
     bool textInputFocused() const;

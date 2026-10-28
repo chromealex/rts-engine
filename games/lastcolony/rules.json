@@ -1,0 +1,31 @@
+// "Last Colony" — They Are Billions-like: build a colony inside the command centre's radius, gather wood
+// and stone, and survive growing waves of the infected until the timer runs out.
+{
+  "victory": {"mode": "survive", "seconds": 720},
+  "buildRadius": 7,
+  "supplyCap": 80,
+  "resources": {
+    "wood": {"name": "Дерево", "start": 300}, "stone": {"name": "Камень", "start": 150}, "gold": {"name": "Золото", "start": 300}
+  },
+  "types": {
+    "command_center": {"name": "Командный центр", "structure": {"footprint": [4, 4]}, "health": {"max": 4000, "armor": 5}, "sight": 10, "key": true,
+                       "produces": ["colonist"], "dropoff": ["wood", "stone"], "supply": 8, "income": {"gold": 2},
+                       "weapons": [{"range": 6, "damage": 12, "cooldown": 1, "projectileSpeed": 16}], "view": {"shape": "hall"}},
+    "colonist": {"name": "Колонист", "health": {"max": 60}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 6, "cost": {"gold": 30, "time": 8, "supply": 1},
+                 "gather": {"wood": {"carry": 10, "time": 2.5}, "stone": {"carry": 8, "time": 3}}, "builds": ["tent", "barracks", "ballista", "wall", "market"]},
+    "tent": {"name": "Палатка", "structure": {"footprint": [2, 2]}, "health": {"max": 300}, "cost": {"wood": 40, "time": 10}, "supply": 6, "income": {"gold": 1}, "view": {"shape": "house"}},
+    "market": {"name": "Рынок", "structure": {"footprint": [2, 2]}, "health": {"max": 400}, "cost": {"wood": 80, "stone": 30, "time": 15}, "income": {"gold": 3}, "view": {"shape": "mill"}},
+    "barracks": {"name": "Казарма", "structure": {"footprint": [3, 3]}, "health": {"max": 1000, "armor": 2}, "cost": {"wood": 120, "stone": 40, "time": 20}, "produces": ["ranger", "soldier"], "view": {"shape": "barracks"}},
+    "ballista": {"name": "Баллиста", "structure": {"footprint": [2, 2]}, "health": {"max": 800, "armor": 3}, "sight": 10, "requires": ["barracks"],
+                 "weapons": [{"range": 8, "damage": 40, "cooldown": 1.5, "projectileSpeed": 20, "splash": 0.6}], "cost": {"wood": 80, "stone": 80, "time": 20}, "view": {"shape": "tower"}},
+    "wall": {"name": "Стена", "structure": {"footprint": [1, 1]}, "health": {"max": 600, "armor": 5}, "cost": {"stone": 10, "time": 4}, "view": {"shape": "wall"}},
+    "ranger": {"name": "Рейнджер", "health": {"max": 80}, "move": {"speed": 3, "radius": 0.3}, "sight": 9, "weapons": [{"range": 6, "damage": 10, "cooldown": 0.8, "projectileSpeed": 20}],
+               "cost": {"gold": 40, "wood": 10, "time": 10, "supply": 1}, "view": {"shape": "ranged"}},
+    "soldier": {"name": "Солдат", "health": {"max": 200, "armor": 2}, "move": {"speed": 2.4, "radius": 0.4}, "sight": 8, "weapons": [{"range": 4, "damage": 16, "cooldown": 1, "projectileSpeed": 20}],
+                "cost": {"gold": 70, "wood": 20, "stone": 10, "time": 14, "supply": 2}, "view": {"shape": "soldier"}},
+    "walker": {"name": "Заражённый", "health": {"max": 60}, "move": {"speed": 1.8, "radius": 0.3}, "sight": 10, "weapons": [{"range": 0.5, "damage": 8, "cooldown": 1.2}], "view": {"shape": "zombie"}},
+    "runner": {"name": "Бегун", "health": {"max": 40}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 12, "weapons": [{"range": 0.5, "damage": 6, "cooldown": 0.8}], "view": {"shape": "zombie", "scale": 0.8}},
+    "tree": {"name": "Дерево", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 400}, "view": {"shape": "tree"}},
+    "stone_quarry": {"name": "Каменоломня", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "stone", "amount": 4000}, "view": {"shape": "rock"}}
+  }
+}

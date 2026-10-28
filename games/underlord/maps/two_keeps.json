@@ -1,0 +1,151 @@
+{
+ "name": "Two Keeps",
+ "size": [
+  48,
+  32
+ ],
+ "players": [
+  {
+   "name": "Синие",
+   "team": 1
+  },
+  {
+   "name": "Красные",
+   "team": 2
+  }
+ ],
+ "terrain": {
+  "rows": [
+   "################################################",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDD......DDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDD......DDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDD......DDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDD......DDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDD......GGDDDDDDDGDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDGGDDDDDDDDDDDDDDDDDDDDDGDDDDDDDDDDD#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDGDDDDDDDDJDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDJDDDDDDDDGDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#D.........DDDDDDDDDDDDDDDDDDDDDDDDDD.........D#",
+   "#DDDDDDDDDDDGDDDDDDDDDDDDDDDDDDDDDGGDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDGDDDDDDDGG......DDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDD......DDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDD......DDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDD......DDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDD......DDDDDDDDDDDDD#",
+   "#DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD#",
+   "################################################"
+  ]
+ },
+ "entities": [
+  {
+   "type": "dungeon_heart",
+   "owner": 1,
+   "pos": [
+    6,
+    16
+   ]
+  },
+  {
+   "type": "dungeon_heart",
+   "owner": 2,
+   "pos": [
+    42,
+    16
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 1,
+   "pos": [
+    9.0,
+    13
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 2,
+   "pos": [
+    39.0,
+    19
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 1,
+   "pos": [
+    9.8,
+    14
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 2,
+   "pos": [
+    38.2,
+    18
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 1,
+   "pos": [
+    9.0,
+    15
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 2,
+   "pos": [
+    39.0,
+    17
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 1,
+   "pos": [
+    9.8,
+    16
+   ]
+  },
+  {
+   "type": "imp",
+   "owner": 2,
+   "pos": [
+    38.2,
+    16
+   ]
+  },
+  {
+   "type": "portal",
+   "owner": 0,
+   "pos": [
+    17,
+    4
+   ]
+  },
+  {
+   "type": "portal",
+   "owner": 0,
+   "pos": [
+    31,
+    28
+   ]
+  }
+ ]
+}

@@ -1,0 +1,64 @@
+// "Frost Crown" — Warcraft III-like: gold mines + lumber, burrows for food, upkeep, heroes from an altar
+// with levels and abilities, creep camps with bounty, towers.
+{
+  "victory": "noStructures",
+  "supplyCap": 80,
+  "upkeep": [{"supply": 30, "gatherMult": 0.7}, {"supply": 55, "gatherMult": 0.4}],
+  "resources": {
+    "gold": {"name": "Золото", "start": 500},
+    "lumber": {"name": "Древесина", "start": 200}
+  },
+  "armorTypes": ["light", "medium", "heavy", "fortified", "hero"],
+  "damageTable": {
+    "normal": {"fortified": 0.7, "light": 1.0},
+    "pierce": {"light": 1.5, "heavy": 0.75, "fortified": 0.35},
+    "siege": {"fortified": 1.5, "light": 0.5},
+    "magic": {"heavy": 1.5, "fortified": 0.35}
+  },
+  "types": {
+    "peon": {"name": "Батрак", "health": {"max": 250, "armorType": "light"}, "move": {"speed": 2.6, "radius": 0.35}, "sight": 7,
+             "weapons": [{"range": 0.5, "damage": 6, "cooldown": 1.5}], "cost": {"gold": 75, "time": 12, "supply": 1},
+             "gather": {"gold": {"carry": 10, "time": 2}, "lumber": {"carry": 10, "time": 3}},
+             "builds": ["great_hall", "burrow", "war_mill", "altar", "watch_tower"], "view": {"shape": "worker", "scale": 0.8}},
+    "grunt": {"name": "Рубака", "health": {"max": 600, "armor": 1, "armorType": "heavy"}, "move": {"speed": 2.7, "radius": 0.4}, "sight": 8,
+              "weapons": [{"range": 0.6, "damage": 18, "cooldown": 1.3}], "cost": {"gold": 200, "time": 18, "supply": 3},
+              "bounty": {"gold": 5}, "view": {"shape": "soldier"}},
+    "hunter": {"name": "Ловчий", "health": {"max": 320, "armorType": "medium"}, "move": {"speed": 2.9, "radius": 0.35}, "sight": 9,
+               "weapons": [{"range": 5, "damage": 17, "cooldown": 1.5, "projectileSpeed": 14, "targets": ["ground", "air"], "damageType": "pierce"}],
+               "cost": {"gold": 135, "lumber": 20, "time": 16, "supply": 2}, "view": {"shape": "ranged"}},
+    "demolisher": {"name": "Разрушитель", "health": {"max": 425, "armor": 2, "armorType": "fortified"}, "move": {"speed": 2.2, "radius": 0.6}, "sight": 8,
+                   "weapons": [{"range": 7, "minRange": 1.5, "damage": 70, "cooldown": 3.5, "projectileSpeed": 10, "splash": 1, "damageType": "siege"}],
+                   "cost": {"gold": 220, "lumber": 50, "time": 30, "supply": 4}, "view": {"shape": "vehicle"}},
+    "blademaster": {"name": "Мастер клинка", "hero": {"levels": [200, 500, 900], "perLevel": [{"stat": "maxHp", "add": 75}, {"stat": "damage", "add": 0.1}]},
+                    "health": {"max": 700, "armor": 3, "armorType": "hero", "regen": 1}, "move": {"speed": 3.1, "radius": 0.45}, "sight": 10,
+                    "energy": {"max": 200, "regen": 1, "start": 120},
+                    "weapons": [{"range": 0.8, "damage": 30, "cooldown": 1.2}], "cost": {"gold": 425, "time": 25, "supply": 5},
+                    "abilities": [
+                      {"id": "whirl", "name": "Вихрь", "target": "none", "cooldown": 12, "energy": 75, "range": 2,
+                       "effects": [{"type": "damage", "amount": 90, "radius": 2.5, "affects": "enemies"}]},
+                      {"id": "warcry", "name": "Боевой клич", "aura": true, "radius": 7, "level": 2,
+                       "effects": [{"type": "buff", "stat": "damage", "mul": 1.15, "affects": "allies"}]}],
+                    "view": {"shape": "hero"}},
+    "great_hall": {"name": "Большой зал", "structure": {"footprint": [4, 4]}, "health": {"max": 1800, "armor": 5, "armorType": "fortified"},
+                   "sight": 10, "cost": {"gold": 385, "lumber": 185, "time": 60}, "produces": ["peon"], "dropoff": ["gold", "lumber"], "supply": 10,
+                   "weapons": [{"range": 6, "damage": 12, "cooldown": 1.5, "projectileSpeed": 14, "damageType": "pierce"}], "view": {"shape": "hall"}},
+    "burrow": {"name": "Нора", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armor": 3, "armorType": "fortified"},
+               "cost": {"gold": 160, "lumber": 40, "time": 25}, "supply": 10, "view": {"shape": "house"}},
+    "war_mill": {"name": "Казарма", "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armor": 4, "armorType": "fortified"},
+                 "cost": {"gold": 180, "lumber": 50, "time": 35}, "produces": ["grunt", "hunter", "demolisher"], "view": {"shape": "barracks"}},
+    "altar": {"name": "Алтарь бурь", "structure": {"footprint": [3, 3]}, "health": {"max": 900, "armor": 4, "armorType": "fortified"},
+              "cost": {"gold": 180, "lumber": 50, "time": 30}, "produces": ["blademaster"], "view": {"shape": "shrine"}},
+    "watch_tower": {"name": "Дозорная башня", "structure": {"footprint": [2, 2]}, "health": {"max": 500, "armor": 5, "armorType": "fortified"},
+                    "sight": 11, "weapons": [{"range": 7, "damage": 18, "cooldown": 1.2, "projectileSpeed": 16, "targets": ["ground", "air"], "damageType": "pierce"}],
+                    "cost": {"gold": 110, "lumber": 80, "time": 30}, "requires": ["war_mill"], "view": {"shape": "tower"}},
+    "troll": {"name": "Лесной тролль", "health": {"max": 350, "armorType": "medium"}, "move": {"speed": 2.4}, "sight": 7,
+              "weapons": [{"range": 4, "damage": 11, "cooldown": 1.6, "projectileSpeed": 12, "damageType": "pierce"}],
+              "neutral": {"leash": 8}, "bounty": {"gold": 30}, "xp": 60, "view": {"shape": "ranged", "color": [0.3, 0.6, 0.3]}},
+    "ogre": {"name": "Огр", "health": {"max": 900, "armor": 2, "armorType": "heavy"}, "move": {"speed": 2.2, "radius": 0.6}, "sight": 7,
+             "weapons": [{"range": 0.8, "damage": 28, "cooldown": 1.8}], "neutral": {"leash": 9}, "bounty": {"gold": 70}, "xp": 150,
+             "view": {"shape": "soldier", "scale": 1.4, "color": [0.5, 0.5, 0.3]}},
+    "gold_mine": {"name": "Золотой рудник", "structure": {"footprint": [3, 3]}, "invulnerable": true,
+                  "resourceNode": {"resource": "gold", "amount": 12500}, "view": {"shape": "mine"}},
+    "pine": {"name": "Ель", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "lumber", "amount": 100}, "view": {"shape": "tree"}}
+  }
+}

@@ -5,11 +5,12 @@
 #include <string>
 #include <vector>
 #include "Conn.h"
+#include "NetText.h"
 #include "../sim/Command.h"
 
 namespace rts::net {
 
-constexpr uint32_t kProtocolVersion = 1;
+constexpr uint32_t kProtocolVersion = 2; // 2: texts are localization keys (NetText)
 
 enum class Msg : uint8_t {
     // client -> server
@@ -73,7 +74,7 @@ struct QueueInfo { std::string id, title; uint8_t teams = 2, teamSize = 1; bool 
 
 struct HelloMsg { uint32_t protocol = kProtocolVersion; std::string name, gameId; uint64_t clientKey = 0, reconnectToken = 0; };
 struct WelcomeMsg { uint32_t clientId = 0; uint64_t reconnectToken = 0; std::string serverName; bool resumed = false; std::vector<QueueInfo> queues; };
-struct ErrorMsg { ErrorCode code = ErrorCode::None; std::string text; };
+struct ErrorMsg { ErrorCode code = ErrorCode::None; NetText text; };
 
 struct QueueStatusMsg { uint8_t state = 0; std::string queueId; uint32_t waitedSec = 0, inQueue = 0; }; // state: 0 idle, 1 searching, 2 found
 
@@ -97,7 +98,7 @@ struct ChecksumMsg { uint32_t tick = 0; uint64_t hash = 0; };
 struct MatchResultMsg { uint32_t tick = 0; int32_t result = 0; uint64_t hash = 0; };
 struct PlayerStatusMsg { uint8_t slot = 0; uint8_t status = 0; }; // 0 connected, 1 disconnected, 2 left
 struct DesyncMsg { uint32_t tick = 0; std::vector<std::pair<uint8_t, uint64_t>> hashes; };
-struct MatchEndMsg { int32_t result = 0; std::string reason; std::vector<std::pair<uint8_t, int32_t>> ratingDelta; };
+struct MatchEndMsg { int32_t result = 0; NetText reason; /* empty = decided in the game */ std::vector<std::pair<uint8_t, int32_t>> ratingDelta; };
 struct ChatMsg { uint32_t from = 0; std::string name, text; };
 
 // ---- encoding
@@ -111,6 +112,8 @@ void write(ByteWriter& w, const MapInfo& m);
 bool read(ByteReader& r, MapInfo& m);
 void write(ByteWriter& w, const RoomSettings& s);
 bool read(ByteReader& r, RoomSettings& s);
+void write(ByteWriter& w, const NetText& t);
+bool read(ByteReader& r, NetText& t);
 void writeCommands(ByteWriter& w, const std::vector<Command>& cmds);
 bool readCommands(ByteReader& r, std::vector<Command>& cmds);
 

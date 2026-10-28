@@ -40,18 +40,56 @@ enum CommandType : uint16_t {
     kCmdClaim,        // point inside a region (Northgard)
     kCmdAutoBuild,    // no units; param = type or -1 (random from rules.autoBuild pool); spot chosen by the sim
     kCmdUpgrade,      // structures, param = target type from `upgrades`
+    kCmdSurrender,    // no units: the issuing player is defeated (kEvPlayerDefeated with value kDefeatSurrendered)
+    // dungeon management / territory (rect commands: point = any point in the first cell, param = rectParam(w, h, extra))
+    kCmdDig,          // no units; mark (extra 0) / unmark (extra 1) diggable cells in a rect
+    kCmdPaintRoom,    // no units; extra = room index (-1 = erase, refunds rules.sellRefund)
+    kCmdPickUp,       // units: own units into the player's hand
+    kCmdDrop,         // point: drop units from the hand (units = which ones, empty = the last picked; param = count, <=0: 1)
+    kCmdSlap,         // units: own units
+    kCmdPossess,      // units[0] = unit to possess; empty units = release
+    kCmdDirect,       // possessed unit: point = direction (x, z), param bit 0 = fire, target = optional attack target
+    kCmdPlayerAbility,// no units; param = index into rules.playerAbilities, point
+    kCmdBuildRoad,    // no units; rect (extra 0 build, 1 remove), cost per cell from rules.roadNetwork
+    kCmdConnectRoad,  // units: own structures; the sim lays the shortest road from each to the own road network
 };
 
+// Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
+inline int64_t rectParam(int w, int h, int extra = 0) {
+    return (int64_t(h & 0xFFFF) << 40) | (int64_t(w & 0xFFFF) << 24) | int64_t(extra & 0xFFFFFF);
+}
+inline void unpackRect(int64_t p, int& w, int& h, int& extra) {
+    w = int((p >> 24) & 0xFFFF); h = int((p >> 40) & 0xFFFF);
+    extra = int(p & 0xFFFFFF);
+    if (extra & 0x800000) extra -= 0x1000000;
+}
+
 // ---------------------------------------------------------------- events (presentation)
+enum DefeatReason : int64_t { kDefeatEliminated = 0, kDefeatSurrendered = 1 }; // kEvPlayerDefeated value
+
 enum GameEvent : uint16_t {
     kEvSpawned = 1, kEvDied, kEvAttack, kEvHit, kEvTrainStarted, kEvTrainDone, kEvBuildPlaced, kEvBuildDone,
     kEvGathered, kEvCaptured, kEvPlayerDefeated, kEvNotEnough, kEvResearched, kEvLevelUp, kEvAbility, kEvMiss,
     kEvReadyToPlace, kEvSold, kEvRegionClaimed, kEvWave, kEvLowPower, kEvUpgraded,
     kEvMessage,       // trigger message: value = index into GameState::trig.messages, player 0 = everyone
+    kEvDug,           // value = cell index
+    kEvTerritory,     // a cell changed owner: value = cell index, player = new owner
+    kEvRoomPainted,   // value = room type (-1 erased), player
+    kEvRecruited,     // a = creature, b = portal
+    kEvCreatureLeft,  // unhappy creature left the dungeon
+    kEvPickedUp, kEvDropped, kEvSlapped,
+    kEvPossessed,     // a = unit (kNullEntity: released)
+    kEvPayday,        // value = 1 paid, 0 unpaid
+    kEvPlayerAbility, // value = ability index
+    kEvProduced,      // a = workplace, value = resource of the first output
+    kEvDelivered,     // a = carrier, b = destination, value = resource
+    kEvRoadBuilt,     // value = cell index (removed: player 0)
+    kEvLanesChanged,  // lane geometry regenerated (GameState::lanes)
 };
 
 // ---------------------------------------------------------------- components
-enum UnitFlags : uint8_t { kUnitHold = 1, kUnitUnderConstruction = 2, kUnitDisabled = 4 /*power deficit*/, kUnitSilent = 8 /*removed without death effects*/ };
+enum UnitFlags : uint8_t { kUnitHold = 1, kUnitUnderConstruction = 2, kUnitDisabled = 4 /*power deficit*/, kUnitSilent = 8 /*removed without death effects*/,
+                          kUnitInHand = 16 /*picked up: off the map*/, kUnitPossessed = 32 /*directly controlled*/ };
 
 struct Unit {
     uint16_t type = 0;
@@ -62,7 +100,11 @@ struct Unit {
     Fixed energy{};
 };
 
-enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Return, Build, Repair, Enter, Cast };
+enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Return, Build, Repair, Enter, Cast,
+                                 Dig,        // point2 = cell to dig, point = cell to stand on
+                                 ClaimCell,  // point = cell to claim (claimers)
+                                 Need,       // param = NeedKind | room << 8, point = room cell (or target = structure)
+                                 Haul };     // carrier job, see Carrier
 
 struct Order {
     OrderType type = OrderType::Move;
@@ -82,6 +124,10 @@ struct Mobile {
     Fixed goalRadius{};
     Fixed stuck{};
     std::vector<uint16_t> roadPath;
+    Vec3 vel{};                  // last velocity (local avoidance)
+    Vec3 yieldHome{};            // stepped aside for a passing unit; walks back here
+    uint32_t yieldUntil = 0;
+    bool yielded = false;
 };
 
 struct Orders { std::vector<Order> queue; };
@@ -91,6 +137,11 @@ struct Combat {
     Entity target = kNullEntity;
     uint8_t acquireTimer = 0;
     bool autoTarget = false;
+    // melee surround: the attack slot (ring around the target) this unit is heading for
+    Entity slotTarget = kNullEntity;
+    int8_t slot = -1;
+    uint32_t slotTick = 0;
+    Vec3 slotPos{};
 };
 
 struct Cargo { int16_t res = -1; Fixed amount{}; Entity lastNode = kNullEntity; Vec3 lastPos{}; bool field = false; };
@@ -138,6 +189,28 @@ struct Capture { Fixed progress{}; uint8_t team = 0; };
 struct Guard { Vec3 home{}; Fixed leash{}; bool returning = false; uint32_t nextWander = 0; };
 struct Summon { uint32_t expire = 0; };
 
+enum NeedKind : int32_t { kNeedHunger = 0, kNeedSleep = 1, kNeedWork = 2 };
+struct Needs {
+    Fixed hunger{}, sleep{};          // 0..1+: active at >= 1
+    Fixed happiness = Fixed::fromInt(1);
+    Fixed payTimer{}, unhappyTime{};
+    bool leaving = false;
+};
+struct Possessed { Vec3 dir{}; Entity target = kNullEntity; bool fire = false; uint32_t lastTick = 0; };
+struct PortalState { Fixed timer{}; };
+struct AutoTrainState { Fixed timer{}; };
+struct ClaimState { Fixed acc{}; };
+struct Advancer { uint8_t unused = 0; };     // keeps pushing to the nearest front when idle (autoTrain units)
+
+// Settlers economy
+struct Inventory { std::vector<Fixed> have, incoming, reserved; };   // per resource
+struct Workshop { Fixed progress{}; bool running = false; };
+struct Carrier { Entity from = kNullEntity, to = kNullEntity; int16_t res = -1; Fixed amount{}, loaded{}; };
+
+// Mushroom Wars 2 lanes
+struct Lane { Entity a = kNullEntity, b = kNullEntity; int offset = 0; std::vector<Vec3> points; }; // offset: <0 left, >0 right
+struct LaneWalker { int lane = -1; uint16_t pos = 0; bool reverse = false; };
+
 // ---------------------------------------------------------------- per-player state
 struct TypeMods { Fixed add[size_t(Stat::Count)]; Fixed mul[size_t(Stat::Count)]; };
 
@@ -169,6 +242,9 @@ struct WaveDef {
     int done = 0;
 };
 
+struct RoomZone { uint16_t type = 0; uint8_t owner = 0; std::vector<int32_t> cells; Vec3 center{}; };
+struct PlayerAbilityState { uint32_t readyAt = 0; int charges = 0; Fixed rearm{}; };
+
 struct GameState {
     std::vector<PlayerEconomy> players;   // index = slot (0 = neutral)
     MapGrid grid;
@@ -194,6 +270,24 @@ struct GameState {
     std::vector<int> autoBuilt;          // per player
     int winnerTeam = -1;                 // set by timed modes / triggers
     TriggerState trig;
+    // dungeon / territory
+    std::vector<int> territoryCells;     // per player slot: owned cells (HUD share = territoryCells[p] / territoryTotal)
+    int territoryTotal = 0;              // claimable cells (ground or diggable)
+    bool territoryDirty = true;          // presentation: territory / dig / room layers changed
+    std::vector<RoomZone> roomZones;     // connected painted areas
+    std::vector<std::vector<int>> roomCells; // [player][room type] cells owned
+    bool roomsDirty = true;
+    std::vector<std::vector<Entity>> hand;   // per player: units picked up (order = pick order)
+    std::vector<Entity> possessed;           // per player
+    std::vector<std::vector<PlayerAbilityState>> playerAbilities; // [player][ability]
+    // settlers economy
+    std::vector<int32_t> roadComp;           // per cell: road network component (-1 none)
+    bool roadsDirty = true;
+    // lanes (Mushroom Wars 2): every lane from a to b (offset lanes around the main spline), for the view
+    std::vector<Lane> lanes;
+    bool lanesDirty = true;
+    uint32_t laneSignature = 0;              // garrisons/obstacles the lanes were built for
+    std::vector<uint32_t> laneRoundRobin;    // per garrison entity index: next lane slot
 };
 
 // ---------------------------------------------------------------- module
@@ -247,6 +341,20 @@ public:
     bool findAutoSpot(Simulation& sim, uint8_t player, uint16_t type, Vec3& out);
     std::vector<Amount> autoBuildCost(Simulation& sim, uint8_t player, uint16_t type) const;
     uint32_t ticksUntilWave(Simulation& sim) const;
+    // ---- dungeon / territory
+    void setTerritory(Simulation& sim, int cell, uint8_t owner);
+    int territoryOf(Simulation& sim, uint8_t player) const;
+    std::vector<Amount> techCost(Simulation& sim, uint8_t player, uint16_t tech) const; // grows with levels
+    bool canUsePlayerAbility(Simulation& sim, uint8_t player, int index) const;
+    int roomCellsOf(Simulation& sim, uint8_t player, int room) const;
+    void applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint16_t sourceType, const std::vector<EffectDef>& effects, Entity target, Vec3 point);
+    void addHeroXp(Simulation& sim, Entity hero, Fixed xp, uint8_t player);
+    // ---- settlers economy
+    bool isGood(uint16_t res) const;       // stored in buildings (rules.storage == "buildings")
+    bool roadConnected(Simulation& sim, Entity a, Entity b);
+    std::vector<Amount> upfrontCost(const std::vector<Amount>& cost) const; // the part paid at once (goods are delivered)
+    // lanes between garrison buildings a -> b (main lane first), empty when none
+    std::vector<int> lanesBetween(Simulation& sim, Entity a, Entity b) const;
 
 private:
     void setupMap(Simulation& sim, const Json& map);
@@ -270,6 +378,30 @@ private:
     void sysWaves(Simulation& sim);
     void sysVictory(Simulation& sim);
     void sysTriggers(Simulation& sim);
+    void sysDungeon(Simulation& sim);     // RtsDungeon.cpp: jobs, needs, portals, territory, possession
+    void setupDungeon(Simulation& sim, const Json& map);
+    void applyDungeonCommand(Simulation& sim, const Command& cmd);
+    bool runDig(Simulation& sim, Entity e, Order& o);
+    bool runClaimCell(Simulation& sim, Entity e, Order& o);
+    bool runNeed(Simulation& sim, Entity e, Order& o);
+    void movePossessed(Simulation& sim);
+    void moveAgents(Simulation& sim);     // RtsAvoidance.cpp: path following with ORCA avoidance and yielding
+    void recomputeRooms(Simulation& sim);
+    void roomEconomy(Simulation& sim);
+    void hashDungeon(Simulation& sim, Hasher& h);
+    void sysSettlers(Simulation& sim);    // RtsSettlers.cpp: workshops, carriers, storehouse stock, roads
+    void applySettlersCommand(Simulation& sim, const Command& cmd);
+    bool runHaul(Simulation& sim, Entity e, Order& o);
+    void recomputeRoads(Simulation& sim);
+    void depositGoods(Simulation& sim, uint8_t player, uint16_t res, Fixed amount);
+    void withdrawGoods(Simulation& sim, uint8_t player, uint16_t res, Fixed amount);
+    void syncStorehouses(Simulation& sim);
+    void hashSettlers(Simulation& sim, Hasher& h);
+    void sysLanes(Simulation& sim);       // RtsLanes.cpp
+    void rebuildLanes(Simulation& sim);
+    bool runLaneWalk(Simulation& sim, Entity e, Order& o);
+    bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
+    void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
     void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
     bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
@@ -282,6 +414,8 @@ private:
 
     Rules rules_;
     TriggerSet triggers_;
+    struct SlotClaim { uint64_t target = 0; int slot = 0; uint64_t claimer = 0; };
+    std::vector<SlotClaim> slotClaims_;   // rebuilt every tick from Combat slots (derived, not state)
 };
 
 } // namespace rts::game
