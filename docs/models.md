@@ -43,7 +43,27 @@ match. Keys: Space next clip, Q quality, V variant, T team colour, P pause; drag
 
 Not supported (warning, skipped): morph targets, `TEXCOORD_1`, more than 4 joint influences, cameras,
 lights. Draco / meshopt geometry and KTX2 / WebP textures are an error when the file requires them
-(re-export without compression). Textures: PNG, JPEG, TGA.
+(re-export without compression). Textures: PNG, JPEG, TGA, KTX2 (below).
+
+**KTX2 textures.** Any texture path (OBJ `map_*`, material overrides `texture` / `teamMask` /
+`normalMap` / `emissiveMap`, glTF images with a plain `source`) may point at a `.ktx2` file; it is
+detected by its identifier, not by extension. Payloads: ETC2 RGB8 / RGBA8, EAC R11, BC1, BC3, BC4,
+BC7, ASTC 4x4 (UNORM or sRGB) or plain RGBA8, with no supercompression or Zstandard. BasisLZ/ETC1S
+and UASTC need a transcoder and are rejected (as is glTF `KHR_texture_basisu`, which requires
+them); 3D textures are rejected, arrays and cube maps keep the first layer/face.
+
+Producing them with KTX-Software (`ktx create`, 4.3+): ASTC is encoded directly, e.g.
+`ktx create --format ASTC_4x4_SRGB_BLOCK --generate-mipmap --zstd 18 albedo.png albedo.ktx2`;
+plain RGBA8 works the same way with `--format R8G8B8A8_SRGB`. KTX-Software does not encode
+ETC2/BC itself: compress with an ETC2/BC7 encoder (etcpak, Compressonator, NVIDIA Texture Tools)
+straight to `.ktx2` (with Zstandard if the tool offers it; otherwise re-wrap, see `ktx create --help`
+for raw block input in your KTX-Software version). Prefer
+`--zstd` (supercompression scheme 2): it shrinks block data well and decodes fast. Never use
+`--encode basis-lz` / `uastc`. Use `*_SRGB` formats for colour, `*_UNORM` for normal/data maps.
+The parser (`engine/render/TextureCodec.h`) keeps the raw blocks of every mip in
+`Image::compressed` for direct GPU upload; until the RHI uploads them, level 0 is also decoded on
+the CPU into `Image::rgba`, so KTX2 textures already work everywhere, only uncompressed in VRAM.
+ASTC has no CPU decoder yet: ASTC files are skipped with a warning until the GPU path lands.
 
 Conventions: Y up, glTF assets face +Z (`"forward"` changes it), one world unit = one map cell. Model
 files are read through the content system (loose files, `.rpak` packs, Android assets, web preload),

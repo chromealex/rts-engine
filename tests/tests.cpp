@@ -1370,6 +1370,242 @@ TEST(models_sample_assets_load) {
     CHECK(warn.empty());
 }
 
+// ---------------------------------------------------------------------------------------------
+// GPU-compressed textures: KTX2 container and CPU block decoders (models agent)
+// ---------------------------------------------------------------------------------------------
+#include "engine/render/TextureCodec.h"
+#include "engine/render/Model.h"
+#include "third_party/zstd/zstd.h"
+#include <cstring>
+
+using namespace rts::render;
+
+namespace ktxtest {
+std::vector<uint8_t> be64(uint32_t hi, uint32_t lo) {
+    std::vector<uint8_t> b(8);
+    for (int i = 0; i < 4; ++i) { b[size_t(i)] = uint8_t(hi >> (24 - 8 * i)); b[size_t(4 + i)] = uint8_t(lo >> (24 - 8 * i)); }
+    return b;
+}
+// EAC block: base, multiplier, table, 3-bit indices in column-major order (i = x * 4 + y).
+std::vector<uint8_t> eac(int base, int mul, int table, const int idx[16]) {
+    uint64_t bits = 0;
+    for (int i = 0; i < 16; ++i) bits |= uint64_t(idx[i]) << (45 - 3 * i);
+    std::vector<uint8_t> b{uint8_t(base), uint8_t(mul << 4 | table)};
+    for (int i = 5; i >= 0; --i) b.push_back(uint8_t(bits >> (8 * i)));
+    return b;
+}
+bool px(const uint8_t* out, int x, int y, int r, int g, int b, int a) {
+    const uint8_t* p = out + (y * 4 + x) * 4;
+    return p[0] == r && p[1] == g && p[2] == b && p[3] == a;
+}
+void put32(std::string& s, size_t at, uint32_t v) { for (int i = 0; i < 4; ++i) s[at + size_t(i)] = char(v >> (8 * i)); }
+void put64(std::string& s, size_t at, uint64_t v) { put32(s, at, uint32_t(v)); put32(s, at + 4, uint32_t(v >> 32)); }
+// Minimal KTX2 writer: 2D, one layer/face, levels given largest first, optional zstd per level.
+std::string makeKtx2(uint32_t vkFormat, uint32_t w, uint32_t h, const std::vector<std::vector<uint8_t>>& levels, bool zstd) {
+    const uint8_t id[12] = {0xAB, 'K', 'T', 'X', ' ', '2', '0', 0xBB, '\r', '\n', 0x1A, '\n'};
+    std::string s(80 + 24 * levels.size(), '\0');
+    std::memcpy(s.data(), id, 12);
+    put32(s, 12, vkFormat); put32(s, 16, 1); put32(s, 20, w); put32(s, 24, h);
+    put32(s, 36, 1); put32(s, 40, uint32_t(levels.size())); put32(s, 44, zstd ? 2 : 0);
+    for (size_t l = levels.size(); l-- > 0;) {   // smallest level first in the file, as the spec suggests
+        std::string data(levels[l].begin(), levels[l].end());
+        if (zstd) {
+            std::string c(ZSTD_compressBound(data.size()), '\0');
+            c.resize(ZSTD_compress(c.data(), c.size(), data.data(), data.size(), 19));
+            data = c;
+        }
+        while (s.size() % 8) s.push_back('\0');
+        put64(s, 80 + 24 * l, s.size()); put64(s, 88 + 24 * l, data.size()); put64(s, 96 + 24 * l, levels[l].size());
+        s += data;
+    }
+    return s;
+}
+// ETC1 individual-mode block: left half (136,136,136) table 0, right half (68,68,68) table 7.
+// Pixel (0,0) uses index 01 (+8), pixel (3,0) index 11 (-183), the rest index 00.
+const std::vector<uint8_t> kEtcIndividual = be64(0x8484841Cu, 0x10001001u);
+} // namespace ktxtest
+
+TEST(etc_blocks_decode_per_spec) {
+    using namespace ktxtest;
+    uint8_t out[64];
+    CHECK(decodeBlock(BlockFormat::ETC2_RGB8, kEtcIndividual.data(), out));
+    CHECK(px(out, 0, 0, 144, 144, 144, 255) && px(out, 1, 1, 138, 138, 138, 255));
+    CHECK(px(out, 2, 0, 115, 115, 115, 255) && px(out, 3, 0, 0, 0, 0, 255) && px(out, 3, 3, 115, 115, 115, 255));
+    // Differential, flipped: base (16,8,0) + delta (+3,-4,0); top table 1 (+5), bottom table 2 (+9).
+    auto diff = be64(0x8344002Bu, 0);
+    decodeBlock(BlockFormat::ETC2_RGB8, diff.data(), out);
+    CHECK(px(out, 3, 1, 137, 71, 5, 255) && px(out, 0, 2, 165, 42, 9, 255));
+    // T mode (R overflows): C1 = (187,34,51), C2 = 136 grey, distance 32; row 0 uses paint colours 0..3.
+    auto tmode = be64(0xF323888Bu, 0x11001010u);
+    decodeBlock(BlockFormat::ETC2_RGB8, tmode.data(), out);
+    CHECK(px(out, 0, 0, 187, 34, 51, 255) && px(out, 1, 0, 168, 168, 168, 255));
+    CHECK(px(out, 2, 0, 136, 136, 136, 255) && px(out, 3, 0, 104, 104, 104, 255) && px(out, 2, 2, 187, 34, 51, 255));
+    // H mode (G + dG < 0): C1 = (136,34,68) < C2 = 136 grey, so the ordering bit is 0.
+    // R1=8 G1=2 B1=4, R2=8 G2=8 B2=8, da=1 db=0 -> distance index 4 (23); paints C1+-23, C2+-23.
+    {
+        uint32_t hi = 0;
+        hi |= 8u << 27;                        // R1 (bits 62..59)
+        hi |= (2u >> 1) << 24 | (2u & 1) << 20;   // G1 = bits 58..56 + bit 52
+        hi |= (4u >> 3) << 19 | (4u & 7) << 15;   // B1 = bit 51 + bits 49..47
+        hi |= 8u << 11 | 8u << 7 | 8u << 3;    // R2 G2 B2
+        hi |= 1u << 2 | 1u << 1;               // da, diff
+        hi |= 1u << 18;                        // unused bit 50: dG = 0b110 = -2 with G = 0
+        uint32_t lo = 1u << 4 | 1u << 24 | 1u << 28 | 1u << 12;   // row 0: indices 0,1,2,3
+        auto h = be64(hi, lo);
+        decodeBlock(BlockFormat::ETC2_RGB8, h.data(), out);
+        CHECK(px(out, 0, 0, 159, 57, 91, 255) && px(out, 1, 0, 113, 11, 45, 255));
+        CHECK(px(out, 2, 0, 159, 159, 159, 255) && px(out, 3, 0, 113, 113, 113, 255));
+    }
+    // Planar (B overflows) with O = H = V: constant (130, 0, 239).
+    auto planar = be64(0x4001F9C2u, 0x01DC003Bu);
+    decodeBlock(BlockFormat::ETC2_RGB8, planar.data(), out);
+    CHECK(px(out, 0, 0, 130, 0, 239, 255) && px(out, 3, 3, 130, 0, 239, 255));
+    // EAC alpha in ETC2_RGBA8: base 100, multiplier 2, table 13 (-1 -2 -3 -10 0 1 2 9).
+    int idx[16]; for (int& i : idx) i = 4;
+    idx[0] = 7; idx[4] = 3;   // (0,0) -> +9*2, (1,0) -> -10*2
+    auto rgba8 = eac(100, 2, 13, idx);
+    rgba8.insert(rgba8.end(), kEtcIndividual.begin(), kEtcIndividual.end());
+    decodeBlock(BlockFormat::ETC2_RGBA8, rgba8.data(), out);
+    CHECK(px(out, 0, 0, 144, 144, 144, 118) && px(out, 1, 0, 138, 138, 138, 80) && px(out, 2, 2, 115, 115, 115, 100));
+    // EAC R11: multiplier 0 adds the raw modifier to base*8+4; otherwise modifier*multiplier*8.
+    int ridx[16] = {}; ridx[4] = 7;
+    auto r11 = eac(128, 0, 0, ridx);
+    decodeBlock(BlockFormat::EAC_R11, r11.data(), out);
+    CHECK(px(out, 0, 0, 128, 0, 0, 255) && px(out, 1, 0, 130, 0, 0, 255));   // 1025, 1042 of 2047
+    ridx[4] = 3;
+    r11 = eac(128, 1, 0, ridx);
+    decodeBlock(BlockFormat::EAC_R11, r11.data(), out);
+    CHECK(px(out, 1, 0, 113, 0, 0, 255));   // 1028 - 15*8 = 908
+}
+
+TEST(bc_blocks_decode_per_spec) {
+    using namespace ktxtest;
+    uint8_t out[64];
+    // BC1 four-colour: red / blue endpoints, row 0 indices 0,1,2,3.
+    const uint8_t bc1[8] = {0x00, 0xF8, 0x1F, 0x00, 0xE4, 0, 0, 0};
+    CHECK(decodeBlock(BlockFormat::BC1, bc1, out));
+    CHECK(px(out, 0, 0, 255, 0, 0, 255) && px(out, 1, 0, 0, 0, 255, 255) && px(out, 2, 0, 170, 0, 85, 255));
+    CHECK(px(out, 3, 0, 85, 0, 170, 255) && px(out, 2, 3, 255, 0, 0, 255));
+    // BC1 three-colour (c0 <= c1): index 2 = midpoint, index 3 = transparent black.
+    const uint8_t bc1t[8] = {0x1F, 0x00, 0x00, 0xF8, 0xE4, 0, 0, 0};
+    decodeBlock(BlockFormat::BC1, bc1t, out);
+    CHECK(px(out, 0, 0, 0, 0, 255, 255) && px(out, 2, 0, 127, 0, 127, 255) && px(out, 3, 0, 0, 0, 0, 0));
+    // BC3: 8-value alpha (255..0) then the BC1 colour block (always four-colour, even when c0 <= c1).
+    uint8_t bc3[16] = {255, 0, 0x3A, 0, 0, 0, 0, 0};
+    std::memcpy(bc3 + 8, bc1t, 8);
+    decodeBlock(BlockFormat::BC3, bc3, out);
+    CHECK(px(out, 0, 0, 0, 0, 255, 218) && px(out, 1, 0, 255, 0, 0, 36) && px(out, 3, 0, 170, 0, 85, 255));
+    // BC4 six-value mode (a0 <= a1): 51 for index 2, 0 and 255 for indices 6 and 7.
+    const uint8_t bc4[8] = {0, 255, 2 | 6 << 3 | (7 << 6 & 0xFF), 7 >> 2, 0, 0, 0, 0};
+    decodeBlock(BlockFormat::BC4, bc4, out);
+    CHECK(px(out, 0, 0, 51, 0, 0, 255) && px(out, 1, 0, 0, 0, 0, 255) && px(out, 2, 0, 255, 0, 0, 255) && px(out, 3, 0, 0, 0, 0, 255));
+    // BC7 mode 6: R 127..0, A 127..127, P-bits 1 / 0 (applied to every channel of the endpoint);
+    // row 0 indices 0, 15, 8.
+    uint8_t bc7[16] = {};
+    int pos = 0;
+    auto bits = [&](uint32_t v, int n) { for (int i = 0; i < n; ++i, ++pos) bc7[pos >> 3] |= uint8_t((v >> i & 1) << (pos & 7)); };
+    bits(1u << 6, 7);
+    bits(127, 7); bits(0, 7); bits(0, 7); bits(0, 7); bits(0, 7); bits(0, 7); bits(127, 7); bits(127, 7);
+    bits(1, 1); bits(0, 1);
+    bits(0, 3); bits(15, 4); bits(8, 4);
+    CHECK(decodeBlock(BlockFormat::BC7, bc7, out));
+    CHECK(px(out, 0, 0, 255, 1, 1, 255) && px(out, 1, 0, 0, 0, 0, 254) && px(out, 2, 0, 120, 0, 0, 254) && px(out, 3, 3, 255, 1, 1, 255));
+    CHECK(!decodeBlock(BlockFormat::ASTC_4x4, bc7, out));
+}
+
+TEST(ktx2_parse_and_decode_image) {
+    using namespace ktxtest;
+    // 8x4 ETC2 sRGB, two levels (8x4 = 2 blocks, 4x2 = 1 block), with and without zstd.
+    std::vector<uint8_t> l0 = kEtcIndividual, planar = be64(0x4001F9C2u, 0x01DC003Bu);
+    l0.insert(l0.end(), planar.begin(), planar.end());
+    for (bool zstd : {false, true}) {
+        const std::string file = makeKtx2(148, 8, 4, {l0, planar}, zstd);
+        CompressedImage ci;
+        std::string err;
+        CHECK(isKtx2(file) && parseKtx2(file, ci, err));
+        CHECK(ci.format == BlockFormat::ETC2_RGB8 && ci.srgb && ci.width == 8 && ci.height == 4 && ci.levels.size() == 2);
+        CHECK(ci.levels.size() == 2 && ci.levels[0] == l0 && ci.levels[1] == planar);
+        std::vector<uint8_t> mip1;
+        CHECK(decodeBlocks(ci, 1, mip1) && mip1.size() == 4 * 2 * 4 && mip1[0] == 130 && mip1[2] == 239);
+        Image img;
+        CHECK(decodeImage(file, img) && img.width == 8 && img.height == 4 && img.rgba.size() == 8 * 4 * 4);
+        CHECK(img.compressed && img.compressed->levels.size() == 2);
+        if (img.rgba.size() == 128) {
+            CHECK(img.rgba[0] == 144 && img.rgba[3 * 4] == 0 && img.rgba[4 * 4] == 130 && img.rgba[4 * 4 + 2] == 239);
+            CHECK(img.rgba[(3 * 8 + 7) * 4 + 2] == 239);   // bottom-right pixel comes from the second block
+        }
+        Image copy = img;   // stays copyable, shares the block data
+        CHECK(copy.compressed == img.compressed);
+    }
+    // Uncompressed RGBA8 passthrough and BC1 with a size that is not a multiple of 4 (crop).
+    {
+        std::vector<uint8_t> rgba = {1, 2, 3, 4, 5, 6, 7, 8};
+        Image img;
+        CHECK(decodeImage(makeKtx2(37, 2, 1, {rgba}, true), img) && img.rgba == rgba && img.compressed && !img.compressed->srgb);
+        const std::vector<uint8_t> bc1 = {0x00, 0xF8, 0x1F, 0x00, 0xE4, 0, 0, 0, 0x1F, 0x00, 0x00, 0xF8, 0xE4, 0, 0, 0};
+        CompressedImage ci;
+        std::string err;
+        CHECK(parseKtx2(makeKtx2(131, 5, 3, {bc1}, false), ci, err) && ci.format == BlockFormat::BC1);
+        std::vector<uint8_t> out;
+        CHECK(decodeBlocks(ci, 0, out) && out.size() == 5 * 3 * 4);
+        if (out.size() == 60) CHECK(out[4 * 4 + 2] == 255 && out[4 * 4 + 3] == 255);   // pixel (4,0) = blue of block 2
+        ci.vkFormat = 131;
+        const uint8_t three[8] = {0x1F, 0x00, 0x00, 0xF8, 0xFF, 0xFF, 0xFF, 0xFF};   // all index 3
+        ci.levels[0].assign(three, three + 8); ci.levels[0].insert(ci.levels[0].end(), three, three + 8);
+        CHECK(decodeBlocks(ci, 0, out) && out[3] == 255 && out[0] == 0);   // BC1_RGB: opaque black
+        CHECK(parseKtx2(makeKtx2(157, 4, 4, {std::vector<uint8_t>(16)}, false), ci, err) && ci.format == BlockFormat::ASTC_4x4);
+        CHECK(!decodeBlocks(ci, 0, out));   // no CPU ASTC decoder
+    }
+}
+
+TEST(ktx2_rejects_bad_files) {
+    using namespace ktxtest;
+    CompressedImage ci;
+    std::string err;
+    std::vector<uint8_t> l0 = kEtcIndividual;
+    const std::string good = makeKtx2(147, 4, 4, {l0}, false), goodZ = makeKtx2(147, 4, 4, {l0}, true);
+    CHECK(parseKtx2(good, ci, err) && parseKtx2(goodZ, ci, err));
+    std::string basis = good;
+    put32(basis, 44, 1);
+    CHECK(!parseKtx2(basis, ci, err) && err.find("transcoder") != std::string::npos);
+    std::string uastc = good;
+    put32(uastc, 12, 0);
+    CHECK(!parseKtx2(uastc, ci, err) && err.find("BasisLZ/UASTC") != std::string::npos);
+    std::string odd = good;
+    put32(odd, 12, 1000);
+    CHECK(!parseKtx2(odd, ci, err) && err.find("vkFormat") != std::string::npos);
+    // Every truncation fails cleanly; so do wild offsets, sizes, level counts and corrupt zstd data.
+    for (const std::string* f : {&good, &goodZ}) {
+        bool allFail = true;
+        for (size_t n = 0; n < f->size(); ++n) allFail = allFail && !parseKtx2(f->substr(0, n), ci, err);
+        CHECK(allFail);
+    }
+    std::string bad = good;
+    put64(bad, 80, ~0ull);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = good; put64(bad, 88, ~0ull - 4);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = good; put32(bad, 40, 200);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = good; put32(bad, 20, 0x7fffffff);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = goodZ; put64(bad, 96, 1ull << 40);
+    CHECK(!parseKtx2(bad, ci, err));
+    bad = goodZ; bad[bad.size() - 3] ^= 0x5A; bad[bad.size() - 6] ^= 0x33;
+    CHECK(!parseKtx2(bad, ci, err) || ci.levels.size() == 1);   // corrupt payload never crashes
+    uint32_t seed = 12345;
+    bool garbageFails = true;
+    for (int i = 0; i < 200; ++i) {
+        std::string g = good;
+        for (size_t k = 12; k < g.size(); ++k) { seed = seed * 1664525u + 1013904223u; if ((seed >> 28) == 0) g[k] = char(seed >> 16); }
+        if (parseKtx2(g, ci, err)) { std::vector<uint8_t> out; decodeBlocks(ci, 0, out); }
+        garbageFails = garbageFails && !parseKtx2(std::string(64 + size_t(i), char(i)), ci, err);
+    }
+    CHECK(garbageFails);
+    Image img;
+    CHECK(!decodeImage(basis, img) && !decodeImage(good.substr(0, 90), img));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
