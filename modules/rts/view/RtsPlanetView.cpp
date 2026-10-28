@@ -258,7 +258,19 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
                 }
         }
     }
-    if (dev_ && rules_) planetGroundFx_.draw(*dev_, r, planets_, pframe_, s.seconds, time, vision, grid, groundFx_, *rules_, terrDemo ? &territoryDemo_ : nullptr);
+    if (dev_ && rules_ && planetGroundFx_.draw(*dev_, r, planets_, pframe_, s, time, vision, grid, groundFx_, *rules_, terrDemo ? &territoryDemo_ : nullptr))
+        for (size_t bi = 0; bi < Wd.bodies.size(); ++bi) { // rock dug out (seen): the terrain under it becomes ground
+            if (!Wd.bodies[bi].surface()) continue;
+            const int N = Wd.bodies[bi].faceSize;
+            std::vector<uint8_t> fl(size_t(6 * N * N), kCellGround);
+            for (int f = 0; f < 6; ++f)
+                for (int y = 0; y < N; ++y)
+                    for (int x = 0; x < N; ++x) {
+                        const size_t c = size_t(Wd.sim->gridCell(int(bi), f, x, y));
+                        if (c < grid.flags.size()) fl[(size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x)] = grid.flags[c];
+                    }
+            planets_.updateFlags(int(bi), fl);
+        }
     handleEvents(s);
     const float3 eye = r.camera().eye();
     const PlanetWorld& W = planets_.world();
@@ -465,6 +477,13 @@ void sceneFromSphere(Simulation& sim, RtsModule& m, const Surface& S, RtsScene& 
         if (viewer != 0) so.visible = visibleAt(t.pos) == 2;
         out.objects.push_back(so);
     });
+    for (size_t i = 0; i < gs.roads.nodes.size(); ++i)   // map roads between buildings (sim positions; RtsPlanetGroundFx drapes them)
+        for (uint16_t j : gs.roads.adj[i]) {
+            if (j <= i) continue;
+            auto* ta = w.tryGet<Transform>(gs.roads.nodes[i]);
+            auto* tb = w.tryGet<Transform>(gs.roads.nodes[j]);
+            if (ta && tb) out.roads.push_back({toF(ta->pos), toF(tb->pos)});
+        }
 }
 
 } // namespace rts::game
