@@ -8,7 +8,8 @@
 //                   "type": "spot", "angle": 40 (cone, degrees), "softness": 0.35, "pitch": 35
 //                   (degrees below the horizon), "yaw": 0 (degrees from the object's facing),
 //                   "sweep": 45, "sweepSpeed": 25 (searchlight swing, degrees and degrees/s),
-//                   "offset": [forward, side] (in the object's frame, e.g. headlights [0.5, ±0.2]).
+//                   "offset": [forward, side] (in the object's frame, e.g. headlights [0.5, ±0.2]),
+//                   "beam": 0.45 (visible light shaft, 0 = none; default only for height >= 1.5).
 //                   Spot defaults: radius 9, intensity 2.2, height 1.5, white.
 //   "attackLight":     { "color", "radius", "intensity", "time", "halo" }   muzzle flash
 //   "projectileLight": { "color", "radius", "intensity", "halo" }           its projectiles
@@ -29,6 +30,7 @@
 //     "clouds": 0.5,      cloud shadow coverage 0..1 (0 = clear sky)
 //     "cloudStrength": 0.45, "cloudScale": 1, "wind": [1.2, 0.5]   (world units / s)
 //     "storm": 0,         0..1: overcast + lightning flashes (deterministic in game time)
+//     "waterReflections": true,   planar reflections on water (High tier only)
 //     "preset": "desert" }   desert | snow | volcanic | overcast | cave (underground: permanent
 //                         night, almost no ambient); sets palettes and defaults, fields still win
 // Decorative lights (lanterns, lava, campfires) in the map's "lights" array:
@@ -67,7 +69,8 @@ public:
         render::float3 color{1, 0.62f, 0.32f};
         float radius = 4, intensity = 1.5f, height = 1, flicker = 0, halo = -1;
         bool whileBuilding = false, spot = false;
-        float angle = 40, softness = 0.35f, pitch = 35, yaw = 0, sweep = 0, sweepSpeed = 25;
+        float angle = 40, softness = 0.6f, pitch = 35, yaw = 0, sweep = 0, sweepSpeed = 25;
+        float beam = 0.45f;            // spot: visible light shaft strength (0 = none)
         float forward = 0, side = 0;   // offset in the object's frame
     };
     struct MapLight : Glow { float x = 0, z = 0; };
@@ -116,6 +119,7 @@ private:
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
     float lightning_ = 0;
     std::string preset_;
+    bool waterRefl_ = true;
     Palette day_, night_p_;
     bool preview_ = false;
     float previewTime_ = 0.5f, previewClouds_ = 0, previewStorm_ = 0;

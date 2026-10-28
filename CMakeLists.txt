@@ -268,6 +268,7 @@ set(RTS_RUNTIME_SRC
     engine/render/Renderer3DModels.cpp
     engine/render/Lights.cpp
     engine/render/QualityGovernor.cpp
+    engine/render/Renderer3DReflect.cpp
     engine/render/ImGuiLayer.cpp)
 
 if(RTS_PLATFORM STREQUAL "macos")
