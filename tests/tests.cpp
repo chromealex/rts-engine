@@ -1917,6 +1917,239 @@ TEST(tiles2d_sample_games_deterministic) {
     }
 }
 
+// ---------------- models (models agent): loaders, animation, procedural ----------------
+#include "engine/render/Animation.h"
+#include <cmath>
+#include <cstring>
+#include <fstream>
+#include <map>
+#include <sstream>
+
+namespace modeltest {
+using namespace rts::render;
+inline bool near(float a, float b, float eps = 1e-3f) { return std::fabs(a - b) <= eps; }
+inline std::string b64(const std::string& in) {
+    static const char* a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    size_t i = 0;
+    for (; i + 2 < in.size(); i += 3) {
+        uint32_t v = (uint8_t(in[i]) << 16) | (uint8_t(in[i + 1]) << 8) | uint8_t(in[i + 2]);
+        out += a[v >> 18]; out += a[(v >> 12) & 63]; out += a[(v >> 6) & 63]; out += a[v & 63];
+    }
+    if (i + 1 == in.size()) { uint32_t v = uint8_t(in[i]) << 16; out += a[v >> 18]; out += a[(v >> 12) & 63]; out += "=="; }
+    else if (i + 2 == in.size()) { uint32_t v = (uint8_t(in[i]) << 16) | (uint8_t(in[i + 1]) << 8); out += a[v >> 18]; out += a[(v >> 12) & 63]; out += a[(v >> 6) & 63]; out += '='; }
+    return out;
+}
+template <class T> void put(std::string& b, std::initializer_list<T> v) { for (T x : v) b.append(reinterpret_cast<const char*>(&x), sizeof x); }
+inline FileReader mapReader(std::map<std::string, std::string> files) {
+    return [files](const std::string& p, std::string& out) { auto it = files.find(p); if (it == files.end()) return false; out = it->second; return true; };
+}
+inline FileReader diskReader() {
+    return [](const std::string& p, std::string& out) { std::ifstream f(p, std::ios::binary); if (!f) return false; std::stringstream ss; ss << f.rdbuf(); out = ss.str(); return true; };
+}
+// Minimal skinned + animated glTF with an embedded data-URI buffer.
+inline std::string skinnedGltf(const char* extraRequired = "") {
+    std::string bin;
+    put<float>(bin, {0, 0, 0, 1, 0, 0, 0, 1, 0});                       // 0: positions (36)
+    put<uint8_t>(bin, {0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0});            // 36: joints (12)
+    put<float>(bin, {1, 0, 0, 0, 1, 0, 0, 0, 0.5f, 0.5f, 0, 0});        // 48: weights (48)
+    put<uint16_t>(bin, {0, 1, 2, 0});                                    // 96: indices (6 + pad)
+    put<float>(bin, {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1,    // 104: inverse bind (128)
+                     1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, -1, 0, 1});
+    put<float>(bin, {0, 1});                                             // 232: times (8)
+    const float s = std::sin(0.785398f), c = std::cos(0.785398f);        // 90 deg about Y
+    put<float>(bin, {0, 0, 0, 1, 0, s, 0, c});                           // 240: rotations (32)
+    put<float>(bin, {0, 0, 0, 5, 0, 0});                                 // 272: translations (24)
+    std::string j = R"({"asset":{"version":"2.0"},"extensionsRequired":[)" + std::string(extraRequired) + R"(],
+      "buffers":[{"byteLength":296,"uri":"data:application/octet-stream;base64,)" + b64(bin) + R"("}],
+      "bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":12},
+        {"buffer":0,"byteOffset":48,"byteLength":48},{"buffer":0,"byteOffset":96,"byteLength":6},
+        {"buffer":0,"byteOffset":104,"byteLength":128},{"buffer":0,"byteOffset":232,"byteLength":8},
+        {"buffer":0,"byteOffset":240,"byteLength":32},{"buffer":0,"byteOffset":272,"byteLength":24}],
+      "accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3"},
+        {"bufferView":1,"componentType":5121,"count":3,"type":"VEC4"},
+        {"bufferView":2,"componentType":5126,"count":3,"type":"VEC4"},
+        {"bufferView":3,"componentType":5123,"count":3,"type":"SCALAR"},
+        {"bufferView":4,"componentType":5126,"count":2,"type":"MAT4"},
+        {"bufferView":5,"componentType":5126,"count":2,"type":"SCALAR"},
+        {"bufferView":6,"componentType":5126,"count":2,"type":"VEC4"},
+        {"bufferView":7,"componentType":5126,"count":2,"type":"VEC3"}],
+      "materials":[{"name":"TeamCloth","alphaMode":"MASK","alphaCutoff":0.3,"doubleSided":true,
+        "pbrMetallicRoughness":{"baseColorFactor":[0.5,0.25,1,1],"metallicFactor":0.2}}],
+      "meshes":[{"name":"m","primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2},"indices":3,"material":0}]}],
+      "nodes":[{"name":"root","children":[1]},{"name":"bone","translation":[0,1,0]},{"name":"skinned","mesh":0,"skin":0}],
+      "skins":[{"joints":[0,1],"inverseBindMatrices":4}],
+      "scenes":[{"nodes":[0,2]}],
+      "animations":[{"name":"Spin","samplers":[{"input":5,"output":6},{"input":5,"output":7,"interpolation":"STEP"}],
+        "channels":[{"sampler":0,"target":{"node":1,"path":"rotation"}},{"sampler":1,"target":{"node":0,"path":"translation"}}]}]})";
+    return j;
+}
+} // namespace modeltest
+
+TEST(models_quat_matches_matrices) {
+    using namespace modeltest;
+    quat q = quat::axisAngle({0, 1, 0}, 0.7f);
+    float3 v{1, 0.5f, -2};
+    float3 a = q.rotate(v), b = mat4::rotateY(0.7f).transformPoint(v), c = mat4::rotate(q).transformPoint(v);
+    CHECK(near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z));
+    CHECK(near(c.x, b.x) && near(c.y, b.y) && near(c.z, b.z));
+    quat h = slerp(quat{}, quat::axisAngle({0, 1, 0}, 1.0f), 0.5f), e = quat::axisAngle({0, 1, 0}, 0.5f);
+    CHECK(near(h.y, e.y) && near(h.w, e.w));
+    mat4 t = mat4::trs({1, 2, 3}, q, {2, 2, 2});
+    float3 p = t.transformPoint({1, 0, 0}), r = q.rotate({2, 0, 0});
+    CHECK(near(p.x, r.x + 1) && near(p.y, r.y + 2) && near(p.z, r.z + 3));
+    mat4 n = mat4::scale({2, 1, 1}).normalMatrix();
+    CHECK(near(n.at(0, 0), 0.5f) && near(n.at(1, 1), 1.0f));
+}
+
+TEST(models_gltf_skin_and_clips) {
+    using namespace modeltest;
+    std::vector<std::string> warn;
+    auto m = loadGltf("t.gltf", skinnedGltf(), mapReader({}), &warn);
+    CHECK(m->nodes.size() == 3 && m->skins.size() == 1 && m->clips.size() == 1);
+    CHECK(m->meshes.size() == 1 && m->meshes[0].primitives.size() == 1);
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(p.indexCount == 3 && p.jointPalette.size() == 2);
+    const Material& mt = m->materials[size_t(p.material)];
+    CHECK(mt.name == "TeamCloth" && mt.alpha == AlphaMode::Mask && near(mt.alphaCutoff, 0.3f) && mt.doubleSided && near(mt.metallic, 0.2f));
+    CHECK(near(mt.baseColor.y, 0.25f));
+    // weights normalized to bytes, palette slots resolve to the skin joints
+    const ModelVertex& v2 = m->vertices[m->indices[p.firstIndex + 2]];
+    CHECK(v2.weights[0] + v2.weights[1] >= 254 && v2.weights[0] + v2.weights[1] <= 256);
+    // bind pose: joint world * inverse bind = identity
+    std::vector<mat4> pal;
+    paletteMatrices(*m, m->skins[0], p, m->bindWorld, pal);
+    bool identity = true;
+    for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+    CHECK(identity);
+    // clip sampling: linear rotation at half time, step translation
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.5f, pose);
+    quat e = quat::axisAngle({0, 1, 0}, 0.785398f);
+    CHECK(near(std::fabs(pose[1].r.y), e.y, 2e-3f) && near(pose[0].t.x, 0));
+    sampleClip(m->clips[0], 1.0f, pose);
+    CHECK(near(pose[0].t.x, 5));
+    CHECK(near(m->clips[0].duration, 1));
+    CHECK(m->findClip("spin") == 0 && m->findNode("bone") == 1);
+}
+
+TEST(models_gltf_readable_errors) {
+    using namespace modeltest;
+    bool threw = false;
+    try { loadGltf("bad.gltf", skinnedGltf(R"("KHR_draco_mesh_compression")"), mapReader({}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("KHR_draco_mesh_compression") != std::string::npos && std::string(e.what()).find("bad.gltf") == 0; }
+    CHECK(threw);
+    threw = false;
+    try { loadModel("missing.glb", mapReader({}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("missing.glb") != std::string::npos; }
+    CHECK(threw);
+    threw = false;
+    try { loadModel("x.fbx", mapReader({{"x.fbx", "data"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("unsupported model format") != std::string::npos; }
+    CHECK(threw);
+    // accessor pointing past its buffer view
+    std::string g = skinnedGltf();
+    size_t at = g.find(R"("bufferView":0,"componentType":5126,"count":3)");
+    g.replace(at, std::strlen(R"("bufferView":0,"componentType":5126,"count":3)"), R"("bufferView":0,"componentType":5126,"count":9)");
+    threw = false;
+    try { loadGltf("range.gltf", g, mapReader({}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("out of range") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(models_obj_and_mtl) {
+    using namespace modeltest;
+    std::string obj = "mtllib m.mtl\no Box\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n"
+                      "usemtl Glass\nf 1/1/1 2/2/1 3/3/1 4/4/1\nusemtl Missing\nf -4 -3 -2\n";
+    std::string mtl = "newmtl Glass\nKd 0.2 0.4 0.6\nd 0.5\nNs 98\nKe 1 0 0\n";
+    std::vector<std::string> warn;
+    auto m = loadModel("dir/x.obj", mapReader({{"dir/x.obj", obj}, {"dir/m.mtl", mtl}}), &warn);
+    CHECK(m->materials.size() >= 2);
+    int glass = m->findMaterial("Glass");
+    CHECK(glass >= 0);
+    if (glass >= 0) {
+        const Material& g = m->materials[size_t(glass)];
+        CHECK(g.alpha == AlphaMode::Blend && near(g.baseColor.w, 0.5f) && near(g.roughness, 0.1414f, 1e-3f) && near(g.emissive.x, 1));
+    }
+    size_t tris = 0;
+    for (auto& md : m->meshes) for (auto& p : md.primitives) tris += p.indexCount / 3;
+    CHECK(tris == 3);                       // quad -> 2 triangles + 1 triangle with negative indices
+    CHECK(!warn.empty());                   // unknown material 'Missing'
+    CHECK(near(m->boundsMax.x, 1) && near(m->boundsMax.y, 1));
+}
+
+TEST(models_animator_crossfade_and_layers) {
+    using namespace modeltest;
+    auto m = loadGltf("t.gltf", skinnedGltf(), mapReader({}), nullptr);
+    // second clip: translate the bone up
+    AnimClip up;
+    up.name = "Up"; up.duration = 1;
+    AnimChannel ch; ch.node = 1; ch.path = AnimChannel::Translation; ch.times = {0, 1}; ch.values = {0, 3, 0, 0, 3, 0};
+    up.channels.push_back(ch);
+    m->clips.push_back(up);
+    Animator a;
+    a.setModel(m.get());
+    Animator::Play p; p.fade = 0.5f;
+    a.play(0, 0, p);
+    a.update(0.1f);
+    a.play(0, 1, p);                        // cross-fade Spin -> Up over 0.5 s
+    a.update(0.25f);
+    Pose pose;
+    a.evaluate(pose);
+    CHECK(pose[1].t.y > 1.5f && pose[1].t.y < 2.5f);   // halfway between bind (1) and Up (3)
+    a.update(0.5f);
+    a.evaluate(pose);
+    CHECK(near(pose[1].t.y, 3));
+    // overlay restricted to the root's subtree: node 2 (mesh node) stays untouched
+    Animator::Play once; once.loop = false; once.fade = 0;
+    a.play(1, 0, once);
+    a.setMask(1, 1);
+    a.update(2.0f);
+    CHECK(a.finished(1));
+    a.evaluate(pose);
+    CHECK(near(pose[0].t.x, 0));            // root not in the mask: the step translation is not applied
+}
+
+TEST(models_procedural_modifiers) {
+    using namespace modeltest;
+    std::vector<ProcAnim> mods(3);
+    mods[0].channel = ProcAnim::Translate; mods[0].axis = {0, 1, 0}; mods[0].amp = 0.5f; mods[0].wave = ProcAnim::Const; mods[0].fade = 0; mods[0].randomPhase = false;
+    mods[1].special = ProcAnim::Aim; mods[1].channel = ProcAnim::Rotate; mods[1].node = 0; mods[1].turnSpeed = 100; mods[1].limit = 3;
+    mods[2].special = ProcAnim::Fall; mods[2].channel = ProcAnim::Rotate; mods[2].axis = {1, 0, 0}; mods[2].amp = 1.5f; mods[2].on = kProcEvDeath; mods[2].decay = 1; mods[2].node = 0; mods[2].fade = 0;
+    ProcInputs in;
+    in.dt = 0.1f; in.hasTarget = true; in.aimYaw = 0.6f;
+    in.eventAge[kProcEvDeath] = 0.5f;
+    std::vector<ProcRuntime> rt;
+    Pose pose(1);
+    mat4 obj;
+    applyProcedural(mods, in, rt, pose, obj);
+    CHECK(near(obj.at(1, 3), 0.5f));        // whole-object translation
+    CHECK(near(rt[1].aim, 0.6f));           // turret reached the target angle
+    // fall: half way through (age 0.5 of 1 s) with ease-in -> amp * 0.25 on top of the aim rotation
+    float3 f = pose[0].r.rotate({0, 1, 0});
+    CHECK(f.y < 0.99f);
+}
+
+TEST(models_sample_assets_load) {
+    using namespace modeltest;
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    std::vector<std::string> warn;
+    auto golem = loadModel(dir + "golem.glb", diskReader(), &warn);
+    CHECK(golem->clips.size() == 4 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
+    CHECK(golem->findClip("Death") >= 0 && golem->images.size() == 3);
+    auto tank = loadModel(dir + "tank.glb", diskReader(), &warn);
+    CHECK(tank->variants.size() == 2 && tank->findNode("Turret") >= 0 && tank->findVariant("winter") == 1);
+    auto mill = loadModel(dir + "windmill.gltf", diskReader(), &warn);
+    int sail = mill->findMaterial("Sail");
+    CHECK(sail >= 0 && mill->materials[size_t(sail)].alpha == AlphaMode::Mask && mill->materials[size_t(sail)].baseTex >= 0);
+    if (sail >= 0) CHECK(near(mill->materials[size_t(sail)].uvScale.y, 2));
+    auto crystal = loadModel(dir + "crystal.obj", diskReader(), &warn);
+    CHECK(crystal->findMaterial("Crystal") >= 0 && crystal->images.size() == 1);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

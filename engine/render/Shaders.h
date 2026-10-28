@@ -13,15 +13,99 @@ namespace rts::render::shaders {
 //   U1 (per frame): mat4 viewProj; mat4 lightViewProj; vec4 sunDir(xyz, w intensity); vec4 sunColor;
 //                   vec4 skyColor; vec4 groundColor; vec4 fog(rgb, density); vec4 camPos;
 //                   vec4 shadow(x uvFlipY, y depthScale, z depthOffset, w texel); vec4 quality(x taps, y enabled, z radius uv, w normal offset)
-#define RTS_GLSL_BLOCKS \
-    "layout(std140) uniform U0 { mat4 u_model; vec4 u_color; vec4 u_params; };\n" \
+#define RTS_GLSL_FRAME \
     "layout(std140) uniform U1 { mat4 u_viewProj; mat4 u_lightViewProj; vec4 u_sunDir; vec4 u_sunColor;\n" \
     "  vec4 u_skyColor; vec4 u_groundColor; vec4 u_fog; vec4 u_camPos; vec4 u_shadow; vec4 u_quality; };\n"
+#define RTS_GLSL_BLOCKS \
+    "layout(std140) uniform U0 { mat4 u_model; vec4 u_color; vec4 u_params; };\n" RTS_GLSL_FRAME
 
-#define RTS_MSL_BLOCKS \
-    "struct U0 { float4x4 model; float4 color; float4 params; };\n" \
+#define RTS_MSL_FRAME \
     "struct U1 { float4x4 viewProj; float4x4 lightViewProj; float4 sunDir; float4 sunColor;\n" \
     "  float4 skyColor; float4 groundColor; float4 fog; float4 camPos; float4 shadow; float4 quality; };\n"
+#define RTS_MSL_BLOCKS \
+    "struct U0 { float4x4 model; float4 color; float4 params; };\n" RTS_MSL_FRAME
+
+
+// Shadow lookup shared by every lit shader (needs U1 and the shadow map in slot 0).
+#define RTS_GLSL_SHADOW \
+    "uniform highp sampler2DShadow tex0;\n" \
+    "// Soft shadows: rotated Poisson-disc PCF over hardware 2x2 compare taps.\n" \
+    "//   u_quality.x taps (1 / 4 / 8 / 16), u_quality.z filter radius in shadow UV, u_quality.w normal offset (world)\n" \
+    "const vec2 kDisk[16] = vec2[16](\n" \
+    "    vec2(-0.613, 0.617), vec2(0.170, -0.040), vec2(-0.299, 0.791), vec2(0.645, 0.493),\n" \
+    "    vec2(-0.651, 0.717), vec2(0.421, 0.027), vec2(-0.817, -0.271), vec2(-0.705, -0.668),\n" \
+    "    vec2(0.977, -0.108), vec2(0.063, -0.233), vec2(0.346, -0.894), vec2(-0.272, 0.416),\n" \
+    "    vec2(-0.025, 0.919), vec2(-0.389, -0.144), vec2(0.733, -0.627), vec2(0.282, 0.512));\n" \
+    "float shadowAt(vec3 wpos, vec3 n) {\n" \
+    "    if (u_quality.y < 0.5) return 1.0;\n" \
+    "    vec3 L = normalize(u_sunDir.xyz);\n" \
+    "    float k = 1.0 - clamp(dot(n, L), 0.0, 1.0);          // grazing surfaces need the most offset\n" \
+    "    vec4 lp = u_lightViewProj * vec4(wpos + n * u_quality.w * (0.35 + k), 1.0);\n" \
+    "    vec3 p = lp.xyz / lp.w;\n" \
+    "    vec2 uv = p.xy * 0.5 + 0.5;\n" \
+    "    if (u_shadow.x > 0.5) uv.y = 1.0 - uv.y;\n" \
+    "    float d = p.z * u_shadow.y + u_shadow.z;\n" \
+    "    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || d >= 1.0) return 1.0;\n" \
+    "    float r = u_quality.z;\n" \
+    "    if (u_quality.x < 2.0) return texture(tex0, vec3(uv, d));\n" \
+    "    if (u_quality.x < 5.0) { // weak GPUs: fixed 4 taps, each a bilinear 2x2 compare\n" \
+    "        float s = texture(tex0, vec3(uv + vec2(-0.5, -0.5) * r, d));\n" \
+    "        s += texture(tex0, vec3(uv + vec2( 0.5, -0.5) * r, d));\n" \
+    "        s += texture(tex0, vec3(uv + vec2(-0.5,  0.5) * r, d));\n" \
+    "        s += texture(tex0, vec3(uv + vec2( 0.5,  0.5) * r, d));\n" \
+    "        return s * 0.25;\n" \
+    "    }\n" \
+    "    // per-pixel rotation (interleaved gradient noise) turns banding into fine grain\n" \
+    "    float a = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n" \
+    "    vec2 cs = vec2(cos(a), sin(a));\n" \
+    "    int n_ = int(u_quality.x);\n" \
+    "    float s = 0.0;\n" \
+    "    for (int i = 0; i < 16; ++i) {\n" \
+    "        if (i >= n_) break;\n" \
+    "        vec2 o = kDisk[i];\n" \
+    "        o = vec2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);\n" \
+    "        s += texture(tex0, vec3(uv + o * r, d));\n" \
+    "    }\n" \
+    "    return s / float(n_);\n" \
+    "}\n"
+
+#define RTS_MSL_SHADOW \
+    "constant float2 kDisk[16] = {\n" \
+    "    float2(-0.613, 0.617), float2(0.170, -0.040), float2(-0.299, 0.791), float2(0.645, 0.493),\n" \
+    "    float2(-0.651, 0.717), float2(0.421, 0.027), float2(-0.817, -0.271), float2(-0.705, -0.668),\n" \
+    "    float2(0.977, -0.108), float2(0.063, -0.233), float2(0.346, -0.894), float2(-0.272, 0.416),\n" \
+    "    float2(-0.025, 0.919), float2(-0.389, -0.144), float2(0.733, -0.627), float2(0.282, 0.512)};\n" \
+    "static float shadowAt(constant U1& f, float3 wpos, float3 n, float2 fragCoord, depth2d<float> sm, sampler ss) {\n" \
+    "    if (f.quality.y < 0.5) return 1.0;\n" \
+    "    float3 L = normalize(f.sunDir.xyz);\n" \
+    "    float k = 1.0 - clamp(dot(n, L), 0.0, 1.0);\n" \
+    "    float4 lp = f.lightViewProj * float4(wpos + n * f.quality.w * (0.35 + k), 1.0);\n" \
+    "    float3 p = lp.xyz / lp.w;\n" \
+    "    float2 uv = p.xy * 0.5 + 0.5;\n" \
+    "    if (f.shadow.x > 0.5) uv.y = 1.0 - uv.y;\n" \
+    "    float d = p.z * f.shadow.y + f.shadow.z;\n" \
+    "    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || d >= 1.0) return 1.0;\n" \
+    "    float r = f.quality.z;\n" \
+    "    if (f.quality.x < 2.0) return sm.sample_compare(ss, uv, d);\n" \
+    "    if (f.quality.x < 5.0) {\n" \
+    "        float s = sm.sample_compare(ss, uv + float2(-0.5, -0.5) * r, d);\n" \
+    "        s += sm.sample_compare(ss, uv + float2( 0.5, -0.5) * r, d);\n" \
+    "        s += sm.sample_compare(ss, uv + float2(-0.5,  0.5) * r, d);\n" \
+    "        s += sm.sample_compare(ss, uv + float2( 0.5,  0.5) * r, d);\n" \
+    "        return s * 0.25;\n" \
+    "    }\n" \
+    "    float a = 6.2831853 * fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));\n" \
+    "    float2 cs = float2(cos(a), sin(a));\n" \
+    "    int cnt = int(f.quality.x);\n" \
+    "    float s = 0.0;\n" \
+    "    for (int i = 0; i < 16; ++i) {\n" \
+    "        if (i >= cnt) break;\n" \
+    "        float2 o = kDisk[i];\n" \
+    "        o = float2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);\n" \
+    "        s += sm.sample_compare(ss, uv + o * r, d);\n" \
+    "    }\n" \
+    "    return s / float(cnt);\n" \
+    "}\n"
 
 inline const char* kLitVS =
     RTS_GLSL_BLOCKS
@@ -42,53 +126,14 @@ void main() {
 )";
 
 inline const char* kLitFS =
-    RTS_GLSL_BLOCKS
+    RTS_GLSL_BLOCKS RTS_GLSL_SHADOW
     R"(
-uniform highp sampler2DShadow tex0;
 in vec3 v_nrm;
 in vec3 v_wpos;
 in vec4 v_col;
 out vec4 o_color;
 
-// Soft shadows: rotated Poisson-disc PCF over hardware 2x2 compare taps.
-//   u_quality.x taps (1 / 4 / 8 / 16), u_quality.z filter radius in shadow UV, u_quality.w normal offset (world)
-const vec2 kDisk[16] = vec2[16](
-    vec2(-0.613, 0.617), vec2(0.170, -0.040), vec2(-0.299, 0.791), vec2(0.645, 0.493),
-    vec2(-0.651, 0.717), vec2(0.421, 0.027), vec2(-0.817, -0.271), vec2(-0.705, -0.668),
-    vec2(0.977, -0.108), vec2(0.063, -0.233), vec2(0.346, -0.894), vec2(-0.272, 0.416),
-    vec2(-0.025, 0.919), vec2(-0.389, -0.144), vec2(0.733, -0.627), vec2(0.282, 0.512));
-float shadowFactor(vec3 n) {
-    if (u_quality.y < 0.5 || u_params.z < 0.5) return 1.0;
-    vec3 L = normalize(u_sunDir.xyz);
-    float k = 1.0 - clamp(dot(n, L), 0.0, 1.0);          // grazing surfaces need the most offset
-    vec4 lp = u_lightViewProj * vec4(v_wpos + n * u_quality.w * (0.35 + k), 1.0);
-    vec3 p = lp.xyz / lp.w;
-    vec2 uv = p.xy * 0.5 + 0.5;
-    if (u_shadow.x > 0.5) uv.y = 1.0 - uv.y;
-    float d = p.z * u_shadow.y + u_shadow.z;
-    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || d >= 1.0) return 1.0;
-    float r = u_quality.z;
-    if (u_quality.x < 2.0) return texture(tex0, vec3(uv, d));
-    if (u_quality.x < 5.0) { // weak GPUs: fixed 4 taps, each a bilinear 2x2 compare
-        float s = texture(tex0, vec3(uv + vec2(-0.5, -0.5) * r, d));
-        s += texture(tex0, vec3(uv + vec2( 0.5, -0.5) * r, d));
-        s += texture(tex0, vec3(uv + vec2(-0.5,  0.5) * r, d));
-        s += texture(tex0, vec3(uv + vec2( 0.5,  0.5) * r, d));
-        return s * 0.25;
-    }
-    // per-pixel rotation (interleaved gradient noise) turns banding into fine grain
-    float a = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
-    vec2 cs = vec2(cos(a), sin(a));
-    int n_ = int(u_quality.x);
-    float s = 0.0;
-    for (int i = 0; i < 16; ++i) {
-        if (i >= n_) break;
-        vec2 o = kDisk[i];
-        o = vec2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);
-        s += texture(tex0, vec3(uv + o * r, d));
-    }
-    return s / float(n_);
-}
+float shadowFactor(vec3 n) { return u_params.z < 0.5 ? 1.0 : shadowAt(v_wpos, n); }
 
 void main() {
     vec4 albedo = u_color * v_col;
@@ -114,7 +159,7 @@ void main() {
 )";
 
 inline const char* kLitMSL =
-    "#include <metal_stdlib>\nusing namespace metal;\n" RTS_MSL_BLOCKS
+    "#include <metal_stdlib>\nusing namespace metal;\n" RTS_MSL_BLOCKS RTS_MSL_SHADOW
     R"(
 struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; };
 struct VOut { float4 pos [[position]]; float3 nrm; float3 wpos; float4 col; };
@@ -127,41 +172,8 @@ vertex VOut vs_main(VIn in [[stage_in]], constant U0& u [[buffer(1)]], constant 
     o.pos = f.viewProj * wp;
     return o;
 }
-constant float2 kDisk[16] = {
-    float2(-0.613, 0.617), float2(0.170, -0.040), float2(-0.299, 0.791), float2(0.645, 0.493),
-    float2(-0.651, 0.717), float2(0.421, 0.027), float2(-0.817, -0.271), float2(-0.705, -0.668),
-    float2(0.977, -0.108), float2(0.063, -0.233), float2(0.346, -0.894), float2(-0.272, 0.416),
-    float2(-0.025, 0.919), float2(-0.389, -0.144), float2(0.733, -0.627), float2(0.282, 0.512)};
 static float shadowFactor(constant U0& u, constant U1& f, float3 wpos, float3 n, float2 fragCoord, depth2d<float> sm, sampler ss) {
-    if (f.quality.y < 0.5 || u.params.z < 0.5) return 1.0;
-    float3 L = normalize(f.sunDir.xyz);
-    float k = 1.0 - clamp(dot(n, L), 0.0, 1.0);
-    float4 lp = f.lightViewProj * float4(wpos + n * f.quality.w * (0.35 + k), 1.0);
-    float3 p = lp.xyz / lp.w;
-    float2 uv = p.xy * 0.5 + 0.5;
-    if (f.shadow.x > 0.5) uv.y = 1.0 - uv.y;
-    float d = p.z * f.shadow.y + f.shadow.z;
-    if (uv.x <= 0.0 || uv.x >= 1.0 || uv.y <= 0.0 || uv.y >= 1.0 || d >= 1.0) return 1.0;
-    float r = f.quality.z;
-    if (f.quality.x < 2.0) return sm.sample_compare(ss, uv, d);
-    if (f.quality.x < 5.0) {
-        float s = sm.sample_compare(ss, uv + float2(-0.5, -0.5) * r, d);
-        s += sm.sample_compare(ss, uv + float2( 0.5, -0.5) * r, d);
-        s += sm.sample_compare(ss, uv + float2(-0.5,  0.5) * r, d);
-        s += sm.sample_compare(ss, uv + float2( 0.5,  0.5) * r, d);
-        return s * 0.25;
-    }
-    float a = 6.2831853 * fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));
-    float2 cs = float2(cos(a), sin(a));
-    int cnt = int(f.quality.x);
-    float s = 0.0;
-    for (int i = 0; i < 16; ++i) {
-        if (i >= cnt) break;
-        float2 o = kDisk[i];
-        o = float2(o.x * cs.x - o.y * cs.y, o.x * cs.y + o.y * cs.x);
-        s += sm.sample_compare(ss, uv + o * r, d);
-    }
-    return s / float(cnt);
+    return u.params.z < 0.5 ? 1.0 : shadowAt(f, wpos, n, fragCoord, sm, ss);
 }
 fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], constant U1& f [[buffer(2)]],
                         depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]]) {

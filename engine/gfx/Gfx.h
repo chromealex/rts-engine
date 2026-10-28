@@ -41,7 +41,7 @@ enum class BufferType { Vertex, Index };
 enum class Usage { Immutable, Dynamic };          // Dynamic: updated (whole or partially) every frame
 enum class PixelFormat { RGBA8, R8, Depth };   // Depth: 24/32-bit depth render target
 enum class Filter { Nearest, Linear };
-enum class VertexFormat { Float2, Float3, Float4, UByte4N };
+enum class VertexFormat { Float2, Float3, Float4, UByte4N, UByte4 }; // UByte4: integers 0..255 (GLSL float / MSL uchar4)
 enum class IndexType { None, UInt16, UInt32 };
 enum class Primitive { Triangles, Lines };
 enum class CullMode { None, Back, Front };
@@ -62,6 +62,7 @@ struct TextureDesc {
     bool repeat = false;
     bool renderTarget = false;  // can be attached to a pass (color or depth)
     bool compare = false;       // depth textures: sampled with hardware depth comparison (shadow maps)
+    bool mipmaps = false;       // RGBA8/R8: full mip chain generated from level 0 (trilinear when Linear)
     const void* data = nullptr; // may be null (contents undefined until updated)
     const char* label = nullptr;
 };
@@ -93,7 +94,8 @@ struct PipelineDesc {
     BlendMode blend = BlendMode::Opaque;
     bool depthTest = true;
     bool depthWrite = true;
-    bool depthOnly = false;          // no color output (shadow maps); the pass must have no color target
+    bool depthOnly = false;          // no color output (shadow maps); the pass must have no color target.
+                                     // A fragment stage, when the shader has one, still runs (alpha-tested casters).
     float depthBiasConstant = 0;     // polygon offset, used by shadow casters
     float depthBiasSlope = 0;
     const char* label = nullptr;
