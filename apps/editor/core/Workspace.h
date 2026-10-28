@@ -77,6 +77,7 @@ public:
 
     // background build (rtsbuild)
     bool building() const { return building_; }
+    std::string logsDir() const;   // <engine>/logs, created on demand
     std::string buildLog() { std::lock_guard<std::mutex> lk(buildMutex_); return buildLog_; }
     // extraArgs: more rtsbuild flags (Build window: --estimate --out ..., --audio, --no-atlas, ...)
     void startBuild(const std::string& target, const std::string& config, const std::string& extraArgs = "");

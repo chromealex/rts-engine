@@ -4989,6 +4989,142 @@ TEST(lighting_quality_governor) {
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
 }
 
+// ---------------- Native plugins bridge, store and ads services (platforms agent) ----------------
+#include "engine/platform/PluginJson.h"
+#include "engine/platform/Plugins.h"
+#include "engine/services/Ads.h"
+#include "engine/services/Store.h"
+#include <cstdlib>
+#include <thread>
+
+static void setEnvVar(const char* k, const char* v) {
+#if defined(_WIN32)
+    _putenv_s(k, v);
+#else
+    setenv(k, v, 1);
+#endif
+}
+
+TEST(plugin_json_keeps_numbers_and_unicode) {
+    namespace json = plugins::json;
+    json::Value v;
+    std::string err;
+    CHECK(json::parse(R"({"price":0.99,"micros":1990000000,"t":"Привет 🙂","a":[true,null]})", v, &err));
+    CHECK(v["price"].s == "0.99" && v["micros"].i64() == 1990000000);
+    CHECK(v["t"].str() == "Привет 🙂");
+    CHECK(json::dump(v) == "{\"price\":0.99,\"micros\":1990000000,\"t\":\"Привет 🙂\",\"a\":[true,null]}");
+    CHECK(!json::parse("{\"a\":}", v, &err) && !err.empty());
+    CHECK(json::parseOr(json::stripComments("// head\n{ \"u\": \"http://x\" /* c */ }"))["u"].str() == "http://x");
+    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","ios":"I","default":"D"},"n":{"web":1}})", "ios") == R"({"id":"I","n":null})");
+    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","desktop":"PC"}})", "linux") == R"({"id":"PC"})");
+}
+
+namespace {
+struct EchoPlugin : plugins::NativePlugin {
+    std::vector<std::string> calls;
+    void call(const std::string& method, const std::string& args, plugins::Reply r) override {
+        calls.push_back(method + " " + args);
+        if (method == "fail") { r.fail("nope"); return; }
+        if (method == "later") { std::thread([r] { r.ok(R"({"from":"thread"})"); }).join(); return; }
+        if (method == "event") plugins::emit("echo", "ping", R"({"n":1})");
+        r.ok(args);
+    }
+    void update() override { ++updates; }
+    int updates = 0;
+};
+} // namespace
+
+TEST(plugin_bridge_calls_replies_events) {
+    plugins::configure(R"({"echo":{"key":{"linux":"L","windows":"L","macos":"L","default":"L"}}})");
+    auto echo = std::make_shared<EchoPlugin>();
+    plugins::registerPlugin("echo", echo);
+    CHECK(plugins::available("echo") && !plugins::available("no-such-plugin"));
+    // desktop mocks exist only when the game lists them (a shipped build must not offer fake purchases)
+    if (!std::getenv("RTS_MOCK_PLUGINS")) CHECK(!plugins::available("mock-store") && !plugins::available("mock-ads"));
+    std::vector<std::string> got;
+    plugins::pump();
+    CHECK(echo->updates == 0); // no per-frame work before "init"
+    plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
+    CHECK(got.empty()); // replies never arrive inside call()
+    plugins::pump();
+    CHECK(echo->updates == 1); // then update() every frame
+    CHECK(got.size() == 1 && got[0] == R"({"x":1})");
+    CHECK(echo->calls.size() == 2 && echo->calls[0] == R"(init {"key":"L"})"); // config first, resolved
+    plugins::call("echo", "again", "{}", {});
+    plugins::call("echo", "fail", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "ERR " + r.error); });
+    plugins::call("echo", "later", "{}", [&](const plugins::Result& r) { got.push_back(r.data); });
+    plugins::call("no-such-plugin", "x", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "missing"); });
+    std::vector<std::string> events;
+    int id = plugins::addListener("echo", [&](const std::string& ev, const std::string& d) { events.push_back(ev + d); });
+    plugins::call("echo", "event", "{}", {});
+    plugins::pump();
+    CHECK(echo->calls.size() == 6); // init went out only once
+    CHECK(got.size() == 4 && got[1] == "ERR nope" && got[2] == R"({"from":"thread"})" && got[3] == "missing");
+    CHECK(events.size() == 1 && events[0] == R"(ping{"n":1})");
+    plugins::removeListener(id);
+    plugins::unregisterPlugin("echo");
+}
+
+TEST(store_and_ads_through_mock_plugins) {
+    plugins::configureGame(R"(// comments allowed, like every game.json
+    {
+      "plugins": { "mock-store": {}, "mock-ads": {} },
+      "store": { "providers": ["no-such-store", "mock-store"],
+                 "products": [ { "id": "gems", "type": "consumable" },
+                               { "id": "noads", "type": "nonConsumable", "ids": { "default": "com.game.noads" } } ] },
+      "ads": { "providers": { "default": ["mock-ads"] } }
+    })");
+    CHECK(store::available() && store::provider() == "mock-store");
+    CHECK(store::typeOf("noads") == store::ProductType::NonConsumable);
+    std::vector<store::Product> prods;
+    store::products([&](bool ok, const std::vector<store::Product>& p, const std::string&) { if (ok) prods = p; });
+    plugins::pump();
+    CHECK(prods.size() == 2 && prods[1].id == "noads" && prods[0].price == "$0.99" && prods[0].priceMicros == 990000);
+
+    std::vector<store::Purchase> done, async;
+    store::onPurchase([&](const store::Purchase& p) { async.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "purchased");
+    store::purchase("noads", [&](const store::Purchase& p) { done.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "cancelled");
+    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "pending");
+    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
+    plugins::pump();
+    setEnvVar("RTS_MOCK_STORE", "purchased");
+    CHECK(done.size() == 3);
+    CHECK(done[0].state == store::PurchaseState::Purchased && done[0].productId == "noads" && !done[0].token.empty());
+    CHECK(done[1].state == store::PurchaseState::Cancelled);
+    CHECK(done[2].state == store::PurchaseState::Pending);
+    CHECK(async.size() == 1 && async[0].state == store::PurchaseState::Purchased && async[0].productId == "gems");
+
+    std::vector<store::Purchase> restored;
+    store::finish(async[0]); // consumable granted → consumed, no longer restored
+    store::restore([&](bool ok, const std::vector<store::Purchase>& p, const std::string&) { if (ok) restored = p; });
+    plugins::pump();
+    CHECK(restored.size() == 1 && restored[0].productId == "noads" && restored[0].restored);
+
+    CHECK(ads::available() && ads::provider() == "mock-ads");
+    ads::preload(ads::Format::Rewarded);
+    plugins::pump();
+    CHECK(ads::ready(ads::Format::Rewarded));
+    std::vector<ads::ShowResult> shown;
+    int pauses = 0;
+    int l = plugins::addListener("*", [&](const std::string& ev, const std::string&) { pauses += ev == "app.pause"; });
+    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); }, "double_reward");
+    setEnvVar("RTS_MOCK_ADS", "noreward");
+    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); });
+    setEnvVar("RTS_MOCK_ADS", "ok");
+    ads::setEnabled(false);
+    ads::show(ads::Format::Interstitial, [&](const ads::ShowResult& r) { shown.push_back(r); });
+    ads::setEnabled(true);
+    plugins::pump();
+    CHECK(shown.size() == 3);
+    CHECK(shown[0].shown == false && shown[0].error == "ads disabled"); // answered at once, no plugin call
+    CHECK(shown[1].shown && shown[1].rewarded);
+    CHECK(shown[2].shown && !shown[2].rewarded);
+    CHECK(pauses == 2 && !ads::ready(ads::Format::Interstitial));
+    plugins::removeListener(l);
+}
 
 // ---------------- overlays (data-driven helper elements; overlays agent) ----------------
 #include "engine/platform/Platform.h"
@@ -5336,136 +5472,6 @@ TEST(fx_unity_importer_output_is_valid) {
     }
     CHECK(std::filesystem::exists(out + "/fx/textures/smoke.png"));
     std::filesystem::remove_all(out);
-}
-
-// ---------------- Native plugins bridge, store and ads services (platforms agent) ----------------
-#include "engine/platform/PluginJson.h"
-#include "engine/platform/Plugins.h"
-#include "engine/services/Ads.h"
-#include "engine/services/Store.h"
-#include <cstdlib>
-#include <thread>
-
-static void setEnvVar(const char* k, const char* v) {
-#if defined(_WIN32)
-    _putenv_s(k, v);
-#else
-    setenv(k, v, 1);
-#endif
-}
-
-TEST(plugin_json_keeps_numbers_and_unicode) {
-    namespace json = plugins::json;
-    json::Value v;
-    std::string err;
-    CHECK(json::parse(R"({"price":0.99,"micros":1990000000,"t":"Привет 🙂","a":[true,null]})", v, &err));
-    CHECK(v["price"].s == "0.99" && v["micros"].i64() == 1990000000);
-    CHECK(v["t"].str() == "Привет 🙂");
-    CHECK(json::dump(v) == "{\"price\":0.99,\"micros\":1990000000,\"t\":\"Привет 🙂\",\"a\":[true,null]}");
-    CHECK(!json::parse("{\"a\":}", v, &err) && !err.empty());
-    CHECK(json::parseOr(json::stripComments("// head\n{ \"u\": \"http://x\" /* c */ }"))["u"].str() == "http://x");
-    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","ios":"I","default":"D"},"n":{"web":1}})", "ios") == R"({"id":"I","n":null})");
-    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","desktop":"PC"}})", "linux") == R"({"id":"PC"})");
-}
-
-namespace {
-struct EchoPlugin : plugins::NativePlugin {
-    std::vector<std::string> calls;
-    void call(const std::string& method, const std::string& args, plugins::Reply r) override {
-        calls.push_back(method + " " + args);
-        if (method == "fail") { r.fail("nope"); return; }
-        if (method == "later") { std::thread([r] { r.ok(R"({"from":"thread"})"); }).join(); return; }
-        if (method == "event") plugins::emit("echo", "ping", R"({"n":1})");
-        r.ok(args);
-    }
-};
-} // namespace
-
-TEST(plugin_bridge_calls_replies_events) {
-    plugins::configure(R"({"echo":{"key":{"linux":"L","windows":"L","macos":"L","default":"L"}}})");
-    auto echo = std::make_shared<EchoPlugin>();
-    plugins::registerPlugin("echo", echo);
-    CHECK(plugins::available("echo") && !plugins::available("no-such-plugin"));
-    std::vector<std::string> got;
-    plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
-    CHECK(got.empty()); // replies never arrive inside call()
-    plugins::pump();
-    CHECK(got.size() == 1 && got[0] == R"({"x":1})");
-    CHECK(echo->calls.size() == 2 && echo->calls[0] == R"(init {"key":"L"})"); // config first, resolved
-    plugins::call("echo", "again", "{}", {});
-    plugins::call("echo", "fail", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "ERR " + r.error); });
-    plugins::call("echo", "later", "{}", [&](const plugins::Result& r) { got.push_back(r.data); });
-    plugins::call("no-such-plugin", "x", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "missing"); });
-    std::vector<std::string> events;
-    int id = plugins::addListener("echo", [&](const std::string& ev, const std::string& d) { events.push_back(ev + d); });
-    plugins::call("echo", "event", "{}", {});
-    plugins::pump();
-    CHECK(echo->calls.size() == 6); // init went out only once
-    CHECK(got.size() == 4 && got[1] == "ERR nope" && got[2] == R"({"from":"thread"})" && got[3] == "missing");
-    CHECK(events.size() == 1 && events[0] == R"(ping{"n":1})");
-    plugins::removeListener(id);
-    plugins::unregisterPlugin("echo");
-}
-
-TEST(store_and_ads_through_mock_plugins) {
-    plugins::configureGame(R"(// comments allowed, like every game.json
-    {
-      "plugins": { "mock-store": {}, "mock-ads": {} },
-      "store": { "providers": ["no-such-store", "mock-store"],
-                 "products": [ { "id": "gems", "type": "consumable" },
-                               { "id": "noads", "type": "nonConsumable", "ids": { "default": "com.game.noads" } } ] },
-      "ads": { "providers": { "default": ["mock-ads"] } }
-    })");
-    CHECK(store::available() && store::provider() == "mock-store");
-    CHECK(store::typeOf("noads") == store::ProductType::NonConsumable);
-    std::vector<store::Product> prods;
-    store::products([&](bool ok, const std::vector<store::Product>& p, const std::string&) { if (ok) prods = p; });
-    plugins::pump();
-    CHECK(prods.size() == 2 && prods[1].id == "noads" && prods[0].price == "$0.99" && prods[0].priceMicros == 990000);
-
-    std::vector<store::Purchase> done, async;
-    store::onPurchase([&](const store::Purchase& p) { async.push_back(p); });
-    setEnvVar("RTS_MOCK_STORE", "purchased");
-    store::purchase("noads", [&](const store::Purchase& p) { done.push_back(p); });
-    setEnvVar("RTS_MOCK_STORE", "cancelled");
-    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
-    setEnvVar("RTS_MOCK_STORE", "pending");
-    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
-    plugins::pump();
-    setEnvVar("RTS_MOCK_STORE", "purchased");
-    CHECK(done.size() == 3);
-    CHECK(done[0].state == store::PurchaseState::Purchased && done[0].productId == "noads" && !done[0].token.empty());
-    CHECK(done[1].state == store::PurchaseState::Cancelled);
-    CHECK(done[2].state == store::PurchaseState::Pending);
-    CHECK(async.size() == 1 && async[0].state == store::PurchaseState::Purchased && async[0].productId == "gems");
-
-    std::vector<store::Purchase> restored;
-    store::finish(async[0]); // consumable granted → consumed, no longer restored
-    store::restore([&](bool ok, const std::vector<store::Purchase>& p, const std::string&) { if (ok) restored = p; });
-    plugins::pump();
-    CHECK(restored.size() == 1 && restored[0].productId == "noads" && restored[0].restored);
-
-    CHECK(ads::available() && ads::provider() == "mock-ads");
-    ads::preload(ads::Format::Rewarded);
-    plugins::pump();
-    CHECK(ads::ready(ads::Format::Rewarded));
-    std::vector<ads::ShowResult> shown;
-    int pauses = 0;
-    int l = plugins::addListener("*", [&](const std::string& ev, const std::string&) { pauses += ev == "app.pause"; });
-    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); }, "double_reward");
-    setEnvVar("RTS_MOCK_ADS", "noreward");
-    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); });
-    setEnvVar("RTS_MOCK_ADS", "ok");
-    ads::setEnabled(false);
-    ads::show(ads::Format::Interstitial, [&](const ads::ShowResult& r) { shown.push_back(r); });
-    ads::setEnabled(true);
-    plugins::pump();
-    CHECK(shown.size() == 3);
-    CHECK(shown[0].shown == false && shown[0].error == "ads disabled"); // answered at once, no plugin call
-    CHECK(shown[1].shown && shown[1].rewarded);
-    CHECK(shown[2].shown && !shown[2].rewarded);
-    CHECK(pauses == 2 && !ads::ready(ads::Format::Interstitial));
-    plugins::removeListener(l);
 }
 
 // ---------------- Cube-sphere (RtsSphere) ----------------
@@ -6156,8 +6162,229 @@ TEST(icons_generate_platform_sets) {
     CHECK(sheet.width > 600 && sheet.height > 400);
     branding::Image strip = branding::splashStrip(splash::parseSpec(game["splash"]), (dir / "game").string(), {0, 0.5f}, 160, 90, &pw);
     CHECK(strip.width > 320 && strip.height > 90);
-    fs::remove_all(dir);
+    ax.close(); tv31.close();   // Windows can't delete open files
+    std::error_code rmEc;
+    fs::remove_all(dir, rmEc);
 }
+
+
+// ---------------- one-click MCP setup (editor Agent window) ----------------
+#if defined(RTS_TESTS_EDITOR_CORE)
+#include "apps/editor/core/McpInstall.h"
+TEST(mcp_install_patches_configs_as_text) {
+    using namespace rts::editor;
+    McpServerSpec sp; sp.command = "/opt/rts/rtsmcp"; sp.args = {"--engine", "/opt/rts"};
+    const std::string entry = mcpEntryJson(sp);
+    std::string err, t;
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));                        // empty file -> fresh config
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
+    // unrelated content stays byte for byte, including numbers our reader would round
+    std::string user = "{\n  \"numStartups\": 123456789012345,\n  \"ratio\": 0.123456789,\n  \"theme\": \"dark\"\n}\n";
+    t = user;
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
+    CHECK(t.find("123456789012345") != std::string::npos && t.find("0.123456789") != std::string::npos && t.find("\"theme\": \"dark\"") != std::string::npos);
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["args"].size() == 2);
+    // existing servers: added next to them, replaced in place on update, removed cleanly
+    t = R"({"mcpServers": {"other": {"command": "x"}}, "z": 1})";
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
+    Json j = Json::parse(t);
+    CHECK(j["mcpServers"]["other"]["command"].str() == "x" && j["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
+    sp.command = "/new/rtsmcp";
+    CHECK(mcpPatchJson(t, "rtsengine", mcpEntryJson(sp), &err));
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/new/rtsmcp" && t.find("/opt/rts/rtsmcp") == std::string::npos);
+    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
+    j = Json::parse(t);
+    CHECK(!j["mcpServers"].has("rtsengine") && j["mcpServers"]["other"]["command"].str() == "x" && j["z"].integer() == 1);
+    t = R"({"mcpServers": {"a": {}, "rtsengine": {"command": "y"}}})";       // last member: the comma before it goes
+    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
+    CHECK(!Json::parse(t)["mcpServers"].has("rtsengine") && Json::parse(t)["mcpServers"].has("a"));
+    t = "[1, 2]";
+    CHECK(!mcpPatchJson(t, "rtsengine", entry, &err) && !err.empty());   // not an object: refused, untouched
+    CHECK(t == "[1, 2]");
+}
+#endif
+
+// ---------------- Planets: surface, world block, orbit layer, transit ----------------
+static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/games/planets";
+
+TEST(planet_surface_offsets_and_hash_buckets) {
+    using namespace rts::game;
+    CubeSphere s(12);
+    // offsets inside a face are exact; across seams they agree with neighbour steps
+    int bad = 0;
+    for (int id = 0; id < s.cellCount(); ++id) {
+        for (int k = 0; k < 4; ++k) {
+            static const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            if (s.offset(id, d[k][0], d[k][1]) != s.neighbor(id, d[k][0], d[k][1])) ++bad;
+        }
+        // a 2-step walk ends near (2 cells) the start, never on itself
+        for (int dx = -2; dx <= 2; ++dx) {
+            const int o = s.offset(id, dx, 0);
+            if (o < 0) continue;
+            const Fixed arc = sphereArcTurns(s.cellCenterDir(id), s.cellCenterDir(o));
+            if ((dx != 0 && o == id) || arc > Fixed::fromRatio(3 * (dx < 0 ? -dx : dx) + 1, 4 * 12 * 2)) ++bad;
+        }
+    }
+    CHECK(bad == 0);
+    Surface S;
+    BodyDef b; b.id = "p"; b.radius = Fixed::fromInt(20); b.faceSize = 12;
+    S.bodies = {b};
+    S.build();
+    CHECK(S.W == 12 && S.H == 72 && S.bucketCount() == 6 * 3 * 3);
+    // every cell centre maps back to its cell, and lies on body 0 at radius
+    int bad2 = 0;
+    for (int c = 0; c < S.W * S.H; ++c) {
+        const Vec3 p = S.cellCenter(c);
+        if (S.cellAt(p) != c || S.bodyAt(p) != 0 || fxAbs(S.altitude(p)) > Fixed::fromRatio(1, 100)) ++bad2;
+        std::vector<int32_t> near;
+        S.bucketsAround(p, Fixed::fromInt(3), near);
+        if (std::find(near.begin(), near.end(), S.bucketOf(p)) == near.end()) ++bad2;
+    }
+    CHECK(bad2 == 0);
+    // ground distance is the chord, symmetric
+    const Vec3 a = S.cellCenter(S.gridCell(0, 4, 6, 6)), c = S.cellCenter(S.gridCell(0, 5, 6, 6));
+    CHECK(S.groundDist(a, c) == S.groundDist(c, a) && S.groundDist(a, c) > Fixed::fromInt(39));
+    CHECK(!Surface::onSphere(Vec3{Fixed::fromInt(2048), Fixed{}, Fixed::fromInt(2048)}) && Surface::onSphere(a));
+}
+
+TEST(planet_world_loads_and_paths_cross_seams) {
+    auto sim = makeSim(kPlanets, "maps/two_worlds.json", 1);
+    auto& m = mod(*sim);
+    const game::Surface* S = m.surface(*sim);
+    CHECK(S != nullptr);
+    if (!S) return;
+    CHECK(S->bodies.size() == 3 && S->findBody("terra") == 1 && S->startBody == 1);
+    CHECK(S->bodies[1].hasSurface() && !S->bodies[0].hasSurface());
+    // commanders on opposite faces of terra
+    Entity c1 = findType(*sim, "commander", 1), c2 = findType(*sim, "commander", 2);
+    CHECK(c1.valid() && c2.valid());
+    const Vec3 p1 = sim->world().get<Transform>(c1).pos, p2 = sim->world().get<Transform>(c2).pos;
+    CHECK(m.bodyOf(*sim, p1) == 1 && m.bodyOf(*sim, p2) == 1);
+    // ground path from one pole to the other: crosses at least two face seams, every step a neighbour
+    auto& g = m.state(*sim).grid;
+    std::vector<Vec3> path;
+    CHECK(g.findPath(p1, p2, game::kLayerGround, path, 400000));
+    CHECK(path.size() >= 2);
+    if (!path.empty()) CHECK(path.back() == p2);
+    // the route (waypoints joined by great-circle chords) visits at least one face besides the two poles
+    std::vector<int> faces;
+    Vec3 prev = p1;
+    for (auto& p : path) {
+        for (int k = 1; k <= 16; ++k) {
+            int b, f, x, y;
+            S->cellFace(S->cellAt(prev + (p - prev) * Fixed::fromRatio(k, 16)), b, f, x, y);
+            if (std::find(faces.begin(), faces.end(), f) == faces.end()) faces.push_back(f);
+        }
+        prev = p;
+    }
+    CHECK(faces.size() >= 3);
+    // a move order gets the commander around the planet
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {c1}; mv.point = S->cellCenter(S->gridCell(1, 0, 12, 12));
+    sim->submit(mv);
+    const Fixed before = S->groundDist(sim->world().get<Transform>(c1).pos, mv.point);
+    for (int i = 0; i < 20 * 15; ++i) sim->step();
+    const Vec3 now = sim->world().get<Transform>(c1).pos;
+    CHECK(S->groundDist(now, mv.point) < before - Fixed::fromInt(10));
+    CHECK(fxAbs(S->altitude(now) - S->heightAt(now)) < Fixed::fromRatio(1, 20));   // stays on the surface
+    // body orbits: terra moves around the sun, luna around terra, positions are Fixed and periodic
+    const Vec3 t0 = m.bodyWorldPosition(*sim, 1, 0), t1 = m.bodyWorldPosition(*sim, 1, 20 * 1200);
+    CHECK(fxAbs((t0 - t1).length()) < Fixed::fromRatio(1, 2));
+    CHECK(fxAbs((m.bodyWorldPosition(*sim, 2, 777) - m.bodyWorldPosition(*sim, 1, 777)).length() - Fixed::fromInt(60)) < Fixed::fromRatio(1, 4));
+    // vision: own commander's cell is visible, the enemy pole is not
+    int b, f, x, y;
+    S->cellFace(S->cellAt(now), b, f, x, y);
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 2);
+    S->cellFace(S->cellAt(p2), b, f, x, y);
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 0);
+}
+
+TEST(planet_orbit_units_and_transit) {
+    auto sim = makeSim(kPlanets, "maps/two_worlds.json", 2);
+    auto& m = mod(*sim);
+    const game::Surface* S = m.surface(*sim);
+    if (!S) { CHECK(false); return; }
+    const int gun = m.rules().findType("gunship");
+    CHECK(gun >= 0 && (m.rules().types[size_t(gun)].layer & game::kLayerOrbit));
+    Entity c1 = findType(*sim, "commander", 1);
+    const Vec3 home = sim->world().get<Transform>(c1).pos;
+    Entity g1 = m.spawn(*sim, uint16_t(gun), 1, home);
+    const Vec3 gp = sim->world().get<Transform>(g1).pos;
+    CHECK(fxAbs((gp - game::Surface::anchor(1)).length() - S->bodies[1].shellRadius()) < Fixed::fromRatio(1, 50));   // on the shell
+    // can't transit to its own body or a star; can to luna
+    CHECK(!m.canTransit(*sim, g1, 1) && !m.canTransit(*sim, g1, 0) && m.canTransit(*sim, g1, 2));
+    Command t; t.player = 1; t.type = game::kCmdTransit; t.units = {g1}; t.param = 2;
+    sim->submit(t);
+    for (int i = 0; i < 3; ++i) sim->step();   // input delay
+    CHECK(sim->world().has<game::Transit>(g1));
+    const auto tx = sim->world().get<game::Transit>(g1);
+    CHECK(tx.arrive > tx.depart && (sim->world().get<game::Unit>(g1).flags & game::kUnitInTransit));
+    // halfway: the world position lies between the two shell points
+    const Vec3 mid = m.worldPosition(*sim, g1, (tx.depart + tx.arrive) / 2);
+    CHECK(fxAbs((mid - (tx.fromWorld + tx.toWorld) * Fixed::fromRatio(1, 2)).length()) < Fixed::fromInt(3));   // within a tick of travel
+    while (sim->tick() <= tx.arrive) sim->step();
+    CHECK(!sim->world().has<game::Transit>(g1));
+    const Vec3 arr = sim->world().get<Transform>(g1).pos;
+    CHECK(m.bodyOf(*sim, arr) == 2);
+    CHECK(fxAbs((arr - game::Surface::anchor(2)).length() - S->bodies[2].shellRadius()) < Fixed::fromRatio(1, 50));
+    // an orbit unit sees the surface below it
+    int b, f, x, y;
+    S->cellFace(S->cellAt(arr), b, f, x, y);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 2);
+    // ground weapons without "orbit" can't hit it, the defender's can
+    const auto& peewee = m.rules().types[size_t(m.rules().findType("peewee"))];
+    const auto& defender = m.rules().types[size_t(m.rules().findType("defender"))];
+    CHECK(!game::layerHit(peewee.weapons[0].targets, m.rules().types[size_t(gun)].layer));
+    CHECK(game::layerHit(defender.weapons[0].targets, m.rules().types[size_t(gun)].layer));
+}
+
+TEST(planet_matches_deterministic_and_replay) {
+    auto run = [](uint64_t seed, std::vector<Command>* rec, const std::vector<Command>* play) {
+        auto sim = makeSim(kPlanets, "maps/two_worlds.json", seed);
+        game::RtsAI a(1, seed), b(2, seed);
+        if (play) for (const Command& c : *play) sim->submit(c);   // recorded with their execution ticks
+        for (int t = 0; t < 20 * 90; ++t) {
+            if (!play) { a.update(*sim); b.update(*sim); }
+            sim->step();
+        }
+        if (rec) *rec = sim->executedCommands();
+        return sim->checksum();
+    };
+    std::vector<Command> cmds;
+    const uint64_t c1 = run(3, &cmds, nullptr), c2 = run(3, nullptr, nullptr);
+    CHECK(c1 == c2);
+    CHECK(!cmds.empty());
+    CHECK(run(3, nullptr, &cmds) == c1);   // replaying the recorded commands gives the same state
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/MapDoc.h"
+TEST(planet_mapdoc_round_trip_and_validate) {
+    editor::MapDoc doc;
+    std::string err;
+    CHECK(doc.load(kPlanets + "/maps/two_worlds.json", &err));
+    CHECK(doc.data.planet() && doc.data.bodies.size() == 3);
+    const Json orig = Json::parseFile(kPlanets + "/maps/two_worlds.json");
+    const Json back = doc.toJson();
+    CHECK(back["world"]["bodies"][size_t(1)]["terrain"]["corners"] == orig["world"]["bodies"][size_t(1)]["terrain"]["corners"]);
+    CHECK(back["entities"][size_t(0)]["at"] == orig["entities"][size_t(0)]["at"]);
+    CHECK(back["players"][size_t(0)]["start"] == orig["players"][size_t(0)]["start"]);
+    CHECK(!back.has("size") && !back.has("terrain"));
+    const Json rulesJson = Json::parseFile(kPlanets + "/rules.json");
+    const game::Rules rules = game::loadRules(rulesJson);
+    auto issues = doc.validate(rules, rulesJson);
+    int errors = 0;
+    for (auto& i : issues) if (i.error) { ++errors; std::printf("    issue: %s\n", i.text.c_str()); }
+    CHECK(errors == 0);
+    // a seam mismatch is reported, a bad position is an error
+    doc.data.bodies[1].corners[0] += 5;
+    doc.data.entities[0].at.set("face", Json::number(int64_t(9)));
+    issues = doc.validate(rules, rulesJson);
+    bool seam = false, pos = false;
+    for (auto& i : issues) { seam |= !i.error && i.text.find("швах") != std::string::npos; pos |= i.error && i.text.find("0..5") != std::string::npos; }
+    CHECK(seam && pos);
+}
+#endif
 
 // ---------------- Lua scripting (scripting agent) ----------------
 #include "modules/rts/RtsScript.h"

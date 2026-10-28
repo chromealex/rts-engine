@@ -33,7 +33,7 @@ function std.waves(tick)
           for _ = 1, n do
             local ox = (rts.rng_unit() * 2 - 1) * wd.spread
             local oz = (rts.rng_unit() * 2 - 1) * wd.spread
-            local e = rts.spawn_on_cell(s.type, wd.player, wd.x + ox, wd.z + oz, 6)
+            local e = rts.spawn_on_cell(s.type, wd.player, wd.x + ox, wd.y, wd.z + oz, 6)
             if e then spawned[#spawned + 1] = e end
           end
         end

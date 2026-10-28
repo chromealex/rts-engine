@@ -20,6 +20,17 @@ uint8_t cellFlagsFromChar(char c) {
 }
 
 bool applyCornersFile(Json& map, const ContentReader& read, std::string* err) {
+    // planet maps: every body's terrain.cornersFile (6 faces x (N+1)^2 int16 LE)
+    if (Json* world = map.find("world"); world && world->isObject())
+        if (Json* bodies = world->find("bodies"); bodies && bodies->isArray())
+            for (size_t i = 0; i < bodies->size(); ++i) {
+                Json* t = bodies->at(i).find("terrain");
+                if (!t || !t->isObject() || !t->has("cornersFile") || t->has("cornersBlob")) continue;
+                const std::string file = t->getStr("cornersFile");
+                std::string bytes;
+                if (file.empty() || !read(file, bytes)) { if (err) *err = "map world body '" + bodies->at(i).getStr("id") + "' terrain.cornersFile: cannot read '" + file + "'"; return false; }
+                t->set("cornersBlob", Json::string(std::move(bytes)));
+            }
     Json* terrain = map.find("terrain");
     if (!terrain || !terrain->isObject() || !terrain->has("cornersFile") || terrain->has("cornersBlob")) return true;
     const std::string file = terrain->getStr("cornersFile");
@@ -257,6 +268,18 @@ bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
 
 bool MapGrid::nearestPassable(int& x, int& y, uint8_t layer, int radius) const {
     if (passable(x, y, layer)) return true;
+    if (surf) { // rings across face seams
+        if (!inside(x, y)) return false;
+        const int c0 = index(x, y);
+        for (int r = 1; r <= radius; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                    const int c = surf->offset(c0, dx, dy);
+                    if (c >= 0 && passable(c % w, c / w, layer)) { x = c % w; y = c / w; return true; }
+                }
+        return false;
+    }
     for (int r = 1; r <= radius; ++r)
         for (int dy = -r; dy <= r; ++dy)
             for (int dx = -r; dx <= r; ++dx) {

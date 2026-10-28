@@ -130,14 +130,15 @@ int rSpawn(lua_State* L, Vm& vm) {
     pushEntity(L, vm.module->spawn(*vm.sim, uint16_t(t), uint8_t(intArg(L, 2)), {fxArg(L, 3), fxArg(L, 4), fxArg(L, 5)}));
     return 1;
 }
-// rts.spawn_on_cell(typeIndex, owner, x, z, radius): nearest passable cell for the type's path layer within
-// radius of (x, z), spawned at its centre; nil when there is none
+// rts.spawn_on_cell(typeIndex, owner, x, y, z, radius): nearest passable cell for the type's path layer within
+// radius of the point's cell (planet-aware), spawned at its centre; nil when there is none
 int rSpawnOnCell(lua_State* L, Vm& vm) {
     CTX;
     const size_t t = size_t(intArg(L, 1));
     if (t >= R.types.size()) { lua_pushnil(L); return 1; }
-    int cx = gs.grid.cellX(fxArg(L, 3)), cy = gs.grid.cellY(fxArg(L, 4));
-    if (!gs.grid.nearestPassable(cx, cy, R.types[t].pathLayer, int(intArg(L, 5)))) { lua_pushnil(L); return 1; }
+    int cx, cy;
+    gs.grid.cellXY({fxArg(L, 3), fxArg(L, 4), fxArg(L, 5)}, cx, cy);
+    if (!gs.grid.nearestPassable(cx, cy, R.types[t].pathLayer, int(intArg(L, 6)))) { lua_pushnil(L); return 1; }
     pushEntity(L, m.spawn(sim, uint16_t(t), uint8_t(intArg(L, 2)), gs.grid.cellCenter(cx, cy)));
     return 1;
 }

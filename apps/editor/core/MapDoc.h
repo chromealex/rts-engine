@@ -21,6 +21,7 @@ struct DocEntity {
     int owner = 0;           // 0 neutral, 1..N players, -1 hostile creeps
     int garrison = -1;       // -1 = default
     float amount = -1;       // resource override, -1 = default
+    Json at;                 // planet maps: {"body", "face", "x", "y"} (x/z above mirror at.x/at.y); null on flat maps
     Json extra = Json::object();
 };
 
@@ -34,7 +35,26 @@ struct DocPlayer {
     float startX = 0, startZ = 0;
     bool waves = false;      // scripted side (not a real opponent)
     std::vector<std::pair<std::string, float>> resources; // start overrides
+    Json startAt;            // planet maps: start as {"body", "face", "x", "y"} (hasStart set); null on flat maps
     Json extra = Json::object();
+};
+
+// One body of a planet map's `world` block. Surface bodies keep their per-face gameplay layers and corner
+// heights structured (faces 0..5, docs/planets.md §2); every other body key (kind, radius, orbit, visual,
+// generate, ...) round-trips through `meta`, other terrain keys through `terrainExtra`.
+struct DocBody {
+    std::string id;
+    int faceSize = 0;                   // 0: no surface (star)
+    std::vector<char> cells;            // 6 * N * N, face-major then row-major ('.' etc. as flat maps)
+    std::vector<int8_t> levels;         // 6 * N * N
+    std::vector<int16_t> corners;       // 6 * (N+1)^2, 1/16 units; seam duplicates equal
+    std::string cornersFile;            // terrain.cornersFile as read ("" = inline)
+    Json meta = Json::object();
+    Json terrainExtra = Json::object(); // per-face extra keys live in faceExtra
+    std::vector<Json> faceExtra;        // 6 objects (fields, material, ... per face)
+    bool surface() const { return faceSize > 0; }
+    size_t cellIndex(int face, int x, int y) const { return (size_t(face) * size_t(faceSize) + size_t(y)) * size_t(faceSize) + size_t(x); }
+    size_t cornerIndex(int face, int i, int j) const { return (size_t(face) * size_t(faceSize + 1) + size_t(j)) * size_t(faceSize + 1) + size_t(i); }
 };
 
 struct MapData {
@@ -55,6 +75,11 @@ struct MapData {
     std::vector<DocEntity> entities;
     std::vector<std::pair<int, int>> roads;   // entity indices
     Json extra = Json::object();               // areas, waves, triggers, victory, ...
+    // planet maps (`world` block): the bodies; the flat layers above are then unused (kept at 4x4)
+    std::vector<DocBody> bodies;
+    Json worldExtra = Json::object();          // world keys other than bodies (start, ...)
+    bool planet() const { return !bodies.empty(); }
+    int findBody(const std::string& id) const { for (size_t i = 0; i < bodies.size(); ++i) if (bodies[i].id == id) return int(i); return -1; }
 
     size_t idx(int x, int y) const { return size_t(y * w + x); }
     bool inside(int x, int y) const { return x >= 0 && y >= 0 && x < w && y < h; }
@@ -84,6 +109,7 @@ public:
     // simulation loader reads); save() writes the blob to the .r16 file and never into the JSON.
     Json toJson() const;
     std::string cornersFileName() const;                                          // relative, e.g. maps/big.r16
+    std::string bodyCornersFileName(const DocBody& b) const;                      // maps/<map>.<body>.r16
     static std::string cornersPath(const std::string& mapFile, const std::string& rel); // absolute file
     std::string toJsonText() const { return toJson().dump(); }
 
@@ -119,7 +145,11 @@ public:
     // Checks against the rules, then a real simulation setup (catches everything the loader rejects).
     std::vector<Issue> validate(const game::Rules& rules, const Json& rulesJson) const;
 
+    Json worldJson() const;  // the `world` block of a planet map (corners of big bodies as cornersFile + cornersBlob)
+
 private:
+    static void loadWorld(const Json& w, MapData& d);
+    void validateWorld(const game::Rules& rules, std::vector<Issue>& out) const;
     void mirror(bool point);
     void ensureLayers();
     std::vector<MapData> undo_, redo_;

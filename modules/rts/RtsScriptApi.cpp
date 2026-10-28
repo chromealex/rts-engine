@@ -417,11 +417,12 @@ int gSpawn(lua_State* L, Vm& vm) {
     if (!argFx(L, vm, 3, p.x, "x") || !argFx(L, vm, 4, p.z, "z")) return -1;
     GameState& gs = m.state(sim);
     const UnitType& ut = R.types[size_t(t)];
-    int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
-    if (!gs.grid.inside(cx, cy)) { lua_pushnil(L); return 1; }
+    int cx, cy;
+    if (!gs.grid.cellXY(p, cx, cy)) { lua_pushnil(L); return 1; }
     if (!ut.structure) {
+        const int ox = cx, oy = cy;
         if (!gs.grid.nearestPassable(cx, cy, ut.pathLayer, 6)) { lua_pushnil(L); return 1; }
-        if (cx != gs.grid.cellX(p.x) || cy != gs.grid.cellY(p.z)) p = gs.grid.cellCenter(cx, cy);
+        if (cx != ox || cy != oy) p = gs.grid.cellCenter(cx, cy);
     }
     pushEntity(L, m.spawn(sim, uint16_t(t), uint8_t(owner), p));
     return 1;

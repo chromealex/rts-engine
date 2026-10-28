@@ -51,6 +51,9 @@ set(RTS_PLUGINS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/plugins.cmake" CACHE FILEPATH 
 set(RTS_PLUGIN_SOURCES "")
 set(RTS_PLUGIN_FRAMEWORKS "")
 set(RTS_PLUGIN_PLIST_XML "")
+set(RTS_PLUGIN_INCLUDE_DIRS "")
+set(RTS_PLUGIN_LIBRARIES "")
+set(RTS_PLUGIN_RUNTIME_FILES "")
 if(EXISTS "${RTS_PLUGINS_FILE}")
     include("${RTS_PLUGINS_FILE}")
     message(STATUS "RTSEngine plugins: ${RTS_PLUGIN_NAMES}")
@@ -87,6 +90,7 @@ add_library(rts_game STATIC
     modules/rts/RtsSphere.cpp
     modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
+    modules/rts/RtsPlanets.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
@@ -306,13 +310,21 @@ endif()
 # library so that the entry point lands in the final binary on every toolchain.
 # Native plugins bridge + store/ads services (engine/platform/Plugins.h, engine/services). No window
 # needed, so tests link it directly; platform backends live in the runtime sources.
+# Desktop mock store/ads: on for development builds; rtsbuild turns it off in packaged games unless
+# game.json lists a mock (plugins.cmake sets RTS_MOCK_PLUGINS), so they are not even compiled in.
+if(NOT DEFINED RTS_MOCK_PLUGINS)
+    set(RTS_MOCK_PLUGINS ON)
+endif()
 add_library(rts_plugins STATIC
     engine/platform/Plugins.cpp
     engine/platform/PluginJson.cpp
     engine/services/Store.cpp
-    engine/services/Ads.cpp
-    engine/services/MockPlugins.cpp)
+    engine/services/Ads.cpp)
 target_include_directories(rts_plugins PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+if(RTS_MOCK_PLUGINS)
+    target_sources(rts_plugins PRIVATE engine/services/MockPlugins.cpp)
+    target_compile_definitions(rts_plugins PUBLIC RTS_WITH_MOCK_PLUGINS=1)
+endif()
 
 add_library(rts_runtime OBJECT ${RTS_RUNTIME_SRC})
 target_link_libraries(rts_runtime PUBLIC rts_engine rts_models rts_imgui rts_pack rts_zstd_dec rts_plugins)
@@ -451,11 +463,28 @@ if(RTS_BUILD_CLIENT)
     foreach(fw ${RTS_PLUGIN_FRAMEWORKS})
         target_link_libraries(${RTS_CLIENT_TARGET} PRIVATE "-framework ${fw}")
     endforeach()
+    # Desktop SDKs the developer installs (e.g. Steamworks): headers, import libraries, and shared
+    # libraries copied next to the executable (rpath $ORIGIN / @loader_path finds them there).
+    if(RTS_PLUGIN_INCLUDE_DIRS)
+        target_include_directories(${RTS_CLIENT_TARGET} SYSTEM PRIVATE ${RTS_PLUGIN_INCLUDE_DIRS})
+    endif()
+    if(RTS_PLUGIN_LIBRARIES)
+        target_link_libraries(${RTS_CLIENT_TARGET} PRIVATE ${RTS_PLUGIN_LIBRARIES})
+    endif()
+    if(RTS_PLUGIN_RUNTIME_FILES)
+        add_custom_command(TARGET ${RTS_CLIENT_TARGET} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${RTS_PLUGIN_RUNTIME_FILES} "$<TARGET_FILE_DIR:${RTS_CLIENT_TARGET}>")
+        if(UNIX AND NOT APPLE)
+            set_target_properties(${RTS_CLIENT_TARGET} PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+        elseif(APPLE)
+            set_target_properties(${RTS_CLIENT_TARGET} PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
+        endif()
+    endif()
 endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -557,6 +586,10 @@ if(RTS_BUILD_TESTS)
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
+    if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
+        target_link_libraries(rts_tests PRIVATE rts_editor_core)
+        target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)
+    endif()
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()

@@ -102,7 +102,7 @@ local function runActions(di, d, player, unit, wx, wy, wz)
           local pz = az + fx(n // 4) * SEVEN_TENTHS
           local e
           if structure then e = rts.spawn(a.type, owner, px, ay, pz)
-          else e = rts.spawn_on_cell(a.type, owner, px, pz, 6) end
+          else e = rts.spawn_on_cell(a.type, owner, px, ay, pz, 6) end
           if e then made[#made + 1] = e end
         end
         if a.attack_move then

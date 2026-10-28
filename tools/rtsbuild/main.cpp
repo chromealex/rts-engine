@@ -151,10 +151,17 @@ std::string replaceAll(std::string s, const std::string& a, const std::string& b
     for (size_t pos = 0; (pos = s.find(a, pos)) != std::string::npos; pos += b.size()) s.replace(pos, a.size(), b);
     return s;
 }
-void copyDir(const fs::path& from, const fs::path& to) {
+// Recursive copy that also works into an existing folder on every standard library
+// (MinGW's fs::copy(recursive | overwrite_existing) fails when the target directory exists).
+void copyTree(const fs::path& from, const fs::path& to) {
     fs::create_directories(to);
-    fs::copy(from, to, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
+        const fs::path dst = to / fs::relative(it->path(), from);
+        if (it->is_directory()) fs::create_directories(dst);
+        else fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing);
+    }
 }
+void copyDir(const fs::path& from, const fs::path& to) { copyTree(from, to); }
 std::string sanitize(const std::string& s) {
     std::string o;
     for (char c : s) o += (std::isalnum(static_cast<unsigned char>(c)) ? c : (c == ' ' || c == '-' || c == '_') ? '_' : '_');
@@ -600,6 +607,13 @@ std::string pluginsVar(const Options& o, const std::string& platform, const fs::
     return " -DRTS_PLUGINS_FILE=" + quote(rts::build::writePluginsCMake(pluginsFor(o, platform), dir));
 }
 
+// Shared libraries of desktop SDK plugins (steam_api64.dll, libsteam_api.so) next to the executable.
+void copyPluginRuntime(const Options& o, const std::string& platform, const fs::path& dir) {
+    rts::build::PluginSet set = rts::build::loadPlugins(o.engine, o.project, readText(o.project / "game.json"), platform, o.plugins);
+    for (const fs::path& f : rts::build::runtimeFiles(set))
+        fs::copy_file(f, dir / f.filename(), fs::copy_options::overwrite_existing);
+}
+
 // ------------------------------------------------------------------ targets
 void buildMac(const Game& g, Options& o) {
     if (std::string(kHost) != "macos") {
@@ -843,6 +857,7 @@ void buildWindows(const Game& g, Options& o) {
         fs::remove_all(out / g.exe);
         fs::create_directories(out / g.exe);
         fs::copy_file(bdir / (g.exe + ".exe"), out / g.exe / (g.exe + ".exe"), fs::copy_options::overwrite_existing);
+        copyPluginRuntime(o, "windows", out / g.exe);
         placeContent(o, out / g.exe / "content");
         info("Готово: " + (out / g.exe / (g.exe + ".exe")).string());
         reportSize(o, "windows", out / g.exe);
@@ -878,6 +893,7 @@ void buildLinux(const Game& g, Options& o) {
     fs::remove_all(out / g.exe);
     fs::create_directories(out / g.exe);
     fs::copy_file(bdir / g.exe, out / g.exe / g.exe, fs::copy_options::overwrite_existing);
+    copyPluginRuntime(o, "linux", out / g.exe);
     placeContent(o, out / g.exe / "content");
     rts::build::brandLinux(branding(g, o), out / g.exe, info);   // share/icons/hicolor + share/applications/<exe>.desktop
     info("Готово: " + (out / g.exe / g.exe).string());
