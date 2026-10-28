@@ -41,7 +41,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
             auto* cu = w.tryGet<Unit>(cand);
             if (!cu || cu->hp.raw <= 0) return;
             const UnitType& ct = rules_.types[cu->type];
-            if (ct.invulnerable || !(ct.layer & layers)) return;
+            if (ct.invulnerable || !layerHit(layers, ct.layer)) return;
             if (!hostile(sim, o.player, w.get<Owner>(cand).player)) return;
             if (rules_.advancedEffects) { uint32_t fl = statusFlags(sim, cand); if ((fl & kStInvisible) && !(fl & kStRevealed) && !(rules_.mech.detection && detected(sim, cand, o.player))) return; }
             Vec3 cp = w.get<Transform>(cand).pos;
@@ -185,8 +185,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 pr.damage = dmg; pr.splash = wd.splash; pr.damageType = dtype; pr.owner = o.player; pr.layers = wd.targets;
                 pr.onHit = proc ? wd.onHit : enchant; pr.sourceType = u.type;
                 if (proc && enchant >= 0) onHits.push_back({enchant, e, c.target, o.player, u.type, tp});
-                Vec3 start = tr.pos;
-                start.y = groundHeight(sim, tr.pos) + Fixed::fromRatio(6, 10);
+                Vec3 start = lift(sim, tr.pos, Fixed::fromRatio(6, 10));
                 shots.push_back({pr, start});
             }
         }
@@ -232,16 +231,15 @@ void RtsModule::sysProjectiles(Simulation& sim) {
                 pr.travel += step;
                 Fixed t = fxMin(kOne, pr.travel / pr.total);
                 Vec3 flatPos = pr.start + (pr.aim - pr.start) * t;
-                flatPos.y = groundHeight(sim, flatPos) + Fixed::fromRatio(4, 10) + e.delivery.arcHeight * 4 * t * (kOne - t);
-                tr.pos = flatPos;
+                tr.pos = lift(sim, flatPos, Fixed::fromRatio(4, 10) + e.delivery.arcHeight * 4 * t * (kOne - t));
                 if (t >= kOne) impacts.push_back(p);
                 return;
             }
-            Vec3 aim = pr.aim; aim.y = groundHeight(sim, aim) + Fixed::fromRatio(4, 10);
+            Vec3 aim = lift(sim, pr.aim, Fixed::fromRatio(4, 10));
             if (moveTowards(tr.pos, aim, step)) impacts.push_back(p);
             return;
         }
-        if (w.alive(pr.target) && w.has<Unit>(pr.target)) { pr.aim = w.get<Transform>(pr.target).pos; pr.aim.y = groundHeight(sim, pr.aim) + Fixed::fromRatio(4, 10); }
+        if (w.alive(pr.target) && w.has<Unit>(pr.target)) { pr.aim = lift(sim, w.get<Transform>(pr.target).pos, Fixed::fromRatio(4, 10)); }
         if (!moveTowards(tr.pos, pr.aim, pr.speed * dt)) return;
         if (w.alive(pr.target) && w.has<Unit>(pr.target)) dealDamage(sim, pr.target, pr.damage, pr.damageType, pr.source, pr.owner);
         if (pr.onHit >= 0 && w.alive(pr.target)) onHits.push_back({pr.onHit, pr.source, pr.target, pr.owner, pr.sourceType, pr.aim});
@@ -379,7 +377,7 @@ void RtsModule::applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint
         case EffectKind::Blink: {
             if (!w.alive(caster)) break;
             auto& g = state(sim).grid;
-            int x = g.cellX(point.x), y = g.cellY(point.z);
+            int x, y; g.cellXY(point, x, y);
             const UnitType& ct = rules_.types[w.get<Unit>(caster).type];
             if (g.passable(x, y, ct.pathLayer)) {
                 Transform& tr = w.get<Transform>(caster);

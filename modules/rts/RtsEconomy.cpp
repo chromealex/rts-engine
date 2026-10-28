@@ -140,7 +140,7 @@ void RtsModule::sysFields(Simulation& sim) {
         if (t.fieldSpawnRes < 0 || (u.flags & kUnitUnderConstruction)) return;
         const ResourceDef& rd = rules_.resources[size_t(t.fieldSpawnRes)];
         int r = t.fieldSpawnRadius;
-        int cx = g.cellX(tr.pos.x), cy = g.cellY(tr.pos.z);
+        int cx, cy; g.cellXY(tr.pos, cx, cy);
         int x = cx + sim.rng().range(-r, r), y = cy + sim.rng().range(-r, r);
         if (!g.inside(x, y)) return;
         size_t i = size_t(g.index(x, y));
@@ -402,7 +402,7 @@ void RtsModule::sysGarrison(Simulation& sim) {
                 auto& f = w.get<Footprint>(r.from);
                 while (pos + 1u < L.points.size()) {
                     Vec3 p = L.points[reverse ? L.points.size() - 1 - pos : pos];
-                    int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+                    int cx, cy; gs.grid.cellXY(p, cx, cy);
                     if (cx < f.x || cy < f.y || cx >= f.x + f.w || cy >= f.y + f.h) break;
                     ++pos;
                 }

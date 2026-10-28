@@ -22,6 +22,7 @@ const char* const kEventNames[] = {
     "roadBuilt", "lanesChanged",
     "statusStart", "statusEnd", "areaStart", "areaTrigger", "areaEnd", "projectileLaunch", "impact",
     "chainJump", "castStart", "channelStart", "channelEnd", "alert", "garrisonChanged",
+    "transitStart", "transitEnd",
     "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
@@ -38,7 +39,7 @@ const CmdName kCommands[] = {
     {"possess", kCmdPossess}, {"direct", kCmdDirect}, {"player_ability", kCmdPlayerAbility},
     {"build_road", kCmdBuildRoad}, {"connect_road", kCmdConnectRoad},
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
-    {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
+    {"transit", kCmdTransit}, {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
     {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
     {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem},
 };
