@@ -188,6 +188,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
+        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10) && rules_.mech.workerCaps && !mechNodeHasRoom(sim, o.target, e)) { stopMoving(sim, e); return false; }   // agent-mech: waits for a free place
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) { stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10)); }
         else if (m && !m->moving) o.state = 0;
         return false;
@@ -207,7 +208,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         }
         if (rules_.resources[size_t(res)].kind == ResourceKind::Flow || nt.dropoffMask & (1u << res)) {
             // reclaim (TA) or gather-in-place (farm that is its own dropoff): credit directly
-            addResource(sim, owner, uint16_t(res), take * gs.players[owner].gatherMult);
+            addResource(sim, owner, uint16_t(res), take * gatherMultFor(sim, owner, res));
             sim.emit({kEvGathered, owner, e, o.target, res, nodePos});
             o.state = 2;
             o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
@@ -358,7 +359,7 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         }
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
             stopMoving(sim, e);
-            addResource(sim, owner, uint16_t(cargo->res), cargo->amount * state(sim).players[owner].gatherMult);
+            addResource(sim, owner, uint16_t(cargo->res), cargo->amount * gatherMultFor(sim, owner, cargo->res));
             sim.emit({kEvGathered, owner, e, o.target, cargo->res, w.get<Transform>(e).pos});
             cargo->amount = Fixed{};
             Order g;

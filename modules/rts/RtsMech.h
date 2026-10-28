@@ -19,5 +19,7 @@ struct Boarded { Entity carrier = kNullEntity; bool fires = false; };
 struct Veteran { int level = 1; Fixed xp{}; Entity lastHit = kNullEntity; };
 // Extra rally waypoints of a producer (Shift + rally): new units walk them in order after the rally point.
 struct RallyPath { std::vector<Vec3> points; };
+// StarCraft shields: absorb damage first, regenerate after `delay` seconds without being hit.
+struct Shield { Fixed hp{}; uint32_t lastHit = 0; };
 
 } // namespace rts::game

@@ -66,9 +66,10 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     if (!u || u->hp.raw <= 0) return;
     const UnitType& t = rules_.types[u->type];
     if (t.invulnerable) return;
-    Fixed raw = dmg * rules_.damageMult(dmgType, t.armorType);
+    if (rules_.mech.shields) { dmg = mechShieldAbsorb(sim, target, dmg); if (dmg.raw <= 0) { sim.emit({kEvHit, sourceOwner, target, source, 0, w.get<Transform>(target).pos}); return; } }
+    Fixed raw = dmgType == kDamagePure ? dmg : dmg * rules_.damageMult(dmgType, t.armorType);
     Fixed armor = stat(sim, target, Stat::Armor);
-    Fixed fin = fxMax(raw - armor, raw / 5);
+    Fixed fin = rules_.mech.any ? mechArmorDamage(sim, target, raw, dmgType) : fxMax(raw - armor, raw / 5);   // agent-mech armor models
     if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target);   // agent-mech (retreat)
     if (rules_.advancedEffects) {
         uint32_t fl = statusFlags(sim, target);
@@ -162,23 +163,25 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 continue;
             }
             Fixed dmg = wd.damage * mult;
+            uint16_t dtype = wd.damageType;
+            if (rules_.mech.armorModel == ArmorModel::Classes) mechClassDamage(sim, e, i, c.target, dmg, dtype);   // agent-mech
             const int16_t enchant = statusOnHit(e);
             const bool proc = wd.onHit >= 0 && (wd.onHitChance >= kOne || sim.rng().unit() < wd.onHitChance);
             if (wd.projectileSpeed.raw <= 0) {
-                dealDamage(sim, c.target, dmg, wd.damageType, e, o.player);
+                dealDamage(sim, c.target, dmg, dtype, e, o.player);
                 if (proc) onHits.push_back({wd.onHit, e, c.target, o.player, u.type, tp});
                 if (enchant >= 0) onHits.push_back({enchant, e, c.target, o.player, u.type, tp});
                 if (wd.splash.raw > 0) {
                     gs.hash.query(tp, wd.splash, [&](Entity s) {
                         if (s == c.target || !w.has<Unit>(s)) return;
                         if (!hostile(sim, o.player, w.get<Owner>(s).player)) return;
-                        if (dist2D(w.get<Transform>(s).pos, tp) <= wd.splash) dealDamage(sim, s, dmg, wd.damageType, e, o.player);
+                        if (dist2D(w.get<Transform>(s).pos, tp) <= wd.splash) dealDamage(sim, s, dmg, dtype, e, o.player);
                     });
                 }
             } else {
                 Projectile pr;
                 pr.target = c.target; pr.source = e; pr.aim = tp; pr.speed = wd.projectileSpeed;
-                pr.damage = dmg; pr.splash = wd.splash; pr.damageType = wd.damageType; pr.owner = o.player; pr.layers = wd.targets;
+                pr.damage = dmg; pr.splash = wd.splash; pr.damageType = dtype; pr.owner = o.player; pr.layers = wd.targets;
                 pr.onHit = proc ? wd.onHit : enchant; pr.sourceType = u.type;
                 if (proc && enchant >= 0) onHits.push_back({enchant, e, c.target, o.player, u.type, tp});
                 Vec3 start = tr.pos;

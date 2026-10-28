@@ -279,6 +279,14 @@ Json entityJson(const SimRefs& refs, Entity e) {
         j.set("carrying", cj);
     }
     if (auto* h = w.tryGet<Hero>(e)) j.set("level", Json::number(int64_t(h->level)));
+    if (auto* v = w.tryGet<Veteran>(e); v && v->level > 1) j.set("rank", Json::number(int64_t(v->level)));
+    if (auto* sh = w.tryGet<Shield>(e)) j.set("shield", Json::number(sh->hp.toDouble(), 1));
+    if (auto* tp = w.tryGet<Transport>(e); tp && !tp->cargo.empty()) {
+        Json c = Json::array();
+        for (Entity p : tp->cargo) c.push(refs.refJson(p));
+        j.set("cargo", c);
+    }
+    if (auto* st = w.tryGet<Stance>(e)) { static const char* n[] = {"aggressive", "defensive", "hold", "passive"}; j.set("stance", Json::string(n[st->mode & 3])); }
     if (auto* rs = w.tryGet<ResourceStock>(e); rs && !rs->infinite) j.set("amount", Json::number(rs->amount.toDouble(), 0));
     return j;
 }

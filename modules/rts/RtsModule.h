@@ -504,6 +504,13 @@ public:
     bool applyMechCommand2(Simulation& sim, const Command& cmd);    // guard, follow, rally waypoints
     void mechTick(Simulation& sim);                                  // veterans, toggles
     void mechVeteranKill(Simulation& sim, Entity victim);
+    // combat / economy models (RtsMechCombat.cpp)
+    void mechClassDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;
+    Fixed mechArmorDamage(Simulation& sim, Entity target, Fixed raw, uint16_t dmgType) const;   // armor model
+    Fixed mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg);                          // what is left for hp
+    Fixed gatherMultFor(Simulation& sim, uint8_t owner, int res) const;                         // upkeep per resource
+    bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
+    void mechTickCombat(Simulation& sim);                                                       // shields
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

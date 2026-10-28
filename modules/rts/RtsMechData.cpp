@@ -80,10 +80,60 @@ void loadMechRules(Rules& r, const Json& j) {
         if (m.vet.xp.empty()) fail("veterancy.xp", "needs at least one rank");
         m.any = m.veterancy = true;
     }
+    // ---- combat models
+    auto classIndex = [&](const std::string& name) -> uint16_t {
+        for (size_t i = 0; i < m.armorClasses.size(); ++i) if (m.armorClasses[i] == name) return uint16_t(i);
+        if (m.armorClasses.size() >= 64) fail("armor classes", "at most 64");
+        m.armorClasses.push_back(name);
+        return uint16_t(m.armorClasses.size() - 1);
+    };
+    if (const Json& am = j["armorModel"]; !am.isNull()) {
+        const std::string type = am.isString() ? am.str() : am.getStr("type", "subtract");
+        if (type == "subtract") m.armorModel = ArmorModel::Subtract;
+        else if (type == "percent") m.armorModel = ArmorModel::Percent;
+        else if (type == "classes") m.armorModel = ArmorModel::Classes;
+        else fail("armorModel", "expected subtract, percent or classes, got '" + type + "'");
+        m.minDamageFraction = am.getFx("minFraction", m.armorModel == ArmorModel::Classes ? Fixed{} : m.minDamageFraction);
+        m.minDamage = am.getFx("min", m.armorModel == ArmorModel::Classes ? Fixed::fromInt(1) : Fixed{});
+        m.percentFactor = am.getFx("factor", m.percentFactor);
+        for (auto& b : am["base"].items()) classIndex(b.str());
+        m.baseClasses = int(m.armorClasses.size());
+        if (m.armorModel == ArmorModel::Classes && m.baseClasses == 0) fail("armorModel.base", "the classes model needs base classes, e.g. [\"melee\", \"pierce\"]");
+        m.any = true;
+    }
+    for (auto& rs : j["upkeepResources"].items()) {
+        int ri = r.findResource(rs.str());
+        if (ri < 0) fail("upkeepResources", "unknown resource '" + rs.str() + "'");
+        m.upkeepMask |= 1u << ri;
+    }
     size_t ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];
         const std::string where = "type '" + id + "'";
+        if (m.armorModel == ArmorModel::Classes) {
+            for (auto& [cls, v] : tj["armors"].members()) {
+                uint16_t ci = classIndex(cls);
+                if (t.mech.armors.size() <= ci) t.mech.armors.resize(size_t(ci) + 1);
+                t.mech.armors[ci] = v.fx();
+                t.mech.armorClassMask |= uint64_t(1) << ci;
+            }
+            const Json& ws = tj["weapons"];
+            t.mech.attacks.resize(ws.size());
+            for (size_t wi = 0; wi < ws.size(); ++wi)
+                for (auto& [cls, v] : ws[wi]["attacks"].members()) t.mech.attacks[wi].push_back({classIndex(cls), v.fx()});
+        }
+        if (const Json& sh = tj["shields"]; sh.isObject()) {
+            t.mech.shieldMax = sh.getFx("max");
+            if (t.mech.shieldMax.raw <= 0) fail(where + " shields.max", "must be > 0");
+            t.mech.shieldRegen = sh.getFx("regen", Fixed::fromInt(2));
+            t.mech.shieldDelay = sh.getFx("delay", t.mech.shieldDelay);
+            t.mech.shieldArmor = sh.getFx("armor");
+            m.any = m.shields = true;
+        }
+        if (const Json& rn = tj["resourceNode"]; rn.isObject() && rn.has("maxWorkers")) {
+            t.mech.maxWorkers = int(rn.getInt("maxWorkers", 0));
+            if (t.mech.maxWorkers > 0) m.any = m.workerCaps = true;
+        }
         MechType& mt = t.mech;
         if (tj.has("stance")) {
             mt.stance = stanceOf(where + " stance", tj.getStr("stance"));
