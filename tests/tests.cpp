@@ -2181,6 +2181,36 @@ TEST(i18n_placeholder_only_strings_are_not_untranslated) {
     CHECK((flagged == std::vector<std::string>{"hi", "lit"}));
 }
 
+TEST(i18n_ui_documents_translated) {
+    // Every {{ 'key' | tr(lang) }} in the engine's documents exists in every engine table, and the
+    // documents have no hard-coded Cyrillic (menu, hud, lobby, and any document added later).
+    namespace fs = std::filesystem;
+    auto read = contentReader("skirmish");
+    int docs = 0;
+    for (auto& entry : fs::directory_iterator(fs::path(RTS_SOURCE_DIR) / "engine" / "assets" / "ui")) {
+        if (entry.path().extension() != ".rml") continue;
+        ++docs;
+        const std::string doc = entry.path().filename().string();
+        std::string rml;
+        CHECK(read("engine/ui/" + doc, rml));
+        auto keys = i18n::markupKeys(rml);
+        CHECK(!keys.empty());
+        for (const char* lang : {"en", "ru"}) {
+            std::string text;
+            CHECK(read(std::string("engine/lang/") + lang + ".json", text));
+            i18n::Catalog c;
+            c.merge(Json::parse(text));
+            for (auto& k : keys)
+                if (!c.find(k)) { CHECK(false); std::printf("  %s: '%s' missing in %s\n", doc.c_str(), k.c_str(), lang); }
+        }
+        bool cyrillic = false;
+        for (size_t i = 0; i + 1 < rml.size(); ++i)
+            if ((unsigned char)rml[i] == 0xD0 || (unsigned char)rml[i] == 0xD1) cyrillic = true;
+        CHECK(!cyrillic);
+    }
+    CHECK(docs >= 3);   // menu, hud, lobby
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
