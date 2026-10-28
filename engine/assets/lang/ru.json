@@ -36,7 +36,7 @@
     "wave_in": { "one": "Волна через {count} секунду", "few": "Волна через {count} секунды", "many": "Волна через {count} секунд", "other": "Волна через {count} секунды" },
     "regions": "Регионы: {count}",
     "claim": "Занять",
-    "auto_build": "СТРОИТЬ",
+    "auto_build": "Строить",
     "menu": "Меню"
   },
 
@@ -57,16 +57,16 @@
     "stock": "Запас: {amount}",
     "garrison": "Гарнизон: {count} / {max}",
     "supply_cost": "{count} лим.",
-    "send": "Отправить:",
+    "send": "Отправить",
     "send_hint": "Перетащите от здания к цели",
-    "attack": "Атака (A)",
-    "stop": "Стоп (S)",
-    "hold": "Держать (H)",
-    "patrol": "Патруль (P)",
-    "build": "Строить:",
+    "attack": "Атака",
+    "stop": "Стоп",
+    "hold": "Держать",
+    "patrol": "Патруль",
+    "build": "Строить",
     "requires": "Требуется: {list}",
     "aura": "Аура: {name}",
-    "energy_cost": "({count} эн.)",
+    "energy_cost": "{count} эн.",
     "place": "Установить: {name}",
     "charges": "Заряды: {count} / {max}",
     "research": "Исследовать: {name}",
@@ -96,7 +96,11 @@
     "to_menu": "В меню",
     "sound": "Звук:",
     "music": "Музыка:",
-    "off": "выкл"
+    "off": "выкл",
+    "particles": "Частицы:",
+    "low": "низк.",
+    "medium": "средн.",
+    "high": "выс."
   },
 
   "ui": {

@@ -576,6 +576,7 @@ TEST(json_edit_and_dump_roundtrip) {
 // ---------------- Localization (engine/i18n) ----------------
 #include "engine/i18n/GameLanguage.h"
 #include "modules/rts/RtsLocalize.h"
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -865,6 +866,7 @@ TEST(pack_sample_games_match_folder) {
 #include <sstream>
 #include <tuple>
 #include "engine/audio/Audio.h"
+#include "engine/audio/AudioMixer.h"   // spatialize / distanceGain (pure functions)
 #include "engine/audio/Synth.h"
 #include "modules/rts/audio/RtsAudio.h"
 
@@ -1001,15 +1003,15 @@ TEST(audio_voice_limits_and_cooldown) {
 
 TEST(audio_spatial_and_volumes) {
     auto a = offlineAudio();
-    CHECK(loadBank(*a, R"({"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
+    CHECK(loadBank(*a, R"({"spatial":{"minDistance":10,"maxDistance":20,"reverb":false},"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
     a->setListener(0, 0, 0, 10);
     CHECK(a->audibility(5, 0) == 1.0f && a->audibility(25, 0) == 0.0f);
     CHECK(a->audibility(15, 0) > 0.0f && a->audibility(15, 0) < 1.0f);
     audio::PlayParams far;
     far.positional = true; far.x = 100;
-    CHECK(loadBank(*a, R"({"sounds":{"blip":{"synth":{"duration":0.1}}}})"));
+    CHECK(loadBank(*a, R"({"spatial":{"minDistance":10,"maxDistance":20,"reverb":false},"sounds":{"blip":{"synth":{"duration":0.1}}}})"));
     CHECK(a->play("blip", far) == audio::kNoVoice);                 // inaudible one-shots are not even started
-    CHECK(loadBank(*a, R"({"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
+    CHECK(loadBank(*a, R"({"spatial":{"minDistance":10,"maxDistance":20,"reverb":false},"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
     audio::PlayParams right;
     right.positional = true; right.x = 9;
     audio::VoiceId v = a->play("tone", right);
@@ -1140,7 +1142,6 @@ TEST(audio_decode_and_stream_ogg_vorbis) {
     std::tie(l, r) = renderRms(*a, 0.3f);
     CHECK(l > 0.05 && r > 0.05);
 }
-
 // ------------------------------------------------------------------ unpacker plugins (foreign archives)
 
 #include <filesystem>
@@ -1332,6 +1333,48 @@ TEST(unpacker_westwood_pak) {
     CHECK(w.writeToString(bytes, WriteOptions{}));
     auto p = Pack::open(memorySource(bytes));
     CHECK(p && p->read("A.CPS", out) && out == a && p->read("B.VOC", out) && out == b);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+// ------------------------------------------------------------------ importers (tools/importers)
+
+TEST(importer_dune2_rules_and_synthetic_scenario) {
+    if (!havePython()) return;
+    CHECK(std::system("python3 " RTS_SOURCE_DIR "/tools/importers/lib/selftest.py >/dev/null") == 0);
+    tfs::path d = testDir("dune2");
+    // A made-up scenario in the Dune II INI layout (no game data): two houses, a base, units, spice.
+    std::string ini = "[BASIC]\nMapScale=1\nWinFlags=6\n[MAP]\nField=1300\nBloom=2409\nSeed=353\n"
+                      "[Atreides]\nQuota=500\nCredits=1000\nBrain=Human\n[Ordos]\nCredits=500\nBrain=CPU\n"
+                      "[UNITS]\nID001=Atreides,Trike,256,1501,64,Guard\nID002=Ordos,Quad,256,2600,64,Hunt\nID003=Fremen,Sandworm,256,2000,64,Ambush\n"
+                      "ID004=Ordos,Frigate,256,2000,64,Guard\n"
+                      "[STRUCTURES]\nID000=Atreides,Const Yard,256,1630\nID001=Ordos,Windtrap,256,2660\nGEN2662=Ordos,Wall\nGEN2663=Ordos,Concrete\n";
+    std::string pak = le32(4 + 13 + 4) + std::string("SCENA001.INI\0", 13) + le32(0) + ini;
+    writeFile(d / "src" / "SCENARIO.PAK", pak);
+    std::string cmd = "python3 " RTS_SOURCE_DIR "/tools/importers/dune2/import.py --maps-only --json --source '" + (d / "src").string() +
+                      "' --out '" + (d / "out").string() + "' > '" + (d / "report.json").string() + "'";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile((d / "report.json").string());
+    CHECK(rep.getBool("ok") && rep.getInt("maps") == 1 && rep["skipped"].getInt("Frigate") == 1);
+    Json game = Json::parseFile((d / "out" / "game.json").string());
+    CHECK(game.getBool("external") && game["maps"].size() == 1);
+    // The importer's rules and map must load into the real simulation and run.
+    SimConfig cfg; cfg.seed = 4;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    bool loaded = true;
+    try {
+        sim->setup(Json::parseFile((d / "out" / "rules.json").string()), Json::parseFile((d / "out" / "maps" / "scena001.json").string()));
+    } catch (const std::exception& e) { std::printf("  %s\n", e.what()); loaded = false; }
+    CHECK(loaded);
+    if (loaded) {
+        CHECK(countType(*sim, "const_yard", 1) == 1 && countType(*sim, "windtrap", 2) == 1 && countType(*sim, "trike", 1) == 1);
+        CHECK(countType(*sim, "wall", 2) == 1 && countType(*sim, "spice_bloom", 0) == 1);
+        Fixed spice{};
+        for (auto a : mod(*sim).state(*sim).grid.fieldAmt) spice += a;
+        CHECK(spice > Fixed{});                                       // Field= became a spice field
+        run(*sim, 20);
+        CHECK(sim->result() == 0);                                   // Ordos still has units: no instant win
+    }
     std::error_code ec;
     tfs::remove_all(d, ec);
 }
@@ -2400,6 +2443,66 @@ TEST(models_sample_assets_load) {
     CHECK(warn.empty());
 }
 
+TEST(i18n_ui_markup_keys) {
+    CHECK((i18n::markupKeys(R"(<h2>{{ 'menu.map' | tr(lang) }}</h2><b data-if="screen == 'menu'">{{"a.b"|tr}}</b>{{ 'x' | trim }}<!-- {{ 'c' | tr(lang) }} -->)")
+           == std::vector<std::string>{"menu.map", "a.b"}));
+}
+
+TEST(i18n_saved_language_roundtrip) {
+    // The user data dir does not exist on first run; saving must create it.
+    const auto root = std::filesystem::temp_directory_path() / "rts-test-i18n-userdir";
+    const std::string dir = (root / "nested").string();
+    std::filesystem::remove_all(root);
+    CHECK(i18n::readSavedLanguage(dir).empty());
+    CHECK(i18n::saveLanguage(dir, "ru_RU"));
+    CHECK(i18n::readSavedLanguage(dir) == "ru-RU");
+    std::filesystem::remove_all(root);
+}
+
+TEST(i18n_placeholder_only_strings_are_not_untranslated) {
+    // "{name}: {text}" (net.chat_line) is the same in every language: no "not translated" warning.
+    CHECK(i18n::visibleText("{name}: {text}") == ": ");
+    CHECK(i18n::visibleText("{{x}} {n} ok") == "{x}  ok");
+    i18n::Catalog en, ru;
+    en.merge(Json::parse(R"({"chat": "{name}: {text}", "score": "{a} – {b}", "lit": "{{raw}}", "hi": "Hello, {name}"})"));
+    ru.merge(Json::parse(R"({"chat": "{name}: {text}", "score": "{a} – {b}", "lit": "{{raw}}", "hi": "Hello, {name}"})"));
+    std::vector<std::string> flagged;
+    for (auto& i : i18n::check(en, "en", ru, "ru"))
+        if (i.message.find("not translated yet") != std::string::npos) flagged.push_back(i.key);
+    // literal braces are visible text, so "{{raw}}" still counts as words
+    CHECK((flagged == std::vector<std::string>{"hi", "lit"}));
+}
+
+TEST(i18n_ui_documents_translated) {
+    // Every {{ 'key' | tr(lang) }} in the engine's documents exists in every engine table, and the
+    // documents have no hard-coded Cyrillic (menu, hud, lobby, and any document added later).
+    namespace fs = std::filesystem;
+    auto read = contentReader("skirmish");
+    int docs = 0;
+    for (auto& entry : fs::directory_iterator(fs::path(RTS_SOURCE_DIR) / "engine" / "assets" / "ui")) {
+        if (entry.path().extension() != ".rml") continue;
+        ++docs;
+        const std::string doc = entry.path().filename().string();
+        std::string rml;
+        CHECK(read("engine/ui/" + doc, rml));
+        auto keys = i18n::markupKeys(rml);
+        if (doc != "keyboard.rml") CHECK(!keys.empty()); // the on-screen keyboard has only key caps, no text
+        for (const char* lang : {"en", "ru"}) {
+            std::string text;
+            CHECK(read(std::string("engine/lang/") + lang + ".json", text));
+            i18n::Catalog c;
+            c.merge(Json::parse(text));
+            for (auto& k : keys)
+                if (!c.find(k)) { CHECK(false); std::printf("  %s: '%s' missing in %s\n", doc.c_str(), k.c_str(), lang); }
+        }
+        bool cyrillic = false;
+        for (size_t i = 0; i + 1 < rml.size(); ++i)
+            if ((unsigned char)rml[i] == 0xD0 || (unsigned char)rml[i] == 0xD1) cyrillic = true;
+        CHECK(!cyrillic);
+    }
+    CHECK(docs >= 3);   // menu, hud, lobby
+}
+
 #include "engine/atlas/TextureLibrary.h"
 
 namespace {
@@ -2561,6 +2664,507 @@ TEST(terrain_line_of_sight_behind_ridge) {
     run(*sim2, 1);
     CHECK(mod(*sim2).state(*sim2).vision[1][size_t(gs.grid.index(17, 4))] == 2);
     CHECK(!mod(*sim2).state(*sim2).grid.hf);
+TEST(audio_3d_distance_models_and_pose) {
+    audio::DistanceDef d;
+    d.minDistance = 10; d.maxDistance = 50;
+    for (auto model : {audio::Rolloff::Inverse, audio::Rolloff::Linear, audio::Rolloff::Exponential}) {
+        d.model = model;
+        CHECK(audio::distanceGain(d, 5, 1) == 1.0f && audio::distanceGain(d, 50, 1) == 0.0f);
+        float prev = 1.0f;
+        bool monotonic = true;
+        for (float x = 10; x <= 50; x += 1) { float g = audio::distanceGain(d, x, 1); monotonic = monotonic && g <= prev; prev = g; }
+        CHECK(monotonic);
+        CHECK(audio::distanceGain(d, 40, 2) > audio::distanceGain(d, 40, 1));  // more hearing = farther
+    }
+    audio::Environment env;
+    audio::ListenerPose ear;   // at the origin, looking down -z
+    auto above = audio::spatialize(ear, env, d, 0, 30, 0), side = audio::spatialize(ear, env, d, 30, 0, 0);
+    CHECK(std::fabs(above.distance - 30) < 1e-3f && std::fabs(above.gain - side.gain) < 1e-5f);  // height counts as distance
+    CHECK(std::fabs(above.pan) < 1e-3f && side.pan > 0.8f);
+    ear.forward[0] = 0; ear.forward[1] = -1; ear.forward[2] = 0;          // top-down camera
+    ear.up[0] = 0; ear.up[1] = 0; ear.up[2] = -1;                          // screen up = world -z
+    CHECK(audio::spatialize(ear, env, d, 20, -5, 0).pan > 0.5f);          // world +x is screen right
+    env.rear = 1;
+    ear = audio::ListenerPose{};
+    auto front = audio::spatialize(ear, env, d, 0, 0, -20), back = audio::spatialize(ear, env, d, 0, 0, 20);
+    CHECK(back.gain < front.gain && back.cutoff > 0 && (front.cutoff == 0 || back.cutoff < front.cutoff));
+    CHECK(front.t > 0.2f && front.send > env.reverbNear);                  // farther = more reverb
+    CHECK(audio::farWeight(0.1f, 0.3f) == 0.0f && audio::farWeight(1.0f, 0.3f) == 1.0f && audio::farWeight(0.65f, 0.3f) > 0.3f);
+}
+
+namespace {
+// Fraction of the signal's energy in its sample-to-sample differences: high for bright sounds.
+double brightness(const std::vector<float>& st) {
+    double e = 0, d = 0;
+    for (size_t i = 2; i < st.size(); i += 2) { e += st[i] * st[i]; const double x = st[i] - st[i - 2]; d += x * x; }
+    return e > 0 ? d / e : 0;
+}
+std::vector<float> renderBuf(audio::AudioEngine& a, float seconds) {
+    std::vector<float> buf(size_t(48000 * seconds) * 2);
+    a.render(buf.data(), int(buf.size() / 2));
+    return buf;
+}
+double energy(const std::vector<float>& st, size_t from, size_t to) {
+    double e = 0;
+    for (size_t i = from * 2; i < std::min(st.size(), to * 2); ++i) e += st[i] * st[i];
+    return e;
+}
+} // namespace
+
+TEST(audio_air_absorption_dulls_far_sounds) {
+    // linear rolloff 0 keeps the level until the last 20 %: only the air filter differs
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":100,"airAbsorption":1000,"reverb":false},
+        "sounds":{"hiss":{"synth":{"wave":"noise","freq":20000,"duration":0.5,"attack":0,"release":0}}}})"));
+    a->setListener(0, 0, 0, 5);
+    audio::PlayParams p;
+    p.positional = true;
+    p.x = 2;
+    a->play("hiss", p);
+    const double nearB = brightness(renderBuf(*a, 0.4f));
+    renderBuf(*a, 0.3f);
+    p.x = 75;
+    a->play("hiss", p);
+    const auto farBuf = renderBuf(*a, 0.4f);
+    CHECK(energy(farBuf, 0, 19200) > 1.0);                                  // still clearly audible
+    CHECK(brightness(farBuf) < nearB * 0.3);                                // but much duller
+}
+
+TEST(audio_reverb_grows_with_distance) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":100,"airAbsorption":false,
+        "reverb":{"size":0.7,"wet":0.6,"near":0.0,"far":1.0}},
+        "sounds":{"tick":{"synth":{"wave":"square","freq":300,"duration":0.04,"attack":0,"release":0.01}}}})"));
+    a->setListener(0, 0, 0, 5);
+    auto tailRatio = [&](float x) {
+        audio::PlayParams p;
+        p.positional = true;
+        p.x = x;
+        a->play("tick", p);
+        auto b = renderBuf(*a, 0.8f);
+        const double direct = energy(b, 0, 2400), tail = energy(b, 9600, 38400);  // 0..50 ms vs 200..800 ms
+        renderBuf(*a, 4.0f);                                                       // let the tail die
+        return direct > 0 ? tail / direct : 0.0;
+    };
+    const double nearR = tailRatio(2), farR = tailRatio(75);
+    CHECK(nearR < 0.01 && farR > 0.05 && farR > nearR * 10);
+    auto after = renderBuf(*a, 0.1f);                                       // the reverb decays (stable, no NaN)
+    CHECK(energy(after, 0, 4800) < 1e-6 && std::isfinite(energy(after, 0, 4800)));
+}
+
+TEST(audio_far_variant_crossfade) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":100,"airAbsorption":false,"reverb":false},
+        "sounds":{"boom":{"synth":{"wave":"sine","freq":2000,"duration":1},"far":{"sound":"boomFar","from":0.2},"maxDistance":100},
+                  "boomFar":{"synth":{"wave":"sine","freq":100,"duration":1},"maxDistance":160}}})"));
+    CHECK(a->sound(a->find("boom"))->far == a->find("boomFar"));
+    a->setListener(0, 0, 0, 5);
+    auto crossings = [&](float x) {
+        audio::PlayParams p;
+        p.positional = true;
+        p.x = x;
+        audio::VoiceId v = a->play("boom", p);
+        auto b = renderBuf(*a, 0.3f);
+        int zc = 0;
+        for (size_t i = 2; i < b.size(); i += 2) zc += (b[i] > 0) != (b[i - 2] > 0);
+        a->stop(v, 0.01f);
+        renderBuf(*a, 0.05f);
+        CHECK(a->activeVoices() == 0);                                      // stop() ends both halves
+        return zc;
+    };
+    CHECK(crossings(3) > 1000);    // near: the bright 2 kHz version
+    CHECK(crossings(95) < 100);    // far: the 100 Hz rumble
+    CHECK(a->audibility(a->find("boom"), 130, 0, 0) > 0.0f);  // heard as far as its far variant carries
+    std::string err;
+    CHECK(loadBank(*a, R"({"sounds":{"x":{"synth":{},"far":"nope"}}})", &err) && a->warnings().size() == 1);
+    CHECK(!loadBank(*a, R"({"spatial":{"model":"cubic"}})", &err) && err.find("unknown model 'cubic'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"minDistance":30,"maxDistance":20}}})", &err) && err.find("minDistance < maxDistance") != std::string::npos);
+}
+
+TEST(audio_speed_of_sound_delay) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":200,"airAbsorption":false,"reverb":false,"speedOfSound":100},
+        "sounds":{"bang":{"synth":{"wave":"square","freq":200,"duration":0.2,"attack":0}}}})"));
+    a->setListener(0, 0, 0, 5);
+    audio::PlayParams p;
+    p.positional = true;
+    p.x = 50;                                                                 // 0.5 s away
+    a->play("bang", p);
+    auto b = renderBuf(*a, 0.8f);
+    CHECK(energy(b, 0, 22000) < 1e-9);                                        // nothing before ~0.46 s
+    CHECK(energy(b, 24500, 33000) > 1.0);                                     // then the bang
+    p.x = 0.5f;
+    a->play("bang", p);
+    b = renderBuf(*a, 0.05f);
+    CHECK(energy(b, 0, 2400) > 0.1);                                          // close sounds are immediate
+}
+
+// ---------------- Music (loops, layers, quantized transitions, stingers, ducking) ----------------
+#include "tools/audiopack/AudioPack.h"
+
+namespace {
+// 16-bit mono WAV from a function of time
+std::string wavOf(int rate, float seconds, const std::function<float(float)>& f) {
+    std::vector<int16_t> pcm(size_t(float(rate) * seconds));
+    for (size_t i = 0; i < pcm.size(); ++i) pcm[i] = int16_t(std::lrint(std::clamp(f(float(i) / float(rate)), -1.0f, 1.0f) * 20000.0f));
+    return audiopack::encodeWav(pcm, 1, rate);
+}
+float tone(float hz, float t) { return std::sin(6.2831853f * hz * t); }
+// Amplitude of `hz` in the left channel of `st` between two times (Goertzel).
+double level(const std::vector<float>& st, double hz, double from, double to) {
+    const size_t a = size_t(from * 48000), b = std::min(st.size() / 2, size_t(to * 48000));
+    if (b <= a) return 0;
+    const double w = 6.283185307 * hz / 48000, c = 2 * std::cos(w);
+    double s1 = 0, s2 = 0;
+    for (size_t i = a; i < b; ++i) { const double s0 = st[i * 2] + c * s1 - s2; s2 = s1; s1 = s0; }
+    return 2 * std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) / double(b - a);
+}
+} // namespace
+
+TEST(audio_music_loop_points) {
+    auto a = offlineAudio();
+    // 0..0.5 s: 200 Hz intro, 0.5..1 s: 800 Hz loop body
+    std::map<std::string, std::string> files = {{"m.wav", wavOf(48000, 1.0f, [](float t) { return t < 0.5f ? tone(200, t) : tone(800, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"match":[{"file":"m.wav","loopStart":0.5}]}})", nullptr, files));
+    a->playMusic("match", 0.01f);
+    auto b = renderBuf(*a, 3.0f);
+    CHECK(level(b, 200, 0.1, 0.45) > 0.3 && level(b, 800, 0.1, 0.45) < 0.03);   // intro once
+    CHECK(level(b, 800, 1.2, 2.9) > 0.3 && level(b, 200, 1.2, 2.9) < 0.03);     // then the loop body only
+}
+
+TEST(audio_music_layers_follow_intensity) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"base.wav", wavOf(48000, 1.0f, [](float t) { return 0.5f * tone(200, t); })},
+                                                {"drums.wav", wavOf(48000, 1.0f, [](float t) { return 0.5f * tone(1500, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"match":{"layers":[{"file":"base.wav"},{"file":"drums.wav","intensity":0.5}]}}})", nullptr, files));
+    CHECK(a->musicHasLayers("match"));
+    a->playMusic("match", 0.01f);
+    auto calm = renderBuf(*a, 1.5f);
+    CHECK(level(calm, 200, 0.5, 1.5) > 0.2 && level(calm, 1500, 0.5, 1.5) < 0.02);  // stems loop: still playing after 1 s
+    a->setMusicIntensity(1.0f);
+    auto fight = renderBuf(*a, 4.0f);
+    CHECK(level(fight, 1500, 3.0, 4.0) > 0.2 && level(fight, 200, 3.0, 4.0) > 0.2);
+    a->setMusicIntensity(0.0f);
+    auto after = renderBuf(*a, 5.0f);
+    CHECK(level(after, 1500, 4.0, 5.0) < 0.02);
+}
+
+TEST(audio_music_transition_on_bar) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"a.wav", wavOf(48000, 4.0f, [](float t) { return 0.5f * tone(300, t); })},
+                                                {"b.wav", wavOf(48000, 4.0f, [](float t) { return 0.5f * tone(900, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"calm":{"files":["a.wav"],"bpm":120,"beatsPerBar":4},"fight":"b.wav"}})", nullptr, files));
+    a->playMusic("calm", 0.01f);
+    renderBuf(*a, 0.3f);
+    a->playMusic("fight", 0.02f);                 // bar = 2 s at 120 bpm: the switch waits until 2.0 s
+    auto b = renderBuf(*a, 2.5f);                 // covers 0.3 .. 2.8 s
+    CHECK(level(b, 300, 0.9, 1.6) > 0.2 && level(b, 900, 0.0, 1.6) < 0.02);
+    CHECK(level(b, 900, 1.9, 2.4) > 0.2 && level(b, 300, 1.9, 2.4) < 0.02);
+    std::string err;
+    CHECK(!loadBank(*a, R"({"music":{"x":{"files":["a.wav"],"transition":"soon"}}})", &err, files) && err.find("unknown transition 'soon'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"music":{"x":{"files":["a.wav"],"layers":["b.wav"]}}})", &err, files) && err.find("either") != std::string::npos);
+}
+
+TEST(audio_stinger_sync_and_ducking) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"m.wav", wavOf(48000, 4.0f, [](float t) { return 0.5f * tone(300, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"match":{"files":["m.wav"],"bpm":120}},
+        "sounds":{"sting":{"synth":{"wave":"sine","freq":1200,"duration":0.3},"bus":"music","sync":"beat","spatial":false},
+                  "say":{"synth":{"wave":"sine","freq":2000,"duration":1.0,"attack":0.01,"release":0.01},"bus":"voice","volume":0.3}}})", nullptr, files));
+    CHECK(a->sound(a->find("say"))->duckMusic > 0.3f);   // voice ducks music by default
+    a->playMusic("match", 0.01f);
+    renderBuf(*a, 0.1f);
+    a->play("sting");                                    // asked at 0.1 s: lands on the beat at 0.5 s
+    auto b = renderBuf(*a, 0.8f);                         // 0.1 .. 0.9 s
+    CHECK(level(b, 1200, 0.0, 0.35) < 0.02 && level(b, 1200, 0.42, 0.65) > 0.2);
+    renderBuf(*a, 1.0f);
+    const double before = level(renderBuf(*a, 0.5f), 300, 0.0, 0.5);
+    a->play("say");
+    auto during = renderBuf(*a, 0.8f);
+    const double ducked = level(during, 300, 0.3, 0.8);
+    CHECK(ducked < before * 0.75 && ducked > before * 0.45);           // voice ducks by 0.4 by default
+    renderBuf(*a, 2.5f);                                   // released after the voice ends
+    CHECK(level(renderBuf(*a, 0.5f), 300, 0.0, 0.5) > before * 0.95);
+    std::string err;
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"sync":"later"}}})", &err) && err.find("unknown sync") != std::string::npos);
+}
+
+TEST(audio_music_per_map) {
+    const std::string dir = "games/skirmish/";
+    Json rulesJson = Json::parse(readSource(dir + "rules.json"));
+    game::Rules rules = game::loadRules(rulesJson);
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"m.wav", wavOf(48000, 0.5f, [](float t) { return tone(300, t); })}};
+    Json bank = Json::parse(R"({"music":{"match":"m.wav","match.valley":"m.wav"}})");
+    CHECK(loadBank(*a, bank.dump(), nullptr, files));
+    game::RtsAudio s;
+    CHECK(s.init(*a, rules, bank));
+    Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim.setup(rulesJson, Json::parse(readSource(dir + "maps/valley.json")));
+    s.attach(sim, 1, "maps/valley.json");
+    CHECK(a->currentMusic() == "match.valley");
+    s.attach(sim, 1, "maps/other.json");
+    CHECK(a->currentMusic() == "match");
+}
+
+// ---------------- Build-time compression (tools/audiopack) ----------------
+
+namespace {
+double snrDb(const std::vector<int16_t>& a, const std::vector<int16_t>& b) {
+    const size_t n = std::min(a.size(), b.size());
+    double s = 0, e = 0;
+    for (size_t i = 0; i < n; ++i) { s += double(a[i]) * a[i]; const double d = double(a[i]) - b[i]; e += d * d; }
+    return e > 0 ? 10 * std::log10(s / e) : 200;
+}
+std::vector<int16_t> sinePcm(int channels, size_t frames, int rate) {
+    std::vector<int16_t> p(frames * size_t(channels));
+    for (size_t i = 0; i < frames; ++i)
+        for (int c = 0; c < channels; ++c) p[i * size_t(channels) + size_t(c)] = int16_t(std::lrint(std::sin(6.2831853 * (440 + 220 * c) * double(i) / rate) * 16000));
+    return p;
+}
+} // namespace
+
+TEST(audiopack_adpcm_roundtrip) {
+    for (int ch : {1, 2}) {
+        for (size_t frames : {size_t(1), size_t(1017), size_t(1018), size_t(30000)}) {
+            auto pcm = sinePcm(ch, frames, 44100);
+            const std::string wav = audiopack::encodeAdpcm(pcm, ch, 44100);
+            audio::Clip c;
+            std::string err;
+            CHECK(audio::decodeClip(wav, c, err));
+            CHECK(c.channels == ch && c.sampleRate == 44100 && c.frames() >= frames && c.frames() <= frames + 7);
+            if (frames > 1000) CHECK(snrDb(pcm, c.pcm) > 30);
+            CHECK(wav.size() < pcm.size() * 2 / 3 || frames < 2000);   // about 4:1
+        }
+    }
+}
+
+TEST(audiopack_vorbis_roundtrip) {
+    auto pcm = sinePcm(2, 44100, 44100);
+    std::string ogg, ogg2, err;
+    CHECK(audiopack::encodeVorbis(pcm, 2, 44100, 0.4f, 7, ogg, &err));
+    CHECK(audiopack::encodeVorbis(pcm, 2, 44100, 0.4f, 7, ogg2, &err) && ogg == ogg2);   // reproducible builds
+    CHECK(ogg.size() < pcm.size() * 2 / 10);
+    audio::Clip c;
+    CHECK(audio::decodeClip(ogg, c, err));
+    CHECK(c.channels == 2 && c.frames() == 44100);
+    CHECK(snrDb(pcm, c.pcm) > 25);
+}
+
+TEST(audiopack_profiles_and_conversion) {
+    using audiopack::Codec;
+    audiopack::Settings st;
+    std::string err;
+    CHECK(audiopack::settingsFor(Json::parse("{}"), "desktop", st, &err) && st.sounds == Codec::Keep && st.music == Codec::Keep);
+    CHECK(audiopack::settingsFor(Json::parse("{}"), "mobile", st, &err) && st.sounds == Codec::Adpcm && st.music == Codec::Vorbis && st.maxRate == 32000);
+    CHECK(audiopack::settingsFor(Json::parse(R"({"build":{"desktop":{"music":"vorbis","musicQuality":0.6}}})"), "desktop", st, &err) &&
+          st.music == Codec::Vorbis && std::fabs(st.musicQuality - 0.6f) < 1e-3f);
+    CHECK(!audiopack::settingsFor(Json::parse(R"({"build":{"mobile":{"music":"mp4"}}})"), "mobile", st, &err) && err.find("unknown codec 'mp4'") != std::string::npos);
+    CHECK(!audiopack::settingsFor(Json::parse(R"({"build":{"mobile":{"bitrate":1}}})"), "mobile", st, &err) && err.find("unknown key 'bitrate'") != std::string::npos);
+    CHECK(audiopack::profileForTarget("android") == "mobile" && audiopack::profileForTarget("web") == "web" && audiopack::profileForTarget("macos") == "desktop");
+
+    // a bank with a positional effect, a UI sound kept on purpose, an already-lossy file and music
+    std::map<std::string, std::string> files = {
+        {"sfx/hit.wav", audiopack::encodeWav(sinePcm(2, 24000, 48000), 2, 48000)},
+        {"ui/click.wav", audiopack::encodeWav(sinePcm(1, 4800, 48000), 1, 48000)},
+        {"sfx/old.ogg", readSource("tests/data/audio/tone.ogg")},
+        {"music/a.wav", audiopack::encodeWav(sinePcm(2, 96000, 48000), 2, 48000)},
+    };
+    Json bank = Json::parse(R"({"sounds":{"hit":{"files":["sfx/hit.wav"]},"click":{"file":"ui/click.wav","bus":"ui","compress":"keep"},
+        "old":{"file":"sfx/old.ogg"}},"music":{"match":{"files":[{"file":"music/a.wav","loopStart":0.5}],"bpm":100}}})");
+    CHECK(audiopack::settingsFor(bank, "mobile", st, &err));
+    audiopack::Output out;
+    auto reader = [&](const std::string& p, std::string& o) { auto it = files.find(p); if (it == files.end()) return false; o = it->second; return true; };
+    CHECK(audiopack::convert(bank, reader, st, out, &err));
+    CHECK(out.files.count("sfx/hit.wav") && out.files.count("music/a.ogg") && !out.files.count("ui/click.wav") && !out.files.count("sfx/old.ogg"));
+    CHECK(out.replaced.size() == 1 && out.replaced[0] == "music/a.wav");
+    CHECK(out.report.after() < out.report.before() / 3);
+    audio::Clip hit;
+    CHECK(audio::decodeClip(out.files["sfx/hit.wav"], hit, err) && hit.channels == 1 && hit.sampleRate == 32000);  // mono, resampled
+    // the rewritten bank loads with the converted files, loop points and grid intact
+    auto a = offlineAudio();
+    Json nb = Json::parse(out.audioJson);
+    CHECK(nb["music"]["match"]["files"][size_t(0)].getStr("file") == "music/a.ogg");
+    CHECK(a->loadBank(nb, [&](const std::string& p, std::string& o) {
+        if (auto it = out.files.find(p); it != out.files.end()) { o = it->second; return true; }
+        return reader(p, o);
+    }, &err));
+    CHECK(a->warnings().empty());
+    CHECK(a->playMusic("match") && !a->sound(a->find("hit"))->clips.empty());
+}
+
+TEST(audiopack_stage_game_folder) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "rts_audiopack_test";
+    fs::remove_all(root);
+    fs::create_directories(root / "game" / "music");
+    auto write = [](const fs::path& p, const std::string& s) { std::ofstream f(p, std::ios::binary); f << s; };
+    write(root / "game" / "game.json", R"({"name":"T","audio":"sound.json"})");
+    write(root / "game" / "sound.json", R"({"music":{"match":"music/a.wav"},"build":{"web":{"musicQuality":0.1}}})");
+    write(root / "game" / "music" / "a.wav", audiopack::encodeWav(sinePcm(2, 48000, 48000), 2, 48000));
+    write(root / "game" / "rules.json", "{}");
+    audiopack::Report rep;
+    std::string err;
+    CHECK(audiopack::stageGame((root / "game").string(), (root / "web").string(), "web", rep, &err));
+    CHECK(fs::exists(root / "web" / "music" / "a.ogg") && !fs::exists(root / "web" / "music" / "a.wav") && fs::exists(root / "web" / "rules.json"));
+    CHECK(Json::parseFile((root / "web" / "sound.json").string())["music"].getStr("match") == "music/a.ogg");
+    CHECK(fs::exists(root / "game" / "music" / "a.wav"));                 // the project itself is untouched
+    CHECK(audiopack::stageGame((root / "game").string(), (root / "desktop").string(), "desktop", rep, &err));
+    CHECK(fs::exists(root / "desktop" / "music" / "a.wav") && rep.items.empty());   // desktop keeps files by default
+    write(root / "game" / "sound.json", R"({"sounds":{"x":{"file":"../../../etc/passwd"}},"build":{"web":{"sounds":"pcm"}}})");
+    CHECK(audiopack::stageGame((root / "game").string(), (root / "web2").string(), "web", rep, &err));
+    CHECK(rep.items.empty() && rep.warnings.size() == 1);                  // nothing outside the game folder is read
+    fs::remove_all(root);
+}
+
+// ---------------- particles (engine/fx, modules/rts/fx) ----------------
+#include <cstdlib>
+#include "engine/fx/ParticleSystem.h"
+#include "modules/rts/fx/RtsFx.h"
+
+namespace {
+fx::EffectDef fxParse(const char* text, std::vector<std::string>* errs = nullptr) {
+    fx::EffectDef d;
+    std::vector<std::string> e;
+    fx::parseEffect(Json::parse(text), "t.json", d, e);
+    if (errs) *errs = e;
+    return d;
+}
+} // namespace
+
+TEST(fx_parse_validates_and_round_trips) {
+    std::vector<std::string> errs;
+    fx::EffectDef d = fxParse(R"({"emitters": [{ "texture": "builtin:smoke", "blend": "alpha", "align": "velocity", "burst": 12,
+        "life": [0.5, 1], "speed": 3, "size": [0.2, 0.4], "spread": 30, "shape": "ring", "radius": 2, "gravity": [0, -9, 0],
+        "color": [[0, "#ff8000ff"], [1, "#20202000"]], "sizeOverLife": [[0, 1], [1, 3]], "minQuality": "medium" }]})", &errs);
+    CHECK(errs.empty());
+    CHECK(d.emitters.size() == 1);
+    auto& e = d.emitters[0];
+    CHECK(e.blend == fx::FxBlend::Alpha && e.align == fx::FxAlign::Velocity && e.shape == fx::FxShape::Ring);
+    CHECK(e.burst == 12 && e.speed.min == 3 && e.speed.max == 3 && e.minQuality == fx::FxQuality::Medium);
+    CHECK(std::fabs(e.color[0].rgba.y - 128 / 255.0f) < 1e-3f && e.color[1].rgba.w == 0);
+    fx::EffectDef back;
+    std::vector<std::string> e2;
+    CHECK(fx::parseEffect(fx::effectToJson(d), "t.json", back, e2) && e2.empty());
+    CHECK(back.emitters.size() == 1 && back.emitters[0].burst == 12 && back.emitters[0].radius == 2 && back.emitters[0].gravity.y == -9);
+
+    fxParse(R"({"emitters": [{ "burst": 3, "blend": "screen", "colour": "#fff" }]})", &errs);
+    CHECK(errs.size() == 2);   // unknown blend, unknown field (typos must not pass silently)
+    fxParse(R"({"emitters": [{ "rate": 5 }]})", &errs);
+    CHECK(errs.size() == 1 && errs[0].find("duration") != std::string::npos);
+    fxParse(R"({"emitters": []})", &errs);
+    CHECK(!errs.empty());
+}
+
+TEST(fx_quality_tiers_bound_particles) {
+    fx::EffectDef d = fxParse(R"({"emitters": [{ "burst": 2000, "life": 5 }, { "burst": 10, "life": 5, "minQuality": "high" }]})");
+    auto count = [&](fx::FxQuality q) {
+        fx::ParticleSystem ps;
+        ps.setQuality(q);
+        ps.init(nullptr);
+        int id = ps.define("boom", d);
+        ps.play(id, {0, 0, 0});
+        ps.update(0.016f);
+        return ps.stats().particles;
+    };
+    CHECK(count(fx::FxQuality::Off) == 0);
+    CHECK(count(fx::FxQuality::Low) == fx::limitsFor(fx::FxQuality::Low).maxParticles);   // budget is a hard cap
+    CHECK(count(fx::FxQuality::Medium) == 1400);                                           // 2000 x 0.7, high-only emitter off
+    CHECK(count(fx::FxQuality::High) == 2010);
+    CHECK(fx::defaultQualityFor("Mali-T720", true) == fx::FxQuality::Low || std::getenv("RTS_PARTICLES"));
+    CHECK(fx::defaultQualityFor("Adreno (TM) 640", true) == fx::FxQuality::Medium || std::getenv("RTS_PARTICLES"));
+    CHECK(fx::defaultQualityFor("Apple M2", false) == fx::FxQuality::High || std::getenv("RTS_PARTICLES"));
+}
+
+TEST(fx_attached_trail_follows_and_stops) {
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    int id = ps.define("trail", fxParse(R"({"emitters": [{ "perMeter": 10, "loop": true, "life": 0.5, "speed": 0 }]})"));
+    fx::FxHandle h = ps.play(id, {0, 1, 0});
+    CHECK(h.valid() && ps.playing(h));
+    for (int i = 1; i <= 10; ++i) { ps.move(h, {float(i), 1, 0}); ps.update(0.01f); }
+    CHECK(ps.stats().particles >= 99 && ps.stats().particles <= 101);   // 10 m x 10 per metre, wherever the frames fall
+    ps.stop(h);
+    ps.update(0.01f);
+    CHECK(!ps.playing(h));
+    for (int i = 0; i < 60; ++i) ps.update(0.02f);
+    CHECK(ps.stats().particles == 0);
+    CHECK(ps.effect("missing") < 0 && !ps.errors().empty());
+}
+
+TEST(fx_offscreen_one_shots_are_not_spawned) {
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    int id = ps.define("puff", fxParse(R"({"emitters": [{ "burst": 5, "life": 1, "speed": 1 }]})"));
+    render::RTSCamera cam;
+    cam.target = {50, 0, 50};
+    ps.setView(cam, cam.proj(16.0f / 9.0f, false) * cam.view(), 1600, 900);
+    CHECK(ps.play(id, {50, 0, 50}).valid());
+    CHECK(!ps.play(id, {50, 0, 140}).valid());   // behind the camera
+    CHECK(!ps.play(id, {400, 0, 50}).valid());   // far off to the side
+    CHECK(ps.stats().culled == 2);
+}
+
+TEST(fx_sample_games_have_valid_effects) {
+    for (std::string g : {"skirmish", "mushrooms"}) {
+        const std::string dir = "games/" + g + "/";
+        fx::ParticleSystem ps;
+        ps.init(nullptr);
+        ps.setFileReader([&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); });
+        game::Rules rules = game::loadRules(Json::parse(readSource(dir + "rules.json")));
+        game::RtsFx bridge;
+        std::string err;
+        CHECK(bridge.init(ps, rules, Json::parse(readSource(dir + "fx/fx.json")), &err));
+        for (auto& w : bridge.warnings()) std::printf("    %s: %s\n", g.c_str(), w.c_str());
+        CHECK(bridge.warnings().empty());
+        for (auto& entry : std::filesystem::directory_iterator(std::string(RTS_SOURCE_DIR) + "/" + dir + "fx")) {
+            const std::string name = entry.path().stem().string();
+            if (name == "fx") continue;
+            CHECK(ps.effect(name) >= 0);
+        }
+        for (auto& e : ps.errors()) std::printf("    %s\n", e.c_str());
+        CHECK(ps.errors().empty());
+    }
+}
+
+TEST(fx_rts_events_keep_sim_deterministic) {
+    // Same bot match with and without effects: identical checksums, and effects actually played.
+    const std::string dir = "games/skirmish/";
+    Json rulesJson = Json::parse(readSource(dir + "rules.json"));
+    Json map = Json::parse(readSource(dir + "maps/valley.json"));
+    Json bank = Json::parse(readSource(dir + "fx/fx.json"));
+    game::Rules rules = game::loadRules(rulesJson);
+    auto play = [&](bool withFx, int& played) {
+        fx::ParticleSystem ps;
+        ps.setQuality(fx::FxQuality::Low);
+        ps.init(nullptr);
+        ps.setFileReader([&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); });
+        game::RtsFx bridge;
+        if (withFx) bridge.init(ps, rules, bank);
+        SimConfig cfg;
+        cfg.seed = 11;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rulesJson, map);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim.players()) bots.emplace_back(p.slot, 11);
+        if (withFx) bridge.attach(sim, 0);
+        for (int t = 0; t < 20 * 240 && sim.result() == 0; ++t) {
+            for (auto& b : bots) b.update(sim);
+            sim.step();
+            if (t % 2) continue;   // two ticks per frame: the collector keeps both ticks' events
+            bridge.update(sim, nullptr);
+            ps.update(0.1f);
+        }
+        played = bridge.played();
+        bridge.detach();
+        return sim.checksum();
+    };
+    int none = 0, some = 0;
+    const uint64_t without = play(false, none), with = play(true, some);
+    CHECK(without == with);
+    CHECK(none == 0 && some > 20);   // first four minutes of a bot match: deaths, hits, buildings
 }
 
 int main() {

@@ -52,6 +52,7 @@ struct RtsScene {
     // tells the view whether they are new
     std::vector<SimEvent> events;
     uint32_t tick = 0;
+    double seconds = 0;          // game time (tick / tick rate): drives the day/night cycle
     // drag-to-send arrows (Mushroom-Wars input) and box selection are drawn by the client
 };
 

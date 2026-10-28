@@ -102,7 +102,35 @@ endif()
 # ---------------------------------------------------------------------------
 set(RTS_CONTENT_PACK "" CACHE FILEPATH "Prebuilt content.rpak to ship instead of loose content (set by rtsbuild)")
 add_library(rts_zstd_dec STATIC third_party/zstd/zstddeclib.c)
-add_library(rts_pack STATIC engine/pack/Pack.cpp)
+# HTTP fetcher for chunk downloads, per platform (see engine/pack/Chunks.h).
+if(RTS_PLATFORM STREQUAL "windows")
+    set(RTS_PACK_HTTP engine/pack/http/HttpWin.cpp)
+elseif(RTS_PLATFORM STREQUAL "macos" OR RTS_PLATFORM STREQUAL "ios")
+    set(RTS_PACK_HTTP engine/pack/http/HttpApple.mm)
+elseif(RTS_PLATFORM STREQUAL "android")
+    set(RTS_PACK_HTTP engine/pack/http/HttpAndroid.cpp)
+elseif(RTS_PLATFORM STREQUAL "web")
+    set(RTS_PACK_HTTP engine/pack/http/HttpWeb.cpp)
+elseif(UNIX)
+    set(RTS_PACK_HTTP engine/pack/http/HttpCurl.cpp)
+else()
+    set(RTS_PACK_HTTP engine/pack/http/HttpNone.cpp)
+endif()
+add_library(rts_pack STATIC engine/pack/Pack.cpp engine/pack/Sha256.cpp engine/pack/Chunks.cpp ${RTS_PACK_HTTP})
+find_package(Threads)
+if(Threads_FOUND)
+    target_link_libraries(rts_pack PUBLIC Threads::Threads)
+endif()
+if(RTS_PLATFORM STREQUAL "windows")
+    target_link_libraries(rts_pack PUBLIC winhttp)
+elseif(RTS_PLATFORM STREQUAL "macos" OR RTS_PLATFORM STREQUAL "ios")
+    set_source_files_properties(engine/pack/http/HttpApple.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(rts_pack PUBLIC "-framework Foundation")
+elseif(RTS_PLATFORM STREQUAL "web")
+    target_link_options(rts_pack PUBLIC -sFETCH=1)
+elseif(UNIX AND NOT ANDROID)
+    target_link_libraries(rts_pack PUBLIC ${CMAKE_DL_LIBS})
+endif()
 target_include_directories(rts_pack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(NOT MSVC)
     target_compile_options(rts_zstd_dec PRIVATE -w)
@@ -158,6 +186,7 @@ endif()
 add_library(rts_audio STATIC
     engine/audio/AudioEngine.cpp
     engine/audio/AudioMixer.cpp
+    engine/audio/AudioReverb.cpp
     engine/audio/AudioDecode.cpp
     engine/audio/Synth.cpp
     ${RTS_MINIAUDIO_IMPL})
@@ -180,6 +209,12 @@ endif()
 
 add_library(rts_game_audio STATIC modules/rts/audio/RtsAudio.cpp)
 target_link_libraries(rts_game_audio PUBLIC rts_game rts_audio)
+
+# Particles: CPU simulation + RHI rendering (presentation only), and the RTS event bridge.
+add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp)
+target_link_libraries(rts_fx PUBLIC rts_engine)
+add_library(rts_game_fx STATIC modules/rts/fx/RtsFx.cpp)
+target_link_libraries(rts_game_fx PUBLIC rts_game rts_fx)
 
 # ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
@@ -361,6 +396,7 @@ if(RTS_BUILD_EDITOR)
     add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp
                    ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
+    target_link_libraries(rts_editor PRIVATE rts_game_fx)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(APPLE)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
@@ -374,9 +410,29 @@ if(RTS_BUILD_EDITOR)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Build-time audio compression (host tools and tests only; games just decode): IMA ADPCM and
+# OGG Vorbis encoders (libvorbis, BSD), profiles from audio.json, used by rtsbuild per target.
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_vorbisenc STATIC
+        third_party/vorbis/src/ogg/bitwise.c third_party/vorbis/src/ogg/framing.c
+        third_party/vorbis/src/vorbis/analysis.c third_party/vorbis/src/vorbis/bitrate.c third_party/vorbis/src/vorbis/block.c third_party/vorbis/src/vorbis/codebook.c third_party/vorbis/src/vorbis/envelope.c third_party/vorbis/src/vorbis/floor0.c third_party/vorbis/src/vorbis/floor1.c third_party/vorbis/src/vorbis/info.c third_party/vorbis/src/vorbis/lookup.c third_party/vorbis/src/vorbis/lpc.c third_party/vorbis/src/vorbis/lsp.c third_party/vorbis/src/vorbis/mapping0.c third_party/vorbis/src/vorbis/mdct.c third_party/vorbis/src/vorbis/psy.c third_party/vorbis/src/vorbis/registry.c third_party/vorbis/src/vorbis/res0.c third_party/vorbis/src/vorbis/sharedbook.c third_party/vorbis/src/vorbis/smallft.c third_party/vorbis/src/vorbis/synthesis.c third_party/vorbis/src/vorbis/vorbisenc.c third_party/vorbis/src/vorbis/window.c)
+    target_include_directories(rts_vorbisenc PUBLIC third_party/vorbis/include PRIVATE third_party/vorbis/src/vorbis)
+    target_compile_options(rts_vorbisenc PRIVATE $<IF:$<BOOL:${MSVC}>,/w,-w>)
+    if(NOT MSVC)
+        target_link_libraries(rts_vorbisenc PUBLIC m)
+    endif()
+    add_library(rts_audiopack STATIC tools/audiopack/AudioPack.cpp)
+    target_link_libraries(rts_audiopack PUBLIC rts_audio rts_vorbisenc)
+    add_executable(rts_audiopack_tool tools/audiopack/main.cpp)
+    set_target_properties(rts_audiopack_tool PROPERTIES OUTPUT_NAME rts_audiopack)
+    target_link_libraries(rts_audiopack_tool PRIVATE rts_audiopack)
+endif()
+
 if(RTS_BUILD_TOOLS)
     add_executable(rtsbuild tools/rtsbuild/main.cpp)
-    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer)
+    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer rts_audiopack)
     add_executable(assetpipe tools/assetpipe/main.cpp)
     target_link_libraries(assetpipe PRIVATE rts_pack_writer)
     target_compile_definitions(assetpipe PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -420,7 +476,8 @@ if(RTS_BUILD_TESTS)
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
-    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
+    target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
@@ -439,16 +496,16 @@ if(NOT MSVC)
     target_compile_options(rts_rmlui PRIVATE -w)
 endif()
 
-add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp)
+add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp engine/ui/UiKeyboard.cpp)
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
-target_link_libraries(rts_ui PUBLIC rts_rmlui)
+target_link_libraries(rts_ui PUBLIC rts_rmlui rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
-    target_link_libraries(rts_client PRIVATE rts_ui rts_net)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
-    target_link_libraries(main PRIVATE rts_ui rts_net)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -489,4 +546,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
             target_link_libraries(${t} PRIVATE rts_atlas_builder)
         endif()
     endforeach()
+endif()
+if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
+    target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
 endif()

@@ -6,14 +6,15 @@
     <application
         android:label="@APP_NAME@"
         android:icon="@mipmap/ic_launcher"
-        android:hasCode="false"
+        android:hasCode="true"
         android:allowBackup="false"
         android:appCategory="game"
         android:isGame="true">
         <activity
-            android:name="android.app.NativeActivity"
+            android:name="com.rtsengine.platform.RtsActivity"
             android:exported="true"
             android:screenOrientation="@ORIENTATION@"
+            android:windowSoftInputMode="adjustNothing|stateHidden"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|density"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
             <meta-data android:name="android.app.lib_name" android:value="main" />

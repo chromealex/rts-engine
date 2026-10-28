@@ -12,10 +12,18 @@ namespace rts::game {
 using namespace render;
 
 namespace {
+constexpr float kTau = 6.28318530718f;
 float num(const Json& j, const char* key, float def) { const Json& v = j[key]; return v.isNumber() ? float(v.fx().toDouble()) : def; }
 float3 color(const Json& j, float3 def) {
     const Json& c = j["color"];
     return c.size() >= 3 ? float3{float(c[0].fx().toDouble()), float(c[1].fx().toDouble()), float(c[2].fx().toDouble())} : def;
+}
+// "halo": number = size, false = none, missing = keep the default
+float halo(const Json& j, float def) {
+    const Json& h = j["halo"];
+    if (h.isNumber()) return float(h.fx().toDouble());
+    if (!h.isNull() && !h.boolean(true)) return 0;
+    return def;
 }
 // `false` switches a default flash off, an object overrides fields of it, anything else keeps it.
 RtsLights::Flash flash(const Json& j, RtsLights::Flash def) {
@@ -26,15 +34,18 @@ RtsLights::Flash flash(const Json& j, RtsLights::Flash def) {
     def.radius = num(j, "radius", def.radius);
     def.intensity = num(j, "intensity", def.intensity);
     def.time = num(j, "time", def.time);
+    def.halo = halo(j, def.halo);
     return def;
 }
 float3 toF(const Vec3& v) { return {float(v.x.toDouble()), float(v.y.toDouble()), float(v.z.toDouble())}; }
 float3 mix(float3 a, float3 b, float t) { return a + (b - a) * t; }
+float smooth(float e0, float e1, float x) { float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f); return t * t * (3 - 2 * t); }
 } // namespace
 
 void RtsLights::init(const Rules& rules) {
     rules_ = &rules;
     types_.clear();
+    active_.clear();
     for (const UnitType& t : rules.types) {
         TypeLights L;
         const Json& v = t.view;
@@ -45,35 +56,137 @@ void RtsLights::init(const Rules& rules) {
             L.intensity = num(g, "intensity", 1.5f);
             L.height = num(g, "height", 1.0f);
             L.flicker = num(g, "flicker", 0.0f);
+            L.halo = halo(g, L.radius * 0.2f);
             L.whileBuilding = g.getBool("whileBuilding", false);
         }
+        if (const Json& c = v["contactShadow"]; c.isNumber()) L.contact = std::clamp(float(c.fx().toDouble()), 0.0f, 1.0f);
+        else if (!c.isNull() && !c.boolean(true)) L.contact = 0;
+        L.contactBox = t.structure && t.resourceNode < 0 && t.footprintW * t.footprintH > 1;
+        if (v.has("contactShape")) L.contactBox = v.getStr("contactShape") == "box";
         bool ranged = false, splash = false;
         for (const WeaponDef& w : t.weapons) {
             ranged |= w.projectileSpeed.raw > 0 || w.range > Fixed::fromInt(2);
             splash |= w.splash.raw > 0;
         }
         const float big = t.structure ? float(std::max(t.footprintW, t.footprintH)) : 0.0f;
-        L.attack = flash(v["attackLight"], {ranged, {1.0f, 0.78f, 0.42f}, 2.2f, 2.4f, 0.09f});
-        L.projectile = flash(v["projectileLight"], {ranged, {1.0f, 0.72f, 0.38f}, 1.7f, 1.6f, 0});
-        L.hit = flash(v["hitLight"], {splash, {1.0f, 0.55f, 0.22f}, splash ? 3.2f : 1.4f, 2.6f, 0.3f});
+        L.attack = flash(v["attackLight"], {ranged, {1.0f, 0.78f, 0.42f}, 2.2f, 2.4f, 0.09f, 0.45f});
+        L.projectile = flash(v["projectileLight"], {ranged, {1.0f, 0.72f, 0.38f}, 1.7f, 1.6f, 0, 0.3f});
+        L.hit = flash(v["hitLight"], {splash, {1.0f, 0.55f, 0.22f}, splash ? 3.2f : 1.4f, 2.6f, 0.3f, splash ? 1.0f : 0.4f});
         L.death = flash(v["deathLight"], {true, {1.0f, 0.5f, 0.2f}, t.structure ? 2.5f + big * 1.3f : 2.2f,
-                                          t.structure ? 3.0f : 1.8f, t.structure ? 0.8f : 0.35f});
+                                          t.structure ? 3.0f : 1.8f, t.structure ? 0.8f : 0.35f, t.structure ? 1.2f + big * 0.4f : 0.6f});
         types_.push_back(L);
     }
-    if (const char* n = std::getenv("RTS_NIGHT")) night_ = std::clamp(float(std::atof(n)), 0.0f, 1.0f);
+    configure(Json{}, Json{});
 }
 
-void RtsLights::applyNight(Lighting& l) {
+std::vector<RtsLights::MapLight> RtsLights::parseMapLights(const Json& lights) {
+    std::vector<MapLight> out;
+    for (const Json& j : lights.items()) {
+        if (!j.isObject()) continue;
+        MapLight m;
+        const Json& p = j["pos"];
+        m.x = p.size() >= 2 ? float(p[0].fx().toDouble()) : num(j, "x", 0);
+        m.z = p.size() >= 2 ? float(p[1].fx().toDouble()) : num(j, "z", 0);
+        m.height = num(j, "height", 1.0f);
+        m.color = color(j, m.color);
+        m.radius = num(j, "radius", 4.0f);
+        m.intensity = num(j, "intensity", 1.5f);
+        m.flicker = num(j, "flicker", 0.0f);
+        m.halo = halo(j, m.radius * 0.2f);
+        out.push_back(m);
+    }
+    return out;
+}
+
+void RtsLights::configure(const Json& game, const Json& mapBlock) {
+    configure(game, mapBlock, Json{});
+}
+
+void RtsLights::configure(const Json& game, const Json& map, const Json& lights) {
+    mapLights_ = parseMapLights(lights);
+    auto pick = [&](const char* key, float def) { return num(map, key, num(game, key, def)); };
+    cycle_ = game.isObject() || map.isObject();
+    startTime_ = pick("time", 0.5f);
+    dayLength_ = std::max(pick("dayLength", 0.0f), 0.0f);
+    nightLevel_ = std::clamp(pick("nightLevel", 1.0f), 0.0f, 1.0f);
+    forcedNight_ = -1;
+    clouds_ = std::clamp(pick("clouds", 0.0f), 0.0f, 1.0f);
+    cloudStrength_ = std::clamp(pick("cloudStrength", 0.45f), 0.0f, 1.0f);
+    cloudScale_ = std::max(pick("cloudScale", 1.0f), 0.05f);
+    storm_ = std::clamp(pick("storm", 0.0f), 0.0f, 1.0f);
+    {
+        const Json& w = map["wind"].size() >= 2 ? map["wind"] : game["wind"];
+        windX_ = w.size() >= 2 ? float(w[0].fx().toDouble()) : 1.2f;
+        windZ_ = w.size() >= 2 ? float(w[1].fx().toDouble()) : 0.5f;
+    }
+    if (const char* c = std::getenv("RTS_CLOUDS")) { clouds_ = std::clamp(float(std::atof(c)), 0.0f, 1.0f); cycle_ = true; }
+    if (const char* st = std::getenv("RTS_STORM")) { storm_ = std::clamp(float(std::atof(st)), 0.0f, 1.0f); cycle_ = true; }
+    if (const char* t = std::getenv("RTS_TIME_OF_DAY")) { startTime_ = float(std::atof(t)); cycle_ = true; }
+    if (const char* n = std::getenv("RTS_NIGHT")) { forcedNight_ = std::clamp(float(std::atof(n)), 0.0f, 1.0f); cycle_ = true; }
+}
+
+void RtsLights::updateSky(Lighting& l, double seconds) {
     if (!haveBase_) { base_ = l; haveBase_ = true; }
-    if (night_ == appliedNight_ && night_ == 0) return;
-    appliedNight_ = night_;
-    // Moonlight: weak bluish sun, dark sky; the fog keeps the horizon readable.
-    const float n = night_;
-    l.sunIntensity = base_.sunIntensity * (1.0f - 0.72f * n);
-    l.sunColor = mix(base_.sunColor, {0.62f, 0.72f, 1.0f}, n);
-    l.skyColor = mix(base_.skyColor, {0.13f, 0.17f, 0.30f}, n);
-    l.groundColor = mix(base_.groundColor, {0.06f, 0.06f, 0.08f}, n);
-    l.fogColor = mix(base_.fogColor, {0.07f, 0.09f, 0.15f}, n);
+    const bool cycle = cycle_ || preview_;
+    if (!cycle) {
+        night_ = dusk_ = 0;
+        if (touched_) { l = base_; touched_ = false; }
+        return;
+    }
+    touched_ = true;
+    float t = preview_ ? previewTime_ : startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
+    t -= std::floor(t);
+    timeOfDay_ = t;
+    // sun elevation: +1 noon, 0 dawn/dusk, -1 midnight
+    const float elev = std::sin(kTau * (t - 0.25f));
+    night_ = forcedNight_ >= 0 ? forcedNight_ : smooth(0.0f, -0.3f, elev) * nightLevel_;
+    dusk_ = forcedNight_ >= 0 ? 0.0f : (1.0f - smooth(0.05f, 0.4f, std::fabs(elev))) * (1.0f - night_ * 0.7f);
+    const float n = night_, d = dusk_;
+
+    // Direction: the sun (moon at night) swings around the base azimuth and never goes low enough
+    // to stretch shadows across the whole map. Periodic in t, so the day wraps without a jump.
+    const float3 b = base_.sunDir;
+    const float horiz = std::sqrt(b.x * b.x + b.z * b.z);
+    const float az0 = std::atan2(b.z, b.x), az = az0 + 0.75f * std::sin(kTau * (t - 0.5f));
+    const float up = 0.45f + 0.55f * std::fabs(elev);
+    l.sunDir = forcedNight_ >= 0 ? b : normalize(float3{std::cos(az) * std::max(horiz, 0.3f), up * std::max(b.y, 0.5f), std::sin(az) * std::max(horiz, 0.3f)});
+
+    // Colours: day -> warm dusk -> bluish moonlight.
+    const float3 duskSun{1.0f, 0.5f, 0.24f}, duskSky{0.62f, 0.44f, 0.46f}, duskFog{0.86f, 0.56f, 0.42f};
+    l.sunIntensity = base_.sunIntensity * (1.0f - 0.2f * d) * (1.0f - 0.72f * n);
+    l.sunColor = mix(mix(base_.sunColor, duskSun, d), {0.62f, 0.72f, 1.0f}, n);
+    l.skyColor = mix(mix(base_.skyColor, duskSky, d), {0.13f, 0.17f, 0.30f}, n);
+    l.groundColor = mix(mix(base_.groundColor, base_.groundColor * 0.8f, d), {0.06f, 0.06f, 0.08f}, n);
+    l.fogColor = mix(mix(base_.fogColor, duskFog, d), {0.07f, 0.09f, 0.15f}, n);
+
+    // Storm: overcast (weaker, greyer sun) and lightning. A flash may start in each game second
+    // with probability ~ storm; a hash of the second index keeps it identical in replays.
+    lightning_ = 0;
+    const float storm = preview_ ? previewStorm_ : storm_;
+    if (storm > 0) {
+        l.sunIntensity *= 1.0f - 0.45f * storm;
+        l.sunColor = mix(l.sunColor, {0.75f, 0.78f, 0.85f}, 0.5f * storm);
+        l.fogColor = mix(l.fogColor, l.fogColor * 0.6f, storm);
+        const double sec = std::floor(seconds);
+        for (int back = 0; back < 2; ++back) { // a flash started in this or the previous second
+            uint32_t h = uint32_t(int64_t(sec) - back) * 2654435761u;
+            h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+            if (float(h & 0xffff) / 65535.0f > storm * 0.16f) continue;
+            const float start = float(sec - back) + float((h >> 16) & 0xff) / 255.0f;
+            const float age = float(seconds) - start;
+            if (age < 0 || age > 0.45f) continue;
+            // double strike: a bright pulse, a short gap, a weaker one
+            const float f = std::exp(-age * 30.0f) + (age > 0.12f ? 0.6f * std::exp(-(age - 0.12f) * 22.0f) : 0.0f);
+            lightning_ = std::max(lightning_, std::min(f, 1.0f));
+        }
+        if (lightning_ > 0) {
+            const float k = lightning_;
+            l.sunIntensity += 1.6f * k;
+            l.sunColor = mix(l.sunColor, {0.85f, 0.9f, 1.0f}, k);
+            l.skyColor = mix(l.skyColor, {0.7f, 0.76f, 0.95f}, 0.8f * k);
+            l.groundColor = mix(l.groundColor, {0.45f, 0.45f, 0.5f}, 0.5f * k);
+        }
+    }
 }
 
 void RtsLights::consumeEvents(const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
@@ -92,7 +205,7 @@ void RtsLights::consumeEvents(const RtsScene& s, double time, const std::vector<
     auto spawn = [&](const Flash& f, float3 p, float height) {
         if (!f.on || f.radius <= 0 || !seen(p)) return;
         p.y = view.heightAt(grid, p.x, p.z) + height;
-        active_.push_back({p, f.color, f.radius, f.intensity, float(time), std::max(f.time, 0.03f)});
+        active_.push_back({p, f.color, f.radius, f.intensity, float(time), std::max(f.time, 0.03f), std::max(f.halo, 0.0f)});
     };
     for (const SimEvent& e : s.events) {
         const float3 p = toF(e.pos);
@@ -102,7 +215,7 @@ void RtsLights::consumeEvents(const RtsScene& s, double time, const std::vector<
         case kEvDied:
             if (e.value >= 0 && size_t(e.value) < types_.size()) spawn(types_[size_t(e.value)].death, p, 0.9f);
             break;
-        case kEvAbility: spawn({true, {0.55f, 0.75f, 1.0f}, 3.0f, 2.2f, 0.4f}, p, 1.0f); break;
+        case kEvAbility: spawn({true, {0.55f, 0.75f, 1.0f}, 3.0f, 2.2f, 0.4f, 0.8f}, p, 1.0f); break;
         default: break;
         }
     }
@@ -118,25 +231,72 @@ void RtsLights::emitActive(LightSystem& ls, double time) {
         if (t >= 1.0f || t < -0.5f) continue; // expired (or the clock was reset)
         float k = 1.0f - std::max(t, 0.0f);
         // flashes are short: bright and slightly bigger at the start
-        ls.add(PointLight{a.pos, a.radius * (0.75f + 0.25f * k), a.color, a.intensity * k * k, 1.5f});
+        PointLight l{a.pos, a.radius * (0.75f + 0.25f * k), a.color, a.intensity * k * k, 1.5f};
+        l.halo = a.halo * (0.6f + 0.4f * k);
+        l.haloAlpha = k;
+        ls.add(l);
         active_[w++] = a;
     }
     active_.resize(w);
 }
 
+void RtsLights::addContactShadows(Renderer3D& r, const RtsScene& s, const MapGrid& grid, const RtsView& view) {
+    LightSystem& ls = r.lights;
+    if (!ls.contactShadows()) return;
+    // Real sun shadows already ground the units on Medium/High; without them (Off/Low) a soft blob
+    // does that job. Buildings always get an AO skirt: shadow maps don't give ambient occlusion.
+    const ShadowQuality sq = r.shadowQuality();
+    const float unitK = sq == ShadowQuality::Off ? 0.5f : sq == ShadowQuality::Low ? 0.38f : 0.2f;
+    const float buildK = sq == ShadowQuality::Off ? 0.45f : 0.3f;
+    for (const SceneObject& o : s.objects) {
+        if (!o.visible || o.isProjectile || o.type >= types_.size()) continue;
+        const UnitType& t = rules_->types[o.type];
+        if (t.layer & kLayerAir) continue; // flyers have their own height blob
+        const float c = types_[o.type].contact;
+        if (c == 0) continue;
+        const float scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());
+        const float3 g{o.pos.x, view.heightAt(grid, o.pos.x, o.pos.z), o.pos.z};
+        if (t.structure) {
+            const float k = (c < 0 ? buildK : c) * std::clamp(o.build, 0.3f, 1.0f);
+            const bool box = types_[o.type].contactBox;
+            const float pad = box ? 0.35f : 0.55f;   // an ellipse needs more room to cover the corners
+            ls.addContactShadow(g, float(t.footprintW) * 0.5f * scale + pad, float(t.footprintH) * 0.5f * scale + pad, k, box, 0.45f);
+        } else {
+            const float rad = std::max(float(t.radius.toDouble()) * 1.3f, 0.22f) * scale;
+            ls.addContactShadow(g, rad, rad, c < 0 ? unitK : c);
+        }
+    }
+}
+
 void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
     if (types_.empty()) return;
-    applyNight(r.lighting);
+    updateSky(r.lighting, s.seconds);
     LightSystem& ls = r.lights;
+    addContactShadows(r, s, grid, view);
+    ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
+    {   // clouds drift with the wind in game time; a storm covers the sky
+        const float clouds = preview_ ? previewClouds_ : clouds_, storm = preview_ ? previewStorm_ : storm_;
+        const float cover = (cycle_ || preview_) ? std::max(clouds, storm * 0.85f) : 0.0f;
+        const float t = float(preview_ && s.seconds == 0 ? time : s.seconds);   // editor preview drifts in real time
+        ls.setClouds(cover, std::min(cloudStrength_ + storm * 0.3f, 0.9f), cloudScale_, -windX_ * t, -windZ_ * t);
+    }
     if (ls.quality() == LightQuality::Off) { active_.clear(); lastTick_ = s.tick; return; }
     consumeEvents(s, time, vision, grid, view);
     const float tt = float(time);
+    // Constant lights matter at night; by day they only warm their surroundings a little.
+    const bool cycle = cycle_ || preview_;
+    const float glowK = cycle ? 0.55f + 0.45f * std::max(night_, dusk_) : 1.0f;
+    const float haloK = cycle ? 0.15f + 0.85f * std::max(night_, dusk_ * 0.7f) : 0.35f;
     for (const SceneObject& o : s.objects) {
         if (!o.visible) continue;
         if (o.isProjectile) {
             if (o.shooterType >= types_.size()) continue;
             const Flash& f = types_[o.shooterType].projectile;
-            if (f.on) ls.add(PointLight{o.pos, f.radius, f.color, f.intensity, 0.5f});
+            if (!f.on) continue;
+            PointLight l{o.pos, f.radius, f.color, f.intensity, 0.5f};
+            l.halo = std::max(f.halo, 0.0f);
+            l.haloAlpha = 0.8f;
+            ls.add(l);
             continue;
         }
         if (o.type >= types_.size()) continue;
@@ -145,12 +305,30 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
         const UnitType& t = rules_->types[o.type];
         const float scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());
         float3 p{o.pos.x, view.heightAt(grid, o.pos.x, o.pos.z) + L.height * scale + ((t.layer & kLayerAir) ? 2.4f : 0.0f), o.pos.z};
-        float in = L.intensity;
+        float in = L.intensity * glowK;
         if (L.flicker > 0) { // two incommensurate waves per object read as fire, not as a pulse
             float ph = o.pos.x * 1.7f + o.pos.z * 2.3f;
             in *= 1.0f + L.flicker * (0.6f * std::sin(tt * 9.0f + ph) + 0.4f * std::sin(tt * 23.0f + ph * 1.9f));
         }
-        ls.add(PointLight{p, L.radius * scale, L.color, in, 0});
+        PointLight l{p, L.radius * scale, L.color, in, 0};
+        l.halo = L.halo * scale;
+        l.haloAlpha = haloK * std::min(in / std::max(L.intensity, 0.01f), 1.3f);
+        ls.add(l);
+    }
+    for (const MapLight& m : mapLights_) { // decorative lights: once the cell has been explored
+        if (vision && !vision->empty()) {
+            int x = int(std::floor(m.x)), y = int(std::floor(m.z));
+            if (!grid.inside(x, y) || (*vision)[size_t(grid.index(x, y))] == 0) continue;
+        }
+        float in = m.intensity * glowK;
+        if (m.flicker > 0) {
+            float ph = m.x * 1.7f + m.z * 2.3f;
+            in *= 1.0f + m.flicker * (0.6f * std::sin(tt * 9.0f + ph) + 0.4f * std::sin(tt * 23.0f + ph * 1.9f));
+        }
+        PointLight l{{m.x, view.heightAt(grid, m.x, m.z) + m.height, m.z}, m.radius, m.color, in, 0.3f};
+        l.halo = std::max(m.halo, 0.0f);
+        l.haloAlpha = haloK;
+        ls.add(l);
     }
     emitActive(ls, time);
 }
