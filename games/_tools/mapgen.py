@@ -492,12 +492,14 @@ def hearthhaul():
     m = Map("Green Dale", 56, 40, duel())
     m.border()
     m.rect(26, 2, 4, 12, '~')
-    m.ent("storehouse", 1, [8, 20], inventory={"planks": 30, "stone": 30, "bread": 10, "sword": 2})
+    m.ent("storehouse", 1, [8, 20], inventory={"planks": 40, "stone": 40, "bread": 20, "coins": 60, "axe": 4, "wine": 10})
     m.ent("school", 1, [8, 26])
-    for i in range(3):
+    m.ent("inn", 1, [4, 24])
+    for i in range(4):
         m.ent("serf", 1, [12, 18 + i])
     m.ent("labourer", 1, [12, 22]); m.ent("labourer", 1, [12, 23])
     m.ent("militia", 1, [13, 25]); m.ent("militia", 1, [13, 26])
+    m.ent("gold_vein", 0, [20.5, 6.5]); m.ent("coal_vein", 0, [22.5, 6.5]); m.ent("iron_vein", 0, [21.5, 8.5])
     for (x, y) in [(4, 10), (5, 12), (6, 9), (4, 13), (7, 11), (5, 8), (3, 11), (6, 14)]:
         m.ent("tree", 0, [x + 0.5, y + 0.5])
     m.ent("rock", 0, [16.5, 32.5]); m.ent("rock", 0, [18.5, 33.5])
