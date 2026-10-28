@@ -81,7 +81,12 @@ void RtsModule::sysFlowFields(Simulation& sim) {
     w.each<Mobile>([&](Entity, Mobile& m) { if (m.flowArrived >= 0) ++settled[m.flowArrived]; });
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         // followers that fell back to their own path (stuck) still settle with the crowd
-        if (m.flowGoalCell < 0 || m.flowArrived >= 0 || !m.moving || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
+        if (m.flowGoalCell < 0 || m.flowArrived >= 0 || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
+        if (!m.moving) {   // stopped on the way (end of its path near the goal): settled; far away: no longer part of it
+            if (dist2D(tr.pos, m.goal) <= m.flowArea * 2 + Fixed::fromInt(2)) { m.flowArrived = m.flowGoalCell; ++settled[m.flowGoalCell]; }
+            else m.flowGoalCell = -1;
+            return;
+        }
         const UnitType& t = rules_.types[u.type];
         // arrival: in the goal radius, or touching a unit that already arrived at the same goal (within twice the
         // radius): it stops, and the crowd settles from the goal outward instead of pushing into the ones in front
@@ -97,6 +102,8 @@ void RtsModule::sysFlowFields(Simulation& sim) {
         // stuck, or circling the crowd for 20 s without finding a gap: settle wherever it touches it
         const Fixed base = disc * 13 / 10 + Fixed::fromInt(2);
         if (dg <= m.flowArea * 2 + Fixed::fromInt(2)) { if (m.flowNear < 65535) ++m.flowNear; } else m.flowNear = 0;
+        // nobody settled yet (the goal point itself is taken / blocked): the first unit hovering in the goal area settles
+        if (k == 0 && dg <= m.flowArea && m.flowNear > 2 * sim.tickRate()) arrive = true;
         const bool late = m.stuck > Fixed::fromRatio(1, 2) || m.flowNear > 20 * sim.tickRate();
         const Fixed limit = late ? fxMax(base, m.flowArea * 2 + Fixed::fromInt(2)) : base;
         if (!arrive && m.goalRadius.raw > 0 && dg <= limit) {

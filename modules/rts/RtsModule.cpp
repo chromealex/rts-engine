@@ -225,7 +225,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         if (bg != "nearest" && bg != "search") throw std::runtime_error("map movement.blockedGoals: expected 'nearest' or 'search'");
         rules_.movement.blockedGoalNearest = bg == "nearest";
     }
-    else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
+    if (map["movement"].has("flowField") && !map["movement"]["flowField"].isObject()) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players
     const size_t np = sim.players().size();
@@ -928,6 +928,7 @@ void RtsModule::issue(Simulation& sim, Entity e, const Order& o, bool queue) {
     if (!queue) {
         ord->queue.clear();
         stopMoving(sim, e);
+        if (auto* m = w.tryGet<Mobile>(e)) { m->flowGoalCell = -1; m->flowArrived = -1; }   // leaves its flow crowd
         if (auto* c = w.tryGet<Combat>(e)) c->target = kNullEntity;
         if (auto* u = w.tryGet<Unit>(e)) u->flags &= uint8_t(~kUnitHold);
     }
