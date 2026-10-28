@@ -4,6 +4,7 @@
 #include "DataOps.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -136,6 +137,50 @@ void registerDataOps(Workspace& ws) {
             ws.map.touched();
             ws.note({Change::Cells, x0, y0, x1, y1, -1, pl ? "Территория игрока " + std::to_string(pl) : "Территория снята"});
             Json r = okWith("Территория: " + std::to_string(n) + " клеток → " + (pl ? "игрок " + std::to_string(pl) : "ничья"));
+            return r;
+        }});
+    ws.registerOp({"build_estimate",
+        "Estimated build size for a platform before building: runs rtsbuild --estimate (the real content pack with the "
+        "game's settings: atlases, sound profile, packaging.files rules, split), returns pack size, atlas stats and the "
+        "heaviest files. Per-file settings live in game.json packaging.files [{match, exclude, level (0 = store), maxSize, "
+        "scale}] (packaging.targets.<t>.files for one platform), set with set_manifest.",
+        Json::parse(R"({"properties": {"target": {"type": "string", "enum": ["macos", "ios", "android", "web", "windows", "linux"]},
+            "top": {"type": "integer"}}, "required": ["target"]})"),
+        [&ws](const Json& p) {
+            if (ws.project.dir.empty()) throw std::runtime_error("no game is open (open_game)");
+            const std::string target = p.getStr("target");
+            const fs::path out = fs::path(ws.project.dir).parent_path() / "dist" / "_estimate";
+            std::string cmd = "\"" + ws.buildTool + "\" --project \"" + ws.project.dir + "\" --engine \"" + ws.engineDir + "\" --target " + target +
+                              " --estimate --out \"" + out.string() + "\" 2>&1";
+#if defined(_WIN32)
+            FILE* pipe = _popen(cmd.c_str(), "r");
+#else
+            FILE* pipe = popen(cmd.c_str(), "r");
+#endif
+            if (!pipe) throw std::runtime_error("cannot start rtsbuild");
+            std::string log; char buf[512];
+            while (std::fgets(buf, sizeof buf, pipe)) log += buf;
+#if defined(_WIN32)
+            int rc = _pclose(pipe);
+#else
+            int rc = pclose(pipe);
+#endif
+            if (rc != 0) throw std::runtime_error("rtsbuild --estimate failed:\n" + log.substr(log.size() > 3000 ? log.size() - 3000 : 0));
+            Json rep = Json::parseFile((out / target / "size-report.json").string());
+            Json r = Json::object();
+            r.set("target", Json::string(target));
+            r.set("pack", rep["pack"]);
+            r.set("atlas", rep["atlas"]);
+            if (rep.has("split")) r.set("split", rep["split"]);
+            r.set("fileRules", rep["fileRules"]);
+            Json files = Json::array();
+            std::vector<const Json*> all;
+            for (auto& f : rep["files"].items()) all.push_back(&f);
+            std::stable_sort(all.begin(), all.end(), [](const Json* a, const Json* b) { return (*a)["storedBytes"].integer() > (*b)["storedBytes"].integer(); });
+            const size_t top = size_t(std::clamp<int64_t>(p["top"].integer(20), 1, 500));
+            for (size_t i = 0; i < all.size() && i < top; ++i) files.push(*all[i]);
+            r.set("heaviest", files);
+            r.set("summary", str("Оценка " + target + ": пак " + std::to_string(rep["pack"]["packBytes"].integer() / 1024) + " КБ"));
             return r;
         }});
 }

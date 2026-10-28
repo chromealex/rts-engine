@@ -97,6 +97,8 @@ void Editor::drawMenuBar() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Сборка")) {
+        if (ImGui::MenuItem("Окно сборки…", "Ctrl+B")) { if (auto* w = window("build")) { w->open = true; ImGui::SetWindowFocus("Сборка"); } }
+        ImGui::Separator();
         ImGui::BeginDisabled(ws_.building());
         static const char* targets[][2] = {{"macos", "macOS (.app)"}, {"ios", "iOS (проект Xcode)"}, {"android", "Android (Gradle + APK)"},
                                            {"web", "Web (HTML5)"}, {"windows", "Windows (.exe)"}, {"linux", "Linux"}, {"all", "Все платформы"}};
@@ -104,6 +106,10 @@ void Editor::drawMenuBar() {
         ImGui::EndDisabled();
         ImGui::Separator();
         ImGui::RadioButton("Debug", &buildConfig, 0); ImGui::SameLine(); ImGui::RadioButton("Release", &buildConfig, 1);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Окно сборки: качество, размер, файлы…")) {
+            if (auto* w = window("build")) { w->open = true; ImGui::SetWindowFocus("Сборка"); }
+        }
         ImGui::EndMenu();
     }
     if (server_.listening()) {

@@ -110,7 +110,7 @@ private:
                 if (ImGui::Selectable(label, ed.gameDevice == d.id)) ed.gameDevice = d.id;
                 if (d.w > 0) {
                     ImGui::SameLine(250);
-                    ImGui::TextDisabled("%d×%d @%.3gx", d.w, d.h, d.scale);
+                    ImGui::TextDisabled("%dx%d @%.3gx", d.w, d.h, d.scale);
                 }
             }
             ImGui::EndCombo();
