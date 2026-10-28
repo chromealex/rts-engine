@@ -141,7 +141,11 @@ void RtsModule::moveAgents(Simulation& sim) {
             while (m.moving && m.pathPos < m.path.size()) {
                 Vec2 d = (m.path[m.pathPos] - tr.pos).xz();
                 Fixed len = d.length();
-                if (len > Fixed::fromRatio(1, 20)) { a.pref = d / len * fxMin(speed, len * invDt); break; }
+                if (len > Fixed::fromRatio(1, 20)) {
+                    if (g.hf && (t.layer & kLayerGround)) a.speed = speed = speed * slopeSpeed(sim, tr.pos, d / len); // uphill slower
+                    a.pref = d / len * fxMin(speed, len * invDt);
+                    break;
+                }
                 if (++m.pathPos >= m.path.size()) { m.moving = false; m.path.clear(); }
             }
             if (m.pathPos >= m.path.size() && m.moving) { m.moving = false; m.path.clear(); }
@@ -213,9 +217,9 @@ void RtsModule::moveAgents(Simulation& sim) {
             if (ignoreGrid) return true;
             int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(np.x), cy = g.cellY(np.z);
             if (cx == cx0 && cy == cy0) return true;
-            if (!g.passable(cx0, cy0, t.layer)) return true; // leaving a blocked cell
-            if (cx != cx0 && cy != cy0) return g.canStep(cx0, cy0, cx, cy0, t.layer) && g.canStep(cx, cy0, cx, cy, t.layer) && g.canStep(cx0, cy0, cx, cy, t.layer);
-            return g.canStep(cx0, cy0, cx, cy, t.layer);
+            if (!g.passable(cx0, cy0, t.pathLayer)) return true; // leaving a blocked cell
+            if (cx != cx0 && cy != cy0) return g.canStep(cx0, cy0, cx, cy0, t.pathLayer) && g.canStep(cx, cy0, cx, cy, t.pathLayer) && g.canStep(cx0, cy0, cx, cy, t.pathLayer);
+            return g.canStep(cx0, cy0, cx, cy, t.pathLayer);
         };
         Vec3 np = tr.pos + step;
         if (!ok(np)) {
@@ -238,7 +242,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         else m.stuck = fxMax(Fixed{}, m.stuck - dt);
         if (m.stuck > Fixed::fromRatio(3, 2) && m.moving) {
             m.stuck = Fixed{};
-            g.findPath(tr.pos, m.goal, t.layer, m.path, 40000, MapGrid::clearanceFor(t.radius), true);
+            g.findPath(tr.pos, m.goal, t.pathLayer, m.path, 40000, MapGrid::clearanceFor(t.radius), true);
             m.pathPos = 0;
             m.moving = !m.path.empty();
         }
@@ -260,7 +264,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         for (int dy = -2; dy <= 2; ++dy)
             for (int dx = -2; dx <= 2; ++dx) {
                 int x = cx + dx, z = cy + dy;
-                if ((dx == 0 && dy == 0) || !g.passable(x, z, t.layer)) continue;
+                if ((dx == 0 && dy == 0) || !g.passable(x, z, t.pathLayer)) continue;
                 size_t i = size_t(g.index(x, z));
                 if (g.soft[i]) continue;                                   // someone stands there
                 Vec2 c = g.cellCenter(x, z).xz();

@@ -19,6 +19,36 @@ uint8_t cellFlagsFromChar(char c) {
     }
 }
 
+bool applyCornersFile(Json& map, const ContentReader& read, std::string* err) {
+    Json* terrain = map.find("terrain");
+    if (!terrain || !terrain->isObject() || !terrain->has("cornersFile") || terrain->has("cornersBlob")) return true;
+    const std::string file = terrain->getStr("cornersFile");
+    std::string bytes;
+    if (file.empty() || !read(file, bytes)) { if (err) *err = "map terrain.cornersFile: cannot read '" + file + "'"; return false; }
+    terrain->set("cornersBlob", Json::string(std::move(bytes)));
+    return true;
+}
+
+std::string encodeCorners(const std::vector<int16_t>& c) {
+    std::string out(c.size() * 2, '\0');
+    for (size_t i = 0; i < c.size(); ++i) { out[2 * i] = char(uint16_t(c[i]) & 0xff); out[2 * i + 1] = char(uint16_t(c[i]) >> 8); }
+    return out;
+}
+
+bool decodeCorners(const Json& terrain, int w, int h, std::vector<int16_t>& out, std::string* err) {
+    const std::string file = terrain.getStr("cornersFile");
+    if (!terrain["cornersBlob"].isString()) { if (err) *err = "map terrain.cornersFile '" + file + "' was not loaded (applyCornersFile)"; return false; }
+    const std::string& b = terrain["cornersBlob"].str();
+    const size_t n = size_t(w + 1) * size_t(h + 1);
+    if (b.size() != n * 2) {
+        if (err) *err = "map terrain.cornersFile '" + file + "': expected " + std::to_string(n * 2) + " bytes ((w+1)*(h+1) int16), got " + std::to_string(b.size());
+        return false;
+    }
+    out.resize(n);
+    for (size_t i = 0; i < n; ++i) out[i] = int16_t(uint16_t(uint8_t(b[2 * i])) | uint16_t(uint8_t(b[2 * i + 1])) << 8);
+    return true;
+}
+
 void MapGrid::init(int width, int h_) {
     w = width; h = h_;
     const size_t n = size_t(w * h);
@@ -26,6 +56,8 @@ void MapGrid::init(int width, int h_) {
     level.assign(n, 0);
     height.assign(n, 0);
     corner.clear();
+    hf = false;
+    slope.clear();
     blocked.assign(n, 0);
     creep.assign(n, 0);
     fieldRes.assign(n, -1);
@@ -39,6 +71,75 @@ void MapGrid::init(int width, int h_) {
     clearance.assign(n, 0);
     clearanceDirty = true;
     soft.assign(n, 0);
+}
+
+namespace {
+int64_t isqrt64(int64_t v) {  // floor(sqrt(v)), integer only
+    if (v <= 0) return 0;
+    int64_t r = 0, bit = int64_t(1) << 62;
+    while (bit > v) bit >>= 2;
+    while (bit) {
+        if (v >= r + bit) { v -= r + bit; r = (r >> 1) + bit; }
+        else r >>= 1;
+        bit >>= 2;
+    }
+    return r;
+}
+} // namespace
+
+uint16_t MapGrid::slopeUnits(Fixed rise) {
+    int64_t v = rise.raw >> (Fixed::kFracBits - 8);
+    return uint16_t(std::clamp<int64_t>(v, 0, 65535));
+}
+
+void MapGrid::enableHeightfield(Fixed levelHeight) {
+    hf = true;
+    slope.assign(size_t(w * h), 0);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const int64_t a = corner[size_t(cornerIndex(x, y))], b = corner[size_t(cornerIndex(x + 1, y))];
+            const int64_t c = corner[size_t(cornerIndex(x, y + 1))], d = corner[size_t(cornerIndex(x + 1, y + 1))];
+            // steepness = max(gradient length, steepest edge): a twisted cell has no gradient but steep edges
+            const int64_t gx = (b - a) + (d - c), gz = (c - a) + (d - b);       // 2x gradient, 1/16 units
+            int64_t s = isqrt64((gx * gx + gz * gz) * 256 * 256 / 4) / 16;      // 1/256 units per cell
+            for (int64_t e : {b - a, d - c, c - a, d - b}) s = std::max(s, (e < 0 ? -e : e) * 16);
+            slope[size_t(index(x, y))] = uint16_t(std::min<int64_t>(s, 65535));
+            Fixed hc = cellHeight(x, y);
+            int lv = levelHeight.raw > 0 ? int((hc / levelHeight).floorInt()) : 0;
+            level[size_t(index(x, y))] = int8_t(std::clamp(lv, 0, 9));
+        }
+    clearanceDirty = true;
+}
+
+Fixed MapGrid::cellHeight(int x, int y) const {
+    if (corner.empty() || !inside(x, y)) return Fixed{};
+    int64_t s = int64_t(corner[size_t(cornerIndex(x, y))]) + corner[size_t(cornerIndex(x + 1, y))] +
+                corner[size_t(cornerIndex(x, y + 1))] + corner[size_t(cornerIndex(x + 1, y + 1))];
+    return Fixed::fromRaw(s << (Fixed::kFracBits - 6)); // sum / 4 / 16
+}
+
+Fixed MapGrid::surfaceHeight(Fixed x, Fixed z) const {
+    if (corner.empty() || w == 0) return Fixed{};
+    const int64_t one = int64_t(1) << Fixed::kFracBits;
+    int64_t rx = std::clamp<int64_t>(x.raw, 0, int64_t(w) * one), rz = std::clamp<int64_t>(z.raw, 0, int64_t(h) * one);
+    int cx = int(rx >> Fixed::kFracBits), cz = int(rz >> Fixed::kFracBits);
+    int64_t fx = rx & (one - 1), fz = rz & (one - 1);
+    if (cx >= w) { cx = w - 1; fx = one; }
+    if (cz >= h) { cz = h - 1; fz = one; }
+    const int64_t a = corner[size_t(cornerIndex(cx, cz))], b = corner[size_t(cornerIndex(cx + 1, cz))];
+    const int64_t c = corner[size_t(cornerIndex(cx, cz + 1))], d = corner[size_t(cornerIndex(cx + 1, cz + 1))];
+    const int64_t top = a * (one - fx) + b * fx, bot = c * (one - fx) + d * fx;   // corner * 2^16
+    const int64_t v = (top >> 4) * (one - fz) + (bot >> 4) * fz;                  // corner * 2^28
+    return Fixed::fromRaw(v >> (28 - Fixed::kFracBits + 4));                     // / 16 units
+}
+
+Vec3 MapGrid::gradient(Fixed x, Fixed z) const {
+    if (corner.empty() || w == 0) return {};
+    int cx = std::clamp(int(x.floorInt()), 0, w - 1), cz = std::clamp(int(z.floorInt()), 0, h - 1);
+    const int64_t a = corner[size_t(cornerIndex(cx, cz))], b = corner[size_t(cornerIndex(cx + 1, cz))];
+    const int64_t c = corner[size_t(cornerIndex(cx, cz + 1))], d = corner[size_t(cornerIndex(cx + 1, cz + 1))];
+    // (diff sum / 2) / 16 units per cell
+    return {Fixed::fromRaw(((b - a) + (d - c)) << (Fixed::kFracBits - 5)), Fixed{}, Fixed::fromRaw(((c - a) + (d - b)) << (Fixed::kFracBits - 5))};
 }
 
 int MapGrid::clearanceFor(Fixed radius) {
@@ -55,7 +156,7 @@ void MapGrid::updateClearance() {
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x) {
             size_t i = size_t(index(x, y));
-            if (!(flags[i] & kCellGround) || blocked[i]) { clearance[i] = 0; q.push_back(int(i)); }
+            if (!(flags[i] & kCellGround) || blocked[i] || (hf && slope[i] > slopeLimit[0])) { clearance[i] = 0; q.push_back(int(i)); }
             else if (x == 0 || y == 0 || x == w - 1 || y == h - 1) { clearance[i] = 1; q.push_back(int(i)); }
         }
     for (size_t qi = 0; qi < q.size(); ++qi) {
@@ -83,13 +184,13 @@ bool MapGrid::passable(int x, int y, uint8_t layer) const {
     const size_t i = size_t(index(x, y));
     if (blocked[i]) return false;
     if (layer & 4 /*naval*/) return flags[i] & kCellWater;
-    if (layer & 8 /*sand only*/) return (flags[i] & kCellGround) && !(flags[i] & (kCellRock | kCellRamp));
-    return flags[i] & kCellGround;
+    const bool ok = (layer & 8 /*sand only*/) ? (flags[i] & kCellGround) && !(flags[i] & (kCellRock | kCellRamp)) : (flags[i] & kCellGround) != 0;
+    return ok && (!hf || slope[i] <= slopeLimitFor(layer)); // heightfield: too steep for this body
 }
 
 bool MapGrid::canStep(int x0, int y0, int x1, int y1, uint8_t layer) const {
     if (!passable(x1, y1, layer)) return false;
-    if (layer & 2) return true;
+    if ((layer & 2) || hf) return true;  // heightfield: slopes (in passable) replace cliffs and ramps
     const size_t a = size_t(index(x0, y0)), b = size_t(index(x1, y1));
     int la = level[a], lb = level[b];
     if (la == lb) return true;
@@ -112,7 +213,8 @@ bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
         for (int x = x0; x < x0 + fw; ++x) {
             if (!inside(x, y)) return false;
             size_t i = size_t(index(x, y));
-            if (blocked[i] || !(flags[i] & kCellGround) || (flags[i] & kCellNoBuild) || level[i] != lv) return false;
+            if (blocked[i] || !(flags[i] & kCellGround) || (flags[i] & kCellNoBuild)) return false;
+            if (hf ? slope[i] > buildLimit : level[i] != lv) return false;
             if (fieldRes[i] >= 0 && fieldAmt[i].raw > 0) return false;
         }
     return true;
