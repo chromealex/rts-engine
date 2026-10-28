@@ -177,6 +177,7 @@ void GameClient::startNetMatch() {
         if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_ = std::make_unique<Simulation>(net_->simConfig(), std::make_unique<RtsModule>());
         sim_->setup(Json::parse(rulesText), map);
+        configurePostFx(map);
     } catch (const std::exception& e) {
         netError_ = e.what();
         sim_.reset();

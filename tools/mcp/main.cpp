@@ -192,6 +192,9 @@ const char* kInstructions =
     "lighting: lighting_set (sun, sky, day/night, presets), light_add / light_update (point lights on the map); "
     "fog of war: rules_merge {path: \"fogOfWar\"} (mode, colour, style, softness, grid, lineOfSight for 3D visibility by heights, "
     "vision.blocks on wall types, delivery.blocksVision on smoke skills); "
+    "post effects (bloom, colour grading, LUT, vignette, tilt-shift, ...): postfx_catalog -> postfx_preset / postfx_add; their answers carry "
+    "'warnings' with ms per frame for heavy effects (bloom, fxaa, sunShafts) - pass them on to the user; view_postfx {quality: low} + view_screenshot "
+    "shows what weak phones get; "
     "game UI: ui_contract (documents, data bindings, events) -> game_file_write ui/hud.rml, ui/skin.rcss ... (the game's ui/ overrides the engine's). "
     "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";

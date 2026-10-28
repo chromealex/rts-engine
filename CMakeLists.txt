@@ -316,6 +316,10 @@ set(RTS_RUNTIME_SRC
     engine/render/QualityGovernor.cpp
     engine/render/Renderer3DReflect.cpp
     engine/render/ImGuiLayer.cpp)
+# post-processing (postfx agent): GPU part in the runtime, data / cost model GPU-free (editor core, rtsmcp, tests)
+list(APPEND RTS_RUNTIME_SRC engine/render/PostFx.cpp)
+add_library(rts_postfx_data STATIC engine/render/PostFxData.cpp)
+target_link_libraries(rts_postfx_data PUBLIC rts_engine)
 
 if(RTS_PLATFORM STREQUAL "macos")
     list(APPEND RTS_RUNTIME_SRC engine/platform/macos/PlatformMac.mm engine/gfx/metal/GfxMetal.mm engine/platform/apple/PluginsApple.mm)
@@ -353,6 +357,7 @@ endif()
 
 add_library(rts_runtime OBJECT ${RTS_RUNTIME_SRC})
 target_link_libraries(rts_runtime PUBLIC rts_engine rts_models rts_imgui rts_pack rts_zstd_dec rts_plugins)
+target_link_libraries(rts_runtime PUBLIC rts_postfx_data)   # postfx agent
 if(APPLE)
     set_source_files_properties(engine/platform/macos/PlatformMac.mm engine/platform/ios/PlatformIOS.mm
         engine/gfx/metal/GfxMetal.mm engine/platform/apple/PluginsApple.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
@@ -513,6 +518,8 @@ if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp
     apps/editor/core/SimTools.cpp apps/editor/core/ScenarioOps.cpp apps/editor/core/SchemaOps.cpp apps/editor/core/CampaignOps.cpp)   # scenario_run, rules_lint, rules_schema keys
     target_link_libraries(rts_editor_core PUBLIC rts_game)
+    target_link_libraries(rts_editor_core PUBLIC rts_postfx_data)   # postfx_* ops (postfx agent)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/PostFxOps.cpp)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
         target_link_libraries(rts_editor_core PUBLIC ws2_32)
@@ -646,6 +653,7 @@ if(RTS_BUILD_TESTS)
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
+    target_link_libraries(rts_tests PRIVATE rts_postfx_data)   # postfx agent
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
