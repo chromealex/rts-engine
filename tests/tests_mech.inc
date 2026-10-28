@@ -924,11 +924,12 @@ TEST(mech_flow_fields) {
         sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
         auto t0 = std::chrono::steady_clock::now();
         sim->submit(mechCmd(1, game::kCmdMove, army, kNullEntity, at(80, 20)));
-        sim->step();
+        run(*sim, 1);
         int onField = 0;
-        for (Entity e : army) { auto& q = sim->world().get<game::Orders>(e).queue; if (!q.empty() && q.front().flow) ++onField; }
+        for (Entity e : army) if (sim->world().get<game::Mobile>(e).flow) ++onField;
         if (flow) CHECK(onField >= 300);   // hundreds of units on one shared field
-        run(*sim, 40);
+        if (flow && onField < 300) std::printf("  on the field after 1 s: %d\n", onField);
+        run(*sim, 39);
         ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         arrived = 0;
         for (Entity e : army) if (posOf(*sim, e).x > Fixed::fromInt(49)) ++arrived;

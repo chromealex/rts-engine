@@ -1692,7 +1692,9 @@ useTemplate, keepSize}`.
 ## Fidelity mechanics (play like the original)
 
 Optional blocks that make the sample games play like their originals (`modules/rts/RtsOriginals*.cpp`). A game that
-uses none of them keeps its exact checksums.
+uses none of them keeps its exact checksums. These blocks are the single implementation of their mechanic: the
+agent-mech spellings of the same mechanics (`armorModel`, type `shields`, `upkeepResources`, `resourceNode.maxWorkers`,
+`"crew": {"accepts"}`, `upgradeGarrison`) are aliases parsed into them (see the agent-mech sections above).
 
 | block | where | meaning |
 |---|---|---|
