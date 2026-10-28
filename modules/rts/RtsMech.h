@@ -52,6 +52,8 @@ struct Morale {
 // Logistics: a conveyor piece's direction (1 east +x, 2 south +z, 3 west, 4 north) and a producer / crafter.
 struct Belt { uint8_t dir = 1; };
 struct Crafter { std::vector<Fixed> in, out; Fixed timer{}, outTimer{}; };
+// Turn-based mode: what a unit may still do this turn.
+struct TurnBudget { Fixed move{}; int shots = 0; Vec3 lastPos{}; uint32_t turn = 0; };
 
 // Global mech state (inside GameState; hashed when used).
 struct MechState {
@@ -80,6 +82,9 @@ struct MechState {
     std::vector<int16_t> beltRes;                  // per cell: resource of the packet (-1 none)
     std::vector<Fixed> beltAmt, beltProg;          // amount, progress along the cell 0..1
     std::vector<std::pair<int32_t, uint8_t>> beltPlan;   // cell -> direction for belts ordered by build_line
+    // turn-based mode
+    uint8_t turnPlayer = 0;                        // whose turn (0 before the first)
+    uint32_t turnIndex = 0, turnStart = 0;
 };
 
 } // namespace rts::game

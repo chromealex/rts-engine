@@ -60,6 +60,13 @@ void loadMechStage4(Rules& r, const Json& j) {
         m.supplySpeed = s.getFx("speed", m.supplySpeed);
         m.supplyAttack = s.getFx("attack", m.supplyAttack);
     }
+    if (const Json& tb = j["turns"]; tb.isObject() || tb.boolean()) {
+        m.turns = m.any = true;
+        m.turnMoveSeconds = tb.getFx("moveSeconds", m.turnMoveSeconds);
+        m.turnAttacks = int(tb.getInt("attacks", m.turnAttacks));
+        m.turnTimeLimit = tb.getFx("timeLimit", m.turnTimeLimit);
+        if (m.turnAttacks < 0) fail("turns.attacks", "must be >= 0");
+    }
     if (const Json& ff = j["flowFields"]; ff.boolean() || ff.isObject()) {
         m.flowFields = true;
         m.flowMinCells = int(ff.getInt("minCells", m.flowMinCells));

@@ -77,6 +77,7 @@ enum CommandType : uint16_t {
     kCmdBounty,       // point or target; param = resource | reward << 8 (autonomous heroes go for it)
     kCmdRotate,       // conveyor pieces: param 1..4 = east, south, west, north; 0 = turn clockwise
     kCmdLock,         // gates / doors: param 1 lock (closed for everyone), 2 unlock, 0 toggle
+    kCmdEndTurn,      // turn-based mode: the active player ends the turn
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -138,6 +139,7 @@ enum GameEvent : uint16_t {
     kEvCamera,          // pos = where to look, value = duration in ms | 1 << 31 when the camera is locked, player
     kEvMissionEnd,      // value 1 victory / 0 defeat, player
     kEvMorale,          // a = unit, value = 0 steady / 1 wavering / 2 routing (stage 4)
+    kEvTurn,            // turn-based mode: player = whose turn starts, value = turn number
 };
 
 // ---------------------------------------------------------------- components
@@ -613,6 +615,12 @@ public:
     bool applyMechLogisticsCommand(Simulation& sim, const Command& cmd);
     void mechLogisticsSetup(Simulation& sim, const Json& map);
     void hashLogistics(Simulation& sim, Hasher& h);
+    // turn-based mode (RtsMechTurns.cpp)
+    void mechTickTurns(Simulation& sim);
+    bool mechTurnCommand(Simulation& sim, const Command& cmd);   // true: swallowed (not your turn) or handled (end turn)
+    bool mechTurnFire(Simulation& sim, Entity e);
+    void mechTurnStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
+    uint8_t turnPlayer(Simulation& sim) const;
     bool genericSeparation = false;   // tests: compare the BA separation against the generic loop
     // BA: separation of overlapping units with a per-cell grid and flat arrays (exactly the pushes of sysMovement)
     void mechSeparation(Simulation& sim, const std::vector<Fixed>& weight, const std::vector<uint8_t>& anchored, Fixed deadZone, size_t,
