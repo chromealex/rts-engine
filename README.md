@@ -207,6 +207,10 @@ Linux ARM64 (GCC), macOS ARM64 (AppleClang) — одинаковые контр�
 - **В игре:** `NetClient` (`engine/net/NetClient.h`) — лобби и матч. Игра строит `Simulation` по
   `match()` и вызывает `attach(sim)`, затем `advance(dt)` вместо `sim.advance(dt)`; интерфейс
   по-прежнему отдаёт команды через `sim.submit()`.
+- **Тексты:** сервер не шлёт готовых фраз — только ключи локализации с аргументами (`NetText`):
+  у игроков в одном матче могут быть разные языки. Клиент переводит их через
+  `net::translate(loc, event.text)` и `net::displayName(...)` из `engine/net/NetLocalize.h`; строки
+  лежат в `engine/assets/lang/*.json` под `net.*`. Названия очередей в `server.json` — тоже ключи (`"@net.queue.1v1"`).
 
 ```bash
 ./build/mac/rts_server --config apps/server/server.json            # UDP 27015, WebSocket 27016

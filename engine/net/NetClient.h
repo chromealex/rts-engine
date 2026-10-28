@@ -33,11 +33,14 @@ struct ClientIdentity {
     uint64_t clientKey = 0;    // stable per install; keys the matchmaking rating
 };
 
+// Something for the UI. `text` is a localization key with arguments (net::translate() in
+// NetLocalize.h); it is empty when the event needs no message.
 struct NetEvent {
-    enum class Kind { Connected, Disconnected, Error, Chat, RoomChanged, QueueChanged, MatchStarted, PlayerStatus, Desync, MatchEnded, ControlChanged };
+    enum class Kind { Connected, Disconnected, Error, Chat, RoomChanged, QueueChanged, MatchStarted, PlayerStatus, Desync, MatchEnded,
+                      RatingChanged, ControlChanged };
     Kind kind;
-    std::string text;
-    int32_t value = 0;   // error code, result, player slot ...
+    NetText text;
+    int32_t value = 0;   // error code, result (MatchEnded), player slot, rating delta ...
 };
 
 class NetClient {
@@ -94,7 +97,7 @@ public:
 private:
     void handle(const Bytes& msg);
     void send(const Bytes& b) { if (conn_) conn_->send(b); }
-    void event(NetEvent::Kind k, std::string text = {}, int32_t v = 0) { events_.push_back({k, std::move(text), v}); }
+    void event(NetEvent::Kind k, NetText text = {}, int32_t v = 0) { events_.push_back({k, std::move(text), v}); }
 
     std::unique_ptr<Conn> conn_;
     ClientIdentity id_;
