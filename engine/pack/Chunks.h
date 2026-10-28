@@ -118,4 +118,8 @@ private:
 
 const char* statusName(ChunkManager::Status s);
 
+// Host tools: attaches the chunks of a split pack found next to it (in ./chunks or the same
+// folder) after checking their SHA-256. Returns how many were attached; problems are listed.
+size_t attachChunksNextTo(Pack& pack, const std::string& packPath, std::vector<std::string>* problems = nullptr);
+
 } // namespace rts::pack

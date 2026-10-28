@@ -4,6 +4,11 @@
 //            [--engine <engine dir>] [--out <dir>] [--config Debug|Release]
 //            [--generate-only] [--team <Apple team id>] [--jobs N]
 //            [--no-pack] [--pack-level N] [--no-atlas]
+//            [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]
+//
+// Split builds (game.json "packaging", see splitConfig): the app ships only the base pack with
+// what the game needs to start; the rest goes to <out>/<target>/chunks/ for upload, downloaded
+// at runtime from packaging.sources (engine/pack/Chunks.h).
 //
 // Content (game folder + engine/assets) ships as one compressed resource pack
 // content/content.rpak; --no-pack ships the loose folder instead (debugging). Every build prints
@@ -70,7 +75,10 @@ struct Options {
     bool atlas = true;
     std::string profile;      // current target: selects the atlas page size
     Json gameJson;
-    std::map<std::string, fs::path> packFiles; // atlas settings key -> built pack (shared by targets with equal settings)
+    std::map<std::string, fs::path> packFiles; // atlas + split settings key -> built pack (shared by targets with equal settings)
+    // Split builds: command-line overrides of game.json "packaging" (-1 / empty = not given).
+    int split = -1, fillBase = -1;
+    std::string chunkSize, baseSize, totalSize;
     unsigned jobs = std::max(2u, std::thread::hardware_concurrency());
 };
 
@@ -230,16 +238,103 @@ Json packReportJson(const rts::pack::WriteStats& st, const rts::atlas::AtlasStat
     return r;
 }
 
-// Builds <out>/_pack[/<atlas key>]/content.rpak from the game folder and engine assets, once per
-// distinct atlas setting (targets with the same page size share one pack).
+// ------------------------------------------------------------------ split builds
+// game.json "packaging" (all optional, the user decides):
+//   {"split": true, "chunkSize": "8MB", "baseSize": "40MB", "totalSize": "1GB", "fillBase": false,
+//    "base": ["maps/intro.json"], "order": ["maps/scena00*", "sprites/*"],
+//    "sources": ["https://cdn.example.com/mygame/{hash}/"],
+//    "targets": {"web": {"split": true, "baseSize": "15MB"}, "windows": {"split": false}}}
+// Per-target blocks override the common settings; command-line flags override both.
+uint64_t parseSize(const Json& j, const std::string& where) {
+    if (j.isNumber()) return uint64_t(std::max<int64_t>(0, j.integer()));
+    std::string s = j.str();
+    if (s.empty()) return 0;
+    size_t i = 0;
+    while (i < s.size() && (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.')) ++i;
+    if (i == 0) die(where + ": размер \"" + s + "\" — ожидается число с KB/MB/GB");
+    double v = std::atof(s.substr(0, i).c_str());
+    std::string unit;
+    for (char c : s.substr(i)) if (!std::isspace(static_cast<unsigned char>(c))) unit += char(std::toupper(static_cast<unsigned char>(c)));
+    double mul = unit.empty() || unit == "B" ? 1 : unit == "K" || unit == "KB" ? 1024.0 : unit == "M" || unit == "MB" ? 1048576.0
+               : unit == "G" || unit == "GB" ? 1073741824.0 : -1;
+    if (mul < 0) die(where + ": неизвестная единица \"" + unit + "\" (B, KB, MB, GB)");
+    return uint64_t(v * mul);
+}
+
+struct SplitConfig {
+    bool enabled = false;
+    rts::pack::SplitOptions opt;
+    std::vector<std::string> sources;
+    std::string key() const {
+        if (!enabled) return "";
+        std::string k = std::to_string(opt.chunkSize) + "/" + std::to_string(opt.baseSize) + "/" + std::to_string(opt.totalBudget) + "/" + (opt.fillBase ? "f" : "-");
+        for (auto& g : opt.base) k += "|b:" + g;
+        for (auto& g : opt.priority) k += "|o:" + g;
+        char buf[24];
+        std::snprintf(buf, sizeof buf, "split-%08llx", static_cast<unsigned long long>(rts::pack::hashBytes(k.data(), k.size()) & 0xffffffffu));
+        return buf;
+    }
+};
+
+SplitConfig splitConfig(const Options& o) {
+    SplitConfig c;
+    const Json& p = o.gameJson["packaging"];
+    const Json& t = p["targets"][o.profile];
+    auto pick = [&](const char* key) -> const Json& { return t.has(key) ? t[key] : p[key]; };
+    c.enabled = pick("split").boolean(false);
+    if (o.split >= 0) c.enabled = o.split == 1;
+    if (!c.enabled) return c;
+    if (pick("chunkSize").isNull() && o.chunkSize.empty()) c.opt.chunkSize = 8u << 20;
+    else c.opt.chunkSize = o.chunkSize.empty() ? parseSize(pick("chunkSize"), "packaging.chunkSize") : parseSize(Json::string(o.chunkSize), "--chunk-size");
+    c.opt.baseSize = o.baseSize.empty() ? parseSize(pick("baseSize"), "packaging.baseSize") : parseSize(Json::string(o.baseSize), "--base-size");
+    c.opt.totalBudget = o.totalSize.empty() ? parseSize(pick("totalSize"), "packaging.totalSize") : parseSize(Json::string(o.totalSize), "--total-size");
+    c.opt.fillBase = o.fillBase >= 0 ? o.fillBase == 1 : pick("fillBase").boolean(false);
+    // What a game needs to start always ships: manifest, rules, languages, UI, engine assets,
+    // sounds table, atlas manifest, the first map with its tileset and the icon.
+    c.opt.base = {"game.json", "audio.json", "lang/*", "ui/*", "engine/*", "_atlas/*"};   // atlas pages hold the sprites
+    c.opt.base.push_back(o.gameJson.getStr("rules", "rules.json"));
+    if (std::string icon = o.gameJson.getStr("icon"); !icon.empty()) c.opt.base.push_back(icon);
+    const Json& maps = o.gameJson["maps"];
+    if (maps.size() > 0) {
+        std::string first = maps[size_t(0)].getStr("file");
+        c.opt.base.push_back(first);
+        try {   // its tileset and atlas image
+            Json m = Json::parseFile((o.project / first).string());
+            if (std::string ts = m["tiles"].getStr("tileset"); !ts.empty()) {
+                c.opt.base.push_back(ts);
+                Json tj = Json::parseFile((o.project / ts).string());
+                if (std::string at = tj.getStr("atlas"); !at.empty()) c.opt.base.push_back(at);
+            }
+        } catch (const std::exception&) {}
+    }
+    // Sprite sheets of all types: any unit may appear on screen at any time.
+    try {
+        Json rules = Json::parseFile((o.project / o.gameJson.getStr("rules", "rules.json")).string());
+        for (auto& [id, t] : rules["types"].members())
+            if (std::string sheet = t["sprite"].getStr("sheet"); !sheet.empty()) c.opt.base.push_back(sheet);
+    } catch (const std::exception&) {}
+    for (auto& g : p["base"].items()) c.opt.base.push_back(g.str());
+    for (auto& g : t["base"].items()) c.opt.base.push_back(g.str());
+    // Download order: user's order first, then small data files, then the rest.
+    for (auto& g : pick("order").items()) c.opt.priority.push_back(g.str());
+    c.opt.priority.push_back("*.json");
+    for (auto& s : pick("sources").items()) c.sources.push_back(s.str());
+    return c;
+}
+
+// Builds <out>/_pack[/<atlas key>][/<split key>]/content.rpak (+ chunks/) from the game folder and
+// engine assets, once per distinct setting (targets with equal settings share one pack).
 fs::path packDir(const Options& o) {
     std::string key = atlasConfig(o).key();
-    return key == "off" ? o.out / "_pack" : o.out / "_pack" / key;
+    fs::path d = key == "off" ? o.out / "_pack" : o.out / "_pack" / key;
+    std::string sk = splitConfig(o).key();
+    return sk.empty() ? d : d / sk;
 }
 
 fs::path contentPack(Options& o) {
     rts::atlas::AtlasConfig ac = atlasConfig(o);
-    std::string key = ac.key();
+    SplitConfig sc = splitConfig(o);
+    std::string key = ac.key() + "/" + sc.key();
     if (auto it = o.packFiles.find(key); it != o.packFiles.end()) return it->second;
     step("Контент: сборка ресурс-пака" + (key == "off" ? std::string() : " (атласы: " + o.profile + ", страница до " + std::to_string(ac.pack.maxPage) + ")"));
     rts::pack::PackWriter w;
@@ -262,17 +357,60 @@ fs::path contentPack(Options& o) {
     wo.threads = o.jobs;
     rts::pack::WriteStats st;
     fs::path dir = packDir(o), out = dir / "content.rpak";
-    if (!w.write(out.string(), wo, &st, &err)) die(err);
+    rts::pack::SplitResult sr;
+    std::error_code ec;
+    fs::remove_all(dir / "chunks", ec);
+    if (sc.enabled) {
+        if (!w.writeSplitFiles(out.string(), (dir / "chunks").string(), wo, sc.opt, &st, &sr, &err)) die(err);
+    } else if (!w.write(out.string(), wo, &st, &err)) {
+        die(err);
+    }
     rts::atlas::finishStats(as, st);
     for (auto& m : st.warnings) info("предупреждение: " + m);
     std::string report = rts::pack::sizeReport(st, 15) + as.report();
+    if (sc.enabled) {
+        report += "разбиение: в сборке " + rts::pack::formatBytes(sr.baseBytes) + ", докачка " + std::to_string(sr.chunks.size()) +
+                  " част. (до " + rts::pack::formatBytes(sc.opt.chunkSize) + "), всего " + rts::pack::formatBytes(sr.totalBytes) + "\n";
+        for (auto& c : sr.chunks) report += "  " + c.file + "  " + rts::pack::formatBytes(c.size) + ", файлов " + std::to_string(c.files) + "\n";
+        if (sr.chunks.empty()) report += "  всё поместилось в сборку — докачивать нечего\n";
+        else if (sc.sources.empty())
+            report += "ВНИМАНИЕ: в game.json нет packaging.sources — игре неоткуда скачивать части (если игра не задаёт источник сама)\n";
+        else {
+            report += "выложите папку chunks/ по адресу:";
+            for (auto& s : sc.sources) report += " " + s;
+            report += "  ({hash} = " + [&] { char b[17]; std::snprintf(b, sizeof b, "%016llx", static_cast<unsigned long long>(st.contentHash)); return std::string(b); }() + ")\n";
+        }
+    }
     for (auto& n : notes) report += n + "\n";
     if (w.external())
         report += "ВНИМАНИЕ: сборка содержит внешний контент (импорт из сторонних архивов) — только для личного использования, не распространять.\n";
     std::stringstream ss(report);
     for (std::string line; std::getline(ss, line);) info(line);
     writeText(dir / "size-report.txt", report);
-    writeText(dir / "size-report.json", packReportJson(st, as).dump(2) + "\n");
+    {
+        Json rep = packReportJson(st, as);
+        if (sc.enabled) {
+            Json s = Json::object();
+            s.set("baseBytes", Json::number(int64_t(sr.baseBytes)));
+            s.set("totalBytes", Json::number(int64_t(sr.totalBytes)));
+            s.set("chunkSize", Json::number(int64_t(sc.opt.chunkSize)));
+            Json arr = Json::array();
+            for (auto& c : sr.chunks) {
+                Json e = Json::object();
+                e.set("file", Json::string(c.file));
+                e.set("bytes", Json::number(int64_t(c.size)));
+                e.set("files", Json::number(int64_t(c.files)));
+                e.set("sha256", Json::string(c.sha256));
+                arr.push(std::move(e));
+            }
+            s.set("chunks", std::move(arr));
+            Json src = Json::array();
+            for (auto& u : sc.sources) src.push(Json::string(u));
+            s.set("sources", std::move(src));
+            rep.set("split", std::move(s));
+        }
+        writeText(dir / "size-report.json", rep.dump(2) + "\n");
+    }
     o.packFiles[key] = out;
     return out;
 }
@@ -302,6 +440,13 @@ void reportSize(const Options& o, const std::string& target, const fs::path& art
     if (!fs::exists(artifact, ec)) return;
     std::string line = target + ": " + artifact.filename().string() + " — " + rts::pack::formatBytes(treeSize(artifact));
     info("размер: " + line);
+    // Split build: the chunks to upload go next to the artifact, not inside it.
+    if (o.pack && fs::is_directory(packDir(o) / "chunks", ec)) {
+        fs::remove_all(o.out / target / "chunks", ec);
+        copyDir(packDir(o) / "chunks", o.out / target / "chunks");
+        line += ", докачка: " + rts::pack::formatBytes(treeSize(o.out / target / "chunks")) + " в " + (o.out / target / "chunks").string();
+        info("части для докачки: " + (o.out / target / "chunks").string());
+    }
     std::string report = line + "\n";
     if (o.pack && fs::exists(packDir(o) / "size-report.txt", ec)) report += "\nконтент (content.rpak):\n" + readText(packDir(o) / "size-report.txt");
     writeText(o.out / target / "size-report.txt", report);
@@ -314,6 +459,7 @@ void reportSize(const Options& o, const std::string& target, const fs::path& art
             Json c = Json::parse(readText(packDir(o) / "size-report.json"));
             j.set("pack", c["pack"]);
             j.set("atlas", c["atlas"]);
+            if (c.has("split")) j.set("split", c["split"]);
         } catch (const std::exception&) {}
     }
     writeText(o.out / target / "size-report.json", j.dump(2) + "\n");
@@ -669,7 +815,8 @@ void buildLinux(const Game& g, Options& o) {
 void usage() {
     std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
                  "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
-                 "                [--no-pack] [--pack-level 1..22] [--no-atlas]\n";
+                 "                [--no-pack] [--pack-level 1..22] [--no-atlas]\n"
+                 "                [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]\n";
 }
 
 } // namespace
@@ -691,6 +838,12 @@ int main(int argc, char** argv) {
         else if (a == "--no-pack") o.pack = false;
         else if (a == "--pack-level") o.packLevel = std::atoi(next().c_str());
         else if (a == "--no-atlas") o.atlas = false;
+        else if (a == "--split") o.split = 1;
+        else if (a == "--no-split") o.split = 0;
+        else if (a == "--chunk-size") o.chunkSize = next();
+        else if (a == "--base-size") o.baseSize = next();
+        else if (a == "--total-size") o.totalSize = next();
+        else if (a == "--fill-base") o.fillBase = 1;
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { usage(); return 2; }
     }

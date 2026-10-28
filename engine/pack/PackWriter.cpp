@@ -437,8 +437,10 @@ bool PackWriter::build(std::string& out, std::vector<std::string>& chunkData, co
         result->totalBytes = out.size();
         for (auto& c : chunkData) result->totalBytes += c.size();
     }
-    if (split && split->totalBudget && result && result->totalBytes > split->totalBudget)
-        return fail(error, "split: the whole content takes " + formatBytes(result->totalBytes) + ", more than the limit " + formatBytes(split->totalBudget));
+    uint64_t total = out.size();
+    for (auto& c : chunkData) total += c.size();
+    if (split && split->totalBudget && total > split->totalBudget)
+        return fail(error, "split: the whole content takes " + formatBytes(total) + ", more than the limit " + formatBytes(split->totalBudget));
     return true;
 }
 
@@ -456,7 +458,8 @@ std::string sizeReport(const WriteStats& st, size_t top) {
     double pct = st.rawBytes ? 100.0 * double(st.packBytes) / double(st.rawBytes) : 100.0;
     char buf[64];
     std::snprintf(buf, sizeof buf, "%.1f%%", pct);
-    o << "файлов: " << st.items.size() << ", исходный размер " << formatBytes(st.rawBytes) << " -> пак " << formatBytes(st.packBytes)
+    bool split = std::any_of(st.items.begin(), st.items.end(), [](const WriteStats::Item& it) { return it.chunk != 0; });
+    o << "файлов: " << st.items.size() << ", исходный размер " << formatBytes(st.rawBytes) << (split ? " -> базовый пак " : " -> пак ") << formatBytes(st.packBytes)
       << " (" << buf << ")";
     if (st.duplicates) o << ", дубликатов: " << st.duplicates;
     o << "\n";
