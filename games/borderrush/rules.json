@@ -1,0 +1,28 @@
+// "Border Rush" — State.io / territory-war style for phones: every cell has an owner; soldiers stream out
+// of the capital and towns on their own, march to the nearest front and convert the ground they stand on
+// (never while enemies stand there). Towns change sides with the ground under them. Spend money on
+// repeatable upgrades and on air strikes / bombardments. Own 85% of the land to win; no land - you're out.
+{
+  "victory": {"mode": "territory", "share": 0.85},
+  "territory": {"claimBy": "units", "startFromRegions": true, "buildOnlyOwned": true},
+  "supplyCap": 60,
+  "resources": {"money": {"name": "Деньги", "start": 200}},
+  "playerAbilities": [
+    {"id": "airstrike", "name": "Авиаудар", "cost": {"money": 150}, "cooldown": 20, "target": "point",
+     "effects": [{"type": "damage", "amount": 120, "radius": 2.5, "affects": "enemies"}]},
+    {"id": "drones", "name": "Дроны", "cost": {}, "cooldown": 4, "charges": {"max": 2, "rearmCost": {"money": 40}, "rearmTime": 15}, "target": "point",
+     "effects": [{"type": "damage", "amount": 50, "radius": 1.5, "affects": "enemies"}, {"type": "stun", "duration": 2, "radius": 1.5, "affects": "enemies"}]}
+  ],
+  "techs": {
+    "drill": {"name": "Муштра", "cost": {"money": 100, "time": 10}, "levels": 5, "costGrowth": 0.6, "effects": [{"tags": ["soldier"], "stat": "damage", "mul": 1.12}]},
+    "logistics": {"name": "Логистика", "cost": {"money": 120, "time": 10}, "levels": 5, "costGrowth": 0.6, "effects": [{"tags": ["city"], "stat": "productionSpeed", "mul": 1.15}]}
+  },
+  "types": {
+    "capital": {"name": "Столица", "tags": ["city"], "structure": {"footprint": [3, 3]}, "invulnerable": true, "capturable": true, "sight": 10, "supply": 24,
+                "income": {"money": 4}, "autoTrain": {"unit": "soldier", "interval": 3}, "researches": ["drill", "logistics"], "view": {"shape": "hall"}},
+    "town": {"name": "Город", "tags": ["city"], "structure": {"footprint": [2, 2]}, "invulnerable": true, "capturable": true, "sight": 7, "supply": 8,
+             "income": {"money": 2}, "autoTrain": {"unit": "soldier", "interval": 5}, "view": {"shape": "house"}},
+    "soldier": {"name": "Солдат", "tags": ["soldier"], "health": {"max": 60}, "move": {"speed": 2.4, "radius": 0.3}, "sight": 6,
+                "weapons": [{"range": 2.5, "damage": 6, "cooldown": 0.8}], "cost": {"supply": 1}, "claim": {"radius": 1.5, "rate": 3}, "view": {"shape": "soldier", "scale": 0.7}}
+  }
+}

@@ -97,6 +97,8 @@ void GameClient::initUi() {
     c.Bind("difficulty", &difficulty_);
     c.Bind("spectator", &spectator_);
     c.Bind("shadows", &shadowQuality_);
+    c.Bind("volume", &volume_);
+    c.Bind("music", &musicVolume_);
     c.Bind("netAddress", &netAddress_);
     c.Bind("netName", &netName_);
     c.Bind("chatInput", &chatInput_);
@@ -114,8 +116,7 @@ void GameClient::initUi() {
     c.BindEventCallback("restart", [this](Rml::DataModelHandle, Rml::Event&, VArgs) { startMatch(mapIndex_); });
     c.BindEventCallback("tomenu", [this](Rml::DataModelHandle, Rml::Event&, VArgs) {
         if (netMatch_) { leaveNetMatch(); return; }
-        sim_.reset();
-        setScreen(Screen::Menu);
+        toMenu();
     });
     // net('connect'), net('create', i) ... -> Lobby.cpp
     c.BindEventCallback("net", [this](Rml::DataModelHandle, Rml::Event&, VArgs a) {

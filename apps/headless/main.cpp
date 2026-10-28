@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
@@ -14,6 +16,7 @@
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
+#include "modules/rts/RtsTiles.h"
 
 using namespace rts;
 namespace fs = std::filesystem;
@@ -21,6 +24,20 @@ namespace fs = std::filesystem;
 static std::unique_ptr<GameModule> makeModule(const std::string& name) {
     if (name == "rts") return std::make_unique<game::RtsModule>();
     return nullptr;
+}
+
+// Map JSON with tile-map terrain applied (2D games: the tileset decides cell kinds/levels/fields).
+static Json loadMap(const std::string& mapPath, const std::string& projectDir) {
+    Json map = Json::parseFile(mapPath);
+    std::string err;
+    auto read = [&](const std::string& p, std::string& out) {
+        std::ifstream f(projectDir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    if (!game::applyTilesToMap(map, read, &err)) throw std::runtime_error(err);
+    return map;
 }
 
 struct Args {
@@ -60,7 +77,7 @@ static int play(const Args& a) {
     SimConfig cfg;
     cfg.seed = a.seed;
     Simulation sim(cfg, makeModule(module));
-    sim.setup(Json::parseFile(rulesPath), Json::parseFile(mapPath));
+    sim.setup(Json::parseFile(rulesPath), loadMap(mapPath, a.project));
 
     std::vector<game::RtsAI> bots;
     for (auto& p : sim.players()) bots.emplace_back(p.slot, a.seed);
@@ -110,7 +127,7 @@ static int replay(const Args& a) {
     SimConfig cfg;
     cfg.seed = rep.seed; cfg.tickRate = rep.tickRate; cfg.inputDelayTicks = rep.inputDelay;
     Simulation sim(cfg, makeModule(rep.module));
-    sim.setup(Json::parseFile(rep.rulesPath), Json::parseFile(rep.mapPath));
+    sim.setup(Json::parseFile(rep.rulesPath), loadMap(rep.mapPath, fs::path(rep.rulesPath).parent_path().string()));
     for (auto& c : rep.commands) sim.submit(c);
     size_t ci = 0;
     while (sim.tick() < rep.endTick) {

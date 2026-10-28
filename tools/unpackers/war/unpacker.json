@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "name": "war",
+  "title": "Warcraft I / II data archive (.WAR, .SUD, .INS)",
+  "version": "1.0.0",
+  "extensions": [".war", ".sud", ".ins"],
+  "magic": [{"offset": 0, "hex": "19000000"}, {"offset": 0, "hex": "18000000"}],
+  "capabilities": ["probe", "list", "extract"],
+  "external": true,
+  "command": ["python3", "unpack.py"],
+  "command_windows": ["py", "-3", "unpack.py"]
+}

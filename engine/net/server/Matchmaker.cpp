@@ -32,10 +32,10 @@ void Server::Impl::onQueueJoin(Client& c, ByteReader& rd) {
     uint32_t n = rd.u32();
     for (uint32_t i = 0; i < n && i < 256 && rd.ok(); ++i) { MapInfo m; if (!read(rd, m)) break; maps.push_back(m); }
     const QueueConfig* q = queue(id);
-    if (!rd.ok() || !q) { sendError(c, ErrorCode::NoSuchQueue, "Нет такого режима"); return; }
+    if (!rd.ok() || !q) { sendError(c, ErrorCode::NoSuchQueue, NetText("net.error.no_such_queue")); return; }
     std::vector<MapInfo> usable;
     for (auto& m : maps) if (mapFits(m, *q)) usable.push_back(m);
-    if (usable.empty()) { sendError(c, ErrorCode::BadRequest, "Нет подходящих карт для режима «" + q->title + "»"); return; }
+    if (usable.empty()) { sendError(c, ErrorCode::BadRequest, NetText("net.error.no_maps_for_queue").str("queue", q->title)); return; }
     if (c.roomId) leaveRoom(c);
     c.queueId = id;
     c.queuedAt = now;
@@ -110,7 +110,7 @@ void Server::Impl::matchmake() {
                 s.kind = SlotKind::Human; s.clientId = group[i]->id; s.name = group[i]->name; s.ready = true;
             }
             for (size_t i = 0; i < r.slots.size(); ++i)
-                if (r.slots[i].kind == SlotKind::Open) { r.slots[i].kind = SlotKind::Bot; r.slots[i].name = "Бот " + std::to_string(i + 1); r.slots[i].ready = true; }
+                if (r.slots[i].kind == SlotKind::Open) { r.slots[i].kind = SlotKind::Bot; r.slots[i].name = "@net.bot"; r.slots[i].ready = true; }
             for (Client* g : group) {
                 sendQueueStatus(*g, 2);
                 leaveQueue(*g);

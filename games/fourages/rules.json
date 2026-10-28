@@ -1,0 +1,59 @@
+// "Four Ages" — Age of Empires II-like: food, wood, gold and stone; villagers gather from bushes, trees and
+// mines and drop off at the town centre or camps; farms are infinite food nodes only their owner can work;
+// ages are techs researched at the town centre that unlock buildings and units; blacksmith upgrades.
+{
+  "victory": "noStructures",
+  "supplyCap": 75,
+  "resources": {
+    "food": {"name": "Пища", "start": 200}, "wood": {"name": "Дерево", "start": 200},
+    "gold": {"name": "Золото", "start": 100}, "stone": {"name": "Камень", "start": 200}
+  },
+  "armorTypes": ["infantry", "archer", "cavalry", "building"],
+  "damageTable": {"pierce": {"building": 0.2, "infantry": 0.9}, "melee": {"building": 0.6}, "spear": {"cavalry": 3, "building": 0.4}, "ram": {"building": 4, "infantry": 0.1, "archer": 0.1, "cavalry": 0.1}},
+  "techs": {
+    "feudal_age": {"name": "Феодальная эпоха", "cost": {"food": 400, "time": 40}, "requires": ["town_center"]},
+    "castle_age": {"name": "Эпоха замков", "cost": {"food": 600, "gold": 200, "time": 60}, "requires": ["feudal_age", "blacksmith"]},
+    "forging": {"name": "Ковка", "cost": {"food": 150, "time": 30}, "requires": ["feudal_age"], "effects": [{"tags": ["melee"], "stat": "damage", "mul": 1.15}]},
+    "fletching": {"name": "Оперение", "cost": {"food": 100, "wood": 50, "time": 30}, "requires": ["feudal_age"], "effects": [{"tags": ["ranged"], "stat": "range", "add": 1}]},
+    "wheelbarrow": {"name": "Тачка", "cost": {"food": 175, "wood": 50, "time": 40}, "requires": ["feudal_age"], "effects": [{"type": "villager", "stat": "gatherRate", "mul": 1.2}]}
+  },
+  "types": {
+    "villager": {"name": "Поселенец", "health": {"max": 25, "armorType": "infantry"}, "move": {"speed": 2.4, "radius": 0.3}, "sight": 6,
+                 "weapons": [{"range": 0.5, "damage": 3, "cooldown": 2}], "cost": {"food": 50, "time": 12, "supply": 1},
+                 "gather": {"food": {"carry": 10, "time": 3}, "wood": {"carry": 10, "time": 3.5}, "gold": {"carry": 10, "time": 4}, "stone": {"carry": 10, "time": 4.5}},
+                 "builds": ["house", "mill", "lumber_camp", "mining_camp", "farm", "barracks", "archery_range", "blacksmith", "stable", "watchtower"]},
+    "militia": {"name": "Ополченец", "tags": ["melee"], "health": {"max": 40, "armor": 1, "armorType": "infantry"}, "move": {"speed": 2.2, "radius": 0.35}, "sight": 6,
+                "weapons": [{"range": 0.5, "damage": 5, "cooldown": 2, "damageType": "melee"}], "cost": {"food": 60, "gold": 20, "time": 21, "supply": 1}, "view": {"shape": "soldier"}},
+    "spearman": {"name": "Копейщик", "tags": ["melee"], "health": {"max": 45, "armorType": "infantry"}, "move": {"speed": 2.3, "radius": 0.35}, "sight": 6,
+                 "weapons": [{"range": 0.6, "damage": 4, "cooldown": 3, "damageType": "spear"}], "cost": {"food": 35, "wood": 25, "time": 22, "supply": 1}, "requires": ["feudal_age"], "view": {"shape": "soldier"}},
+    "archer": {"name": "Лучник", "tags": ["ranged"], "health": {"max": 30, "armorType": "archer"}, "move": {"speed": 2.1, "radius": 0.3}, "sight": 7,
+               "weapons": [{"range": 4, "damage": 4, "cooldown": 2, "projectileSpeed": 12, "damageType": "pierce"}], "cost": {"wood": 25, "gold": 45, "time": 35, "supply": 1}, "view": {"shape": "ranged"}},
+    "knight": {"name": "Рыцарь", "tags": ["melee"], "health": {"max": 100, "armor": 2, "armorType": "cavalry"}, "move": {"speed": 3.5, "radius": 0.5}, "sight": 6,
+               "weapons": [{"range": 0.6, "damage": 10, "cooldown": 1.8, "damageType": "melee"}], "cost": {"food": 60, "gold": 75, "time": 30, "supply": 1}, "view": {"shape": "cavalry"}},
+    "ram": {"name": "Таран", "health": {"max": 175, "armor": 5, "armorType": "building"}, "move": {"speed": 1.6, "radius": 0.6}, "sight": 5,
+            "weapons": [{"range": 0.5, "damage": 40, "cooldown": 3, "damageType": "ram"}], "cost": {"wood": 160, "gold": 75, "time": 36, "supply": 2}, "requires": ["feudal_age"], "view": {"shape": "vehicle"}},
+    "town_center": {"name": "Городской центр", "structure": {"footprint": [4, 4]}, "health": {"max": 2400, "armor": 3, "armorType": "building"}, "sight": 8,
+                    "cost": {"wood": 275, "stone": 100, "time": 150}, "produces": ["villager"], "researches": ["feudal_age", "castle_age", "wheelbarrow"],
+                    "dropoff": ["food", "wood", "gold", "stone"], "supply": 5,
+                    "weapons": [{"range": 6, "damage": 5, "cooldown": 2, "projectileSpeed": 14, "damageType": "pierce"}], "view": {"shape": "hall"}},
+    "house": {"name": "Дом", "structure": {"footprint": [2, 2]}, "health": {"max": 550, "armorType": "building"}, "cost": {"wood": 25, "time": 20}, "supply": 5, "view": {"shape": "house"}},
+    "mill": {"name": "Мельница", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armorType": "building"}, "cost": {"wood": 100, "time": 25}, "dropoff": ["food"], "view": {"shape": "mill"}},
+    "lumber_camp": {"name": "Лесопилка", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armorType": "building"}, "cost": {"wood": 100, "time": 25}, "dropoff": ["wood"], "view": {"shape": "camp"}},
+    "mining_camp": {"name": "Рудник", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armorType": "building"}, "cost": {"wood": 100, "time": 25}, "dropoff": ["gold", "stone"], "view": {"shape": "camp"}},
+    "farm": {"name": "Ферма", "structure": {"footprint": [3, 3]}, "health": {"max": 300, "armorType": "building"}, "cost": {"wood": 60, "time": 15}, "requires": ["mill"],
+             "resourceNode": {"resource": "food", "amount": -1, "ownerOnly": true}, "dropoff": ["food"], "view": {"shape": "farm"}},
+    "barracks": {"name": "Казармы", "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armorType": "building"}, "cost": {"wood": 175, "time": 50}, "produces": ["militia", "spearman", "ram"], "view": {"shape": "barracks"}},
+    "archery_range": {"name": "Стрельбище", "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armorType": "building"}, "cost": {"wood": 175, "time": 50},
+                      "requires": ["feudal_age", "barracks"], "produces": ["archer"], "researches": ["fletching"], "view": {"shape": "barracks"}},
+    "blacksmith": {"name": "Кузница", "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armorType": "building"}, "cost": {"wood": 150, "time": 40},
+                   "requires": ["feudal_age"], "researches": ["forging"], "view": {"shape": "workshop"}},
+    "stable": {"name": "Конюшня", "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armorType": "building"}, "cost": {"wood": 175, "time": 50},
+               "requires": ["castle_age"], "produces": ["knight"], "view": {"shape": "barracks"}},
+    "watchtower": {"name": "Сторожевая башня", "structure": {"footprint": [1, 1]}, "health": {"max": 700, "armor": 1, "armorType": "building"}, "sight": 10, "requires": ["feudal_age"],
+                   "weapons": [{"range": 7, "damage": 5, "cooldown": 2, "projectileSpeed": 14, "damageType": "pierce"}], "cost": {"wood": 25, "stone": 125, "time": 80}, "view": {"shape": "tower"}},
+    "berry_bush": {"name": "Ягоды", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "food", "amount": 400}, "view": {"shape": "bush"}},
+    "oak": {"name": "Дуб", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 150}, "view": {"shape": "tree"}},
+    "gold_pile": {"name": "Золото", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 3000}, "view": {"shape": "mine"}},
+    "stone_pile": {"name": "Камень", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "stone", "amount": 1500}, "view": {"shape": "rock"}}
+  }
+}

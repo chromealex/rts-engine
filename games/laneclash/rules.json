@@ -1,0 +1,21 @@
+// "Lane Clash" — lane battler: press BUILD to get a random spawner next to the core (each one costs more),
+// spawners release their squads together on the shared wave clock, upgrades level them up; kills score
+// points, the core falling ends the match, otherwise the higher score wins when the timer runs out.
+{
+  "waveClock": 12,
+  "autoBuild": {"pool": ["barracks", "range", "kennel"], "cost": {"crystal": 60}, "growth": 0.35},
+  "victory": {"mode": "score", "seconds": 420, "keyLoses": true},
+  "resources": {"crystal": {"name": "Кристаллы", "start": 120}},
+  "types": {
+    "core": {"name": "Ядро", "key": true, "structure": {"footprint": [4, 4]}, "health": {"max": 6000, "armor": 3}, "sight": 9, "income": {"crystal": 4},
+             "weapons": [{"range": 6, "damage": 20, "cooldown": 1, "projectileSpeed": 18}], "view": {"shape": "hall"}},
+    "barracks": {"name": "Казармы", "structure": {"footprint": [2, 2]}, "health": {"max": 900}, "cost": {"time": 4}, "waveSpawn": {"unit": "trooper", "count": 2}, "upgrades": ["barracks2"], "score": 3},
+    "barracks2": {"name": "Казармы II", "structure": {"footprint": [2, 2]}, "health": {"max": 1200}, "cost": {"crystal": 80, "time": 6}, "waveSpawn": {"unit": "trooper", "count": 4}, "score": 5},
+    "range": {"name": "Стрельбище", "structure": {"footprint": [2, 2]}, "health": {"max": 800}, "cost": {"time": 4}, "waveSpawn": {"unit": "archer", "count": 2}, "upgrades": ["range2"], "score": 3},
+    "range2": {"name": "Стрельбище II", "structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "cost": {"crystal": 80, "time": 6}, "waveSpawn": {"unit": "archer", "count": 3}, "score": 5},
+    "kennel": {"name": "Псарня", "structure": {"footprint": [2, 2]}, "health": {"max": 700}, "cost": {"time": 4}, "waveSpawn": {"unit": "hound", "count": 3}, "score": 3},
+    "trooper": {"name": "Пехотинец", "health": {"max": 90, "armor": 1}, "move": {"speed": 2.4, "radius": 0.35}, "sight": 7, "weapons": [{"range": 0.6, "damage": 9, "cooldown": 1}], "score": 1},
+    "archer": {"name": "Лучник", "health": {"max": 55}, "move": {"speed": 2.4, "radius": 0.3}, "sight": 8, "weapons": [{"range": 4.5, "damage": 7, "cooldown": 1, "projectileSpeed": 14}], "score": 1},
+    "hound": {"name": "Гончая", "health": {"max": 45}, "move": {"speed": 3.8, "radius": 0.3}, "sight": 7, "weapons": [{"range": 0.4, "damage": 5, "cooldown": 0.6}], "score": 1}
+  }
+}
