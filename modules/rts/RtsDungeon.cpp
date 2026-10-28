@@ -93,8 +93,13 @@ std::vector<Amount> RtsModule::techCost(Simulation& sim, uint8_t player, uint16_
 bool RtsModule::canUsePlayerAbility(Simulation& sim, uint8_t player, int index) const {
     auto* gs = sim.world().resource<GameState>();
     if (index < 0 || size_t(index) >= rules_.playerAbilities.size() || player == 0 || player >= gs->playerAbilities.size()) return false;
-    const PlayerAbilityDef& a = rules_.playerAbilities[size_t(index)];
     const PlayerAbilityState& st = gs->playerAbilities[player][size_t(index)];
+    const PlayerAbilityDef& a = rules_.advancedEffects ? playerAbilityFor(sim, player, index) : rules_.playerAbilities[size_t(index)];
+    if (rules_.advancedEffects) {
+        if (!st.owned || a.passive || st.pendingAt) return false;
+        if (player < gs->players.size() && (gs->players[player].statusFlags & kStSilence)) return false;
+        for (int rq : a.requires_) if (!requirementsMet(sim, player, {Requirement{(rq & 0x8000) != 0, uint16_t(rq & 0x7FFF)}})) return false;
+    }
     if (st.readyAt > sim.tick()) return false;
     if (a.chargesMax > 0 && st.charges <= 0) return false;
     return canAfford(sim, player, a.cost);
@@ -529,6 +534,7 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
     }
     case kCmdPlayerAbility: {
         int idx = int(cmd.param);
+        if (rules_.advancedEffects) { castPlayerAbility(sim, pl, idx, cmd.point, cmd.target); return; }
         if (!canUsePlayerAbility(sim, pl, idx)) return;
         const PlayerAbilityDef& a = rules_.playerAbilities[size_t(idx)];
         if (!pay(sim, pl, a.cost, {})) return;
@@ -555,7 +561,7 @@ void RtsModule::movePossessed(Simulation& sim) {
         if (sim.tick() > ps.lastTick + 10) { ps.dir = {}; ps.fire = false; } // client stopped steering
         const UnitType& t = rules_.types[u.type];
         auto* b = w.tryGet<Buffs>(e);
-        const bool stunned = b && b->stunUntil > sim.tick();
+        const bool stunned = (b && b->stunUntil > sim.tick()) || (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStRoot)));
         if (ps.dir.length().raw > 0 && !stunned) {
             Vec3 d = ps.dir * (stat(sim, e, Stat::Speed) * dt);
             auto ok = [&](Vec3 np) {
