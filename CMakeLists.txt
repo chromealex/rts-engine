@@ -94,6 +94,7 @@ add_library(rts_game STATIC
     modules/rts/RtsMap.cpp
     modules/rts/RtsHpa.cpp
     modules/rts/RtsMapSphere.cpp
+    modules/rts/RtsHpaSphere.cpp
     modules/rts/RtsSphere.cpp
     modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
@@ -110,8 +111,14 @@ add_library(rts_game STATIC
     modules/rts/RtsEffectsData.cpp
     modules/rts/RtsEffects.cpp
     modules/rts/RtsSkills.cpp
-    modules/rts/RtsAI.cpp)
+    modules/rts/RtsAI.cpp
+    modules/rts/RtsOriginalsData.cpp
+    modules/rts/RtsOriginals.cpp
+    modules/rts/RtsAIOriginals.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
+# agent-mech: mechanics of the top-100 strategy games plan (stances, transports, ...)
+file(GLOB RTS_MECH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/RtsMech*.cpp)
+target_sources(rts_game PRIVATE ${RTS_MECH_SOURCES} modules/rts/RtsSave.cpp modules/rts/RtsCampaign.cpp)   # + save states, campaigns
 
 # Localization: string tables, plurals, language choice (presentation only, no sim dependency).
 # RtsLocalize maps RTS data (types, resources, maps...) to string keys.
@@ -272,7 +279,18 @@ add_library(rts_models STATIC
     engine/render/ModelGltf.cpp
     engine/render/ModelObj.cpp
     engine/render/Animation.cpp
-    engine/render/TextureCodec.cpp)
+    engine/render/TextureCodec.cpp
+    # more formats (docs/models.md): voxels, interchange, classic RTS formats, their textures
+    engine/render/ModelVox.cpp
+    engine/render/ModelPly.cpp
+    engine/render/Model3ds.cpp
+    engine/render/ModelDae.cpp
+    engine/render/ModelMdx.cpp
+    engine/render/ModelMdl.cpp
+    engine/render/Model3do.cpp
+    engine/render/ModelW3d.cpp
+    engine/render/ImageBlp.cpp
+    engine/render/ImageDds.cpp)
 # ufbx (MIT / public domain): FBX parser, compiled as its own C library without warnings.
 # RTS_FBX=OFF keeps it out of size-sensitive builds (FBX files then fail with a readable error).
 option(RTS_FBX "FBX import in the runtime (ufbx, ~0.5 MB of code)" ON)
@@ -492,7 +510,8 @@ endif()
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
     add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp apps/editor/core/Projects.cpp
-    apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
+    apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp
+    apps/editor/core/SimTools.cpp apps/editor/core/ScenarioOps.cpp apps/editor/core/SchemaOps.cpp apps/editor/core/CampaignOps.cpp)   # scenario_run, rules_lint, rules_schema keys
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
@@ -555,6 +574,45 @@ if(RTS_BUILD_TOOLS)
     target_compile_definitions(rtsmcp PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
 
+# Model converter (models agent): formats the runtime does not read -> glTF sidecars (assimp, BSD-3).
+# Host only. RTS_ASSIMP=ON uses an installed assimp (find_package) or downloads v5.4.3 from GitHub
+# at configure time (RTS_FETCH_ASSIMP); OFF keeps the tools working with pre-converted sidecars.
+if(RTS_BUILD_TOOLS)
+    option(RTS_ASSIMP "Model converter (modelconv, rtsbuild) built with assimp" OFF)
+    option(RTS_FETCH_ASSIMP "Download assimp when RTS_ASSIMP=ON and no installed one is found" ON)
+    add_library(rts_modelconv STATIC tools/models/ModelConvert.cpp)
+    target_link_libraries(rts_modelconv PUBLIC rts_pack_writer)
+    if(RTS_ASSIMP)
+        find_package(assimp CONFIG QUIET)
+        if(NOT assimp_FOUND AND RTS_FETCH_ASSIMP)
+            include(FetchContent)
+            set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_ALL_EXPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_GLTF_EXPORTER ON CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_USD_IMPORTER OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+            set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            FetchContent_Declare(assimp GIT_REPOSITORY https://github.com/assimp/assimp.git GIT_TAG v5.4.3 GIT_SHALLOW TRUE)
+            FetchContent_MakeAvailable(assimp)
+        endif()
+        if(TARGET assimp::assimp)
+            target_link_libraries(rts_modelconv PRIVATE assimp::assimp)
+        elseif(TARGET assimp)
+            target_link_libraries(rts_modelconv PRIVATE assimp)
+        else()
+            message(FATAL_ERROR "RTS_ASSIMP=ON: assimp not found (install it or allow RTS_FETCH_ASSIMP)")
+        endif()
+        target_compile_definitions(rts_modelconv PRIVATE RTS_HAVE_ASSIMP=1)
+    endif()
+    add_executable(modelconv tools/models/modelconv.cpp)
+    target_link_libraries(modelconv PRIVATE rts_modelconv rts_models)
+    target_link_libraries(rtsbuild PRIVATE rts_modelconv)
+endif()
+
 # Model viewer (models agent): models, materials, clips and quality tiers as the game renders them.
 if(RTS_BUILD_TOOLS AND RTS_DESKTOP)
     add_executable(rts_modelview apps/modelview/main.cpp apps/modelview/Gallery.cpp $<TARGET_OBJECTS:rts_runtime>)
@@ -593,6 +651,10 @@ if(RTS_BUILD_TESTS)
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
+    if(TARGET rts_modelconv)   # model conversion step of packs (models agent)
+        target_link_libraries(rts_tests PRIVATE rts_modelconv)
+        target_compile_definitions(rts_tests PRIVATE RTS_TEST_MODELCONV=1)
+    endif()
     if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
         target_link_libraries(rts_tests PRIVATE rts_editor_core)
         target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)

@@ -58,6 +58,10 @@ struct TrigAction {
         Research, EnableType, DisableType, Victory, Defeat, EnableTrigger, DisableTrigger, AddScore,
         SetRegionOwner, AttackMove, MoveUnits, SetTickets,
         CastAbility,       // a player ability (map / timer skills): "ability", "at" / "area" (free: "free": true)
+        Objective,         // agent-mech campaigns: "id", "text", "op": add | done | fail, "primary"
+        Dialog,            // "text", "speaker", "portrait", "voice", "duration"
+        Camera,            // "at" / "area", "zoom", "duration", "lock"
+        EndMission,        // "result": victory | defeat, "next": mission id
     } kind = Message;
     TrigPlayer player;
     TrigFilter filter;
@@ -73,6 +77,8 @@ struct TrigAction {
     bool hasAt = false;
     bool attackMove = false;
     std::string text, name;        // message / variable / trigger id
+    std::string op, speaker, portrait, voice;   // campaigns (objective op, dialog speaker...)
+    bool flag = false;             // objective: primary; camera: lock
 };
 
 struct TriggerDef {

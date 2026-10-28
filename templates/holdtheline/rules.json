@@ -1,42 +1,69 @@
-// "Hold the Line" — Company of Heroes-like: infantry squads (hp pool split over members, damage scales with
-// members alive, reinforced near own buildings), victory points drain the enemy's tickets, resource
-// points give fuel and munitions to whoever holds them; manpower trickles in from the headquarters.
+// "Hold the Line" — Company of Heroes: US Army vs Wehrmacht. The map is cut into sectors; capturing a point takes
+// its sector, and a point pays (fuel, munitions, manpower) only while its sector is linked to the headquarters through
+// own sectors (supply lines). Victory points drain the enemy's 500 tickets. Manpower trickles in from the HQ and drops
+// with a bigger army (upkeep: 85% / 70% / 55% of the income at 30 / 60 / 85 population). Infantry are squads: one hp
+// pool split over the men, damage scales with the men alive, reinforced near own buildings. Riflemen and
+// Volksgrenadiers throw grenades for munitions. Prices follow CoH (manpower / munitions / fuel / population).
+// Not yet here (engine plan): cover, suppression and pinning, retreat, veterancy, facing armor, weapon crews,
+// garrisoning houses, doctrines.
 {
-  "victory": {"mode": "tickets", "tickets": 300, "drain": 1},
-  "supplyCap": 60,
+  "victory": {"mode": "tickets", "tickets": 500, "drain": 1},
+  "supplyCap": 100,
+  "regions": {"buildOnlyOwned": false, "supplyLines": true},
+  "upkeep": [
+    {"supply": 30, "incomeMult": 0.85, "resources": ["manpower"]},
+    {"supply": 60, "incomeMult": 0.7, "resources": ["manpower"]},
+    {"supply": 85, "incomeMult": 0.55, "resources": ["manpower"]}
+  ],
   "resources": {
-    "manpower": {"name": "Живая сила", "start": 400},
-    "fuel": {"name": "Топливо", "start": 50},
-    "munitions": {"name": "Боеприпасы", "start": 50}
+    "manpower": {"name": "Живая сила", "start": 500},
+    "munitions": {"name": "Боеприпасы", "start": 50},
+    "fuel": {"name": "Топливо", "start": 30}
   },
-  "armorTypes": ["infantry", "vehicle", "building"],
-  "damageTable": {"small_arms": {"vehicle": 0.2, "building": 0.3}, "at": {"infantry": 0.3, "vehicle": 2}},
+  "factions": {
+    "us": {"name": "США", "start": [{"type": "us_hq", "offset": [0, 0]}, {"type": "engineers", "offset": [4, 0]}]},
+    "wehrmacht": {"name": "Вермахт", "start": [{"type": "wehr_hq", "offset": [0, 0]}, {"type": "pioneers", "offset": [4, 0]}]}
+  },
+  "armorTypes": ["infantry", "light", "vehicle", "building"],
+  "damageTable": {
+    "small_arms": {"infantry": 1, "light": 0.5, "vehicle": 0.1, "building": 0.2},
+    "at": {"infantry": 0.3, "light": 1.5, "vehicle": 1.5, "building": 0.6},
+    "he": {"infantry": 1.2, "light": 0.8, "vehicle": 0.4, "building": 1.2},
+    "sniper": {"infantry": 1, "light": 0.05, "vehicle": 0.02, "building": 0.02}
+  },
   "types": {
-    "hq": {"name": "Штаб", "structure": {"footprint": [4, 4]}, "health": {"max": 3000, "armor": 5, "armorType": "building"}, "sight": 10,
-           "income": {"manpower": 6}, "supply": 20, "produces": ["engineer", "riflemen"], "view": {"shape": "hall"}},
-    "engineer": {"name": "Сапёры", "squad": {"members": 3, "reinforceCost": {"manpower": 15}, "reinforceTime": 4}, "health": {"max": 180, "armorType": "infantry"},
-                 "move": {"speed": 2.6, "radius": 0.5}, "sight": 8, "weapons": [{"range": 3, "damage": 6, "cooldown": 1.2, "damageType": "small_arms"}],
-                 "cost": {"manpower": 170, "time": 15, "supply": 2}, "builds": ["barracks", "motor_pool", "sandbag_mg"], "worker": true, "view": {"shape": "squad"}},
-    "riflemen": {"name": "Стрелки", "squad": {"members": 5, "reinforceCost": {"manpower": 25}, "reinforceTime": 4}, "health": {"max": 400, "armorType": "infantry"},
-                 "move": {"speed": 2.6, "radius": 0.6}, "sight": 9, "weapons": [{"range": 5, "damage": 18, "cooldown": 1.5, "damageType": "small_arms"}],
-                 "cost": {"manpower": 270, "time": 20, "supply": 4}, "view": {"shape": "squad"}},
-    "mg_team": {"name": "Пулемётный расчёт", "squad": {"members": 3, "reinforceCost": {"manpower": 20}}, "health": {"max": 240, "armorType": "infantry"},
-                "move": {"speed": 2.2, "radius": 0.5}, "sight": 10, "weapons": [{"range": 7, "damage": 30, "cooldown": 1.5, "damageType": "small_arms", "splash": 1}],
-                "cost": {"manpower": 260, "munitions": 20, "time": 24, "supply": 4}, "view": {"shape": "squad"}},
-    "at_gun": {"name": "ПТ орудие", "squad": {"members": 4, "reinforceCost": {"manpower": 25}}, "health": {"max": 280, "armorType": "infantry"},
-               "move": {"speed": 1.8, "radius": 0.6}, "sight": 10, "weapons": [{"range": 8, "damage": 80, "cooldown": 3.5, "damageType": "at", "projectileSpeed": 25}],
-               "cost": {"manpower": 300, "munitions": 40, "time": 28, "supply": 4}, "view": {"shape": "vehicle"}},
-    "light_tank": {"name": "Лёгкий танк", "health": {"max": 640, "armor": 3, "armorType": "vehicle"}, "move": {"speed": 3.4, "radius": 0.8}, "sight": 10,
-                   "weapons": [{"range": 6, "damage": 30, "cooldown": 1.5, "damageType": "at", "projectileSpeed": 25}, {"range": 5, "damage": 10, "cooldown": 1, "damageType": "small_arms"}],
-                   "cost": {"manpower": 280, "fuel": 90, "time": 35, "supply": 6}, "view": {"shape": "vehicle"}},
-    "barracks": {"name": "Казарма", "structure": {"footprint": [3, 3]}, "health": {"max": 1500, "armor": 3, "armorType": "building"}, "cost": {"manpower": 150, "time": 30},
-                 "produces": ["mg_team", "at_gun"], "supply": 10, "view": {"shape": "barracks"}},
-    "motor_pool": {"name": "Автопарк", "structure": {"footprint": [4, 3]}, "health": {"max": 1800, "armor": 3, "armorType": "building"}, "cost": {"manpower": 200, "fuel": 50, "time": 40},
-                   "requires": ["barracks"], "produces": ["light_tank"], "supply": 10, "view": {"shape": "workshop"}},
-    "sandbag_mg": {"name": "Пулемётное гнездо", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armor": 4, "armorType": "building"}, "requires": ["barracks"],
-                   "weapons": [{"range": 7, "damage": 15, "cooldown": 1, "damageType": "small_arms"}], "cost": {"manpower": 120, "munitions": 30, "time": 20}, "view": {"shape": "tower"}},
-    "victory_point": {"name": "Ключевая точка", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3, "victoryPoint": true}, "view": {"shape": "flag"}},
-    "fuel_point": {"name": "Склад топлива", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3}, "income": {"fuel": 2}, "view": {"shape": "flag"}},
-    "munition_point": {"name": "Склад боеприпасов", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3}, "income": {"munitions": 2}, "view": {"shape": "flag"}}
+    "us_hq": {"name": "Штаб армии США", "tags": ["building"], "factions": ["us"], "structure": {"footprint": [4, 4]}, "health": {"max": 3000, "armor": 3, "armorType": "building"}, "cost": {"manpower": 0, "time": 1}, "key": true, "sight": 10, "income": {"manpower": 4.5}, "supply": 30, "produces": ["engineers", "riflemen", "jeep"], "weapons": [{"range": 6, "damage": 10, "cooldown": 1, "damageType": "small_arms"}], "view": {"shape": "hall"}},
+    "engineers": {"name": "Сапёры", "tags": ["infantry"], "factions": ["us"], "squad": {"members": 3, "reinforceCost": {"manpower": 15}, "reinforceTime": 4}, "health": {"max": 165, "armorType": "infantry"}, "move": {"speed": 2.6, "radius": 0.59}, "sight": 9, "weapons": [{"range": 3, "damage": 5, "cooldown": 1.2, "damageType": "small_arms"}], "cost": {"manpower": 170, "time": 15, "supply": 3}, "view": {"shape": "squad"}, "builds": ["us_barracks", "weapon_support", "motor_pool", "tank_depot", "sandbags", "us_mg_nest"], "worker": true},
+    "riflemen": {"name": "Стрелки", "tags": ["infantry"], "factions": ["us"], "squad": {"members": 6, "reinforceCost": {"manpower": 28}, "reinforceTime": 4}, "health": {"max": 330, "armorType": "infantry"}, "move": {"speed": 2.6, "radius": 0.6799999999999999}, "sight": 9, "weapons": [{"range": 5, "damage": 30, "cooldown": 1.6, "damageType": "small_arms"}], "cost": {"manpower": 270, "time": 25, "supply": 6}, "view": {"shape": "squad"}, "abilities": [{"id": "grenade", "name": "Граната", "target": "point", "range": 4, "cooldown": 30, "cost": {"munitions": 25}, "castTime": 1, "smart": "densestEnemy", "delivery": {"type": "projectile", "speed": 8, "arc": true}, "effects": [{"type": "damage", "amount": 80, "radius": 1.5, "falloff": 0.5, "damageType": "he"}]}]},
+    "jeep": {"name": "Джип", "tags": ["vehicle"], "factions": ["us"], "health": {"max": 200, "armor": 0, "armorType": "light"}, "move": {"speed": 4.4, "radius": 0.8}, "sight": 10, "weapons": [{"range": 5, "damage": 10, "cooldown": 0.6, "damageType": "small_arms"}], "cost": {"manpower": 160, "time": 20, "supply": 2}, "crush": {"tags": ["obstacle"]}, "view": {"shape": "vehicle"}},
+    "us_hmg": {"name": "Расчёт пулемёта .30", "tags": ["infantry"], "factions": ["us"], "squad": {"members": 3, "reinforceCost": {"manpower": 20}, "reinforceTime": 4}, "health": {"max": 165, "armorType": "infantry"}, "move": {"speed": 2.2, "radius": 0.59}, "sight": 9, "weapons": [{"range": 7, "damage": 36, "cooldown": 1.0, "damageType": "small_arms", "splash": 1.0}], "cost": {"manpower": 260, "time": 25, "supply": 3}, "view": {"shape": "squad"}},
+    "us_mortar": {"name": "Миномётный расчёт", "tags": ["infantry"], "factions": ["us"], "squad": {"members": 3, "reinforceCost": {"manpower": 20}, "reinforceTime": 4}, "health": {"max": 165, "armorType": "infantry"}, "move": {"speed": 2.2, "radius": 0.59}, "sight": 9, "weapons": [{"range": 10, "minRange": 3, "damage": 40, "cooldown": 3.5, "damageType": "he", "projectileSpeed": 12, "splash": 1.2}], "cost": {"manpower": 280, "time": 30, "supply": 3}, "view": {"shape": "squad"}},
+    "at57": {"name": "57-мм ПТ орудие", "tags": ["infantry"], "factions": ["us"], "squad": {"members": 4, "reinforceCost": {"manpower": 25}, "reinforceTime": 4}, "health": {"max": 220, "armorType": "infantry"}, "move": {"speed": 1.8, "radius": 0.62}, "sight": 9, "weapons": [{"range": 8, "damage": 90, "cooldown": 3.5, "damageType": "at", "projectileSpeed": 25}], "cost": {"manpower": 280, "time": 30, "supply": 4}, "view": {"shape": "vehicle"}},
+    "m8": {"name": "M8 «Грейхаунд»", "tags": ["vehicle"], "factions": ["us"], "health": {"max": 300, "armor": 2, "armorType": "vehicle"}, "move": {"speed": 4.0, "radius": 0.8}, "sight": 10, "weapons": [{"range": 6, "damage": 40, "cooldown": 1.8, "damageType": "at", "projectileSpeed": 25}, {"range": 5, "damage": 10, "cooldown": 1.0, "damageType": "small_arms"}], "cost": {"manpower": 260, "fuel": 30, "time": 30, "supply": 4}, "crush": {"tags": ["obstacle"]}, "view": {"shape": "vehicle"}},
+    "sherman": {"name": "M4 «Шерман»", "tags": ["vehicle"], "factions": ["us"], "health": {"max": 640, "armor": 4, "armorType": "vehicle"}, "move": {"speed": 3.0, "radius": 0.8}, "sight": 10, "weapons": [{"range": 7, "damage": 80, "cooldown": 2.5, "damageType": "at", "projectileSpeed": 25}, {"range": 5, "damage": 10, "cooldown": 1.0, "damageType": "small_arms"}], "cost": {"manpower": 360, "fuel": 110, "time": 40, "supply": 6}, "crush": {"tags": ["obstacle"]}, "view": {"shape": "tank"}},
+    "us_barracks": {"name": "Казармы", "tags": ["building"], "factions": ["us"], "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armor": 3, "armorType": "building"}, "cost": {"manpower": 175, "time": 30}, "produces": ["riflemen", "engineers"], "view": {"shape": "barracks"}},
+    "weapon_support": {"name": "Центр поддержки", "tags": ["building"], "factions": ["us"], "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armor": 3, "armorType": "building"}, "cost": {"manpower": 220, "time": 30}, "requires": ["us_barracks"], "produces": ["us_hmg", "us_mortar", "at57"], "view": {"shape": "barracks"}},
+    "motor_pool": {"name": "Автопарк", "tags": ["building"], "factions": ["us"], "structure": {"footprint": [4, 3]}, "health": {"max": 1500, "armor": 3, "armorType": "building"}, "cost": {"manpower": 200, "fuel": 30, "time": 40}, "requires": ["weapon_support"], "produces": ["m8"], "view": {"shape": "workshop"}},
+    "tank_depot": {"name": "Танковое депо", "tags": ["building"], "factions": ["us"], "structure": {"footprint": [4, 3]}, "health": {"max": 1800, "armor": 3, "armorType": "building"}, "cost": {"manpower": 250, "fuel": 100, "time": 50}, "requires": ["motor_pool"], "produces": ["sherman"], "view": {"shape": "workshop"}},
+    "wehr_hq": {"name": "Штаб вермахта", "tags": ["building"], "factions": ["wehrmacht"], "structure": {"footprint": [4, 4]}, "health": {"max": 3000, "armor": 3, "armorType": "building"}, "cost": {"manpower": 0, "time": 1}, "key": true, "sight": 10, "income": {"manpower": 4.5}, "supply": 30, "produces": ["pioneers", "volks", "kubel"], "weapons": [{"range": 6, "damage": 10, "cooldown": 1, "damageType": "small_arms"}], "view": {"shape": "hall"}},
+    "pioneers": {"name": "Пионеры", "tags": ["infantry"], "factions": ["wehrmacht"], "squad": {"members": 3, "reinforceCost": {"manpower": 18}, "reinforceTime": 4}, "health": {"max": 165, "armorType": "infantry"}, "move": {"speed": 2.6, "radius": 0.59}, "sight": 9, "weapons": [{"range": 3, "damage": 5, "cooldown": 1.2, "damageType": "small_arms"}], "cost": {"manpower": 200, "time": 15, "supply": 3}, "view": {"shape": "squad"}, "builds": ["wehr_quarters", "krieg_barracks", "sturm_armory", "panzer_command", "sandbags", "wehr_mg_nest"], "worker": true},
+    "volks": {"name": "Фольксгренадеры", "tags": ["infantry"], "factions": ["wehrmacht"], "squad": {"members": 5, "reinforceCost": {"manpower": 30}, "reinforceTime": 4}, "health": {"max": 300, "armorType": "infantry"}, "move": {"speed": 2.6, "radius": 0.65}, "sight": 9, "weapons": [{"range": 5, "damage": 26, "cooldown": 1.6, "damageType": "small_arms"}], "cost": {"manpower": 240, "time": 25, "supply": 5}, "view": {"shape": "squad"}, "abilities": [{"id": "grenade", "name": "Граната", "target": "point", "range": 4, "cooldown": 30, "cost": {"munitions": 25}, "castTime": 1, "smart": "densestEnemy", "delivery": {"type": "projectile", "speed": 8, "arc": true}, "effects": [{"type": "damage", "amount": 80, "radius": 1.5, "falloff": 0.5, "damageType": "he"}]}]},
+    "kubel": {"name": "Кюбельваген", "tags": ["vehicle"], "factions": ["wehrmacht"], "health": {"max": 200, "armor": 0, "armorType": "light"}, "move": {"speed": 4.4, "radius": 0.8}, "sight": 10, "weapons": [{"range": 5, "damage": 10, "cooldown": 0.6, "damageType": "small_arms"}], "cost": {"manpower": 200, "time": 20, "supply": 2}, "crush": {"tags": ["obstacle"]}, "view": {"shape": "vehicle"}},
+    "mg42": {"name": "Расчёт MG42", "tags": ["infantry"], "factions": ["wehrmacht"], "squad": {"members": 3, "reinforceCost": {"manpower": 20}, "reinforceTime": 4}, "health": {"max": 165, "armorType": "infantry"}, "move": {"speed": 2.2, "radius": 0.59}, "sight": 9, "weapons": [{"range": 7, "damage": 42, "cooldown": 1.0, "damageType": "small_arms", "splash": 1.0}], "cost": {"manpower": 260, "time": 25, "supply": 3}, "view": {"shape": "squad"}},
+    "sniper": {"name": "Снайпер", "tags": ["infantry"], "factions": ["wehrmacht"], "squad": {"members": 1, "reinforceCost": {"manpower": 0}, "reinforceTime": 4}, "health": {"max": 70, "armorType": "infantry"}, "move": {"speed": 2.6, "radius": 0.53}, "sight": 12, "weapons": [{"range": 10, "damage": 120, "cooldown": 5, "damageType": "sniper"}], "cost": {"manpower": 360, "time": 30, "supply": 2}, "view": {"shape": "squad"}},
+    "pak38": {"name": "ПТ орудие Pak 38", "tags": ["infantry"], "factions": ["wehrmacht"], "squad": {"members": 4, "reinforceCost": {"manpower": 25}, "reinforceTime": 4}, "health": {"max": 220, "armorType": "infantry"}, "move": {"speed": 1.8, "radius": 0.62}, "sight": 9, "weapons": [{"range": 8, "damage": 100, "cooldown": 3.8, "damageType": "at", "projectileSpeed": 25}], "cost": {"manpower": 300, "time": 30, "supply": 4}, "view": {"shape": "vehicle"}},
+    "puma": {"name": "«Пума»", "tags": ["vehicle"], "factions": ["wehrmacht"], "health": {"max": 320, "armor": 2, "armorType": "vehicle"}, "move": {"speed": 4.0, "radius": 0.8}, "sight": 10, "weapons": [{"range": 6, "damage": 45, "cooldown": 2, "damageType": "at", "projectileSpeed": 25}, {"range": 5, "damage": 10, "cooldown": 1.0, "damageType": "small_arms"}], "cost": {"manpower": 280, "fuel": 35, "time": 30, "supply": 4}, "crush": {"tags": ["obstacle"]}, "view": {"shape": "vehicle"}},
+    "panzer4": {"name": "Panzer IV", "tags": ["vehicle"], "factions": ["wehrmacht"], "health": {"max": 720, "armor": 5, "armorType": "vehicle"}, "move": {"speed": 2.8, "radius": 0.8}, "sight": 10, "weapons": [{"range": 7, "damage": 85, "cooldown": 2.6, "damageType": "at", "projectileSpeed": 25}, {"range": 5, "damage": 10, "cooldown": 1.0, "damageType": "small_arms"}], "cost": {"manpower": 360, "fuel": 100, "time": 40, "supply": 6}, "crush": {"tags": ["obstacle"]}, "view": {"shape": "tank"}},
+    "wehr_quarters": {"name": "Казармы вермахта", "tags": ["building"], "factions": ["wehrmacht"], "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armor": 3, "armorType": "building"}, "cost": {"manpower": 200, "time": 30}, "produces": ["volks", "pioneers", "mg42", "sniper"], "view": {"shape": "barracks"}},
+    "krieg_barracks": {"name": "Военные казармы", "tags": ["building"], "factions": ["wehrmacht"], "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armor": 3, "armorType": "building"}, "cost": {"manpower": 200, "time": 30}, "requires": ["wehr_quarters"], "produces": ["pak38"], "view": {"shape": "barracks"}},
+    "sturm_armory": {"name": "Штурмовой арсенал", "tags": ["building"], "factions": ["wehrmacht"], "structure": {"footprint": [4, 3]}, "health": {"max": 1500, "armor": 3, "armorType": "building"}, "cost": {"manpower": 240, "fuel": 40, "time": 40}, "requires": ["krieg_barracks"], "produces": ["puma"], "view": {"shape": "workshop"}},
+    "panzer_command": {"name": "Танковое командование", "tags": ["building"], "factions": ["wehrmacht"], "structure": {"footprint": [4, 3]}, "health": {"max": 1800, "armor": 3, "armorType": "building"}, "cost": {"manpower": 280, "fuel": 110, "time": 50}, "requires": ["sturm_armory"], "produces": ["panzer4"], "view": {"shape": "workshop"}},
+    "sandbags": {"name": "Мешки с песком", "tags": ["obstacle"], "structure": {"footprint": [1, 1]}, "health": {"max": 300, "armor": 6, "armorType": "building"}, "cost": {"manpower": 15, "time": 5}, "countsForVictory": false, "view": {"shape": "rock"}},
+    "us_mg_nest": {"name": "Пулемётное гнездо", "tags": ["building"], "factions": ["us"], "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armor": 3, "armorType": "building"}, "cost": {"manpower": 120, "munitions": 30, "time": 20}, "requires": ["us_barracks"], "weapons": [{"range": 7, "damage": 30, "cooldown": 1.0, "damageType": "small_arms", "splash": 1.0}], "view": {"shape": "tower"}},
+    "wehr_mg_nest": {"name": "Бункер MG42", "tags": ["building"], "factions": ["wehrmacht"], "structure": {"footprint": [2, 2]}, "health": {"max": 800, "armor": 3, "armorType": "building"}, "cost": {"manpower": 150, "munitions": 40, "time": 25}, "requires": ["wehr_quarters"], "weapons": [{"range": 7, "damage": 36, "cooldown": 1.0, "damageType": "small_arms", "splash": 1.0}], "view": {"shape": "tower"}},
+    "victory_point": {"name": "Ключевая точка", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 10, "radius": 3, "victoryPoint": true, "region": true}, "view": {"shape": "flag"}},
+    "strategic_point": {"name": "Стратегическая точка", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3, "region": true}, "income": {"manpower": 0.15}, "view": {"shape": "flag"}},
+    "fuel_point": {"name": "Склад топлива", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3, "region": true}, "income": {"fuel": 0.25}, "view": {"shape": "flag"}},
+    "munition_point": {"name": "Склад боеприпасов", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 8, "radius": 3, "region": true}, "income": {"munitions": 0.3}, "view": {"shape": "flag"}}
   }
 }

@@ -114,7 +114,7 @@
    ]
   },
   {
-   "type": "robot",
+   "type": "grunt",
    "owner": 1,
    "pos": [
     8,
@@ -122,7 +122,7 @@
    ]
   },
   {
-   "type": "robot",
+   "type": "grunt",
    "owner": 2,
    "pos": [
     56,
@@ -130,7 +130,7 @@
    ]
   },
   {
-   "type": "robot",
+   "type": "grunt",
    "owner": 1,
    "pos": [
     8,
@@ -138,11 +138,27 @@
    ]
   },
   {
-   "type": "robot",
+   "type": "grunt",
    "owner": 2,
    "pos": [
     56,
     14
+   ]
+  },
+  {
+   "type": "sniper",
+   "owner": 1,
+   "pos": [
+    9,
+    16
+   ]
+  },
+  {
+   "type": "sniper",
+   "owner": 2,
+   "pos": [
+    55,
+    16
    ]
   },
   {
@@ -162,7 +178,7 @@
    ]
   },
   {
-   "type": "factory",
+   "type": "robot_factory",
    "owner": 0,
    "pos": [
     10,
@@ -170,7 +186,7 @@
    ]
   },
   {
-   "type": "factory",
+   "type": "robot_factory",
    "owner": 0,
    "pos": [
     54,
@@ -194,7 +210,7 @@
    ]
   },
   {
-   "type": "factory",
+   "type": "vehicle_factory",
    "owner": 0,
    "pos": [
     18,
@@ -202,7 +218,7 @@
    ]
   },
   {
-   "type": "factory",
+   "type": "vehicle_factory",
    "owner": 0,
    "pos": [
     46,
@@ -226,7 +242,7 @@
    ]
   },
   {
-   "type": "factory",
+   "type": "robot_factory",
    "owner": 0,
    "pos": [
     26,
@@ -234,11 +250,67 @@
    ]
   },
   {
-   "type": "factory",
+   "type": "robot_factory",
    "owner": 0,
    "pos": [
     38,
     24
+   ]
+  },
+  {
+   "type": "gatling_gun",
+   "owner": 0,
+   "pos": [
+    21.5,
+    26.5
+   ]
+  },
+  {
+   "type": "gatling_gun",
+   "owner": 0,
+   "pos": [
+    42.5,
+    5.5
+   ]
+  },
+  {
+   "type": "light_gun",
+   "owner": 0,
+   "pos": [
+    29.5,
+    6.5
+   ]
+  },
+  {
+   "type": "light_gun",
+   "owner": 0,
+   "pos": [
+    34.5,
+    25.5
+   ]
+  },
+  {
+   "type": "jeep",
+   "owner": 0,
+   "pos": [
+    26,
+    26
+   ]
+  },
+  {
+   "type": "jeep",
+   "owner": 0,
+   "pos": [
+    38,
+    6
+   ]
+  },
+  {
+   "type": "howitzer",
+   "owner": 0,
+   "pos": [
+    32.5,
+    16.5
    ]
   }
  ]

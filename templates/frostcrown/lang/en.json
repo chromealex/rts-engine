@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Warcraft III: a hero with abilities, neutral creep camps and upkeep.",
+  "howto.like": "Warcraft III: the Horde — heroes with skills, hall tiers, upkeep, creep camps.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "A small army with a strong hero beats a crowd: upkeep eats your income.",
-  "howto.step1": "Peons mine gold and chop lumber in the pine woods; the great hall trains more peons.",
-  "howto.step2": "Burrows raise supply. Upkeep: above 30 supply income drops to 70%, above 55 to 40%.",
-  "howto.step3": "The war mill trains grunts, hunters and demolishers — demolishers have an area Barrage.",
-  "howto.step4": "The altar summons the hero, the Blademaster. He levels up; abilities (Whirlwind, Chain Lightning, Rejuvenation, Bloodlust, War Cry) are card buttons.",
-  "howto.step5": "Trolls and ogres are neutral camps: kill them with the hero for experience."
+  "howto.tip": "Over 50 food a third of your gold goes to upkeep; a small army with heroes beats a crowd.",
+  "howto.step1": "Five peons fit in a gold mine at once (10 gold a trip); lumber is chopped at the pines, 10 a trip.",
+  "howto.step2": "The Great Hall upgrades to Stronghold and Fortress: they unlock new units and the 2nd and 3rd hero.",
+  "howto.step3": "The first hero is free. Each level gives a skill point: learn abilities (up to 3 levels), the ultimate at level 6.",
+  "howto.step4": "A fallen hero is revived at the altar — cheaper and with its level. Armor cuts damage by 6% a point."
 }

@@ -206,18 +206,16 @@ def frostcrown():
     m.ent("great_hall", 1, [10, 24])
     for i in range(5):
         m.ent("peon", 1, [14 + (i % 3) * 0.8, 21 + i])
-    m.ent("blademaster", 1, [15, 27])  # starting hero: shows the ability kit (chain lightning, rejuvenation)
-    m.ent("burrow", 1, [10, 30])
     m.ent("gold_mine", 0, [10.5, 17.5])
     for y in range(30, 44):
         for x in range(2, 6):
             m.ent("pine", 0, [x + 0.5, y + 0.5])
     # creep camps guarding expansions and the middle
     m.ent("gold_mine", 0, [22.5, 38.5])
-    m.ent("troll", -1, [24, 35])
-    m.ent("troll", -1, [25, 36])
-    m.ent("ogre", -1, [32, 8], sym=False)
-    m.ent("ogre", -1, [32, 40], sym=False)
+    m.ent("forest_troll", -1, [24, 35])
+    m.ent("forest_troll", -1, [25, 36])
+    m.ent("ogre_mauler", -1, [32, 8], sym=False)
+    m.ent("ogre_mauler", -1, [32, 40], sym=False)
     write("frostcrown", m, "frozen_pass")
 
 
@@ -228,38 +226,51 @@ def starfall():
     m.level_rect(2, 2, 20, 20, 1)
     m.rect(22, 10, 1, 3, '/')
     m.rect(21, 10, 1, 3, '/')
-    m.ent("mineral", 0, [5.5, 5.5]); m.ent("mineral", 0, [6.5, 4.5]); m.ent("mineral", 0, [4.5, 7.5])
-    m.ent("mineral", 0, [8.5, 4.5]); m.ent("mineral", 0, [4.5, 9.5])
-    m.ent("geyser", 0, [15, 4])
-    m.ent("mineral", 0, [30.5, 40.5]); m.ent("mineral", 0, [31.5, 41.5])
+    # SC2 base: 8 patches (4 x 1800, 4 x 900) in an arc, two geysers
+    for i, (x, y) in enumerate([(4, 5), (4, 7), (4, 9), (4, 11), (6, 3), (8, 3), (10, 3), (6, 13)]):
+        m.ent("mineral" if i % 2 == 0 else "mineral_small", 0, [x, y + 0.5])
+    m.ent("geyser", 0, [15.5, 4.5])
+    m.ent("geyser", 0, [5.5, 17.5])
+    # natural expansion below the ramp
+    for i, (x, y) in enumerate([(26, 36), (26, 38), (26, 40), (28, 42), (30, 42)]):
+        m.ent("mineral" if i % 2 == 0 else "mineral_small", 0, [x, y + 0.5])
+    m.ent("geyser", 0, [33.5, 43.5])
     m.players[0]["start"] = [11, 12]
     m.players[1]["start"] = m.mirror([11, 12])
     write("starfall", m, "twin_plateaus")
 
 
 def ironfront():
-    m = Map("Ore Valley", 64, 48, duel())
+    m = Map("Ore Valley", 64, 48, duel("allies", "soviet"))
     m.border()
     m.rect(28, 0, 8, 14, '~')
     m.rect(28, 18, 3, 6, ',')
-    m.ent("mcv", 1, [10, 24])
-    m.ent("rifleman", 1, [13, 26]); m.ent("rifleman", 1, [13, 27])
+    m.players[0]["start"] = [10, 24]
+    m.players[1]["start"] = m.mirror([10, 24])
     m.field("ore", 12, 12, 4)
     m.field("ore", 26, 36, 3)
+    m.field("gems", 32, 40, 2, sym=False)
+    m.field("gems", 32, 8, 2, sym=False)
     m.ent("ore_mine", 0, [12, 12])
+    m.ent("gem_mine", 0, [32, 40], sym=False)
     write("ironfront", m, "ore_valley")
 
 
 def ambersands():
-    m = Map("Spice Basin", 64, 48, duel())
-    # mostly sand ('.' with spice); rock plateaus for bases
+    # Dune II: Atreides vs Harkonnen; sand everywhere (worms, spice, blooms), rock plateaus for the bases
+    m = Map("Spice Basin", 64, 48, duel("atreides", "harkonnen"))
     m.rect(3, 15, 16, 18, 'R')
     m.rect(28, 20, 8, 8, 'R', sym=False)
-    m.ent("mcv", 1, [10, 24])
-    m.ent("trooper", 1, [14, 26]); m.ent("trooper", 1, [14, 27])
-    m.field("spice", 23, 18, 4)
+    m.players[0]["start"] = [10, 24]
+    m.players[1]["start"] = m.mirror([10, 24])
+    m.field("spice", 24, 18, 4)
     m.field("spice", 12, 40, 4)
+    m.field("spice", 30, 9, 3)
+    m.ent("spice_bloom", 0, [22, 34])
+    m.ent("spice_bloom", 0, [40, 6], sym=False)
     m.ent("sandworm", -1, [32, 4], sym=False)
+    m.ent("sandworm", -1, [32, 44], sym=False)
+    m.extra["areas"] = {"desert_north": [20, 2, 24, 10], "desert_south": [20, 36, 24, 10]}
     write("ambersands", m, "spice_basin")
 
 
@@ -291,13 +302,14 @@ def metaltide_heights(w, h, bases, spots):
 
 
 def metaltide():
-    m = Map("Twin Craters", 64, 48, duel())
+    m = Map("Twin Craters", 64, 48, duel("arm", "core"))
     m.border()
     m.disc(32, 24, 5, '#', sym=False)
     m.heightfield(metaltide_heights(64, 48, [(10, 24, 7)],
                                     [(6, 18, 2), (6, 30, 2), (14, 16, 2), (14, 32, 2), (20, 24, 2), (24, 10, 2), (26, 38, 2),
                                      (16, 20, 1), (16, 28, 1), (8, 12, 1)]))
-    m.ent("commander", 1, [10, 24])
+    m.players[0]["start"] = [10, 24]
+    m.players[1]["start"] = m.mirror([10, 24])
     for p in [(6, 18), (6, 30), (14, 16), (14, 32), (20, 24), (24, 10), (26, 38)]:
         m.ent("metal_spot", 0, [p[0], p[1]])
     for p in [(16, 20), (16, 28), (8, 12)]:
@@ -309,11 +321,17 @@ def fourages():
     m = Map("Highland", 64, 48, duel())
     m.border()
     m.rect(30, 4, 4, 14, '~')
+    # AoE II start: town centre, 3 villagers, a scout; 6 berry bushes, 7 gold and 5 stone tiles near the base
     m.ent("town_center", 1, [10, 24])
-    for i in range(4):
-        m.ent("villager", 1, [14, 21 + i])
-    m.ent("gold_pile", 0, [8.5, 16.5]); m.ent("stone_pile", 0, [16.5, 31.5])
-    m.ent("berry_bush", 0, [16.5, 18.5]); m.ent("berry_bush", 0, [17.5, 19.5])
+    for i in range(3):
+        m.ent("villager", 1, [14, 22 + i])
+    m.ent("scout", 1, [15, 26])
+    for (x, y) in [(7, 15), (8, 15), (9, 15), (7, 16), (8, 16), (9, 16), (8, 17)]:
+        m.ent("gold_pile", 0, [x + 0.5, y + 0.5])
+    for (x, y) in [(16, 31), (17, 31), (16, 32), (17, 32), (18, 31)]:
+        m.ent("stone_pile", 0, [x + 0.5, y + 0.5])
+    for (x, y) in [(16, 17), (17, 17), (18, 17), (16, 18), (17, 18), (18, 18)]:
+        m.ent("berry_bush", 0, [x + 0.5, y + 0.5])
     for y in range(28, 44):
         for x in range(2, 6):
             m.ent("oak", 0, [x + 0.5, y + 0.5])
@@ -324,17 +342,25 @@ def fourages():
 
 
 def holdtheline():
-    m = Map("Crossroads", 64, 48, duel())
+    # sectors: 4 x 3 grid (16 x 16); the HQ sector is the start, every point takes its sector
+    m = Map("Crossroads", 64, 48, duel("us", "wehrmacht"))
     m.border()
     m.rect(20, 8, 4, 4, '#')
     m.rect(26, 30, 3, 6, '#')
-    m.ent("hq", 1, [8, 24])
-    m.ent("riflemen", 1, [12, 22]); m.ent("riflemen", 1, [12, 26])
-    m.ent("engineer", 1, [11, 24])
-    m.ent("fuel_point", 0, [16, 12])
-    m.ent("victory_point", 0, [32, 24], sym=False)
-    m.ent("victory_point", 0, [24, 12])
-    m.ent("munition_point", 0, [18, 36])
+    names = {}
+    for gy in range(3):
+        for gx in range(4):
+            l = "ABCDEFGHIJKL"[gy * 4 + gx]
+            m.region_rect(gx * 16, gy * 16, 16, 16, l)
+            names[l] = "Сектор " + l
+    m.region_names = names
+    m.players[0]["start"] = [8, 24]
+    m.players[1]["start"] = m.mirror([8, 24])
+    m.ent("fuel_point", 0, [8, 8])
+    m.ent("munition_point", 0, [8, 40])
+    m.ent("strategic_point", 0, [24, 24])
+    m.ent("victory_point", 0, [24, 8])
+    m.ent("munition_point", 0, [24, 40])
     write("holdtheline", m, "crossroads")
 
 
@@ -345,17 +371,22 @@ def lastcolony():
     m.rect(40, 4, 3, 16, '#', sym=False)
     m.rect(40, 28, 3, 16, '#', sym=False)
     m.ent("command_center", 1, [14, 24], sym=False)
-    for i in range(4):
-        m.ent("colonist", 1, [18, 21 + i], sym=False)
     m.ent("ranger", 1, [20, 22], sym=False); m.ent("ranger", 1, [20, 26], sym=False)
-    m.ent("ranger", 1, [21, 24], sym=False)
+    m.ent("ranger", 1, [21, 24], sym=False); m.ent("ranger", 1, [21, 25], sym=False)
     m.ent("stone_quarry", 0, [8.5, 14.5], sym=False)
     m.ent("stone_quarry", 0, [8.5, 33.5], sym=False)
     for y in range(8, 40, 2):
-        m.ent("tree", 0, [3.5, y + 0.5], sym=False)
+        for x in (3, 5):
+            m.ent("tree", 0, [x + 0.5, y + 0.5], sym=False)
+    for x in range(12, 24, 2):
+        m.ent("tree", 0, [x + 0.5, 10.5], sym=False)
+        m.ent("tree", 0, [x + 0.5, 37.5], sym=False)
     m.extra["waves"] = [
         {"time": 90, "player": 2, "at": [60, 24], "spread": 3, "spawn": [{"type": "walker", "count": 5}], "every": 45, "growth": 1.25, "repeats": 14},
-        {"time": 240, "player": 2, "at": [60, 6], "spread": 2, "spawn": [{"type": "runner", "count": 3}], "every": 60, "growth": 1.2, "repeats": 8},
+        {"time": 240, "player": 2, "at": [60, 6], "spread": 2, "spawn": [{"type": "runner", "count": 3}], "every": 60, "growth": 1.2, "repeats": 12},
+        {"time": 480, "player": 2, "at": [60, 42], "spread": 2, "spawn": [{"type": "harpy", "count": 2}], "every": 90, "growth": 1.2, "repeats": 8},
+        {"time": 1140, "player": 2, "at": [60, 24], "spread": 4, "spawn": [{"type": "walker", "count": 60}, {"type": "runner", "count": 20},
+                                                                             {"type": "chubby", "count": 4}], "every": 0, "repeats": 0},
     ]
     write("lastcolony", m, "last_valley")
 
@@ -372,13 +403,18 @@ def clanlands():
             m.region_rect(rx * 16, ry * 12, 16, 12, letters[ry][rx])
     m.region_names = names
     m.rect(15, 4, 1, 5, '#'); m.rect(31, 4, 1, 5, '#')
-    m.ent("longhouse", 1, [7, 6])
-    for i in range(3):
-        m.ent("thrall", 1, [11, 4 + i])
+    m.ent("town_hall", 1, [7, 6])
+    for i in range(4):
+        m.ent("villager", 1, [11, 4 + i])
     m.ent("deer_herd", 0, [24, 6]); m.ent("deer_herd", 0, [8, 18])
     m.ent("deer_herd", 0, [24, 18], sym=False)
     for x in range(18, 26):
         m.ent("birch", 0, [x + 0.5, 2.5])
+    for y in range(2, 9):
+        m.ent("birch", 0, [2.5, y + 0.5])
+    m.ent("stone_deposit", 0, [12, 10]); m.ent("iron_deposit", 0, [40, 18], sym=False)
+    m.ent("wolf", -1, [24, 8]); m.ent("wolf", -1, [25, 8])
+    m.ent("draugr", -1, [24, 16], sym=False); m.ent("draugr", -1, [25, 17], sym=False)
     write("clanlands", m, "fjords")
 
 
@@ -392,10 +428,14 @@ def flagsectors():
     m.region_names = names
     m.rect(15, 6, 2, 6, '#'); m.rect(31, 20, 2, 6, '#', sym=False)
     m.ent("fort", 1, [4, 16])
-    m.ent("robot", 1, [8, 14]); m.ent("robot", 1, [8, 18])
+    m.ent("grunt", 1, [8, 14]); m.ent("grunt", 1, [8, 18]); m.ent("sniper", 1, [9, 16])
     for i, x in enumerate([12, 20, 28]):
         m.ent("flag", 0, [x, 16 + (i % 2) * 6 - 3])
-        m.ent("factory", 0, [x - 2, 8 + (i % 2) * 14])
+        m.ent("robot_factory" if i != 1 else "vehicle_factory", 0, [x - 2, 8 + (i % 2) * 14])
+    m.ent("gatling_gun", 0, [21.5, 26.5])
+    m.ent("light_gun", 0, [29.5, 6.5])
+    m.ent("jeep", 0, [26, 26])
+    m.ent("howitzer", 0, [32.5, 16.5], sym=False)
     write("flagsectors", m, "sector_strip")
 
 
@@ -409,7 +449,7 @@ def laneclash():
 
 
 def underlord():
-    m = Map("Two Keeps", 48, 32, duel())
+    m = Map("Two Keeps", 48, 32, duel() + [{"name": "Герои", "team": 3, "waves": True}])
     m.rows = [['D'] * 48 for _ in range(32)]
     m.border('#')
     # dungeon pockets around the hearts
@@ -424,22 +464,35 @@ def underlord():
     for i in range(4):
         m.ent("imp", 1, [9 + (i % 2) * 0.8, 13 + i])
     m.ent("portal", 0, [17, 4])
+    # heroes from the surface: a party drops in at the middle cave now and then
+    m.rect(22, 13, 4, 6, '.', sym=False)
+    m.extra["waves"] = [{"time": 420, "player": 3, "at": [24, 16], "spread": 1, "spawn": [{"type": "dwarf", "count": 2}, {"type": "wizard", "count": 1}],
+                         "every": 300, "growth": 1.3, "repeats": 5},
+                        {"time": 900, "player": 3, "at": [24, 16], "spread": 1, "spawn": [{"type": "knight", "count": 2}], "every": 420, "growth": 1.2, "repeats": 3}]
     write("underlord", m, "two_keeps")
 
 
 def borderrush():
+    # State.io: 3 x 6 states (portrait), a capital at each end, neutral states hold some soldiers
     m = Map("Five Lands", 24, 42, duel())
     m.border()
     names = {}
-    # regions stacked vertically (portrait): A enemy home, B C D middle, E own home
-    for i, l in enumerate("ABCDE"):
-        m.region_rect(1, 1 + i * 8, 22, 8, l)
-        names[l] = ["Чужбина", "Равнина", "Перевал", "Холмы", "Родина"][i]
+    k = 0
+    for gy in range(6):
+        for gx in range(3):
+            l = "ABCDEFGHIJKLMNOPQR"[k]
+            m.region_rect(1 + gx * 7, 1 + gy * 7, 8 if gx == 2 else 7, 7, l, None)
+            names[l] = "Штат " + str(k + 1)
+            k += 1
     m.region_names = names
-    m.rect(4, 20, 5, 2, '#')
-    m.ent("capital", 1, [12, 37])
-    m.ent("town", 0, [6, 29])
-    m.ent("town", 0, [17, 24])
+    m.ent("capital", 1, [12, 37], garrison=12)
+    garrisons = [[14, 18, 14], [10, 22, 10], [8, 16, 8]]
+    for gy in range(3, 6):
+        for gx in range(3):
+            pos = [4.5 + gx * 7.5, 4.5 + gy * 7]
+            if gy == 5 and gx == 1:
+                continue
+            m.ent("state", 0, pos, garrison=garrisons[gy - 3][gx])
     write("borderrush", m, "five_lands")
 
 
@@ -447,12 +500,14 @@ def hearthhaul():
     m = Map("Green Dale", 56, 40, duel())
     m.border()
     m.rect(26, 2, 4, 12, '~')
-    m.ent("storehouse", 1, [8, 20], inventory={"planks": 30, "stone": 30, "bread": 10, "sword": 2})
+    m.ent("storehouse", 1, [8, 20], inventory={"planks": 40, "stone": 40, "bread": 20, "coins": 60, "axe": 4, "wine": 10})
     m.ent("school", 1, [8, 26])
-    for i in range(3):
+    m.ent("inn", 1, [4, 24])
+    for i in range(4):
         m.ent("serf", 1, [12, 18 + i])
     m.ent("labourer", 1, [12, 22]); m.ent("labourer", 1, [12, 23])
     m.ent("militia", 1, [13, 25]); m.ent("militia", 1, [13, 26])
+    m.ent("gold_vein", 0, [20.5, 6.5]); m.ent("coal_vein", 0, [22.5, 6.5]); m.ent("iron_vein", 0, [21.5, 8.5])
     for (x, y) in [(4, 10), (5, 12), (6, 9), (4, 13), (7, 11), (5, 8), (3, 11), (6, 14)]:
         m.ent("tree", 0, [x + 0.5, y + 0.5])
     m.ent("rock", 0, [16.5, 32.5]); m.ent("rock", 0, [18.5, 33.5])
@@ -493,7 +548,26 @@ def spellbunkers():
     write("spellbunkers", m, "rune_field")
 
 
-GAMES = {f.__name__: f for f in [frostcrown, starfall, ironfront, ambersands, metaltide, fourages, holdtheline,
+def shroomwars():
+    # Mushroom Wars 2: each side brings a hero (four skills), villages / towers / forges with levels
+    kenor = ["tower_defense", "explosive_shells", "close_ranks", "bomb"]
+    marty = ["energy_shield", "fast_growth", "freeze", "ultimate_charge"]
+    m = Map("Twin Valleys", 48, 28, duel(a={"loadout": kenor}, b={"loadout": marty}))
+    m.border()
+    m.rect(22, 4, 4, 5, '#')
+    m.disc(14, 22, 1.5, '#')
+    m.ent("village3", 1, [5, 14], garrison=25)
+    m.ent("village1", 1, [9, 22], garrison=6)
+    m.ent("village1", 0, [13, 6], garrison=8)
+    m.ent("village2", 0, [16, 14], garrison=12)
+    m.ent("tower1", 0, [11, 14], garrison=10)
+    m.ent("forge", 0, [20, 22], garrison=10)
+    m.ent("village5", 0, [24, 14], garrison=30, sym=False)
+    m.ent("tower2", 0, [24, 24], garrison=15, sym=False)
+    write("shroomwars", m, "twin_valleys")
+
+
+GAMES = {f.__name__: f for f in [shroomwars, frostcrown, starfall, ironfront, ambersands, metaltide, fourages, holdtheline,
                                    lastcolony, clanlands, flagsectors, laneclash, underlord, borderrush, hearthhaul, sporelanes,
                                    spellbunkers]}
 
