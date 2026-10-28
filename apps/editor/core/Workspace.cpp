@@ -600,6 +600,29 @@ void Workspace::registerCoreOps() {
         Json keys = Json::array();
         for (auto& [k, v] : d.extra.members()) keys.push(str(k));
         r.set("extraBlocks", keys);
+        if (d.planet()) {   // planet map (world block): bodies with their surfaces and orbits
+            Json bodies = Json::array();
+            for (const auto& b : d.bodies) {
+                Json bj = Json::object();
+                bj.set("id", str(b.id));
+                for (const char* k : {"kind", "radius", "orbit", "orbitAltitude", "seaLevel", "generate"}) if (b.meta.has(k)) bj.set(k, b.meta[k]);
+                bj.set("faceSize", Json::number(int64_t(b.faceSize)));
+                if (b.surface()) {
+                    bj.set("cells", Json::number(int64_t(6 * b.faceSize * b.faceSize)));
+                    auto [mn, mx] = std::minmax_element(b.corners.begin(), b.corners.end());
+                    bj.set("heightMin", Json::number(double(*mn) / 16.0, 2)); bj.set("heightMax", Json::number(double(*mx) / 16.0, 2));
+                    bj.set("cornersStorage", str(b.corners.size() > kInlineCornersMax ? "file " + map.bodyCornersFileName(b) : "inline"));
+                    int objs = 0;
+                    for (auto& e : d.entities) if (e.at.isObject() && e.at.getStr("body") == b.id) ++objs;
+                    bj.set("entities", Json::number(int64_t(objs)));
+                }
+                bodies.push(bj);
+            }
+            Json world = Json::object();
+            world.set("bodies", bodies);
+            for (auto& [k, v] : d.worldExtra.members()) world.set(k, v);
+            r.set("world", world);
+        }
         return r;
     });
     add("map_ascii", "Text picture of the open map (terrain, levels, fields, objects) — the fastest way to 'see' a map.",
