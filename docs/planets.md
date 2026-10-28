@@ -57,19 +57,41 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
   agents implement against this table).
 - Map objects/players on a planet: `"at": {"body": "terra", "face": 2, "x": 10.5, "y": 7}` (cell coordinates).
 
-## 3. Simulation model (agent-planet-sim)
+## 3. Simulation model (agent-planet-sim) — implemented
 
-- Positions are **body-local** Vec3 (origin = body centre); an entity's body is a component (absent = body 0).
-  World position = body centre(t) + local position. Units on different bodies only interact through the orbit layer.
-- A `Surface` abstraction (plane = today's code path, bit-identical; cube-sphere = new) owns: cell lookup from a
-  position, cell centre, neighbour iteration (8-connected, across face seams), surface height/normal ("up"),
-  distance between two positions, moving a position toward another along the surface, projection onto the
-  surface. Pathfinding (A*, HPA*), clearance, vision/LOS, fog, spatial hash, combat ranges, building footprints
-  and AI go through it.
-- `move.layer: "orbit"`: units on the shell radius + orbitAltitude, free great-circle movement, can see/attack the
-  surface below within range; interplanetary transfer between bodies' orbit shells is a timed transit computed
-  from the bodies' positions at departure.
-- New maths is Fixed only: `engine/core/FixedMath.h` (sin/cos/tan/atan2/asin/acos in turns, normalize, cross).
+- **Grid layout.** `Surface` (`modules/rts/RtsSurface.h`) stacks the 6 faces of every surface body as rows of the one
+  `MapGrid`: width = max faceSize, body b occupies rows `[rowBase, rowBase + 6N)`, grid cell = `(rowBase + f*N + y) * W + x`.
+  Every per-cell layer (flags, levels, fields, vision, blocked, clearance, ...) works unchanged; cells `x >= N` of a smaller
+  body are void. `Surface::gridCell(body, face, x, y)` / `cellFace(c, ...)` convert.
+- **Positions.** Sim positions are body-local + an anchor: `pos = anchor(b) + local`, `anchor(b) = (8192 + 4096 b, 0, 0)`.
+  So a position says by itself whether it is on a planet (`Surface::onSphere`) and on which body (`bodyAt`) — no extra
+  component, and flat maps (x < 2048) never take a planet code path. Ground units stand at `dir * (radius + height)`,
+  orbit units on the shell `radius + orbitAltitude`. World position = `bodyPosition(b, t) + (pos - anchor(b))`.
+- **Routing.** `MapGrid::cellOf / cellXY / centerOf / offsetCell / canMoveCells / passableAt` hide the surface; pathing
+  (`findPath` → A* on the neighbour table, string pulling along chords), clearance, `nearestPassable`, field search,
+  free spots, auto-build spots and melee slots go through them. `dist2D` is the 3D chord on planets (xz on flat maps).
+  Spatial hash: coarse cube-sphere buckets (~4x4 cells) per body. Movement: tangent-plane steps re-projected onto the
+  surface / shell (`moveSphere`), slope speed from corner heights; separation in the tangent plane. HPA* is flat-only.
+- **Vision.** `visionSphere`: cells within sight (offset walk across seams), 3D sight line sampled once per cell against
+  the ground radius + blockers → hills and the horizon hide; air/orbit units see everything in range.
+- **Footprints** lie inside one face (`footprintAt(t, c, x0, y0, surface)` gives a plain grid rect or -1).
+- **Bodies / orbits**: angle(t) = phase + t / period (turns), position via `fxCosTurns`/`fxSinTurns` in the parent's XZ
+  plane; Fixed. Hashed (bodies, corners sample, transits) only when a world exists.
+- **Transit**: `kCmdTransit`; component `Transit {from, to, depart, arrive, fromWorld, toWorld, arrival}`; the unit is
+  `kUnitInHand | kUnitInTransit` (off every surface) until `arrive`.
+
+### API for the view / editor / generator
+
+| need | call |
+|---|---|
+| is this a planet map, bodies, layout | `RtsModule::surface(sim)` → `const Surface*` (null on flat maps): `bodies`, `startBody`, `findBody(id)` |
+| body centre at a sim tick | `RtsModule::bodyWorldPosition(sim, body, tick)` (Fixed; view: `float(...)` at tick + alpha) = `Surface::bodyPosition(body, seconds)` |
+| entity world position | `RtsModule::worldPosition(sim, e, tick)` (transit interpolated); body of a position: `bodyOf(sim, pos)`; body-local = `pos - Surface::anchor(body)` |
+| surface point / normal | `Surface::facePoint(body, face, a, b)` / `faceNormal(...)` (body-local); `Surface::up(pos)`, `heightAt(pos)`, `project(pos, alt)` |
+| fog per body | `RtsModule::cellVision(sim, player, body, face, x, y)` (0/1/2), or `GameState::vision[player][surface->gridCell(body, face, x, y)]` |
+| place players / objects (generator, map JSON) | `"at": {"body", "face", "x", "y"}` on entities / players' `start` / waves (`RtsModule::mapPos`); fields per face |
+| sphere paths (fair starts) | `MapGrid::findPath(fromPos, toPos, layer, out, maxNodes)` with positions from `Surface::cellCenter(gridCell(...))` or `anchor(b) + facePoint(...)`; after `Simulation::setup`, the module's `state(sim).grid` |
+| cube-sphere maths | `CubeSphere` (`RtsSphere.h`): cells, dirs, seams, `offset`, corners |
 
 ## 4. Terrain generation (agent-terrain-gen)
 
