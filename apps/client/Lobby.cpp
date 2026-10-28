@@ -194,6 +194,7 @@ void GameClient::startNetMatch() {
     fitCamera();
     minimap_.build(*dev_, mod().state(*sim_), rules_);
     ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
+    fx_.startMatch(*sim_, spectator_ ? 0 : human_, view_, mod().state(*sim_).grid);
     mode_ = Mode::Normal;
     notices_.clear();
     setScreen(Screen::Playing);
@@ -201,6 +202,7 @@ void GameClient::startNetMatch() {
 
 void GameClient::leaveNetMatch() {
     if (net_) { net_->leaveMatch(); net_->refreshRooms(); }   // detach before the simulation goes away
+    fx_.stopMatch();
     sim_.reset();
     bots_.clear();
     selection_.clear();
@@ -211,6 +213,13 @@ void GameClient::leaveNetMatch() {
 }
 
 // ------------------------------------------------------------------ lobby model
+
+// Map titles in rooms come from whoever created the room, in their language: show ours when the
+// map is in this game, else the server's text (which may be a "@key").
+std::string GameClient::mapTitle(const std::string& file, const std::string& serverTitle) const {
+    for (auto& m : maps_) if (m.file == file) return m.title;
+    return loc_.text(serverTitle);
+}
 
 void GameClient::buildLobby(UiState& s) {
     s.netError = netError_;
@@ -233,7 +242,7 @@ void GameClient::buildLobby(UiState& s) {
         s.searching = qs.state != 0;
         for (auto& q : net_->queues()) {
             UiAction a;
-            a.label = q.title;
+            a.label = loc_.text(q.title);   // server config titles may be "@net.queue.x" keys
             const bool mine = qs.state != 0 && qs.queueId == q.id;
             a.active = mine;
             if (mine) a.cost = qs.state == 2 ? tr("lobby.found")
@@ -247,8 +256,8 @@ void GameClient::buildLobby(UiState& s) {
             uint64_t hash = 0;
             for (auto& m : netMaps_) if (m.file == r.mapFile) hash = m.dataHash;
             UiAction a;
-            a.label = r.name;
-            a.cost = tr("lobby.room_line", Args().str("map", r.mapTitle).num("occupied", r.occupied).num("slots", r.slots));
+            a.label = loc_.text(r.name);
+            a.cost = tr("lobby.room_line", Args().str("map", mapTitle(r.mapFile, r.mapTitle)).num("occupied", r.occupied).num("slots", r.slots));
             if (r.phase != net::RoomPhase::Lobby) a.tip = tr("lobby.in_game");
             const uint32_t id = r.id;
             a.enabled = hash != 0 && r.phase == net::RoomPhase::Lobby && r.occupied < r.slots;
@@ -259,7 +268,7 @@ void GameClient::buildLobby(UiState& s) {
         }
         for (size_t i = 0; i < netMaps_.size(); ++i) {
             UiAction a;
-            a.label = netMaps_[i].title;
+            a.label = mapTitle(netMaps_[i].file, netMaps_[i].title);
             a.cost = std::to_string(netMaps_[i].players());
             a.id = addAction([this, i] { netAction("create", int(i)); });
             s.createMaps.push_back(a);
@@ -269,8 +278,8 @@ void GameClient::buildLobby(UiState& s) {
 
     s.lobby = "room";
     s.isHost = net_->isHost();
-    s.roomTitle = room->name;
-    s.roomInfo = room->map.title;
+    s.roomTitle = loc_.text(room->name);
+    s.roomInfo = mapTitle(room->map.file, room->map.title);
     bool allReady = true, anyHuman = false;
     for (size_t i = 0; i < room->slots.size(); ++i) {
         const net::SlotEntry& sl = room->slots[i];
@@ -278,7 +287,8 @@ void GameClient::buildLobby(UiState& s) {
         UiAction a;
         const bool mine = sl.clientId != 0 && sl.clientId == net_->clientId();
         a.active = mine;
-        a.label = sl.kind == net::SlotKind::Human ? sl.name : sl.kind == net::SlotKind::Bot ? tr("lobby.slot_bot")
+        a.label = sl.kind == net::SlotKind::Human ? net::displayName(loc_, sl.name, slot)
+                : sl.kind == net::SlotKind::Bot ? (sl.name.empty() ? tr("lobby.slot_bot") : net::displayName(loc_, sl.name, slot))
                 : sl.kind == net::SlotKind::Closed ? tr("lobby.slot_closed") : tr("lobby.slot_open");
         if (sl.kind == net::SlotKind::Human && sl.clientId == room->hostId) a.hotkey = tr("lobby.host");
         a.cost = tr("lobby.team", Args().num("team", i < room->map.slotTeams.size() ? room->map.slotTeams[i] : int64_t(i + 1)));
@@ -299,7 +309,7 @@ void GameClient::buildLobby(UiState& s) {
         s.slots.push_back(a);
     }
     std::string specs;
-    for (auto& sp : room->spectators) specs += (specs.empty() ? "" : ", ") + sp.name;
+    for (auto& sp : room->spectators) specs += (specs.empty() ? "" : ", ") + net::displayName(loc_, sp.name, 0);
     if (!specs.empty()) s.spectators = tr("lobby.spectators", Args().str("list", specs));
     s.canStart = s.isHost && anyHuman && allReady;
     if (!s.canStart) s.waitHint = tr("lobby.waiting");

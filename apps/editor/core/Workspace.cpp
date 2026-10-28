@@ -2,6 +2,7 @@
 #include "TileOps.h"
 #include "DataOps.h"
 #include "BalanceOps.h"
+#include "LightOps.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -161,7 +162,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerDataOps(*this); registerBalanceOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {

@@ -11,7 +11,8 @@
 //
 // Lookup order for a unit: its type entry, then weapons/abilities by id, then "events".
 // Cue names: see kCueNames in RtsAudio.cpp (attack, hit, died, ready, buildDone, underAttack, ...).
-// Music playlists used automatically: "match", "battle" (heavy fighting nearby), "victory", "defeat".
+// Music playlists used automatically: "match", "battle" (heavy fighting nearby), "victory", "defeat";
+// "<name>.<map>" for one map. A layered "match" gets the fighting intensity instead of switching.
 #pragma once
 #include <array>
 #include <memory>
@@ -40,7 +41,8 @@ public:
     const std::vector<std::string>& warnings() const { return warnings_; }
 
     // Start listening to a match. `viewer` = the local player (0 = spectator: world sounds only).
-    void attach(Simulation& sim, uint8_t viewer);
+    // `map` (file name or stem): playlists "match.<map>", "battle.<map>", ... win over the generic ones.
+    void attach(Simulation& sim, uint8_t viewer, const std::string& map = "");
     void detach();
     // Once per frame after the simulation advanced: plays everything that happened since.
     void update(Simulation& sim, double dt);
@@ -49,6 +51,12 @@ public:
     void onSelect(Simulation& sim, Entity unit);
     void onCommand(Simulation& sim, Entity firstUnit, uint16_t commandType);
     void onMatchEnd(bool won);
+
+    // Listener for an RTS camera (eye looking at a ground target). The ear hangs on the view ray
+    // above the target: zooming out raises it, so the battle sounds farther (quieter, duller,
+    // roomier), while hearing widens with the square root of the zoom so the visible
+    // battlefield never goes silent. `referenceDistance` = camera distance of "normal" zoom.
+    static audio::ListenerPose cameraListener(const float target[3], const float eye[3], float referenceDistance = 24.0f);
     void play(Cue c);   // UI cues (click, error) and anything without a position
 
     // How many sounds update() started since attach (tests, debug overlay).
@@ -65,7 +73,7 @@ private:
 
     audio::SoundId resolve(const Json& name, const std::string& where);
     audio::SoundId cueFor(int type, Cue c) const;
-    bool playAt(audio::SoundId s, const Vec3& pos, bool positional);
+    bool playAt(audio::SoundId s, const Vec3& pos, bool positional, float height = 0);
     // `worldSounds` = false still updates alerts and battle intensity, without playing the hit itself.
     void handle(Simulation& sim, const SimEvent& ev, bool worldSounds);
 
@@ -81,6 +89,8 @@ private:
     float intensity_ = 0;
     double calmSince_ = 0;
     bool inBattle_ = false;
+    std::string map_;
+    std::string musicName(const char* base) const;
     int played_ = 0;
 };
 
