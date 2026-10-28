@@ -1,8 +1,8 @@
 // Dune II rules for RTSEngine, written for the importer (tools/importers/dune2).
 // Numbers approximate the original game's balance from public descriptions; they are our own data,
 // not extracted from DUNE2.EXE. Speeds are map cells per second, times are game seconds.
-// `view.sprite` points at the sprite sheets the importer converts from the user's copy
-// (docs/asset-format.md); until the renderer draws sprites, `view.shape` is used.
+// The importer adds `sprite` blocks (docs/game-format.md, "2D games") for every type it has art for;
+// types without art keep their 3D `view.shape`.
 // Unit limit: every unit takes 1 supply and a Construction Yard gives 25 (Dune II MaxUnit).
 {
   "supplyCap": 200,
@@ -105,19 +105,19 @@
     // ------------------------------------------------------------ vehicles
     "trike": {"name": "Trike", "tags": ["vehicle"], "health": {"max": 100, "armorType": "light"}, "move": {"speed": 4.0, "radius": 0.4}, "sight": 5,
       "weapons": [{"range": 3, "damage": 6, "cooldown": 0.6, "damageType": "bullet"}], "cost": {"spice": 150, "time": 12, "supply": 1},
-      "view": {"shape": "vehicle", "scale": 0.7, "sprite": "gfx/units.sprite.json#trike"}},
+      "view": {"shape": "vehicle", "scale": 0.7}},
     "raider": {"name": "Raider Trike", "tags": ["vehicle"], "health": {"max": 80, "armorType": "light"}, "move": {"speed": 4.6, "radius": 0.4}, "sight": 5,
       "weapons": [{"range": 3, "damage": 6, "cooldown": 0.6, "damageType": "bullet"}], "cost": {"spice": 150, "time": 12, "supply": 1},
       "view": {"shape": "vehicle", "scale": 0.7}},
     "quad": {"name": "Quad", "tags": ["vehicle"], "health": {"max": 130, "armorType": "light"}, "move": {"speed": 3.3, "radius": 0.45}, "sight": 5,
       "weapons": [{"range": 3, "damage": 9, "cooldown": 0.7, "damageType": "bullet"}], "cost": {"spice": 200, "time": 15, "supply": 1},
-      "view": {"shape": "vehicle", "scale": 0.8, "sprite": "gfx/units.sprite.json#quad"}},
+      "view": {"shape": "vehicle", "scale": 0.8}},
     "tank": {"name": "Combat Tank", "tags": ["vehicle"], "health": {"max": 300, "armor": 2, "armorType": "heavy"}, "move": {"speed": 2.5, "radius": 0.5}, "sight": 5,
       "weapons": [{"range": 4, "damage": 30, "cooldown": 1.6, "projectileSpeed": 16, "damageType": "cannon"}], "cost": {"spice": 300, "time": 24, "supply": 1},
-      "view": {"shape": "tank", "scale": 0.8, "sprite": "gfx/units2.sprite.json#tank_base"}},
+      "view": {"shape": "tank", "scale": 0.8}},
     "siege_tank": {"name": "Siege Tank", "tags": ["vehicle"], "health": {"max": 450, "armor": 3, "armorType": "heavy"}, "move": {"speed": 2.0, "radius": 0.55}, "sight": 5,
       "weapons": [{"range": 5, "damage": 50, "cooldown": 2.0, "projectileSpeed": 14, "splash": 0.8, "damageType": "cannon"}], "cost": {"spice": 600, "time": 36, "supply": 1},
-      "view": {"shape": "tank", "scale": 0.95, "sprite": "gfx/units2.sprite.json#siege_tank_base"}},
+      "view": {"shape": "tank", "scale": 0.95}},
     "launcher": {"name": "Rocket Launcher", "tags": ["vehicle"], "health": {"max": 150, "armorType": "light"}, "move": {"speed": 2.5, "radius": 0.5}, "sight": 6,
       "weapons": [{"range": 9, "minRange": 3, "damage": 70, "cooldown": 3.0, "projectileSpeed": 10, "splash": 1.0, "damageType": "rocket"}],
       "cost": {"spice": 450, "time": 30, "supply": 1}, "view": {"shape": "tank", "scale": 0.85}},
@@ -132,9 +132,9 @@
       "view": {"shape": "tank", "scale": 0.9, "color": [0.23, 0.66, 0.38]}},
     "harvester": {"name": "Harvester", "tags": ["vehicle"], "health": {"max": 300, "armor": 1, "armorType": "heavy"}, "move": {"speed": 1.8, "radius": 0.6}, "sight": 3,
       "gather": {"spice": {"carry": 700, "time": 25}}, "cost": {"spice": 300, "time": 30, "supply": 1},
-      "view": {"shape": "worker", "scale": 1.1, "sprite": "gfx/units.sprite.json#harvester"}},
+      "view": {"shape": "worker", "scale": 1.1}},
     "mcv": {"name": "MCV", "tags": ["vehicle"], "health": {"max": 300, "armor": 1, "armorType": "heavy"}, "move": {"speed": 1.6, "radius": 0.6}, "sight": 3,
-      "deploysTo": "const_yard", "cost": {"spice": 900, "time": 50, "supply": 1}, "view": {"shape": "vehicle", "scale": 1.1, "sprite": "gfx/units.sprite.json#mcv"}},
+      "deploysTo": "const_yard", "cost": {"spice": 900, "time": 50, "supply": 1}, "view": {"shape": "vehicle", "scale": 1.1}},
 
     // ------------------------------------------------------------ air
     "carryall": {"name": "Carryall", "tags": ["air"], "health": {"max": 200, "armorType": "light"}, "move": {"speed": 6, "radius": 0.6, "layer": "air"}, "sight": 4,
