@@ -1,0 +1,13 @@
+// mushrooms — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Mushroom Wars: buildings grow troops by themselves, and the winner sends them in time.",
+  "howto.goal": "Capture every building: the enemy must have none left.",
+  "howto.tip": "Do not empty buildings on the front line: an empty house is a free capture.",
+  "howto.step1": "Every building grows a mushroom garrison: a village up to 20, a big village up to 35 and faster.",
+  "howto.step2": "Drag from your building to a target to send a squad. The share sent is 25/50/75/100% on the card, or keys 1–4.",
+  "howto.step3": "The squad fights the garrison: more attackers and the building is yours.",
+  "howto.step4": "Towers shoot at passers-by, forges defend twice as well."
+}

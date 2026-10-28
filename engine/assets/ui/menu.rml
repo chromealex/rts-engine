@@ -11,6 +11,7 @@
     <div id="menu-bg" data-if="screen == 'menu'"></div>
     <div id="menu" class="panel" data-if="screen == 'menu'">
         <h1>{{gameName}}</h1>
+        <button class="small howto-open" data-if="hasHowto" data-event-click="howto()">{{ 'ui.howto' | tr(lang) }}</button>
         <p class="error" data-if="error != ''">{{error}}</p>
 
         <h2>{{ 'menu.difficulty' | tr(lang) }}</h2>
