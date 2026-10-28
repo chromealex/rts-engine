@@ -113,7 +113,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | Resource packs `.rpak`, build size/compression | `engine/pack`, `tools/assetpipe`, `tools/unpackers`, `tools/rtsbuild` | packs agent |
 | Texture atlases (packer, manifest, runtime lookup) | `engine/atlas`, `tools/atlas`, atlas step in `tools/rtsbuild` / `tools/assetpipe` | atlas agent |
 | Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
-| Audio | `engine/audio`, `modules/rts/audio`, `third_party/miniaudio`, `games/*/audio.json`, `docs/game-format.md` § audio.json | audio agent |
+| Audio | `engine/audio`, `modules/rts/audio`, `tools/audiopack`, `third_party/miniaudio`, `third_party/vorbis`, `games/*/audio.json`, `docs/game-format.md` § audio.json | audio agent |
 | 2D games: ortho camera, sprites, tile maps + autotile, tile tool | `engine/render/{SpriteBatch,SpriteShaders,TextureCache}*`, `modules/rts/RtsTiles.*`, `modules/rts/view/{Rts2DView.h,RtsSprites,RtsTileView,RtsCamera.h}*`, `apps/editor/core/TileOps.*`, `apps/editor/windows/TilesWindow.cpp`, `games/tiles2d`, `games/km2d`, `tools/art2d` | 2D-mode agent |
 | Dynamic lighting (point lights, light map, flashes, night) | `engine/render/Lights.*`, `engine/render/LightShaders.h`, `modules/rts/view/RtsLights.*` | lighting agent |
 | Other areas | as assigned by the user | the agent the user assigned |

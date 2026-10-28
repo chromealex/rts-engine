@@ -113,7 +113,9 @@ void GameClient::updateAudio(double dt) {
                 sound_.onSelect(*sim_, first);
             heardSelection_ = selection_;
         }
-        audio_.setListener(cam_.target.x, cam_.target.z, cam_.yaw, std::max(8.0f, cam_.distance * 0.75f));
+        const float3 eye = cam_.eye();
+        const float target[3] = {cam_.target.x, cam_.target.y, cam_.target.z}, eyeP[3] = {eye.x, eye.y, eye.z};
+        audio_.setListener(RtsAudio::cameraListener(target, eyeP));
     }
     if (volume_ != boundVolume_ || musicVolume_ != boundMusicVolume_) { // changed from the pause menu
         audio_.setMasterVolume(float(std::clamp(volume_, 0, 100)) / 100);
@@ -207,7 +209,7 @@ void GameClient::startMatch(size_t idx) {
     mode_ = Mode::Normal;
     setScreen(Screen::Playing);
     audio_.stopAll(0.1f);
-    sound_.attach(*sim_, spectator_ ? 0 : human_);
+    sound_.attach(*sim_, spectator_ ? 0 : human_, maps_[idx].file);
     heardSelection_.clear();
 }
 

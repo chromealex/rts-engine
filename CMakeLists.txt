@@ -158,6 +158,7 @@ endif()
 add_library(rts_audio STATIC
     engine/audio/AudioEngine.cpp
     engine/audio/AudioMixer.cpp
+    engine/audio/AudioReverb.cpp
     engine/audio/AudioDecode.cpp
     engine/audio/Synth.cpp
     ${RTS_MINIAUDIO_IMPL})
@@ -374,9 +375,29 @@ if(RTS_BUILD_EDITOR)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Build-time audio compression (host tools and tests only; games just decode): IMA ADPCM and
+# OGG Vorbis encoders (libvorbis, BSD), profiles from audio.json, used by rtsbuild per target.
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_vorbisenc STATIC
+        third_party/vorbis/src/ogg/bitwise.c third_party/vorbis/src/ogg/framing.c
+        third_party/vorbis/src/vorbis/analysis.c third_party/vorbis/src/vorbis/bitrate.c third_party/vorbis/src/vorbis/block.c third_party/vorbis/src/vorbis/codebook.c third_party/vorbis/src/vorbis/envelope.c third_party/vorbis/src/vorbis/floor0.c third_party/vorbis/src/vorbis/floor1.c third_party/vorbis/src/vorbis/info.c third_party/vorbis/src/vorbis/lookup.c third_party/vorbis/src/vorbis/lpc.c third_party/vorbis/src/vorbis/lsp.c third_party/vorbis/src/vorbis/mapping0.c third_party/vorbis/src/vorbis/mdct.c third_party/vorbis/src/vorbis/psy.c third_party/vorbis/src/vorbis/registry.c third_party/vorbis/src/vorbis/res0.c third_party/vorbis/src/vorbis/sharedbook.c third_party/vorbis/src/vorbis/smallft.c third_party/vorbis/src/vorbis/synthesis.c third_party/vorbis/src/vorbis/vorbisenc.c third_party/vorbis/src/vorbis/window.c)
+    target_include_directories(rts_vorbisenc PUBLIC third_party/vorbis/include PRIVATE third_party/vorbis/src/vorbis)
+    target_compile_options(rts_vorbisenc PRIVATE $<IF:$<BOOL:${MSVC}>,/w,-w>)
+    if(NOT MSVC)
+        target_link_libraries(rts_vorbisenc PUBLIC m)
+    endif()
+    add_library(rts_audiopack STATIC tools/audiopack/AudioPack.cpp)
+    target_link_libraries(rts_audiopack PUBLIC rts_audio rts_vorbisenc)
+    add_executable(rts_audiopack_tool tools/audiopack/main.cpp)
+    set_target_properties(rts_audiopack_tool PROPERTIES OUTPUT_NAME rts_audiopack)
+    target_link_libraries(rts_audiopack_tool PRIVATE rts_audiopack)
+endif()
+
 if(RTS_BUILD_TOOLS)
     add_executable(rtsbuild tools/rtsbuild/main.cpp)
-    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer)
+    target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer rts_audiopack)
     add_executable(assetpipe tools/assetpipe/main.cpp)
     target_link_libraries(assetpipe PRIVATE rts_pack_writer)
     target_compile_definitions(assetpipe PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
@@ -420,7 +441,7 @@ if(RTS_BUILD_TESTS)
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
-    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio)
+    target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()

@@ -241,10 +241,14 @@ stays silent.
 ```json
 {
   "volume": {"master": 1, "sfx": 0.9, "ui": 0.7, "voice": 1, "music": 0.6, "ambient": 0.7},
+  "spatial": {"minDistance": 10, "maxDistance": 55, "airAbsorption": 1500, "speedOfSound": 150,
+              "reverb": {"size": 0.6, "damping": 0.45, "wet": 0.4, "near": 0.04, "far": 0.65}},
   "sounds": {
     "swing": {"files": ["sfx/swing1.ogg", "sfx/swing2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 4, "cooldown": 0.05},
     "alarm": {"file": "voice/under_attack.ogg", "bus": "voice", "priority": 10},
-    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"}
+    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"},
+    "boom":  {"file": "sfx/boom.ogg", "minDistance": 14, "maxDistance": 80, "far": {"sound": "boom_far", "from": 0.25}},
+    "boom_far": {"file": "sfx/boom_far.ogg", "maxDistance": 120, "air": 0.5}
   },
   "music": {
     "menu":  "music/menu.ogg",
@@ -261,6 +265,26 @@ stays silent.
 
 `volume`: mix level per bus, 0..4 (default 1); the player's own volume settings multiply on top.
 
+### spatial — 3D sound and distance
+
+Positional sounds are placed in 3D around the listener (the RTS client puts the ear on the view
+ray above the camera's focus; units on cliffs and flyers are higher). Distances are world units
+(map cells). Zooming out raises the ear, so the battle sounds farther away; the audible area
+grows with the square root of the zoom.
+
+| key | meaning |
+|---|---|
+| `model` | distance curve: `inverse` (default, natural), `linear`, `exponential` |
+| `minDistance`, `maxDistance` | full volume up to min, silent at max (12, 60); the last 20 % of the range always fades out |
+| `rolloff` | steepness of the curve (1) |
+| `airAbsorption` | Hz of the low-pass at max distance: far sounds lose their highs (2500; `false` = off) |
+| `reverb` | `false`, or `{"size": 0.5, "damping": 0.5, "wet": 0.35, "near": 0.05, "far": 0.6}` — `near` / `far` = reverb send at min / max distance: far sounds get roomy and lose their attack |
+| `speedOfSound` | world units per second; distant sounds arrive late (0 = off; capped at 3 s) |
+| `rear` | 0..1: sources behind the listener get duller and a bit quieter (0) |
+
+The distance keys (`model`, `minDistance`, `maxDistance`, `rolloff`) are defaults for every sound;
+a sound can override them and add `air` / `reverb` multipliers (below).
+
 ### sounds
 
 | key | meaning |
@@ -274,6 +298,13 @@ stays silent.
 | `cooldown` | seconds between two starts (0) — 40 archers firing together make a few sounds, not 40 |
 | `priority` | -100..100 (0): when all voices are busy, the lowest priority (oldest first) is stopped; a new sound below everything playing is dropped |
 | `loop` | loops until stopped (false) |
+| `model`, `minDistance`, `maxDistance`, `rolloff` | override the `spatial` defaults: small sounds (footsteps, swords) fade early, explosions carry far |
+| `air` | multiplier of the air absorption, 0..4 (1; 0 = keeps its highs at any distance) |
+| `reverb` | multiplier of the distance reverb send, 0..4 (1; 0 = always dry) |
+| `duckMusic` | 0..1: music is lowered by this fraction while the sound plays (0.4 on the `voice` bus, else 0) |
+| `sync` | `now` (default), `beat`, `bar`: start on the music's grid (stingers) |
+| `compress`, `quality` | build-time codec for this sound's files (see "Compression at build time") |
+| `far` | a distant variant: `"boom_far"` or `{"sound": "boom_far", "from": 0.3}` — both play together and crossfade from `from` (fraction of this sound's distance range) to max distance; the far sound keeps its own distances, so it can carry farther (a low rumble instead of a crack) |
 
 `synth` — a sound made from parameters instead of a file (prototypes, playables); an object or an
 array of layers that are mixed:
@@ -293,10 +324,68 @@ array of layers that are mixed:
 
 ### music
 
-A playlist: a file name, an array of files, or `{"files": [...], "shuffle": false, "loop": true,
-"volume": 1}`. Changes crossfade. Playlists the client plays by name: `menu` (main menu), `match`,
-`battle` (replaces `match` while heavy fighting happens near the camera, back after ~15 s of calm),
-`victory`, `defeat`. All optional.
+Music streams from the files (OGG Vorbis recommended); changes crossfade. Playlists the client
+plays by name, all optional: `menu`, `match`, `battle` (replaces `match` while heavy fighting
+happens near the camera, back after ~15 s of calm), `victory`, `defeat`. A playlist named
+`match.<map>` (map file name without extension, e.g. `match.valley`) wins over `match` on that
+map; the same for `battle`, `victory`, `defeat`.
+
+```json
+"music": {
+  "menu":  "music/menu.ogg",
+  "match": {"files": ["music/a.ogg", {"file": "music/b.ogg", "loopStart": 12.0}], "shuffle": true,
+            "bpm": 96, "beatsPerBar": 4, "transition": "bar"},
+  "match.valley": {"layers": [{"file": "music/valley_base.ogg"},
+                              {"file": "music/valley_drums.ogg", "intensity": 0.3},
+                              {"file": "music/valley_brass.ogg", "intensity": 0.7}],
+                   "loopStart": 4.0, "loopEnd": 68.0, "bpm": 112}
+}
+```
+
+A playlist is a file name, an array of entries, or an object:
+
+| key | meaning |
+|---|---|
+| `files` | entries played in order: a file name or `{"file", "loopStart", "loopEnd"}` (seconds). With `loopStart` the track plays its intro once and then loops from `loopStart` to `loopEnd` (default: the end) seamlessly until the music changes |
+| `layers` | adaptive music instead of `files`: synchronized stems of equal length, looping together (`loopStart` / `loopEnd` on the playlist). A layer with `"intensity": x` fades in as the music intensity passes x; in a match the intensity follows the fighting near the camera, so a layered `match` builds up instead of switching to `battle` |
+| `shuffle`, `loop` | shuffle the entries (no immediate repeats) / start over after the last one (false, true) |
+| `volume` | 0..4 (1) |
+| `bpm`, `beatsPerBar`, `offset` | beat grid (`offset`: seconds before the first beat); used by `transition` and by synced stingers |
+| `transition` | switching away from this playlist waits for the next `beat` or `bar` (default `bar` when `bpm` is set, else `now`) |
+
+Stingers are sounds on the `music` bus: `"sync": "beat"` or `"bar"` starts them on the playing
+music's grid. Any sound can duck the music while it plays: `"duckMusic": 0.5` lowers it by half
+(default 0.4 for the `voice` bus, so announcements are always heard; 0 otherwise).
+
+### Compression at build time
+
+`rtsbuild` re-encodes the referenced sound and music files for each target before packing; the
+project folder is never changed. Profiles: `desktop` (macOS, Windows, Linux), `mobile` (iOS,
+Android), `web`. `--audio mobile` forces a profile, `--audio off` ships the files as they are;
+`rts_audiopack --project <game> --profile mobile` shows what a profile would do.
+
+```json
+"build": {
+  "desktop": {"sounds": "keep", "music": "vorbis", "musicQuality": 0.6},
+  "mobile":  {"sounds": "adpcm", "music": "vorbis", "musicQuality": 0.3, "maxRate": 32000},
+  "web":     {"musicQuality": 0.25}
+}
+```
+
+| key | meaning |
+|---|---|
+| `sounds`, `music` | codec: `keep` (file as is), `pcm` (16-bit WAV), `adpcm` (IMA ADPCM WAV: 4:1, nearly free to decode — short effects), `vorbis` (OGG: music, long sounds) |
+| `soundQuality`, `musicQuality` | Vorbis quality -0.1..1 (0.5 / 0.4; mobile 0.4 / 0.3, web 0.4 / 0.25) |
+| `maxRate` | resample anything above this rate (0 = never; mobile and web 32000) |
+| `monoSounds` | positional sounds become mono: the mixer pans them anyway (true) |
+| `longSound` | seconds: longer sounds (ambient loops, stingers) use the music codec (8) |
+| `reencodeLossy` | also re-encode files that are already OGG/MP3 (false: lossy to lossy only loses quality) |
+
+Defaults without a `build` section: `desktop` keeps everything; `mobile` and `web` use ADPCM for
+sounds and Vorbis for music at 32 kHz. Sounds on the `music` bus count as music. A sound or a
+playlist can override with `"compress"` and `"quality"`. Re-encoded files get the extension of
+their codec and audio.json in the build points at them; a result that isn't smaller keeps the
+original. Loop points stay exact (Vorbis is sample-accurate; ADPCM pads a loop with its own start).
 
 ### events, types, weapons, abilities
 
