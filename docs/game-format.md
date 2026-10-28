@@ -24,6 +24,9 @@ is optional — the blocks present on a type decide what it can do.
 ```
 `"audio"`: another name for the sound file (default `audio.json`).
 
+`"icons"` and `"splash"`: game icons for every platform and the loading screen — see "Icons and
+splash" below (the old single `"icon"` still works as the master icon).
+
 Optional `"camera"` block (2D games, see "2D games" below):
 `{"projection": "ortho", "pitch": 90, "yaw": 0, "fov": 43, "zoom": 20, "zoomMin": 8, "zoomMax": 40, "pixelsPerCell": 32, "rotate": false}`.
 
@@ -961,6 +964,99 @@ textureBindsBefore, textureBindsAfter, groups[] {group, textures, unique, pages,
 occupancyPercent}, excluded[] {path, reason}}. Preview: `assetpipe atlas --profile web -o <dir>
 games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and the report.
 
+## Icons and splash (game.json `icons`, `splash`, optional)
+
+Both blocks are read by `rtsbuild` (every size each platform needs, generated on the host without
+sips/iconutil — works from Linux), by the client (the splash) and by the editor window
+**Иконки и заставка** (opened from **Сборка**) / MCP `branding_get`, `branding_set`,
+`icons_preview`, `splash_preview`. Paths are relative to the game folder. Code: `tools/branding`
+(host), `engine/splash` (runtime), `apps/client/ClientSplash.cpp` (startup).
+
+### icons
+
+```json
+"icons": {
+  "default": "branding/icon.png",              // master: square, >= 1024 px (old "icon" is the fallback)
+  "background": "#101a28",                     // for icons that must be opaque (else: the image's edge colour)
+  "padding": 0.0,                              // artwork inset on opaque squares (fraction of the side)
+  "cornerRadius": 0.0,                         // rounding of the Android legacy icon (default 0.12)
+  "ios": "branding/icon_ios.png",              // path, or {"image", "background", "padding"}
+  "macos": {"margin": 0.098, "cornerRadius": 0.225},      // Big Sur grid by default; 0/0 for pre-shaped art
+  "android": {"legacy": "...", "round": "...",            // path or look object
+              "foreground": "branding/icon_foreground.png", // adaptive 108dp layer (centre 72dp visible)
+              "background": "#101a28",                      // colour or image path
+              "monochrome": "branding/icon_monochrome.png", // Android 13 themed icon (alpha is used)
+              "foregroundPadding": 0.17},                   // when the master is used as the foreground
+  "windows": "...", "linux": "...",
+  "web": {"image": "...", "appleTouch": {...}, "maskable": {...}}
+}
+```
+
+A *look* object (any platform) has `image`, `background`, `padding` (inset of the art inside the
+icon body), `margin` (transparent space around the body), `cornerRadius` (fraction of the body),
+`circle`. Warnings (build log, `branding_get`): master missing, smaller than 1024, not square, iOS
+image with transparency (it is flattened on `background`).
+
+| Platform | Generated (rtsbuild) |
+|---|---|
+| iOS | `gen/Assets.xcassets/AppIcon.appiconset`: iPhone 40..180, iPad 20..167, App Store 1024 + `Contents.json` (opaque) |
+| macOS | `gen/AppIcon.iconset` (16..512@2x) and `gen/AppIcon.icns` (written by rtsbuild; `iconutil` re-packs it on a Mac) |
+| Android | `res/mipmap-{mdpi..xxxhdpi}/ic_launcher.png`, `ic_launcher_round.png`, `ic_launcher_foreground.png` (+ `_background`, `_monochrome`), `mipmap-anydpi-v26/ic_launcher(_round).xml`, `values/ic_launcher_background.xml`, `app/src/main/ic_launcher-playstore.png` (512); manifest gets `android:roundIcon` |
+| Windows | `gen/app.ico` (16, 20, 24, 32, 40, 48, 64 BMP + 256 PNG) and `gen/app.rc` (icon resource 1, also the window icon), compiled into the .exe |
+| Web | `favicon.ico` (16/32/48), `favicon-32.png`, `apple-touch-icon.png` (180, opaque), `icons/icon-{192,512}.png`, `icons/maskable-{192,512}.png`, `manifest.webmanifest` (PWA); links injected into `index.html` |
+| Linux | `share/icons/hicolor/<n>x<n>/apps/<exe>.png` (16..512) and `share/applications/<exe>.desktop` next to the executable |
+
+### splash
+
+```json
+"splash": {
+  "background": "#0a0f16",
+  "image": "branding/splash_bg.png", "fit": "cover", "scale": 1,     // base layer (optional)
+  "logos": [
+    {"image": "branding/studio.png", "start": 0, "duration": 2.2, "scale": 0.34,
+     "animation": {"fadeIn": 0.5, "fadeOut": 0.45, "zoom": {"from": 0.85, "duration": 0.8}}},
+    {"image": "branding/logo.png", "start": 2.0, "scale": 0.55, "anchor": [0.5, 0.46],
+     "animation": [{"t": 0, "opacity": 0, "scale": 0.7}, {"t": 0.6, "opacity": 1, "scale": 1, "ease": "out"}]},
+    {"sheet": "branding/coin_sheet.png", "frame": [128, 128], "count": 8, "fps": 14, "start": 2.5, "scale": 0.2}
+  ],
+  "minSeconds": 3.5, "maxSeconds": 6, "loop": false, "skippable": true, "fadeOut": 0.5, "waitForContent": false,
+  "progress": {"show": true, "color": "#e8b640", "track": "#ffffff26", "position": "bottom", "width": 0.36, "height": 5, "offset": 0.08},
+  "native": {"image": "branding/logo.png", "background": "#0a0f16", "scale": 0.35, "androidIcon": "branding/splash_icon.xml"}
+}
+```
+
+- **Layers** (base image first, then `logo` / `logos` in order, later on top): a static `image`, an
+  animation from `frames` (list of images) or a sprite `sheet` (`frame` [w, h], `count`, frames in
+  rows left to right) played at `fps` (`loopFrames`, default true). `fit`: `contain` (default for
+  logos), `cover` (default for the base), `center` (image pixels × dpi), `stretch`; `scale`
+  multiplies the fitted size; `anchor` is the centre on screen (fractions). `start` / `duration`
+  in seconds (duration 0 = until the splash ends).
+- **animation**: keyframes `[{"t", "opacity", "scale", "x", "y", "rotate" (degrees), "ease":
+  linear|in|out|inOut}]` (t from the layer start; a property is interpolated between the keys that
+  set it), or effects `{"fadeIn", "fadeOut", "fade", "pulse": amount | {"amount", "period"},
+  "rotate": deg/s, "slide": "bottom" | {"from", "distance", "duration"}, "zoom": from | {"from",
+  "duration"}, "keyframes": [...]}` — both combine.
+- **Timing**: the splash leaves when loading is done and `minSeconds` have passed (default: the
+  end of the last layer with a duration, so a studio logo → game logo sequence plays once);
+  `maxSeconds` caps that minimum (never the loading). `loop`: repeat the sequence while loading
+  takes longer. `skippable`: a tap / click / key ends the minimum. `fadeOut`: crossfade to the menu.
+- **Progress bar**: real loading progress — the client's startup steps (rules, renderer, models
+  and textures of every type, effects, audio, UI), and with `waitForContent` (split builds) the
+  download of every pack chunk (`platform::contentProgress`).
+- **In-engine splash**: drawn through the RHI from the first frame (`engine/splash`, one textured
+  quad pipeline, GLSL + MSL; images decoded one per frame and capped at 2048 px), so it runs on
+  any GPU. `RTS_SPLASH=off` loads the old way; with `--map` the splash only covers loading
+  (`RTS_SPLASH=full` plays it all).
+- **Native launch screen** (shown by the OS before the engine starts; a static image on a colour —
+  `native`, else the first logo on `background`): iOS `LaunchScreen.storyboard` + `LaunchImage` /
+  `LaunchBackground` in the asset catalog; Android 12+ splash theme (`windowSplashScreenBackground`,
+  `windowSplashScreenAnimatedIcon`: the logo, or your animated vector drawable `androidIcon`) and a
+  pre-12 `windowBackground` drawable, activity theme `@style/RtsLaunchTheme`; web: HTML/CSS splash
+  in `platform/web/shell.html` with the `.data` download progress until the wasm starts; macOS and
+  Windows: the window background colour.
+- Split builds always keep the splash images in the base pack.
+- Sample: `games/skirmish` (art generated by `games/_tools/brandart.py`, CC0).
+
 ## Recipes (mechanics of known games)
 
 - **Warcraft III**: workers gather gold from mines and wood from trees (`resourceNode` + `gather`), `supply` from farms, `upkeep`, heroes with `hero` + `abilities`, creeps with owner -1 and `neutral.leash`, `bounty`.
@@ -1220,3 +1316,209 @@ occluders, recomputed every vision pass (5 ticks):
 Eyes: `terrain.eyeHeight` + type `"vision": {"eye": 6}` (watchtowers see over walls and hills);
 targets count `terrain.targetHeight`. Air units and types with `"vision": {"seesOver": true}` see the
 full circle. Integer math, deterministic; editor: **Туман войны** → "3D: линия видимости".
+
+## Overlays (helper elements on screen and in the world)
+
+Optional list `"overlays"` in rules.json; game.json `"overlays"` adds entries or overrides them **by
+id**. An overlay is a condition (`when`), a place (`anchor`), a `shape` and a `style`, optionally
+spawned by simulation `event`s. Presentation only: overlays never change the simulation. Editor:
+window **Оверлеи** (list, templates, JSON, preview); MCP: `overlay_templates`, `overlay_list`,
+`overlay_get`, `overlay_set`, `overlay_delete`, `overlay_preview` (+ `view_screenshot`).
+
+```json
+"overlays": [
+  { "id": "build_grid", "when": "placing", "anchor": "ghost",
+    "shape": {"type": "grid", "radius": 4, "predicate": "buildable"},
+    "style": {"colors": {"true": "#3cff6450", "false": "#ff3c3c60"}, "lineColor": "#ffffff38", "outerAlpha": 0.55} }
+]
+```
+
+**Built-in overlays** are ordinary entries (the look the engine always had); override any key by id
+(objects are deep-merged, `"replace": true` replaces the whole entry), or hide one with
+`{"id": "health_bars", "enabled": false}`. A game without the block looks exactly as before.
+
+| id | what |
+|---|---|
+| `selection` | ring under selected objects (`#78ff78e6`; neutral objects `#ffffa0e6`) |
+| `hover` | ring under the hovered object when it is not selected |
+| `move_markers` | small ring where a move order was given |
+| `placement` | footprint of the structure being placed, green / red (`predicate: "ok"`) |
+| `garrison_count` | garrison number in an owner-coloured pill |
+| `health_bars` | hp bar of selected / hovered / damaged objects (26 px units, 46 px structures) |
+| `build_progress` | construction bar |
+
+Entry keys: `id` (required, unique), `enabled` (default true), `order` (draw order, default 0, then
+list order), `when`, `anchor`, `shape`, `style`, `event`; `name` / `description` are free text.
+Unknown keys, types, tags, statuses, colours or impossible combinations are errors
+(`overlay 'x'.anchor.types: unknown type 'dragon'`); at game start a broken entry is skipped with a
+warning, `overlay_set` refuses it.
+
+### when
+
+A string, a list (all must hold) or an object (every key must hold). Strings: `always`, `never`,
+`placing`, `selected`, `hovered`, `cursor`, `playing`, `paused`, `over`.
+
+| key | holds when |
+|---|---|
+| `always` | `true` / `false` |
+| `placing` | `true`: a structure is being placed; `"id"` / `["id", "tag:x"]`: one of these types |
+| `selected` | entity anchors: **this** object is selected (`false`: is not); other anchors: something selected. A filter object / type list narrows it: `{"selected": {"owner": "own", "flags": ["ranged"]}}` |
+| `hovered` | the same for the object under the cursor |
+| `entity` | entity filter on the anchored object (other anchors: any visible object matches) |
+| `types`, `tags`, `owner`, `flags`, `status`, `hp` | shorthand for an `entity` filter at the top level |
+| `key` | keys held: `"Alt"`, `["Shift", "Q"]` (A–Z, 0–9, F1–F12, Shift, Ctrl, Alt, Super, Space, Tab, Enter, arrows) |
+| `state` | `"playing"` / `"paused"` / `"over"` or a list |
+| `var` / `flag` | trigger variable: `"alarm"` (non-zero) or `{"name": "alarm", ">=": 3}` (`==`, `!=`, `<`, `<=`, `>`, `>=`) |
+| `zoom` | camera distance in `[min, max]` |
+| `cursor` | the cursor is over the map (`true` / `false`) |
+| `mode` | client input mode: `normal`, `attack`, `patrol`, `place`, `rally`, `ability`, `claim` |
+| `any` / `all` / `not` | combinations |
+
+**Entity filter** (`when`, entity anchors): `types` (ids or `"tag:x"`), `tags`, `owner` (`own`,
+`ally`, `friendly`, `enemy`, `neutral`, `any`, or a list), `flags` (all must hold, `!` negates:
+`structure`, `unit`, `constructing`, `damaged` (hp < 99.9%), `garrison`, `moving`, `producing`,
+`idle`, `hero`, `worker`, `invulnerable`, `air`, `carrying`, `attacking`, `resource`, `energy`,
+`ranged` (a weapon with range > 1.5), `aura`), `status` (any of these statuses active), `hp`
+(`[min, max)` fraction).
+
+### anchor
+
+`"name"` or `{"type": "name", ...}`.
+
+| anchor | elements at |
+|---|---|
+| `selected` | every selected object (optional entity filter keys) |
+| `hovered` | the object under the cursor |
+| `entities` | every visible object matching the filter: `{"type": "entities", "owner": "own", "flags": ["structure"]}` |
+| `cursor` | the cursor on the ground (`"snap": true`: cell centre) |
+| `ghost` | the structure being placed (centre, its type for footprint / stats, `ok` = placement valid) |
+| `area` | `{"type": "area", "area": "gate"}` (map area) or `"rect": [x, z, w, h]` |
+| `point` | `{"type": "point", "at": [x, z]}` |
+| `screen` | HUD point `{"type": "screen", "at": [x, y]}` in points; negative = from the right / bottom; text boxes hang from that corner |
+| `orders` | line through the queued order points of selected units |
+| `route` | the current path of selected moving units |
+| `rally` | from selected producers to their rally point |
+| `markers` | move order markers |
+| `map` | the camera target (for `cells`) |
+
+Event overlays have no anchor: they sit where the event happened.
+
+### shape
+
+`"name"` or `{"type": "name", ...}`.
+
+| shape | keys |
+|---|---|
+| `ring`, `circle` | `radius`: number (cells) or a stat of the anchored type: `range` / `range:N` (weapon N, + body radius, + upgrades), `minRange`, `sight`, `aura` (`aura:N` = ability N), `buildRadius`, `selection`, `capture`, `claim`, `footprint`, `ability:N` (cast range), `leash`; `radiusScale`, `radiusAdd`. `circle` is filled |
+| `rect` | `size: [w, h]` around the anchor; area anchors: the area |
+| `footprint` | footprint of the ghost / object type, `margin` cells around |
+| `grid` | cells within `radius` around the anchor (ghost: around its footprint; `square: true`), filled by `predicate` (`colors.true` / `.false`), cell lines with `style.lineColor`; `highlightFootprint` (default true: cells under the ghost at full alpha, the rest `style.outerAlpha` and fading out) |
+| `cells` | every cell within `radius` (default 24) of the anchor matching `predicate`; `territoryEdge` draws owner-coloured borders |
+| `line`, `arrow` | from the anchor `to`: `target` (current attack target), `rally`, `cursor`, `order` (first order point), `[x, z]`; `head` = arrow head length. With `orders` / `route` / `rally` anchors: the path |
+| `path` | the `orders` / `route` / `rally` polyline |
+| `text` | `text` with placeholders `{value}` (event value; hits: damage), `{amount}`, `{resource}`, `{name}`, `{hp}`, `{maxHp}`, `{energy}`, `{garrison}`, `{build}` (%), `{selected}` (count), `{owner}`, `{player}`, `{var:NAME}`; `size` in font heights. Always screen space |
+| `icon` | `image` (texture path, atlases work), `size` (world units; points in screen space) |
+| `bar` | `value`: `hp`, `energy`, `build`, `garrison`, `production`, `carry`, `capture`; `width`, `widthStructure`, `height` in points. Entity anchors only, above the object |
+
+Predicates: `ok` (ghost placement valid), `buildable`, `blocked`, `buildRadius`, `walkable`,
+`water`, `resource`, `creep`, `road`, `region`, `territory` (own), `enemyTerritory`, `anyTerritory`,
+`territoryEdge`, `visible`, `explored`, `fogged`, `unexplored`. Cells the local player has not
+explored never show resources / territory.
+
+### style
+
+| key | meaning |
+|---|---|
+| `color` | `[r, g, b, a]` (0..1 or 0..255), `"#rrggbb[aa]"`, a name (`white`, `red`, `gold`, ...) or `"player"` (owner colour) |
+| `colors` | per predicate result `true` / `false` and per owner relation `own`, `ally`, `enemy`, `neutral` |
+| `stops` | bars: `[[0.3, red], [0.6, yellow], [1, green]]` (first stop >= value) |
+| `fillColor`, `lineColor` | fill / outline when both are drawn |
+| `alpha`, `thickness` | thickness in world units (0 = 1-pixel line; screen space: points) |
+| `fill`, `outline` | defaults by shape (`circle`, `grid`, `cells` filled; `ring`, `rect`, `footprint` outlined) |
+| `dash` | `[on, off]` world units; `scroll` = dash speed per second |
+| `pulse`, `pulseMin` | alpha pulse in Hz down to `pulseMin`; `rotate` radians / s (rings, icons) |
+| `fadeIn`, `fadeOut`, `fade` | seconds (conditions of non-entity anchors, event popups) |
+| `onTop` | drawn over everything (no depth test); `additive` / `blend: "add"` glows |
+| `space` | `ground` (draped over the terrain), `billboard` (faces the camera), `screen` (ImGui overlay), `minimap` (rings / discs / rects on the client minimap) |
+| `ground` | `follow` (each vertex on the terrain, default), `flat` (height under the anchor), `zero` |
+| `lift`, `segments`, `offset` | height above the ground; ring segments; screen offset `[x, y]` |
+| `background`, `backgroundShade`, `backgroundAlpha`, `padding`, `rounding`, `border`, `shadow` | text / bar boxes |
+| `outerAlpha`, `falloff` | grids / cells: alpha outside the footprint, fade towards the edge |
+
+### event
+
+`"hit"` or `{"on": "hit" | [...], "lifetime": 1.2, "rise": 0, "grow": 0, "spread": 0, "by": "own",
+"owner": "enemy", "types": [...], "max": 32}`: every matching simulation event spawns a popup at its
+position for `lifetime` seconds, rising `rise` units / s, rings / icons growing `grow` / s. `by` =
+relation of the player who caused it, `owner` = of the object it happened to, `types` = its type.
+Events: `hit`, `died`, `spawned`, `attack`, `gathered`, `delivered`, `produced`, `ability`, `cast`,
+`impact`, `miss`, `built`, `placed`, `trained`, `researched`, `levelup`, `captured`, `sold`,
+`upgraded`, `alert` (under attack), `status`, `area`, `claimed`, `wave`, `message`, `ping` (pings of
+the client / editor). Popups never appear in cells the local player cannot see.
+
+**Quality tiers** (renderer material quality; `RTS_OVERLAYS=low|medium|high` for testing): game
+overlays are capped per overlay (48 / 192 / 1024 elements), per grid / cells shape (600 / 3000 /
+12000 cells) and in live popups (24 / 96 / 256); low halves ring segments. Built-in overlays are
+never capped.
+
+### Recipes
+
+```json
+// 1. build grid while placing (any building), cells under the ghost brighter
+{"id": "build_grid", "when": "placing", "anchor": "ghost",
+ "shape": {"type": "grid", "radius": 4, "predicate": "buildable"},
+ "style": {"colors": {"true": "#3cff6450", "false": "#ff3c3c60"}, "lineColor": "#ffffff38", "outerAlpha": 0.55, "lift": 0.07}}
+// 2. attack range of selected own ranged units / towers, dashed and scrolling
+{"id": "attack_range", "anchor": {"type": "selected", "owner": "own", "flags": ["ranged"]},
+ "shape": {"type": "ring", "radius": "range"}, "style": {"color": "#ff6a4ac0", "thickness": 0.06, "dash": [0.6, 0.35], "scroll": 0.4, "segments": 64}}
+// 3. range preview while placing a tower only
+{"id": "tower_range", "when": {"placing": ["tower"]}, "anchor": "ghost", "shape": {"type": "ring", "radius": "range"},
+ "style": {"color": "#ffd24ad0", "thickness": 0.05}}
+// 4. aura radius
+{"id": "aura_radius", "anchor": {"type": "selected", "flags": ["aura"]}, "shape": {"type": "circle", "radius": "aura"},
+ "style": {"color": "#7ac8ff40", "outline": true, "lineColor": "#9ad8ffc0", "pulse": 0.5, "pulseMin": 0.6}}
+// 5. rally line with an arrow
+{"id": "rally_line", "anchor": "rally", "shape": {"type": "arrow"},
+ "style": {"color": "#78ff78d0", "thickness": 0.07, "dash": [0.5, 0.3], "scroll": 1.5, "lift": 0.12}}
+// 6. damage numbers
+{"id": "damage_numbers", "event": {"on": "hit", "lifetime": 1.0, "rise": 1.6, "spread": 0.5},
+ "shape": {"type": "text", "text": "-{value}", "size": 1.1}, "style": {"color": "#ffe070ff", "colors": {"own": "#ff7060ff"}, "fadeOut": 0.4, "lift": 1.4}}
+// 7. resource gained
+{"id": "resource_popup", "event": {"on": "gathered", "by": "own", "lifetime": 1.4, "rise": 1.2},
+ "shape": {"type": "text", "text": "+{amount} {resource}"}, "style": {"color": "#ffd84aff", "fadeOut": 0.5, "lift": 1.6}}
+// 8. territory borders near the hovered structure
+{"id": "territory_hover", "when": {"hovered": {"flags": ["structure"]}}, "anchor": "cursor",
+ "shape": {"type": "cells", "predicate": "territoryEdge", "radius": 14}, "style": {"color": "player", "thickness": 0.08}}
+// 9. ping marker (alerts and client pings), always on top
+{"id": "ping_marker", "event": {"on": ["ping", "alert"], "lifetime": 2.0, "grow": 1.5}, "shape": {"type": "ring", "radius": 0.6},
+ "style": {"color": "#ffd040ff", "thickness": 0.1, "fadeOut": 0.8, "pulse": 3, "onTop": true}}
+// 10. minimap ping
+{"id": "minimap_ping", "event": {"on": "alert", "lifetime": 3.0, "grow": 2}, "shape": {"type": "ring", "radius": 2},
+ "style": {"space": "minimap", "color": "#ffe040ff", "pulse": 2, "fadeOut": 1}}
+// 11. sight range of own units while Alt is held
+{"id": "sight_alt", "when": {"key": "Alt"}, "anchor": {"type": "entities", "owner": "own", "flags": ["unit"]},
+ "shape": {"type": "ring", "radius": "sight"}, "style": {"color": "#ffffff50"}}
+// 12. pulsing warning under badly damaged own units
+{"id": "low_hp", "anchor": {"type": "entities", "owner": "own", "hp": [0, 0.3]},
+ "shape": {"type": "ring", "radius": "selection", "radiusAdd": 0.15}, "style": {"color": "#ff3030ff", "thickness": 0.06, "pulse": 2}}
+// 13. build radius of own bases while placing
+{"id": "build_radius", "when": "placing", "anchor": "ghost", "shape": {"type": "cells", "predicate": "buildRadius", "radius": 18},
+ "style": {"colors": {"true": "#60b0ff22"}}}
+// 14. energy bar of selected casters
+{"id": "energy_bar", "anchor": {"type": "selected", "flags": ["energy"]}, "shape": {"type": "bar", "value": "energy", "height": 3},
+ "style": {"offset": [0, 6], "background": "#000000aa", "color": "#4aa0ffff"}}
+// 15. a decal under the hero, rotating
+{"id": "hero_decal", "anchor": {"type": "entities", "owner": "own", "flags": ["hero"]},
+ "shape": {"type": "icon", "image": "ui/hero_ring.png", "size": 2.4}, "style": {"rotate": 0.6, "alpha": 0.8}}
+// 16. a gate area highlighted while a trigger variable is set
+{"id": "gate", "when": {"var": "gate_open"}, "anchor": {"type": "area", "area": "gate"}, "shape": "rect",
+ "style": {"fill": true, "color": "#40e0ff80", "pulse": 1}}
+// 17. restyle / hide built-ins
+{"id": "selection", "style": {"color": "#40c0ffff", "thickness": 0.06, "ground": "follow"}}
+{"id": "health_bars", "enabled": false}
+```
+
+The client gives the overlays its input state each frame (cursor, structure being placed, held
+keys, input mode, pause); the editor's Scene view passes the Place tool's structure, so placement
+overlays can be checked while placing objects, and `overlay_preview` / the window's checkboxes draw
+any overlay regardless of its `when`.

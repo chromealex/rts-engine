@@ -38,7 +38,7 @@ struct Project {
 
 // What changed, so views can fly the camera there and flash it.
 struct Change {
-    enum Kind { Cells, Entity, Players, Map, Rules, Project, View } kind = Map;
+    enum Kind { Cells, Entity, Players, Map, Rules, Project, View, Fx } kind = Map;   // Fx: fx/*.json changed (reload effects)
     int x0 = 0, y0 = 0, x1 = -1, y1 = -1;   // cell rect (inclusive)
     int entity = -1;
     std::string text;                        // human readable, Russian
