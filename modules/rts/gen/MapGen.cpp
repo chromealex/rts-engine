@@ -15,7 +15,7 @@ const char* kPresets = R"JSON({
   "canyons":    {"title": "Каньоны", "genre": "any", "params": {"shape": "canyons", "size": [80, 80], "water": 0.0, "ridged": 1.0, "levels": 2, "plateau": 0.6, "peaks": 0.97, "scale": 30}},
   "classic":    {"title": "Классика (Warcraft / Red Alert)", "genre": "classic land RTS", "params": {"shape": "classic", "size": [64, 64], "water": 0.1, "rivers": 0.4, "levels": 1, "plateau": 0.3, "trees": 1.0}},
   "metal":      {"title": "Металлическая карта (TA)", "genre": "Total Annihilation, heightfield", "params": {"shape": "highlands", "size": [72, 72], "water": 0.0, "ridged": 0.5, "relief": 7, "levels": 0, "peaks": 1.0, "rivers": 0, "erosion": 4, "thermal": 10, "resources": 1.0}},
-  "caves":      {"title": "Пещеры (Dungeon Keeper)", "genre": "dungeon (diggable)", "params": {"shape": "caves", "size": [56, 40], "gold": 0.14, "gems": 0.02, "bedrock": 0.08, "caverns": 0.08, "baseRadius": 4}},
+  "caves":      {"title": "Пещеры (Dungeon Keeper)", "genre": "dungeon (diggable)", "params": {"shape": "caves", "size": [48, 32], "gold": 0.03, "gems": 0.004, "bedrock": 0.06, "caverns": 0.06, "baseRadius": 4}},
   "lanes":      {"title": "Линии (lane battler)", "genre": "lanes / MOBA", "params": {"shape": "lanes", "size": [32, 64], "lanes": 3, "laneWidth": 4, "bend": 0.35, "baseRadius": 5}},
   "field":      {"title": "Поле (Mushroom Wars 2)", "genre": "garrison / lanes", "params": {"shape": "lanes", "open": true, "size": [44, 28], "obstacles": 0.12, "lanes": 1, "laneWidth": 3, "baseRadius": 3}},
   "rocky":      {"title": "Каменная планета", "genre": "planet", "params": {"shape": "planet", "faceSize": 32, "water": 0.25, "relief": 8, "ice": 0.12}},
