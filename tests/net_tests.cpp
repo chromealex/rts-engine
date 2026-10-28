@@ -577,6 +577,34 @@ TEST(net_crashing_out_still_costs_rating) {
     CHECK(srv.rating("1v1", 801) > 1000 && srv.rating("1v1", 802) < 1000);
 }
 
+TEST(net_server_verdict_matches_offline_on_a_tile_map) {
+    // The server's re-simulation must load maps exactly like the game: 2D tile maps get their tileset.
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/tiles2d";
+    Json manifest = Json::parseFile(dir + "/game.json");
+    const std::string mapFile = manifest["maps"][size_t(0)].getStr("file");
+    auto data = netgame::loadMatchData(dir, mapFile);
+    SimConfig cfg; cfg.seed = 9;
+    auto sim = netgame::makeSimulation(data.module, cfg);
+    sim->setup(data.rules, data.map);
+    std::vector<game::RtsAI> bots;
+    for (auto& p : sim->players()) bots.emplace_back(p.slot, 9);
+    std::vector<std::pair<uint32_t, uint64_t>> checks;
+    while (sim->tick() < 3000 && sim->result() == 0) {
+        for (auto& b : bots) b.update(*sim);
+        sim->step();
+        if (sim->tick() % 100 == 0) checks.emplace_back(sim->tick(), sim->checksum());
+    }
+    net::ArbiterJob job;
+    job.gameId = manifest.getStr("id"); job.mapFile = mapFile; job.seed = 9;
+    job.dataHash = hashFileContents({dir + "/" + manifest.getStr("rules", "rules.json"), dir + "/" + mapFile});
+    job.endTick = sim->tick(); job.commands = sim->executedCommands(); job.checkpoints = checks;
+    auto res = netgame::makeArbiter({{job.gameId, dir}})(job);
+    CHECK(res.ok && res.mismatchTick == 0 && res.tick == sim->tick() && res.hash == sim->checksum() && res.result == sim->result());
+    if (!res.ok) std::printf("    arbiter: %s\n", res.error.c_str());
+    job.dataHash ^= 1;   // a player with other data: the server refuses to judge
+    CHECK(!netgame::makeArbiter({{job.gameId, dir}})(job).ok);
+}
+
 // Wraps a client connection so a test can cut it like a dead network link.
 struct CuttableConn final : net::Conn {
     std::unique_ptr<net::Conn> inner;
