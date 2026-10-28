@@ -229,6 +229,7 @@ FileProps AtlasConfig::classify(const std::string& path) const {
     if (groups.has(group)) applyProps(p, groups[group]);
     for (const Json* r : rules) applyProps(p, *r);
     if (p.kind != "color") p.trim = false; // alpha of normal maps / masks is data, not coverage
+    if (sheets.count(path)) { p.trim = false; p.rotate = false; }
     return p;
 }
 
@@ -275,6 +276,11 @@ bool buildAtlas(const std::vector<SourceImage>& input, const AtlasConfig& cfg, A
         groups[key].push_back(std::move(pr));
     }
 
+    for (auto it = groups.begin(); it != groups.end();) {
+        // A page holding a single image saves no texture switch and only adds padding: keep it standalone.
+        if (it->second.size() == 1) { st.excluded.push_back({it->second[0].path, "alone in group " + it->first}); it = groups.erase(it); }
+        else ++it;
+    }
     for (auto& [key, members] : groups) {
         // dedupe identical trimmed pixels
         std::vector<int> uniqueOf(members.size(), -1);
@@ -390,7 +396,29 @@ bool buildAtlas(const std::vector<SourceImage>& input, const AtlasConfig& cfg, A
     return true;
 }
 
-bool applyAtlas(pack::PackWriter& w, const AtlasConfig& cfg, AtlasStats& stats, std::string* error) {
+void collectSheets(const Json& j, std::set<std::string>& out) {
+    if (j.isObject()) {
+        for (auto& [k, v] : j.members()) {
+            if (k == "sheet" && v.isString()) out.insert(pack::normalizePath(v.str()));
+            else collectSheets(v, out);
+        }
+    } else if (j.isArray()) {
+        for (auto& v : j.items()) collectSheets(v, out);
+    }
+}
+
+void scanSheets(const pack::PackWriter& w, AtlasConfig& cfg) {
+    for (const std::string& p : w.paths()) {
+        if (!endsWith(lower(p), ".json")) continue;
+        std::string text;
+        if (!w.readInput(p, text)) continue;
+        try { collectSheets(Json::parse(text), cfg.sheets); } catch (const std::exception&) {} // not our file to validate
+    }
+}
+
+bool applyAtlas(pack::PackWriter& w, const AtlasConfig& cfgIn, AtlasStats& stats, std::string* error) {
+    AtlasConfig cfg = cfgIn;
+    scanSheets(w, cfg);
     stats = AtlasStats{};
     stats.enabled = cfg.enabled;
     stats.profile = cfg.profile;

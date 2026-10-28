@@ -15,6 +15,7 @@
 //               faction) are kept on the same page when possible.
 #pragma once
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -43,6 +44,10 @@ struct AtlasConfig {
     std::string pageFormat = "rtex"; // rtex | png
     Json groups = Json::object(); // per-group overrides
     Json files = Json::object();  // glob -> props, in file order, later rules override earlier
+    // Images used as frame-grid sprite sheets ("sheet": "<path>" anywhere in the game's JSON):
+    // renderers address frames by linear uv over the whole image, so they are never trimmed or
+    // rotated. applyAtlas fills it from the pack inputs.
+    std::set<std::string> sheets;
     // Parses game.json["atlas"] for one profile; throws std::runtime_error with a readable message.
     static AtlasConfig fromGame(const Json& gameJson, const std::string& profile);
     FileProps classify(const std::string& packPath) const;
@@ -92,6 +97,9 @@ bool applyAtlas(pack::PackWriter& w, const AtlasConfig& cfg, AtlasStats& stats, 
 void finishStats(AtlasStats& stats, const pack::WriteStats& ws);
 
 bool isImagePath(const std::string& path);
+// Collects every string value of a "sheet" key (recursively) into `out`.
+void collectSheets(const Json& j, std::set<std::string>& out);
+void scanSheets(const pack::PackWriter& w, AtlasConfig& cfg);   // over the writer's .json inputs
 std::string encodePng(const Image& img);
 
 } // namespace rts::atlas
