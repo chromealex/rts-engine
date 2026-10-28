@@ -14,6 +14,7 @@ struct AIConfig {
     int workersPerBase = 14;
     int firstAttackArmy = 8;
     int armyGrowth = 4;           // each wave needs this many more units
+    int maxAttackArmy = 16;       // ...up to this many (supply caps would otherwise stall the attacks)
     Fixed aggression = Fixed::fromInt(1);
 };
 
@@ -28,7 +29,7 @@ private:
     void military(Simulation& sim, RtsModule& m);
     void garrisonPlay(Simulation& sim, RtsModule& m);
     void special(Simulation& sim, RtsModule& m);   // deploy, sidebar placement, claims, auto-build, upgrades, research
-    bool build(Simulation& sim, RtsModule& m, uint16_t type);
+    bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
 
@@ -39,6 +40,7 @@ private:
     int wave_ = 0;
     uint32_t lastBuildTick_ = 0;
     uint32_t lastTechTick_ = 0;
+    bool saveForWorkers_ = false;   // few workers left and one can be trained: don't spend on the army
 };
 
 } // namespace rts::game

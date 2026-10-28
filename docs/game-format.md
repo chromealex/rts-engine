@@ -36,7 +36,7 @@ is optional — the blocks present on a type decide what it can do.
 | `levelHeight` | visual height of one cliff level |
 | `waveClock` | seconds; structures with `waveSpawn` release their units together on this clock (lane battlers) |
 | `autoBuild` | `{"pool": [types], "cost": {res: n}, "growth": 0.5}` — a BUILD button: the sim picks a type from the pool and a spot next to the base automatically; cost grows by `growth` per structure already auto-built |
-| `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}` |
+| `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}`, `{"mode": "territory", "share": 0.9}` (a team owning that share of all claimable cells wins; a player with no territory is out) |
 | `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage |
 | `regions` | `{"claimCost": {"food": 100}, "claimCostGrowth": 0.5, "buildOnlyOwned": true, "productionPerRegion": 0.1}` — territory (Northgard; with flags: Z) |
 | `upkeep` | `[{"supply": 50, "gatherMult": 0.7}, {"supply": 80, "gatherMult": 0.4}]` — gathering yields less with a big army (Warcraft III) |
@@ -46,6 +46,12 @@ is optional — the blocks present on a type decide what it can do.
 | `techs` | see below |
 | `factions` | see below |
 | `triggers` | see "Triggers" (also allowed in maps) |
+| `diggable`, `rooms`, `territory`, `hand`, `possession` | see "Dungeon management and territory" |
+| `playerAbilities` | see "Player abilities" |
+| `storage` | `"player"` (default: one stock per player) or `"buildings"`: goods live in building inventories, see "Settlers economy" |
+| `roadNetwork` | `{"cost": {"stone": 1}, "speed": 1.5, "required": true}` — player-built road cells (map char `+`), faster movement, deliveries only between buildings on one network |
+| `movement` | `{"avoidance": "rvo", "neighbors": 8, "timeHorizon": 1.5}` — local avoidance between moving units: `rvo` (default, ORCA velocity obstacles in fixed point, idle allies step aside) or `simple` (separation only); `neighbors` = agents considered per unit (quality/cost knob), `timeHorizon` in seconds. See "Movement and bodies" |
+| `lanes` | `{"left": 4, "right": 2, "spacing": 0.35}` — Mushroom Wars 2 lanes between garrison buildings (replaces map `roads` for sends) |
 
 ## resources
 
@@ -55,13 +61,32 @@ is optional — the blocks present on a type decide what it can do.
   "ore":    {"name": "Руда", "field": true, "regrow": 0.5, "cellMax": 100},              // Red Alert / Dune: harvested from map fields
   "metal":  {"kind": "flow", "start": 500, "storage": 1000},                               // Total Annihilation: income/expense per second, capped by storage
   "power":  {"kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense"]},// Red Alert power: provided vs consumed
-  "spice":  {"capped": true, "storage": 1000}                                              // Dune silos: stock limited by storage
+  "spice":  {"capped": true, "storage": 1000},                                             // Dune silos: stock limited by storage
+  "coins":  {"global": true, "start": 100}                                                 // with "storage": "buildings": not a good, stays player-wide
 }
 ```
 Kinds: `stock` (default: gathered/earned, spent), `flow` (per-second income from `income`, spent while
 building in progressive mode; at 0 with negative income production slows by `deficitProduction`),
 `capacity` (sum of `provides` minus `consumes`; a deficit slows production and disables types with
 any tag in `deficitDisables`).
+
+## Movement and bodies
+
+`"move": {"speed": 2.8, "radius": 0.4, "mass": 0.64, "layer": "ground"}`
+
+- `radius` is the real body size (cells): units keep `r1 + r2` apart, weapon and ability ranges are measured
+  edge to edge (`range` + both radii, structures by their footprint), and paths keep clearance from walls and
+  buildings for bodies larger than half a cell (tight gaps cost more; nothing becomes unreachable).
+- `mass` (default `4 * radius²`) decides who yields when bodies overlap. Units that are fighting, holding
+  position or working (gathering, building, digging) are anchored (x8) and are barely pushed; moving units (x2)
+  push idle ones (x1) aside. A 0.03-cell dead zone and a per-tick push cap remove jitter.
+- With `movement.avoidance: "rvo"` moving units steer around each other with reciprocal velocity obstacles
+  (nearest `neighbors`, deterministic order). Idle allies in the way are asked to yield: they step to a free side
+  cell and walk back once the way is clear, so a unit can pass a gap of standing units; units blocked by anchored
+  ones re-path around them.
+- Melee units (range < 2) attacking a target pick a free slot on a ring around it (slots by angle, claimed
+  per target, ties by entity index) and path around allies already fighting instead of pushing into the front
+  rank; ranged units stop and shoot. A group given an attack-move spreads into an arc whose flanks run ahead.
 
 ## types — blocks
 
@@ -119,7 +144,22 @@ any tag in `deficitDisables`).
 | `view` | presentation only (shape, colour, model; see README "Models & materials") |
 
 Stats usable in modifiers: `maxHp`, `armor`, `damage` (multiplier), `range` (added), `speed`, `sight`,
-`gatherRate` (multiplier), `attackSpeed` (multiplier).
+`gatherRate` (multiplier; also dig/claim/work speed, alias `workRate`), `attackSpeed` (multiplier),
+`productionSpeed` (multiplier on training/research/autoTrain speed of a producer).
+
+More type blocks (dungeon management and territory, see the section below):
+
+| block | meaning |
+|---|---|
+| `digs` | `{"rate": 2}` — worker digs cells its owner marked (hardness per second); idle diggers find jobs themselves |
+| `claimer` | `{"time": 0.5}` — worker walks to unowned cells next to own territory and claims them (seconds per cell, x2 for enemy cells) |
+| `claim` | `{"radius": 1.5, "rate": 2}` — the unit converts cells around it (cells per second): only cells touching own territory, never while hostile units stand on them (territory war front line) |
+| `claimedByTerritory` | `true` — a neutral structure (portal) joins the player owning territory next to it |
+| `capturable` | `true` — with `territory`: the structure flips to whoever owns the ground under its centre |
+| `portal` | `{"interval": 20, "pool": ["goblin"]}` — recruits one attracted creature per interval (pool empty: every type with `attractedBy`), up to the supply capacity |
+| `attractedBy` | `{"rooms": {"lair": 1, "library": 9}, "resources": {"gold": 500}, "weight": 1}` — when a portal may recruit this type (room cells owned, stock), chosen by weight |
+| `needs` | creature needs and morale, see below |
+| `autoTrain` | `{"unit": "soldier", "interval": 4}` — structure continuously produces units while the population cap allows (pays the unit's cost if any); they attack-move to the nearest front (closest non-own cell touching own territory, else the nearest enemy, or the rally point) and keep pushing it when idle |
 
 ### Abilities
 
@@ -146,7 +186,9 @@ what the AI uses.
                   "effects": [{"tags": ["infantry"], "stat": "damage", "mul": 1.15}, {"type": "archer", "stat": "range", "add": 1}]}
 }
 ```
-An effect without `tags`/`type` applies to every type. Requirements can be types or techs (ages: a tech
+An effect without `tags`/`type` applies to every type. Repeatable upgrades: `"levels": 5, "costGrowth": 0.5` — the
+tech can be researched 5 times, each level re-applies its effects (multipliers compound) and costs
+`cost * (1 + costGrowth * levelsDone)`; `researched` counts levels. Requirements can be types or techs (ages: a tech
 required by the next tier's types).
 
 ## factions
@@ -282,6 +324,117 @@ weapon / ability by id in `weapons` / `abilities`, then `events`.
 "Everyone who sees the spot" respects fog of war; a spectator hears all world sounds and no
 player-only cues.
 
+## Dungeon management and territory
+
+```json
+"diggable": {"D": {"hardness": 3}, "G": {"hardness": 6, "yields": {"gold": 250}}, "J": {"hardness": 8, "yields": {"gold": 40}, "infinite": true}},
+"territory": {"claimBy": "both", "startFromRegions": false, "startRadius": 3, "buildOnlyOwned": true},
+"rooms": {
+  "lair":     {"name": "Логово", "cost": {"gold": 10}, "supply": 1},
+  "hatchery": {"cost": {"gold": 12}, "income": {"food": 0.05}},
+  "treasury": {"cost": {"gold": 15}, "storage": {"gold": 500}},
+  "library":  {"cost": {"gold": 20}, "income": {"research": 0.02}, "work": {"yields": {"research": 1}}},
+  "training": {"cost": {"gold": 20}, "work": {"xp": 3, "cost": {"gold": 0.5}}}
+},
+"hand": {"max": 8, "ownTerritoryOnly": true, "slapDamage": 5, "slapDuration": 10, "slapSpeed": 1.5, "slapWork": 1.5},
+"possession": {"cost": {"mana": 100}, "drain": {"mana": 2}}
+```
+
+- **Diggable terrain**: map characters listed in `diggable` (one character, not `. ~ # , = / R` or a digit) are
+  solid cells. Players mark cells with the dig command; idle `digs` workers dig marked cells next to ground they
+  can reach; the cell becomes ground (paths update) and `yields` is credited (`infinite`: the seam stays).
+- **Territory** (per-cell owner layer, `MapGrid::territory`; `GameState::territoryCells[slot]` / `territoryTotal`
+  for the HUD share): starts from map `"territory": {"rows": ["..11..", ...]}` (digits = player slots), from owned
+  regions (`startFromRegions`) and `startRadius` cells around starting structures and start points. Claimed by
+  `claimer` workers and/or units with `claim` (`claimBy`: `workers`, `units`, `both`). `buildOnlyOwned`: every
+  footprint cell must be own territory. Losing a cell removes a room painted on it.
+- **Rooms** are painted on own territory (paint command with a rect); `cost` is per cell. Effects scale with the
+  player's total cells of the type: `supply` (creature capacity), `income`, `storage`, `provides` per cell; `work`
+  is earned per creature working inside (`yields` per second, `xp` per second for types with `hero` levels, `cost`
+  per second). Painting over another room replaces it; erasing refunds `sellRefund`.
+- **Creature needs** (`needs` on a type):
+  ```json
+  "needs": {"hunger": {"interval": 60, "room": "hatchery", "time": 4, "cost": {"food": 1}},
+            "sleep": {"interval": 90, "room": "lair", "time": 8},
+            "pay": {"interval": 120, "amount": {"gold": 50}},
+            "works": ["library", "training"], "workTime": 10,
+            "happiness": {"start": 1, "unmetPerSecond": 0.01, "recovery": 0.005, "slap": 0.1, "unpaid": 0.3, "leaveBelow": 0.2, "leaveAfter": 30}}
+  ```
+  A need becomes active after `interval`; the idle creature walks to the nearest own room of that type and stays
+  `time` seconds (paying `cost`; sleeping heals). Payday deducts `amount`; unpaid wages, slaps and unmet needs
+  lower happiness; below `leaveBelow` for `leaveAfter` seconds the creature walks out through an own portal.
+  Idle creatures work in `works` rooms (the AI may take them from work to fight).
+- **Hand**: pick up own units (`max` in the hand, off the map: no orders, no combat), drop them on a visible own
+  territory cell; slap: `slapDamage` (never kills), speed/work buff for `slapDuration`, happiness down.
+- **Possession**: one unit per player is steered directly (direction vector per tick, fire button); the AI
+  ignores it; `cost` once, `drain` per second (released when unaffordable).
+
+## Settlers economy (Knights and Merchants)
+
+```json
+"storage": "buildings",
+"roadNetwork": {"cost": {"stone": 1}, "speed": 1.5},
+"types": {
+  "storehouse": {"structure": {"footprint": [3, 3]}, "storehouse": {"capacity": 2000}},
+  "woodcutter": {"structure": {"footprint": [2, 2]}, "recipe": {"out": {"wood": 1}, "time": 10, "from": "wood", "radius": 8}, "cost": {"planks": 3, "stone": 2}},
+  "sawmill":    {"structure": {"footprint": [2, 2]}, "recipe": {"in": {"wood": 1}, "out": {"planks": 2}, "time": 8, "buffer": 2}},
+  "farm":       {"structure": {"footprint": [3, 3]}, "recipe": {"out": {"grain": 1}, "time": 12}},
+  "serf":       {"move": {"speed": 3}, "carrier": {"capacity": 1}},
+  "soldier":    {"trainFrom": "recruit", "cost": {"sword": 1, "armor": 1, "time": 6},
+                 "needs": {"hunger": {"interval": 120, "at": "inn", "time": 3, "cost": {"food": 1}, "starve": 1}}}
+}
+```
+
+- With `"storage": "buildings"` every `stock` resource that is not `global` is a **good**: it lives in building
+  inventories. The player's stock of a good is the sum of its **storehouses** (`storehouse.capacity` = total
+  goods); paying takes goods out of storehouses, income and bounties are put into them. Starting goods (resource
+  `start`, map player `resources`) go into the first storehouses; map entities can carry `"inventory": {"wood": 5}`.
+- **Recipes**: a workplace consumes `in` from its own inventory and produces `out` into it every `time` seconds
+  (`productionSpeed` stat and power apply); it keeps `buffer` cycles of inputs and stops when `buffer` cycles of
+  output are waiting. Raw producers have no `in`; `from` + `radius` deplete the nearest resource node or field
+  cell of that resource (wood from trees, stone from a quarry, fish from water fields).
+- **Carriers** (`carrier.capacity` per trip) haul on request, deterministically (every 0.5 s, buildings in
+  entity order): construction sites and workplace inputs first (source: workplace output, else nearest
+  storehouse), then workplace outputs to the nearest storehouse with room. With `roadNetwork.required` the
+  source and destination must touch the same road network.
+- **Construction**: goods in a structure's `cost` are not paid at once; carriers deliver them to the site and
+  building progress can't exceed the delivered share (builders still build). Other resources are paid up front.
+- **Roads**: map char `+`, the road command (rect), or the connect command (the sim paves the shortest path from
+  a structure to the road network of an own storehouse). Movement on road cells is `speed` times faster.
+- **Recruits**: `trainFrom` consumes an idle own unit of that type within 15 cells of the producer.
+- **Food**: needs with `"at": "<structure type>"` are satisfied at the nearest own structure of that type (cost
+  taken from the stock); `starve` hp per second is lost while the need is active.
+
+## Lanes (Mushroom Wars 2)
+
+`"lanes": {"left": 4, "right": 2, "spacing": 0.35}`: for every pair of garrison buildings the sim finds an A* path
+around obstacles and other buildings, smooths it into a fixed-point Catmull-Rom spline (about two samples per
+cell) and adds `left` + `right` parallel lanes `spacing` cells apart (pulled back towards the main lane where they
+would hit an obstacle). Sent units are spread over the lanes round-robin and follow their lane exactly. Lanes are
+rebuilt when garrison buildings or obstacles change (`GameState::lanes`, `lanesDirty`, event `kEvLanesChanged`).
+
+## Player abilities
+
+```json
+"playerAbilities": [
+  {"id": "nuke", "name": "Ядерный удар", "cost": {"money": 500}, "cooldown": 60, "target": "point",
+   "effects": [{"type": "damage", "amount": 200, "radius": 3}]},
+  {"id": "drone", "cost": {}, "cooldown": 5, "charges": {"max": 2, "rearmCost": {"money": 100}, "rearmTime": 20},
+   "effects": [{"type": "damage", "amount": 60, "radius": 1.5}, {"type": "stun", "duration": 2, "radius": 1.5}]}
+]
+```
+Not tied to a unit. Effects are the ability effects (`damage`, `heal`, `stun`, `buff`, `spawn`; not `blink`).
+Charges rearm one at a time after `rearmTime`, paying `rearmCost`. The AI fires them at enemy concentrations.
+
+## Commands (for tools and network code)
+
+Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
+`kCmdDig` / `kCmdPaintRoom` (point = first cell, `param = rectParam(w, h, extra)`: dig `extra` 0 mark / 1 unmark;
+room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
+`kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
+optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
+`kCmdConnectRoad` (units = own structures).
+
 ## Triggers
 
 Event → conditions → actions, evaluated inside the deterministic simulation.
@@ -329,3 +482,7 @@ Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"e
 - **Z**: regions with `capture.region` flags, `productionPerRegion`, factories in sectors with `capturable`.
 - **Mushroom Wars**: `garrison` structures, `roads` + `roadsOnly`, `entersGarrison` units, Send command.
 - **Lane battlers**: `autoBuild`, `waveClock` + `waveSpawn`, `upgrades`, `victory: score`.
+- **Dungeon Keeper**: `diggable` rock and gold veins, imps with `digs` + `claimer`, `territory.buildOnlyOwned`, painted `rooms` (lair `supply`, hatchery food `income`, library `work`), neutral `portal` with `claimedByTerritory`, creatures with `attractedBy` + `needs`, `hand`, `possession`, `victory: keyUnits` (dungeon heart).
+- **Knights and Merchants / Settlers**: `"storage": "buildings"`, storehouses, `recipe` chains (woodcutter → sawmill, farm → mill → bakery), `carrier` serfs, `roadNetwork`, materials delivered to sites, `trainFrom` recruits, inn food `needs` with `starve`.
+- **Mushroom Wars 2**: `garrison` villages + `lanes` instead of hand-made `roads`.
+- **Territory war (State.io)**: `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `capturable` towns, barracks with `autoTrain`, `playerAbilities`, repeatable `levels` techs, `victory: territory`.
