@@ -71,6 +71,7 @@ target_include_directories(rts_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(rts_game STATIC
     modules/rts/RtsData.cpp
     modules/rts/RtsMap.cpp
+    modules/rts/RtsHpa.cpp
     modules/rts/RtsModule.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp

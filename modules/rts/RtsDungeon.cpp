@@ -274,7 +274,7 @@ bool RtsModule::runDig(Simulation& sim, Entity e, Order& o) {
     g.digMark[di] = 0;
     g.digHp[di] = Fixed{};
     g.flags[di] = kCellGround;
-    g.clearanceDirty = true;
+    g.cellChanged(int(di) % g.w, int(di) / g.w);
     gs.territoryDirty = true;
     gs.fieldsDirty = true;
     sim.emit({kEvDug, owner, e, kNullEntity, int64_t(di), o.point2});
@@ -562,8 +562,8 @@ void RtsModule::movePossessed(Simulation& sim) {
                 if (t.layer & kLayerAir) return true;
                 int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(np.x), cy = g.cellY(np.z);
                 if (cx == cx0 && cy == cy0) return true;
-                if (cx != cx0 && cy != cy0) return g.canStep(cx0, cy0, cx, cy0, t.layer) && g.canStep(cx, cy0, cx, cy, t.layer) && g.canStep(cx0, cy0, cx, cy, t.layer);
-                return g.canStep(cx0, cy0, cx, cy, t.layer);
+                if (cx != cx0 && cy != cy0) return g.canStep(cx0, cy0, cx, cy0, t.pathLayer) && g.canStep(cx, cy0, cx, cy, t.pathLayer) && g.canStep(cx0, cy0, cx, cy, t.pathLayer);
+                return g.canStep(cx0, cy0, cx, cy, t.pathLayer);
             };
             Vec3 np = tr.pos + d;
             if (ok(np)) tr.pos = np;
@@ -739,7 +739,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 int sx = g.cellX(p.x), sy = g.cellY(p.z);
                 if (!g.inside(sx, sy)) continue;
                 int claimCell = -1, digCell = -1, standCell = -1;
-                bfsCells(g, g.index(sx, sy), t.layer, 6000, [&](int c) {
+                bfsCells(g, g.index(sx, sy), t.pathLayer, 6000, [&](int c) {
                     int x = c % g.w, y = c / g.w;
                     if (t.digRate.raw > 0 && bit)
                         for (int k = 0; k < 4; ++k) {
@@ -904,7 +904,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
             size_t pick = 0;
             for (; pick + 1 < cands.size(); ++pick) { if (roll < weights[pick]) break; roll -= weights[pick]; }
             const uint16_t type = cands[pick];
-            Vec3 spot = freeSpotNear(sim, rq.portal, rules_.types[type].layer);
+            Vec3 spot = freeSpotNear(sim, rq.portal, rules_.types[type].pathLayer);
             Entity n = spawn(sim, type, rq.owner, spot);
             eco.supplyUsed += rules_.types[type].supplyUsed;
             sim.emit({kEvRecruited, rq.owner, n, rq.portal, type, spot});
@@ -955,7 +955,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
         for (auto& r : rel) {
             const UnitType& ut = rules_.types[r.type];
             if (!canAfford(sim, r.owner, ut.cost, ut.supplyUsed) || !pay(sim, r.owner, ut.cost, ut.supplyUsed, false)) continue;
-            Vec3 spot = freeSpotNear(sim, r.from, ut.layer);
+            Vec3 spot = freeSpotNear(sim, r.from, ut.pathLayer);
             Entity n = spawn(sim, r.type, r.owner, spot);
             sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, spot});
             w.add<Advancer>(n);

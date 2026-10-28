@@ -30,7 +30,7 @@ void Editor::drawMenuBar() {
         if (ImGui::BeginMenu("Новая карта")) {
             static int sz[2] = {64, 48};
             ImGui::InputInt2("Размер", sz);
-            if (ImGui::Button("Создать")) { newMap(std::clamp(sz[0], 8, 1024), std::clamp(sz[1], 8, 1024)); ImGui::CloseCurrentPopup(); }
+            if (ImGui::Button("Создать")) { newMap(std::clamp(sz[0], 8, game::kMaxMapSize), std::clamp(sz[1], 8, game::kMaxMapSize)); ImGui::CloseCurrentPopup(); }
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Открыть")) {

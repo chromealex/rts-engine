@@ -117,6 +117,35 @@ Rules loadRules(const Json& j) {
         r.heights.damagePerLevel = h.getFx("damagePerLevel");
     }
 
+    if (const Json& tr = j["terrain"]; tr.isObject()) { // other keys of the block are visual (view)
+        std::string model = tr.getStr("model", "levels");
+        if (model == "levels") r.terrain.model = TerrainModel::Levels;
+        else if (model == "flat") r.terrain.model = TerrainModel::Flat;
+        else if (model == "heightfield") r.terrain.model = TerrainModel::Heightfield;
+        else fail("terrain.model", "expected 'flat', 'levels' or 'heightfield', got '" + model + "'");
+        if (const Json& ms = tr["maxSlope"]; !ms.isNull()) {
+            if (ms.isNumber()) r.terrain.maxSlopeGround = ms.fx();
+            else if (ms.isObject()) {
+                for (auto& [k, v] : ms.members()) {
+                    if (k == "ground") r.terrain.maxSlopeGround = v.fx();
+                    else if (k == "sand") r.terrain.maxSlopeSand = v.fx();
+                    else fail("terrain.maxSlope", "unknown move layer '" + k + "' (ground, sand)");
+                    if (v.fx().raw <= 0) fail("terrain.maxSlope." + k, "must be positive");
+                }
+            } else fail("terrain.maxSlope", "expected a number or {\"ground\": x, \"sand\": y}");
+            if (r.terrain.maxSlopeGround.raw <= 0) fail("terrain.maxSlope", "must be positive");
+        }
+        auto nonNeg = [&](const char* key, Fixed& v) {
+            v = tr.getFx(key, v);
+            if (v.raw < 0) fail(std::string("terrain.") + key, "must not be negative");
+        };
+        nonNeg("buildSlope", r.terrain.buildSlope);
+        nonNeg("uphillSpeed", r.terrain.uphillSpeed);
+        nonNeg("downhillSpeed", r.terrain.downhillSpeed);
+        nonNeg("eyeHeight", r.terrain.eyeHeight);
+        nonNeg("targetHeight", r.terrain.targetHeight);
+    }
+
     // ---- resources
     for (auto& [id, rj] : j["resources"].members()) {
         ResourceDef d;
@@ -308,6 +337,10 @@ Rules loadRules(const Json& j) {
             t.speed = m.getFx("speed", Fixed::fromInt(2));
             t.layer = parseLayers(m["layer"], kLayerGround);
             t.radius = m.getFx("radius", t.radius);
+            if (m.has("maxSlope")) {
+                t.maxSlope = m.getFx("maxSlope");
+                if (t.maxSlope.raw <= 0) fail(where + " move.maxSlope", "must be positive");
+            }
             t.mass = m.getFx("mass", t.radius * t.radius * 4);
             if (t.radius.raw <= 0 || t.mass.raw <= 0) fail(where + " move", "radius and mass must be positive");
         }
@@ -643,6 +676,19 @@ Rules loadRules(const Json& j) {
         r.movement.rvo = av == "rvo";
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
+    }
+    // slope classes: types with their own move.maxSlope get a class (pathing and passability per class)
+    for (auto& t : r.types) {
+        t.pathLayer = t.layer;
+        if (!r.terrain.heightfield() || t.maxSlope.raw < 0 || (t.layer & kLayerAir)) continue;
+        auto& cls = r.terrain.slopeClasses;
+        auto it = std::find(cls.begin(), cls.end(), t.maxSlope);
+        if (it == cls.end()) {
+            if (cls.size() >= 15) fail("type '" + t.id + "' move.maxSlope", "at most 15 different maxSlope values");
+            cls.push_back(t.maxSlope);
+            it = cls.end() - 1;
+        }
+        t.pathLayer = uint8_t(t.layer | ((it - cls.begin() + 1) << 4));
     }
     bool anySettlers = r.buildingStorage || r.roadNetwork.enabled;
     for (auto& t : r.types) if (t.storeCapacity.raw > 0 || t.recipe.enabled || t.carrierCapacity.raw > 0 || t.trainFrom != kNoType) anySettlers = true;

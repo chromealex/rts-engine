@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "engine/core/Random.h"
 #include "engine/sim/Replay.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
@@ -44,6 +45,7 @@ struct Args {
     std::string project = "games/skirmish", map, replay, record;
     uint64_t seed = 1;
     uint32_t maxSeconds = 1800;
+    int benchPaths = 0;   // >0: time that many path queries (HPA* vs plain A*) and exit
     bool quiet = false;
 };
 
@@ -68,6 +70,49 @@ static void status(Simulation& sim) {
     std::printf("\n");
 }
 
+// Path query benchmark: random start/goal pairs on passable ground cells (fixed seed), the same queries with
+// the map's pathing mode (HPA* on big maps) and with plain A* (any length, node limit as in the game).
+static int benchPaths(Simulation& sim, const Args& a) {
+    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
+    game::MapGrid& g = m->state(sim).grid;
+    const uint8_t layer = game::kLayerGround;
+    Random rng(a.seed);
+    std::vector<std::pair<Vec3, Vec3>> q;
+    while (int(q.size()) < a.benchPaths) {
+        int x0 = int(rng.below(uint32_t(g.w))), y0 = int(rng.below(uint32_t(g.h))), x1 = int(rng.below(uint32_t(g.w))), y1 = int(rng.below(uint32_t(g.h)));
+        if (g.passable(x0, y0, layer) && g.passable(x1, y1, layer)) q.push_back({g.cellCenter(x0, y0), g.cellCenter(x1, y1)});
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    g.updateClearance();
+    double clearMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    auto runAll = [&](const char* name, int minCells, int maxNodes = 40000) {
+        g.hpaMinCells = minCells;
+        std::vector<Vec3> path;
+        int found = 0;
+        double total = 0, worst = 0;
+        size_t points = 0;
+        double length = 0;
+        for (auto& [s, e] : q) {
+            auto t = std::chrono::steady_clock::now();
+            if (g.findPath(s, e, layer, path, maxNodes, 1)) ++found;
+            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+            total += ms; worst = std::max(worst, ms); points += path.size();
+            Vec3 p = s;
+            for (auto& wp : path) { length += (wp - p).xz().length().toDouble(); p = wp; }
+        }
+        std::printf("%-6s %d queries: found=%d avg=%.2f ms max=%.2f ms waypoints=%zu length=%.0f\n", name, int(q.size()), found, total / double(q.size()), worst, points, length);
+    };
+    std::printf("Map %dx%d, heightfield=%d, clearance pass %.1f ms\n", g.w, g.h, int(g.hf), clearMs);
+    auto t1 = std::chrono::steady_clock::now();
+    runAll("hpa", 0);  // first query builds the abstract graph
+    std::printf("       (graph build + queries %.0f ms, hpa=%d fallback=%d)\n",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count(), g.hpaStats[0], g.hpaStats[1]);
+    runAll("hpa", 0);
+    runAll("astar", 1 << 30);
+    runAll("a*full", 1 << 30, g.w * g.h);   // reference: unbounded A* (which goals are reachable at all)
+    return 0;
+}
+
 static int play(const Args& a) {
     Json manifest = Json::parseFile(a.project + "/game.json");
     std::string rulesPath = a.project + "/" + manifest.getStr("rules", "rules.json");
@@ -79,6 +124,7 @@ static int play(const Args& a) {
     Simulation sim(cfg, makeModule(module));
     sim.setup(Json::parseFile(rulesPath), loadMap(mapPath, a.project));
 
+    if (a.benchPaths > 0) return benchPaths(sim, a);
     std::vector<game::RtsAI> bots;
     for (auto& p : sim.players()) bots.emplace_back(p.slot, a.seed);
 
@@ -154,6 +200,7 @@ int main(int argc, char** argv) {
         else if (k == "--record") a.record = next();
         else if (k == "--replay") a.replay = next();
         else if (k == "--quiet") a.quiet = true;
+        else if (k == "--bench-paths") a.benchPaths = std::stoi(next());
         else { std::printf("usage: rts_headless --project DIR [--map FILE] [--seed N] [--record F] | --replay F\n"); return 2; }
     }
     try { return a.replay.empty() ? play(a) : replay(a); }
