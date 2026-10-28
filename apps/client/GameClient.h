@@ -20,6 +20,7 @@
 #include "engine/net/NetClient.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
+#include "engine/render/PostFx.h"
 #include "engine/render/QualityGovernor.h"
 #include "engine/render/Renderer3D.h"
 #include "engine/sim/Simulation.h"
@@ -30,6 +31,7 @@
 #include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
 #include "ClientFx.h"
+#include "modules/rts/view/RtsViewScript.h"
 
 namespace Rml { class ElementDocument; class Element; }
 
@@ -238,8 +240,13 @@ private:
     Minimap minimap_;
 
     Renderer3D r3d_;
+    render::PostFx postFx_;               // post-processing: game.json / map "postfx" (engine/render/PostFx.h)
+    render::PostFxQuality postFxBase_ = render::PostFxQuality::Medium;   // tier before the governor stepped down
+    void configurePostFx(const Json& map);
     RtsView view_;
     ClientFx fx_;                         // particle effects (ClientFx.cpp)
+    game::ViewScripts viewScripts_;       // rules "viewScripts" (docs/scripting.md): notices / effects / sounds
+    void runViewScripts(float dt);
     audio::AudioEngine audio_;
     RtsAudio sound_;
     std::vector<Entity> heardSelection_;  // selection when the last select sound played

@@ -1,0 +1,8 @@
+// Arrow impact: a pinch of dust.
+{
+  "emitters": [
+    { "texture": "builtin:smoke", "blend": "alpha", "burst": 3, "life": [0.3, 0.5], "speed": [0.5, 1.2], "spread": 60,
+      "drag": 3, "size": [0.25, 0.35], "sizeOverLife": [[0, 0.7], [1, 1.5]], "rotation": [0, 360],
+      "color": [[0, "#9a8e7a90"], [1, "#a89c8800"]] }
+  ]
+}
