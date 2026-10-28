@@ -120,6 +120,10 @@ struct Parser {
         else if (t == "time") o.kind = TrigCondition::Time;
         else if (t == "alive") o.kind = TrigCondition::Alive;
         else if (t == "regions") o.kind = TrigCondition::RegionsOwned;
+        else if (t == "script") {
+            o.kind = TrigCondition::Script; o.name = c.getStr("fn"); o.args = c;
+            if (o.name.empty()) fail(where, "script condition needs 'fn'");
+        }
         else fail(where, "unknown condition '" + t + "'");
         return o;
     }
@@ -135,7 +139,7 @@ struct Parser {
             {"disableType", TrigAction::DisableType}, {"victory", TrigAction::Victory}, {"defeat", TrigAction::Defeat},
             {"enableTrigger", TrigAction::EnableTrigger}, {"disableTrigger", TrigAction::DisableTrigger}, {"addScore", TrigAction::AddScore},
             {"setRegionOwner", TrigAction::SetRegionOwner}, {"attackMove", TrigAction::AttackMove}, {"move", TrigAction::MoveUnits},
-            {"setTickets", TrigAction::SetTickets}, {"castAbility", TrigAction::CastAbility},
+            {"setTickets", TrigAction::SetTickets}, {"castAbility", TrigAction::CastAbility}, {"script", TrigAction::Script},
         };
         bool known = false;
         for (auto& [k, v] : kinds) if (t == k) { o.kind = v; known = true; }
@@ -154,6 +158,10 @@ struct Parser {
         if (a.has("at")) { o.at = {a["at"][0].fx(), Fixed{}, a["at"][1].fx()}; o.hasAt = true; }
         if (a.has("resource")) o.index = resource(a.getStr("resource"));
         if (a.has("tech")) o.index = tech(a.getStr("tech"));
+        if (o.kind == TrigAction::Script) {
+            o.name = a.getStr("fn"); o.args = a;
+            if (o.name.empty()) fail(where, "script action needs 'fn'");
+        }
         if (o.kind == TrigAction::CastAbility) {
             int k = r.findPlayerAbility(a.getStr("ability"));
             if (k < 0) fail(where, "unknown player ability '" + a.getStr("ability") + "'");
@@ -300,6 +308,7 @@ bool RtsModule::triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t 
             ok = compare(Fixed::fromInt(n), c.cmp, c.value);
             break;
         }
+        case TrigCondition::Script: ok = script_ && script_->callCondition(sim, c.name, c.args, player, kNullEntity, {}); break;
         }
         if (ok == c.negate) return false;
     }
@@ -442,6 +451,9 @@ void RtsModule::runTriggerActions(Simulation& sim, size_t di, uint8_t player, En
             break;
         case TrigAction::SetTickets:
             for (uint8_t p : players) { uint8_t t = teamOf(sim, p); if (t < gs.tickets.size()) gs.tickets[t] = a.amount; }
+            break;
+        case TrigAction::Script:
+            if (script_) script_->callAction(sim, a.name, a.args, player, unit, at, d.id);
             break;
         case TrigAction::CastAbility:
             for (uint8_t p : players) {

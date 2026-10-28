@@ -5255,6 +5255,220 @@ TEST(audio_group_errors) {
     CHECK(a->warnings().size() == 3);   // unknown key 'maxx', a group that limits nothing, unknown group 'nope'
 }
 
+// ---------------- Lua scripting (scripting agent) ----------------
+#include "modules/rts/RtsScript.h"
+#include <fstream>
+#include <iterator>
+
+// skirmish rules + map with inline simulation scripts {path: source}
+static std::unique_ptr<Simulation> scriptSim(const std::vector<std::pair<std::string, std::string>>& files, uint64_t seed = 1, Json* rulesOut = nullptr) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    Json list = Json::array(), src = Json::object();
+    for (auto& [p, t] : files) { list.push(Json::string(p)); src.set(p, Json::string(t)); }
+    rules.set("scripts", list);
+    rules.set("$scriptSources", src);
+    if (rulesOut) *rulesOut = rules;
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    return sim;
+}
+static bool scriptLogHas(Simulation& sim, const std::string& text, bool error = true) {
+    auto* se = mod(sim).scripts();
+    if (!se) return false;
+    for (auto& e : se->log()) if (e.error == error && e.text.find(text) != std::string::npos) return true;
+    return false;
+}
+static Fixed gold(Simulation& sim, uint8_t p) { return mod(sim).state(sim).players[p].stock[size_t(mod(sim).rules().findResource("gold"))]; }
+
+TEST(script_no_scripts_no_vm) {
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 3);
+    CHECK(mod(*sim).scripts() == nullptr);
+    CHECK(sim->world().resource<game::ScriptStore>() == nullptr);
+}
+
+TEST(script_syntax_and_float_literals) {
+    CHECK(game::checkScriptSyntax("a.lua", "local x = 1 + 2\nreturn x // 2").empty());
+    std::string e = game::checkScriptSyntax("a.lua", "local x = 1\nlocal y = x * 1.5\n");
+    CHECK(e.find("a.lua:2:") != std::string::npos && e.find("1.5") != std::string::npos);
+    CHECK(game::checkScriptSyntax("a.lua", "local s = \"1.5\" -- 2.5\n--[[ 3.5 ]] local t = [[4.5]]").empty());
+    CHECK(!game::checkScriptSyntax("a.lua", "local x = 1e3").empty());
+    CHECK(!game::checkScriptSyntax("a.lua", "local x = .5").empty());
+    CHECK(!game::checkScriptSyntax("a.lua", "local x = 1..'a'").empty());              // malformed number in Lua too
+    CHECK(game::checkScriptSyntax("a.lua", "local x = 1 ..'a'").empty());
+    CHECK(game::checkScriptSyntax("a.lua", "local x = 7 / 2").find("float arithmetic") != std::string::npos); // constant folding
+    CHECK(game::checkScriptSyntax("a.lua", "local s = 'a'..1").empty());
+    CHECK(game::checkScriptSyntax("v.lua", "local x = 1.5", false).empty());          // view scripts: floats are fine
+    CHECK(game::checkScriptSyntax("a.lua", "x = = 1").find("a.lua:1:") != std::string::npos);
+}
+
+TEST(script_api_basics) {
+    auto sim = scriptSim({{"scripts/a.lua", R"(
+        function on_start()
+          state.started = game.tick()
+          game.give(1, "gold", 100)
+          local hall = game.units{owner = 1, type = "townhall"}[1]
+          local x, z = game.pos(hall)
+          state.spawned = game.spawn("footman", 1, x + 3, z)
+          state.half = tostring(fx(1, 2))
+          state.sq = fx.sqrt(16) == fx(4)
+        end
+        every(1, function(tick) state.ticks = (state.ticks or 0) + 1 end)
+        on("spawned", function(e) state.last_spawn = e.unit_type end)
+    )"}});
+    const Fixed g0 = gold(*sim, 1);
+    for (int i = 0; i < 45; ++i) sim->step();
+    CHECK(gold(*sim, 1) >= g0 + Fixed::fromInt(100) - Fixed::fromInt(1000));   // started (bots absent: no spending)
+    CHECK(gold(*sim, 1) == g0 + Fixed::fromInt(100));
+    CHECK(sim->world().count<game::Unit>() > 0);
+    CHECK(findType(*sim, "footman", 1).valid());
+    CHECK(mod(*sim).scripts()->errorCount() == 0);
+    for (auto& e : mod(*sim).scripts()->log()) if (e.error) std::printf("  log: %s\n", e.text.c_str());
+}
+
+TEST(script_sandbox) {
+    auto sim = scriptSim({{"scripts/a.lua", R"(
+        state.os = os == nil and io == nil and load == nil and package == nil and collectgarbage == nil and next == nil
+        state.debug = debug == nil and string.dump == nil
+        function on_start()
+          game.set_var("os_absent", state.os and state.debug and 1 or 0)
+        end
+        on("tick", function(tick) if tick == 2 then local x = tick / 2 end end)                -- float arithmetic
+        on("tick", function(tick) if tick == 3 then while true do end end end)              -- runaway loop
+        on("tick", function(tick) if tick == 4 then game.give(1, "gold", tonumber("2.5")) end end)
+        on("tick", function(tick) if tick == 5 then pcall(function() while true do end end) end end) -- budget beats pcall
+        on("tick", function(tick) if tick == 6 then setmetatable({}, {__mode = "k"}) end end)
+        on("tick", function(tick) if tick == 7 then newglobal = 1 end end)
+        on("tick", function(tick) if tick == 8 then game.give(1, "gold", fx(5)) ; game.set_var("alive", 1) end end)
+        on("tick", function(tick) if tick == 9 then for k in pairs({[{}] = 1}) do end end end)
+    )"}});
+    for (int i = 0; i < 12; ++i) sim->step();
+    auto& vars = mod(*sim).state(*sim).trig.vars;
+    CHECK(vars["os_absent"] == Fixed::fromInt(1));
+    CHECK(vars["alive"] == Fixed::fromInt(1));                     // the game and other handlers go on
+    CHECK(scriptLogHas(*sim, "float arithmetic is not allowed"));
+    CHECK(scriptLogHas(*sim, "instruction budget exceeded"));
+    CHECK(scriptLogHas(*sim, "is a float: use fx("));
+    CHECK(scriptLogHas(*sim, "__mode is not allowed"));
+    CHECK(scriptLogHas(*sim, "can't create global 'newglobal'"));
+    CHECK(scriptLogHas(*sim, "no deterministic order"));
+    CHECK(scriptLogHas(*sim, "scripts/a.lua:"));                   // errors carry file:line
+    CHECK(mod(*sim).scripts()->errorCount() == 7);                 // each failing handler once: then disabled
+    auto* st = sim->world().resource<game::ScriptStore>();
+    int disabled = 0;
+    for (auto d : st->disabled) disabled += d;
+    CHECK(disabled == 7);
+}
+
+TEST(script_state_hashed_and_rollback) {
+    const char* src = R"(
+        function on_start() state.n = 0; state.list = {} end
+        on("tick", function(tick)
+          state.n = state.n + game.var("step")
+          if tick % 3 == 0 then state.list[#state.list + 1] = fx(tick, 4) end
+          if tick == 6 then game.after(1, "later", {n = state.n}) end
+        end)
+        function later(arg) game.give(1, "gold", arg.n) end
+    )";
+    auto a = scriptSim({{"scripts/a.lua", src}});
+    auto b = scriptSim({{"scripts/a.lua", src}});
+    mod(*a).state(*a).trig.vars["step"] = Fixed::fromInt(1);
+    mod(*b).state(*b).trig.vars["step"] = Fixed::fromInt(1);
+    for (int i = 0; i < 10; ++i) { a->step(); b->step(); }
+    CHECK(a->checksum() == b->checksum());
+    // a script-only difference changes the hash
+    auto* sb = b->world().resource<game::ScriptStore>();
+    const std::string before = sb->state;
+    mod(*b).state(*b).trig.vars["step"] = Fixed::fromInt(2);
+    mod(*a).state(*a).trig.vars["step"] = Fixed::fromInt(2);
+    a->step(); b->step();
+    CHECK(sb->state != before);
+    // rollback: save, run ahead, load, re-run -> identical to a straight run
+    SimSnapshot snap;
+    b->saveState(snap);
+    for (int i = 0; i < 30; ++i) b->step();
+    const uint64_t ahead = b->checksum();
+    b->loadState(snap);
+    for (int i = 0; i < 30; ++i) { b->step(); a->step(); }
+    CHECK(b->checksum() == ahead);
+    CHECK(a->checksum() == b->checksum());
+    CHECK(gold(*a, 1) == gold(*b, 1));
+    CHECK(mod(*b).scripts()->errorCount() == 0);
+}
+
+TEST(script_data_hooks) {
+    Json rules;
+    auto sim = scriptSim({{"scripts/a.lua", R"(
+        function cond(ctx) return game.var("go") >= 1 end
+        function act(ctx) game.give(ctx.args.player, "gold", ctx.args.amount) end
+    )"}}, 1, &rules);
+    // re-create with a trigger using both
+    Json trig = Json::parse(R"([{"id": "t", "once": false, "forEachPlayer": false,
+        "event": {"type": "every", "seconds": 1},
+        "conditions": [{"type": "script", "fn": "cond"}],
+        "actions": [{"type": "script", "fn": "act", "amount": 7, "player": 1}]}])");
+    rules.set("triggers", trig);
+    SimConfig cfg;
+    sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    const Fixed g0 = gold(*sim, 1);
+    for (int i = 0; i < 25; ++i) sim->step();
+    CHECK(gold(*sim, 1) == g0);                                       // condition false
+    mod(*sim).state(*sim).trig.vars["go"] = Fixed::fromInt(1);
+    for (int i = 0; i < 20; ++i) sim->step();
+    CHECK(gold(*sim, 1) == g0 + Fixed::fromInt(7));
+    CHECK(mod(*sim).scripts()->errorCount() == 0);
+    // unknown function reported at load
+    rules.set("triggers", Json::parse(R"([{"id": "u", "event": "start", "actions": [{"type": "script", "fn": "nope"}]}])"));
+    sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    CHECK(scriptLogHas(*sim, "'nope' is not defined"));
+}
+
+static std::unique_ptr<Simulation> scriptedGame(uint64_t seed) {
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/scripted";
+    Json rules = Json::parseFile(dir + "/rules.json");
+    Json map = Json::parseFile(dir + "/maps/valley.json");
+    std::string err;
+    bool ok = game::embedScripts(rules, map, [&](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    }, &err);
+    CHECK(ok);
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, map);
+    return sim;
+}
+
+TEST(script_sample_deterministic) {
+    auto run = [](uint64_t seed) {
+        auto sim = scriptedGame(seed);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, seed);
+        for (int i = 0; i < 20 * 120; ++i) { for (auto& b : bots) b.update(*sim); sim->step(); }
+        CHECK(mod(*sim).scripts() && mod(*sim).scripts()->errorCount() == 0);
+        return sim->checksum();
+    };
+    const uint64_t a = run(3), b = run(3), c = run(4);
+    CHECK(a == b);
+    CHECK(a != c);
+}
+
+TEST(script_embed_requires) {
+    Json rules = Json::parse(R"({"scripts": ["scripts/main.lua"]})");
+    std::map<std::string, std::string> files = {{"scripts/main.lua", "local u = require(\"lib.u\")"}, {"scripts/lib/u.lua", "return {}"}};
+    std::string err;
+    CHECK(game::embedScripts(rules, Json::object(), [&](const std::string& p, std::string& out) {
+        auto it = files.find(p); if (it == files.end()) return false; out = it->second; return true; }, &err));
+    CHECK(rules["$scriptSources"].has("scripts/lib/u.lua"));
+    Json bad = Json::parse(R"({"scripts": ["scripts/missing.lua"]})");
+    CHECK(!game::embedScripts(bad, Json::object(), [](const std::string&, std::string&) { return false; }, &err) && err.find("missing.lua") != std::string::npos);
+    CHECK(game::scriptApiReference().has("actions"));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

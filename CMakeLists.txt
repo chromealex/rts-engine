@@ -588,3 +588,23 @@ endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)
 endif()
+
+# ---------------------------------------------------------------------------
+# Scripting (scripting agent): Lua 5.4 (third_party/lua, MIT) compiled as C without the os / io /
+# package / debug libraries (same build on web, iOS, Android, desktop). Simulation scripts are
+# deterministic (fx numbers, float guard in rts_luaconf.h); docs/scripting.md.
+# ---------------------------------------------------------------------------
+set(RTS_LUA_SRC lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+    llex.c lmathlib.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c
+    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c)
+list(TRANSFORM RTS_LUA_SRC PREPEND third_party/lua/)
+add_library(rts_lua STATIC ${RTS_LUA_SRC})
+target_include_directories(rts_lua PUBLIC third_party/lua)
+set_target_properties(rts_lua PROPERTIES LINKER_LANGUAGE C)
+if(MSVC)
+    target_compile_options(rts_lua PRIVATE /W0)
+else()
+    target_compile_options(rts_lua PRIVATE -w)
+endif()
+target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp)
+target_link_libraries(rts_game PUBLIC rts_lua)

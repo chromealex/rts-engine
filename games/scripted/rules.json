@@ -1,0 +1,139 @@
+// "Iron & Gold" — a Warcraft/Red-Alert-style example built purely from data.
+// Workers gather gold and wood, build a base, train an army; supply from farms; towers; siege; flyers.
+{
+  "victory": "noStructures",
+  // Lua mechanics (docs/scripting.md): bounty, war chest, chain heal effect, a custom victory condition
+  "scripts": ["scripts/rules.lua", "scripts/abilities.lua"],
+  "supplyCap": 100,
+  "maxQueue": 5,
+
+  "resources": {
+    "gold": { "name": "Gold", "kind": "stock", "start": 500 },
+    "wood": { "name": "Wood", "kind": "stock", "start": 250 }
+  },
+
+  "armorTypes": ["light", "medium", "heavy", "fortified"],
+  "damageTable": {
+    "normal": { "fortified": 0.7 },
+    "pierce": { "light": 1.25, "heavy": 0.75, "fortified": 0.35 },
+    "siege":  { "light": 0.6, "medium": 0.8, "fortified": 1.6 }
+  },
+
+  "types": {
+    "peasant": {
+      "name": "Peasant",
+      "health": { "max": 220, "armorType": "light" },
+      "move": { "speed": 2.4, "radius": 0.35 },
+      "sight": 7,
+      "weapons": [ { "id": "pick", "range": 0.5, "damage": 5, "cooldown": 1.5 } ],
+      "cost": { "gold": 75, "time": 12, "supply": 1 },
+      "gather": { "gold": { "carry": 10, "time": 2.0 }, "wood": { "carry": 10, "time": 3.0 } },
+      "builds": ["townhall", "farm", "barracks", "workshop", "tower"],
+      "view": { "shape": "worker", "scale": 0.8 }
+    },
+    "footman": {
+      "name": "Footman",
+      "health": { "max": 420, "armor": 2, "armorType": "heavy" },
+      "move": { "speed": 2.6, "radius": 0.4 },
+      "sight": 8,
+      "weapons": [ { "id": "sword", "range": 0.6, "damage": 12, "cooldown": 1.2, "damageType": "normal" } ],
+      "cost": { "gold": 135, "time": 15, "supply": 2 },
+      "view": { "shape": "soldier", "scale": 1.0 }
+    },
+    "archer": {
+      "name": "Archer",
+      "health": { "max": 240, "armorType": "medium" },
+      "move": { "speed": 2.8, "radius": 0.35 },
+      "sight": 9,
+      "weapons": [ { "id": "bow", "range": 5.5, "damage": 16, "cooldown": 1.5, "projectileSpeed": 14,
+                     "targets": ["ground", "air"], "damageType": "pierce" } ],
+      "cost": { "gold": 130, "wood": 10, "time": 16, "supply": 2 },
+      "abilities": [ { "id": "mend", "name": "Mending Song", "target": "none", "range": 6, "cooldown": 20, "autocast": true,
+                       "effects": [ { "type": "script", "fn": "chain_heal", "affects": "allies", "jumps": 3, "amount": 60, "jumpRadius": 5 } ] } ],
+      "view": { "shape": "ranged", "scale": 0.95 }
+    },
+    "catapult": {
+      "name": "Catapult",
+      "health": { "max": 300, "armorType": "heavy" },
+      "move": { "speed": 1.8, "radius": 0.6 },
+      "sight": 9,
+      "weapons": [ { "id": "boulder", "range": 8, "minRange": 2, "damage": 60, "splash": 1.2, "cooldown": 4,
+                     "projectileSpeed": 9, "damageType": "siege" } ],
+      "cost": { "gold": 200, "wood": 60, "time": 25, "supply": 3 },
+      "view": { "shape": "vehicle", "scale": 1.1, "projectileLight": false, "hitLight": { "radius": 3.6, "intensity": 3.0 } }
+    },
+    "gryphon": {
+      "name": "Gryphon",
+      "health": { "max": 320, "armorType": "light" },
+      "move": { "speed": 4.0, "layer": "air", "radius": 0.5 },
+      "sight": 10,
+      "weapons": [ { "id": "hammer", "range": 3.5, "damage": 22, "cooldown": 1.6, "projectileSpeed": 12,
+                     "targets": ["ground", "air"] } ],
+      "cost": { "gold": 260, "wood": 40, "time": 28, "supply": 4 },
+      "requires": ["tower"],
+      "view": { "shape": "flyer", "scale": 1.1, "projectileLight": { "color": [0.55, 0.75, 1.0] }, "attackLight": { "color": [0.6, 0.8, 1.0] } }
+    },
+
+    "townhall": {
+      "name": "Town Hall",
+      "structure": { "footprint": [4, 4] },
+      "health": { "max": 1500, "armor": 5, "armorType": "fortified" },
+      "sight": 10,
+      "cost": { "gold": 400, "wood": 200, "time": 60 },
+      "produces": ["peasant"],
+      "dropoff": ["gold", "wood"],
+      "supply": 10,
+      "view": { "shape": "hall", "light": { "color": [1.0, 0.6, 0.28], "radius": 6, "intensity": 1.6, "height": 1.4, "flicker": 0.18 } }
+    },
+    "farm": {
+      "name": "Farm",
+      "structure": { "footprint": [2, 2] },
+      "health": { "max": 400, "armor": 1, "armorType": "fortified" },
+      "cost": { "gold": 80, "wood": 20, "time": 20 },
+      "supply": 6,
+      "view": { "shape": "house", "light": { "color": [1.0, 0.72, 0.4], "radius": 3.2, "intensity": 1.1, "height": 0.8 } }
+    },
+    "barracks": {
+      "name": "Barracks",
+      "structure": { "footprint": [3, 3] },
+      "health": { "max": 1000, "armor": 3, "armorType": "fortified" },
+      "cost": { "gold": 160, "wood": 60, "time": 35 },
+      "produces": ["footman", "archer"],
+      "view": { "shape": "barracks", "light": { "color": [1.0, 0.6, 0.28], "radius": 4, "intensity": 1.3, "height": 1.0, "flicker": 0.18 } }
+    },
+    "workshop": {
+      "name": "Workshop",
+      "structure": { "footprint": [3, 3] },
+      "health": { "max": 900, "armor": 3, "armorType": "fortified" },
+      "cost": { "gold": 150, "wood": 100, "time": 40 },
+      "requires": ["barracks"],
+      "produces": ["catapult", "gryphon"],
+      "view": { "shape": "workshop", "light": { "color": [1.0, 0.45, 0.15], "radius": 4.5, "intensity": 2.0, "height": 0.7, "flicker": 0.3 } }
+    },
+    "tower": {
+      "name": "Guard Tower",
+      "structure": { "footprint": [2, 2] },
+      "health": { "max": 500, "armor": 4, "armorType": "fortified" },
+      "sight": 11,
+      "weapons": [ { "id": "arrows", "range": 7, "damage": 18, "cooldown": 1.2, "projectileSpeed": 16,
+                     "targets": ["ground", "air"], "damageType": "pierce" } ],
+      "cost": { "gold": 110, "wood": 80, "time": 30 },
+      "view": { "shape": "tower", "light": { "color": [1.0, 0.6, 0.28], "radius": 4.5, "intensity": 1.5, "height": 2.4, "flicker": 0.18 } }
+    },
+
+    "goldmine": {
+      "name": "Gold Mine",
+      "structure": { "footprint": [3, 3] },
+      "invulnerable": true,
+      "resourceNode": { "resource": "gold", "amount": 12000 },
+      "view": { "shape": "mine" }
+    },
+    "tree": {
+      "name": "Tree",
+      "structure": { "footprint": [1, 1] },
+      "invulnerable": true,
+      "resourceNode": { "resource": "wood", "amount": 80 },
+      "view": { "shape": "tree" }
+    }
+  }
+}
