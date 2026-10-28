@@ -448,6 +448,18 @@ void RtsView::configureChoice(gfx::Device& dev, const UnitType& t, const Json& v
                 for (const char* const* cand = kAuto[k]; *cand && cs.clips.empty(); ++cand)
                     if (ln.find(*cand) != std::string::npos) cs.clips.push_back(ci);
             }
+            // numbered variants of the same action (Warcraft III "Stand", "Stand - 2", "Attack - 1",
+            // "Attack - 2"): all of them, one picked at random like an explicit list
+            if (cs.clips.size() == 1) {
+                auto base = [](std::string n) {
+                    n = lower(n);
+                    while (!n.empty() && (std::isdigit(static_cast<unsigned char>(n.back())) || n.back() == ' ' || n.back() == '-' || n.back() == '_')) n.pop_back();
+                    return n;
+                };
+                const std::string key = base(m.clips[size_t(cs.clips[0])].name);
+                for (int ci = 0; ci < int(m.clips.size()); ++ci)
+                    if (ci != cs.clips[0] && !key.empty() && base(m.clips[size_t(ci)].name) == key) cs.clips.push_back(ci);
+            }
         }
         c.hasClip[k] = !cs.clips.empty();
     }
