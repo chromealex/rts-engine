@@ -42,7 +42,7 @@ const CmdName kCommands[] = {
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
     {"transit", kCmdTransit}, {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
     {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
-    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem},
+    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty},
 };
 
 Vec3 readPoint(const Json& p) {

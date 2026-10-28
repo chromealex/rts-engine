@@ -76,7 +76,16 @@ void io(Archive& a, ItemBag& x) { a(x.items, x.charges); }
 void io(Archive& a, GroundItem& x) { a(x.pos, x.item, x.charges); }
 void io(Archive& a, MechState::Objective& x) { a(x.id, x.text, x.state, x.player, x.primary); }
 void io(Archive& a, MechState::Dialog& x) { a(x.speaker, x.portrait, x.voice, x.text, x.duration); }
-void io(Archive& a, MechState& x) { a(x.prices, x.groundItems, x.decks, x.allyRequest, x.cyclePhase, x.nextGroup, x.objectives, x.dialogs, x.nextMission, x.missionResult); }
+void io(Archive& a, Bounty& x) { a(x.pos, x.target, x.player, x.res, x.reward); }
+void io(Archive& a, RoundUnit& x) { a(x.owner, x.type, x.pos); }
+void io(Archive& a, MechState& x) {
+    a(x.prices, x.groundItems, x.decks, x.allyRequest, x.cyclePhase, x.nextGroup, x.objectives, x.dialogs, x.nextMission, x.missionResult,
+      x.cover, x.bounties, x.roundPhase, x.roundIndex, x.phaseEnd, x.roundSnapshot);
+}
+void io(Archive& a, Suppression& x) { a(x.value); }
+void io(Archive& a, Turret& x) { a(x.dir, x.init); }
+void io(Archive& a, Abandoned& x) { a(x.formerOwner); }
+void io(Archive& a, GrowState& x) { a(x.timer); }
 // state
 void io(Archive& a, TypeMods& x) { a(x.add, x.mul); }
 void io(Archive& a, PlayerEconomy& x) {
@@ -171,7 +180,8 @@ template <class... T> struct PoolList {
 using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, Production, Construction, ResourceStock, Extractor, Footprint,
                         Garrison, Projectile, Hero, Transit, Squad, Buffs, AbilityState, Statuses, Area, Channel, GroupTag, Capture, Guard, Summon,
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
-                        Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag>;
+                        Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
+                        Suppression, Turret, Abandoned, GrowState>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {
