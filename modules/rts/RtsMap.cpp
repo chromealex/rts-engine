@@ -20,6 +20,17 @@ uint8_t cellFlagsFromChar(char c) {
 }
 
 bool applyCornersFile(Json& map, const ContentReader& read, std::string* err) {
+    // planet maps: every body's terrain.cornersFile (6 faces x (N+1)^2 int16 LE)
+    if (Json* world = map.find("world"); world && world->isObject())
+        if (Json* bodies = world->find("bodies"); bodies && bodies->isArray())
+            for (size_t i = 0; i < bodies->size(); ++i) {
+                Json* t = bodies->at(i).find("terrain");
+                if (!t || !t->isObject() || !t->has("cornersFile") || t->has("cornersBlob")) continue;
+                const std::string file = t->getStr("cornersFile");
+                std::string bytes;
+                if (file.empty() || !read(file, bytes)) { if (err) *err = "map world body '" + bodies->at(i).getStr("id") + "' terrain.cornersFile: cannot read '" + file + "'"; return false; }
+                t->set("cornersBlob", Json::string(std::move(bytes)));
+            }
     Json* terrain = map.find("terrain");
     if (!terrain || !terrain->isObject() || !terrain->has("cornersFile") || terrain->has("cornersBlob")) return true;
     const std::string file = terrain->getStr("cornersFile");
