@@ -5,6 +5,8 @@
   "version": "0.1.0",
   "build": 1,
   "module": "rts",
+  "sourceLanguage": "ru",
+  "languages": ["ru", "en"],
   "rules": "rules.json",
   "lighting": { "time": 0.66, "dayLength": 600, "clouds": 0.3 },
   "maps": [
