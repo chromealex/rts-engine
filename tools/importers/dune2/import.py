@@ -4,11 +4,13 @@
     python3 tools/importers/dune2/import.py --source "~/Downloads/Dune II" --out ~/RTSGames/dune2 [--json]
 
 Reads every .PAK under --source (Westwood PAK, see tools/unpackers/wwpak) and writes:
-  game.json, rules.json (our own balance data, tools/importers/dune2/rules.json), lang/{en,ru}.json,
-  maps/scen{a,h,o}NNN.json   66 campaign scenarios (terrain approximated, see below)
-  gfx/*.png + *.sprite.json  SHP sprite sheets with team-colour masks (docs/asset-format.md)
-  gfx/terrain.png + terrain.tileset.json   ICON.ICN tiles, landscape auto-tiling
-  gfx/pictures/*.png, gfx/anim/*.png + *.sprite.json   CPS pictures and WSA animations
+  game.json (top-down ortho camera), rules.json (our balance, tools/importers/dune2/rules.json), lang/{en,ru}.json,
+  maps/scen{a,h,o}NNN.json   66 campaign scenarios with a tile layer (terrain approximated, see below)
+  tilesets/dune.json + .png  ICON.ICN landscape: sand, rock, dunes, mountains, spice (mask16 autotiling)
+  sprites/<type>.png         units (SHP, 5 facings mirrored, turrets composited) and structures (ICN tile
+                             groups: built / rubble / animation), house colour as magenta shades;
+                             added to rules.json as `sprite` blocks (docs/game-format.md, "2D games")
+  pictures/*.png, pictures/anim/*.png   CPS pictures and WSA animation sheets
   audio/*.wav + audio.json   VOC sounds and voices mapped to engine sound events
 
 Everything written is derived from copyrighted data: game.json is marked "external", so rtsbuild
@@ -52,14 +54,6 @@ HOUSES = ['Harkonnen', 'Atreides', 'Ordos', 'Fremen', 'Sardaukar', 'Mercenary']
 HOUSE_RU = {'Harkonnen': 'Харконнены', 'Atreides': 'Атрейдесы', 'Ordos': 'Ордосы', 'Fremen': 'Фримены',
             'Sardaukar': 'Сардаукары', 'Mercenary': 'Наёмники'}
 SCALES = {0: (1, 1, 62, 62), 1: (16, 16, 32, 32), 2: (21, 21, 21, 21)}   # MapScale -> x0, y0, w, h
-
-# Named frames we are sure of (5 directions N..S, the west side is mirrored), by sheet.
-NAMED_SPRITES = {
-    'UNITS.SHP': {'quad': 0, 'trike': 5, 'mcv': 10, 'harvester': 15, 'rocket': 20, 'missile': 40},
-    'UNITS2.SHP': {'tank_base': 0, 'tank_turret': 5, 'siege_tank_base': 10, 'siege_tank_turret': 15,
-                   'devastator_base': 20, 'launcher_turret': 25},
-}
-TEAM_INDICES = range(144, 151)      # Harkonnen-red ramp that the game remaps per house
 
 TYPE_RU = {
     'const_yard': 'Сборочный цех', 'windtrap': 'Ветроловушка', 'refinery': 'Перерабатывающий завод', 'silo': 'Хранилище специи',
@@ -195,6 +189,12 @@ def landscape(seed, protect):
                 kinds[y][x] = 'r'
             elif sample(dune, 16, x, y) > 0.62:
                 kinds[y][x] = 'd'
+    # Dune II mountains always rise from rock: a mountain cell touching sand becomes rock.
+    for y in range(64):
+        for x in range(64):
+            if kinds[y][x] == 'm' and any(kinds[yy][xx] in ('s', 'd') for yy in range(max(0, y - 1), min(64, y + 2))
+                                          for xx in range(max(0, x - 1), min(64, x + 2))):
+                kinds[y][x] = 'r'
     # Bases sit on rock in the original missions: grow a plateau around every protected cell.
     for (x, y) in protect:
         for dy in range(-2, 3):
@@ -308,12 +308,13 @@ def convert_scenario(name, text, rules_types, report):
             kinds[c[1]][c[0]] = 's'
             entities.append(('spice_bloom', 0, c[0] + 0.5, c[1] + 0.5))
 
+    # Tile layer (tilesets/dune.json): the engine derives terrain cells and spice fields from it.
     code = {'s': ',', 'd': ',', 'r': 'R', 'm': '#'}
-    rows, field_rows, look = [], [], []
+    rows, tile_rows, field_rows = [], [], []
     for y in range(y0, y0 + h):
         rows.append(''.join(code[kinds[y][x]] for x in range(x0, x0 + w)))
         field_rows.append(''.join(str(density[y][x]) if density[y][x] else '0' for x in range(x0, x0 + w)))
-        look.append(''.join(kinds[y][x] for x in range(x0, x0 + w)))
+        tile_rows.append(''.join(('O' if density[y][x] >= 7 else 'o') if density[y][x] else kinds[y][x] for x in range(x0, x0 + w)))
 
     players = []
     for i, house in enumerate(order):
@@ -350,11 +351,11 @@ def convert_scenario(name, text, rules_types, report):
         'size': [w, h],
         'players': players,
         'terrain': {'rows': rows},
+        # Plain fields for builds without the tileset; with tiles the engine takes spice from them.
         'fields': [{'resource': 'spice', 'rows': field_rows}],
+        'tiles': {'tileset': 'tilesets/dune.json', 'rows': tile_rows},
         'entities': ents,
         'triggers': triggers,
-        # presentation: landscape kinds per cell for the tileset (s sand, d dunes, r rock, m mountain)
-        'look': {'tileset': 'gfx/terrain.tileset.json', 'kinds': look},
         'source': {'scenario': name, 'seed': seed, 'mapScale': scale, 'terrain': 'approximated'},
     }
     if victory:
@@ -364,74 +365,142 @@ def convert_scenario(name, text, rules_types, report):
     return data, human
 
 
-# ------------------------------------------------------------------ graphics
+# ------------------------------------------------------------------ graphics (2D format of docs/game-format.md)
 
-def team_split(px, pal):
-    """Palette indices -> (RGBA bytes, mask bytes). Team pixels are stored as grey (luminance) and
-    flagged in the mask, so the renderer can tint them with any player colour."""
-    rgba = bytearray(len(px) * 4)
-    mask = bytearray(len(px))
+# Unit sheets: (sheet, first frame) per layer; Dune II stores 5 facings N, NE, E, SE, S and mirrors
+# the west side, which is exactly the engine's `mirror: true` layout. Turrets are composited on
+# their chassis. Pairs marked "guess" are inferred from the look of the frames.
+UNIT_ART = {
+    'quad': [('UNITS.SHP', 0)], 'trike': [('UNITS.SHP', 5)], 'raider': [('UNITS.SHP', 5)],
+    'mcv': [('UNITS.SHP', 10)], 'harvester': [('UNITS.SHP', 15)],
+    'tank': [('UNITS2.SHP', 0), ('UNITS2.SHP', 5)], 'siege_tank': [('UNITS2.SHP', 10), ('UNITS2.SHP', 15)],
+    'devastator': [('UNITS2.SHP', 20), ('UNITS2.SHP', 25)],          # guess: turret
+    'sonic_tank': [('UNITS2.SHP', 0), ('UNITS2.SHP', 30)],           # guess
+    'launcher': [('UNITS2.SHP', 0), ('UNITS2.SHP', 35)],             # guess
+    'deviator': [('UNITS2.SHP', 0), ('UNITS2.SHP', 35)],             # guess
+}
+# Structures are ICON.ICN tile groups (ICON.MAP): frame 0 = being built, 1 = rubble, 2.. = alive.
+STRUCTURE_ART = {
+    'palace': (11, 3, 3), 'light_factory': (12, 2, 2), 'heavy_factory': (13, 3, 2), 'hightech_factory': (14, 3, 2),
+    'ix': (15, 2, 2), 'wor': (16, 2, 2), 'const_yard': (17, 2, 2), 'barracks': (18, 2, 2), 'windtrap': (19, 2, 2),
+    'starport': (20, 3, 3), 'refinery': (21, 3, 2), 'repair': (22, 3, 2), 'turret': (23, 1, 1), 'rocket_turret': (24, 1, 1),
+    'silo': (25, 2, 2), 'outpost': (26, 2, 2),
+}
+TEAM_INDICES = range(144, 151)      # Harkonnen-red ramp that the game remaps per house
+
+
+def to_team_rgba(px, pal, transparent=0):
+    """Palette indices -> RGBA where house-coloured pixels become magenta shades (r = b, g = 0),
+    the engine's team-colour convention; other pixels are nudged off that exact hue."""
+    out = bytearray(len(px) * 4)
     for k, v in enumerate(px):
-        if v == 0:
+        if v == transparent:
             continue
         r, g, b = pal[v]
         if v in TEAM_INDICES:
             lum = max(r, g, b)
-            r = g = b = lum
-            mask[k] = 255
-        rgba[4 * k:4 * k + 4] = bytes((r, g, b, 255))
-    return rgba, mask
+            r, g, b = lum, 0, lum
+        elif r == b and g == 0 and r > 0:
+            g = 1
+        out[4 * k:4 * k + 4] = bytes((r, g, b, 255))
+    return out
 
 
-def pack_sheet(frames, cols=16):
-    """Simple shelf packing in frame order -> (W, H, [(x, y)])."""
-    cw = max((f['width'] for f in frames), default=1)
-    ch = max((f['height'] for f in frames), default=1)
-    cols = max(1, min(cols, len(frames)))
-    rows = (len(frames) + cols - 1) // cols
-    return cols * cw, max(1, rows) * ch, [((k % cols) * cw, (k // cols) * ch) for k in range(len(frames))]
+def blit(dst, dw, src, sw, sh, x0, y0):
+    """Alpha-tested copy of an RGBA image into a bigger RGBA buffer."""
+    for y in range(sh):
+        for x in range(sw):
+            s = 4 * (y * sw + x)
+            if src[s + 3]:
+                d = 4 * ((y0 + y) * dw + x0 + x)
+                dst[d:d + 4] = src[s:s + 4]
 
 
-def write_shp(name, data, pal, out, report):
-    frames = ww.read_shp(data)
-    if not frames:
-        return None
-    W, H, pos = pack_sheet(frames)
-    sheet, mask = bytearray(W * H * 4), bytearray(W * H)
-    any_team = False
-    for f, (fx, fy) in zip(frames, pos):
-        rgba, m = team_split(f['pixels'], pal)
-        any_team = any_team or any(m)
-        w = f['width']
-        for y in range(f['height']):
-            o = (fy + y) * W + fx
-            sheet[4 * o:4 * (o + w)] = rgba[4 * y * w:4 * (y + 1) * w]
-            mask[o:o + w] = m[y * w:(y + 1) * w]
-    base = name.rsplit('.', 1)[0].lower()
-    write_png(os.path.join(out, 'gfx', base + '.png'), W, H, sheet)
-    sprite = {
-        'format': 'rts.sprite/1',
-        'source': name,
-        'image': base + '.png',
-        'pixelsPerCell': 16,
-        'frames': [{'x': x, 'y': y, 'w': f['width'], 'h': f['height'], 'ax': f['width'] // 2, 'ay': f['height'] // 2}
-                   for f, (x, y) in zip(frames, pos)],
-        'sprites': {},
-    }
-    if any_team and name.startswith('UNITS'):   # only unit sheets use the house-colour ramp
-        write_png(os.path.join(out, 'gfx', base + '.mask.png'), W, H, mask, channels=1)
-        sprite['teamMask'] = base + '.mask.png'
-    for sname, first in NAMED_SPRITES.get(name, {}).items():
-        if first + 4 < len(frames):
-            dirs = [{'frames': [first + i]} for i in range(5)] + [{'frames': [first + i], 'flipX': True} for i in (3, 2, 1)]
-            sprite['sprites'][sname] = {'directions': dirs}
-    wjson(os.path.join(out, 'gfx', base + '.sprite.json'), sprite)
-    report['sprites'] += 1
-    report['frames'] += len(frames)
-    return base
+def write_unit_sheets(files, pal, out, report):
+    """-> {type: sprite block}."""
+    shp = {}
+    blocks = {}
+    for tid, layers in UNIT_ART.items():
+        frames = []
+        try:
+            for sheet, first in layers:
+                if sheet not in shp:
+                    shp[sheet] = ww.read_shp(files[sheet]) if sheet in files else []
+                if first + 4 >= len(shp[sheet]):
+                    raise KeyError(sheet)
+                frames.append(shp[sheet][first:first + 5])
+        except (KeyError, ww.FormatError, struct.error, IndexError):
+            continue
+        fw = max(f['width'] for layer in frames for f in layer)
+        fh = max(f['height'] for layer in frames for f in layer)
+        W, H = fw, fh * 5                       # one column, five rows (N, NE, E, SE, S)
+        sheet_px = bytearray(W * H * 4)
+        for row in range(5):
+            for layer in frames:
+                f = layer[row]
+                blit(sheet_px, W, to_team_rgba(f['pixels'], pal), f['width'], f['height'],
+                     (fw - f['width']) // 2, row * fh + (fh - f['height']) // 2)
+        rel = 'sprites/%s.png' % tid
+        write_png(os.path.join(out, rel), W, H, sheet_px)
+        blocks[tid] = {'sheet': rel, 'frame': [fw, fh], 'facings': 8, 'mirror': True, 'mode': 'ground',
+                       'pixelsPerCell': 16, 'filter': 'nearest', 'team': 'magenta', 'actions': {'idle': [0, 1]}}
+        report['sprites'] += 1
+    return blocks
+
+
+def write_structure_sheets(files, pal, out, report):
+    tw, th, tiles = ww.read_icn(files['ICON.ICN'])
+    groups = ww.read_icon_map(files['ICON.MAP'])
+    blocks = {}
+    for tid, (g, w, h) in STRUCTURE_ART.items():
+        if g >= len(groups):
+            continue
+        t = groups[g]
+        per = w * h
+        n = len(t) // per
+        if n < 3:
+            continue
+        fw, fh = w * tw, h * th
+        is_turret = w == 1 and h == 1 and n >= 10
+        if is_turret:
+            # frames 2..9 aim N, NE, E, SE, S, SW, W, NW; engine rows start east and go clockwise
+            order = [4, 5, 6, 7, 8, 9, 2, 3]
+            cols, rows, cells = 1, 8, [[f] for f in order]
+        else:
+            cols, rows, cells = n, 1, [list(range(n))]
+        W, H = cols * fw, rows * fh
+        img = bytearray(W * H * 4)
+        for r, row in enumerate(cells):
+            for c, f in enumerate(row):
+                for k in range(per):
+                    rgba = to_team_rgba(tiles[t[f * per + k]], pal, transparent=-1)
+                    x0, y0 = c * fw + (k % w) * tw, r * fh + (k // w) * th
+                    for y in range(th):
+                        o = (y0 + y) * W + x0
+                        img[4 * o:4 * (o + tw)] = rgba[4 * y * tw:4 * (y + 1) * tw]
+        rel = 'sprites/%s.png' % tid
+        write_png(os.path.join(out, rel), W, H, img)
+        block = {'sheet': rel, 'frame': [fw, fh], 'mode': 'ground', 'pixelsPerCell': 16, 'filter': 'nearest',
+                 'team': 'magenta', 'shadow': False}
+        if is_turret:
+            block.update({'facings': 8, 'actions': {'idle': [0, 1]}})
+        else:
+            block.update({'facings': 1, 'corpseTime': 8,
+                          'actions': {'idle': [2, n - 2, 2] if n > 3 else [2, 1], 'build': {'start': 0, 'count': 1, 'loop': False},
+                                      'die': [1, 1, 1]}})
+        blocks[tid] = block
+        report['sprites'] += 1
+    # Spice bloom: first tile of group 10 (a sand mound).
+    if len(groups) > 10 and groups[10]:
+        img = to_team_rgba(tiles[groups[10][0]], pal, transparent=-1)
+        write_png(os.path.join(out, 'sprites', 'spice_bloom.png'), tw, th, img)
+        blocks['spice_bloom'] = {'sheet': 'sprites/spice_bloom.png', 'frame': [tw, th], 'mode': 'ground', 'pixelsPerCell': 16,
+                                 'filter': 'nearest', 'team': 'none', 'shadow': False, 'facings': 1, 'actions': {'idle': [0, 1]}}
+    return blocks
 
 
 def write_tileset(files, pal, out):
+    """ICON.ICN -> tilesets/dune.png + tilesets/dune.json (terrains with mask16 autotiling)."""
     tw, th, tiles = ww.read_icn(files['ICON.ICN'])
     groups = ww.read_icon_map(files['ICON.MAP']) if 'ICON.MAP' in files else []
     cols = 32
@@ -444,32 +513,40 @@ def write_tileset(files, pal, out):
         for y in range(th):
             o = (y0 + y) * W + x0
             sheet[4 * o:4 * (o + tw)] = rgba[4 * y * tw:4 * (y + 1) * tw]
-    write_png(os.path.join(out, 'gfx', 'terrain.png'), W, H, sheet)
-    ts = {'format': 'rts.tileset/1', 'source': 'ICON.ICN', 'image': 'terrain.png', 'tileSize': [tw, th], 'columns': cols,
-          'count': len(tiles), 'groups': {'icon%d' % k: g for k, g in enumerate(groups)}}
-    land = next((g for g in groups if len(g) == 81), None)
-    if land:
-        def block(start):
-            return land[start:start + 16]
-        ts['autotile'] = {
-            'mode': 'nesw16',     # tile = list[mask], mask bits: N=1 E=2 S=4 W=8 (neighbours of the same kind)
-            'kinds': {'s': {'tiles': [land[0]] * 16}, 'r': {'tiles': block(1)}, 'd': {'tiles': block(17)},
-                      'm': {'tiles': block(33)}, 'spice': {'tiles': block(49)}, 'thickSpice': {'tiles': block(65)}},
-            'base': {'r': 's', 'd': 's', 'm': 'r', 'spice': 's', 'thickSpice': 'spice'},
-        }
-    wjson(os.path.join(out, 'gfx', 'terrain.tileset.json'), ts)
+    write_png(os.path.join(out, 'tilesets', 'dune.png'), W, H, sheet)
+    land = next((g for g in groups if len(g) == 81 and g == list(range(g[0], g[0] + 81))), None)
+    if land is None:
+        raise ww.FormatError('ICON.MAP: landscape group (81 consecutive tiles) not found')
+    L = land[0]
+    def auto(first):   # Dune II: 16 tiles per kind, index = N1 E2 S4 W8 neighbours of the same kind
+        return {'type': 'mask16', 'first': L + first}
+    ts = {
+        'name': 'Dune II', 'atlas': 'tilesets/dune.png', 'tileSize': [tw, th], 'columns': cols, 'filter': 'nearest',
+        'terrains': [
+            {'id': 'sand', 'char': 's', 'cell': ',', 'color': [0.84, 0.6, 0.35], 'tiles': [L]},
+            {'id': 'rock', 'char': 'r', 'cell': 'R', 'color': [0.45, 0.42, 0.36], 'under': 'sand', 'tiles': [L + 16], 'autotile': auto(1)},
+            {'id': 'dunes', 'char': 'd', 'cell': ',', 'color': [0.8, 0.55, 0.3], 'under': 'sand', 'tiles': [L + 32], 'autotile': auto(17)},
+            {'id': 'mountain', 'char': 'm', 'cell': '#', 'color': [0.35, 0.25, 0.15], 'under': 'rock', 'tiles': [L + 48], 'autotile': auto(33)},
+            {'id': 'spice', 'char': 'o', 'cell': ',', 'color': [0.85, 0.45, 0.25], 'field': {'resource': 'spice', 'density': 5},
+             'under': 'sand', 'depleted': 'sand', 'tiles': [L + 64], 'autotile': dict(auto(49), **{'with': ['thick_spice']})},
+            {'id': 'thick_spice', 'char': 'O', 'cell': ',', 'color': [0.7, 0.3, 0.15], 'field': {'resource': 'spice', 'density': 9},
+             'under': 'spice', 'depleted': 'sand', 'tiles': [L + 80], 'autotile': auto(65)},
+        ],
+    }
+    wjson(os.path.join(out, 'tilesets', 'dune.json'), ts)
     return len(tiles)
 
 
 def write_cps(name, data, pal, out):
     px, own = ww.read_cps(data)
     p = own or pal
-    write_png(os.path.join(out, 'gfx', 'pictures', name.rsplit('.', 1)[0].lower() + '.png'), 320, 200,
+    write_png(os.path.join(out, 'pictures', name.rsplit('.', 1)[0].lower() + '.png'), 320, 200,
               ww.to_rgba(px[:64000], p, transparent=-1))
 
 
 def write_wsa(name, data, pal, out):
-    w, h, frames, loops = ww.read_wsa(data)
+    """WSA animation -> one PNG sheet (8 frames per row) for menus, briefings and cutscenes."""
+    w, h, frames, _loops = ww.read_wsa(data)
     if not frames:
         return False
     cols = min(len(frames), 8)
@@ -482,13 +559,7 @@ def write_wsa(name, data, pal, out):
         for y in range(h):
             o = (y0 + y) * W + x0
             sheet[4 * o:4 * (o + w)] = rgba[4 * y * w:4 * (y + 1) * w]
-    base = name.rsplit('.', 1)[0].lower()
-    write_png(os.path.join(out, 'gfx', 'anim', base + '.png'), W, H, sheet)
-    wjson(os.path.join(out, 'gfx', 'anim', base + '.sprite.json'), {
-        'format': 'rts.sprite/1', 'source': name, 'image': base + '.png',
-        'frames': [{'x': (k % cols) * w, 'y': (k // cols) * h, 'w': w, 'h': h, 'ax': 0, 'ay': 0} for k in range(len(frames))],
-        'sprites': {base: {'directions': [{'frames': list(range(len(frames)))}], 'fps': 8, 'loop': loops}},
-    })
+    write_png(os.path.join(out, 'pictures', 'anim', name.rsplit('.', 1)[0].lower() + '.png'), W, H, sheet)
     return True
 
 
@@ -573,15 +644,14 @@ def load_rules():
 
 
 def run(src, out, only_maps=False):
-    report = {'source': src, 'out': out, 'paks': 0, 'files': 0, 'maps': 0, 'sprites': 0, 'frames': 0, 'tiles': 0,
+    report = {'source': src, 'out': out, 'paks': 0, 'files': 0, 'maps': 0, 'sprites': 0, 'tiles': 0,
               'pictures': 0, 'animations': 0, 'sounds': 0, 'skipped': {}, 'warnings': []}
     files, paks = load_sources(src)
     report['paks'], report['files'] = len(paks), len(files)
-    rules_text, rules = load_rules()
+    _rules_text, rules = load_rules()
     os.makedirs(out, exist_ok=True)
-    with open(os.path.join(out, 'rules.json'), 'w', encoding='utf-8') as f:
-        f.write(rules_text)
     pal = ww.read_pal(files['IBM.PAL']) if 'IBM.PAL' in files else None
+    has_tiles = pal is not None and 'ICON.ICN' in files and 'ICON.MAP' in files
 
     maps, lang_en, lang_ru = [], {}, {}
     for name in sorted(n for n in files if n.startswith('SCEN') and n.endswith('.INI')):
@@ -617,17 +687,19 @@ def run(src, out, only_maps=False):
     wjson(os.path.join(out, 'lang', 'en.json'), dict(sorted(lang_en.items())))
     wjson(os.path.join(out, 'lang', 'ru.json'), dict({'@language': 'Русский'}, **dict(sorted(lang_ru.items()))))
 
+    # Graphics: sprite sheets become `sprite` blocks on the types; the tileset is needed by the
+    # maps, so it is written even with --maps-only.
+    sprites = {}
+    if has_tiles:
+        try:
+            report['tiles'] = write_tileset(files, pal, out)
+        except (ww.FormatError, struct.error, IndexError) as ex:
+            report['warnings'].append('ICON.ICN: %s' % ex)
+            has_tiles = False
     if not only_maps and pal:
-        for name in sorted(n for n in files if n.endswith('.SHP')):
-            try:
-                write_shp(name, files[name], pal, out, report)
-            except (ww.FormatError, struct.error, IndexError) as ex:
-                report['warnings'].append('%s: %s' % (name, ex))
-        if 'ICON.ICN' in files:
-            try:
-                report['tiles'] = write_tileset(files, pal, out)
-            except (ww.FormatError, struct.error, IndexError) as ex:
-                report['warnings'].append('ICON.ICN: %s' % ex)
+        sprites.update(write_unit_sheets(files, pal, out, report))
+        if has_tiles:
+            sprites.update(write_structure_sheets(files, pal, out, report))
         for name in sorted(n for n in files if n.endswith('.CPS')):
             try:
                 write_cps(name, files[name], pal, out)
@@ -641,10 +713,25 @@ def run(src, out, only_maps=False):
             except (ww.FormatError, struct.error, IndexError) as ex:
                 report['warnings'].append('%s: %s' % (name, ex))
         write_audio(files, out, rules, report)
+    for tid, block in sprites.items():
+        if tid in rules['types']:
+            rules['types'][tid]['sprite'] = block
+    with open(os.path.join(out, 'rules.json'), 'w', encoding='utf-8') as f:
+        f.write('// Dune II rules (tools/importers/dune2/rules.json) + sprite sheets converted from your copy.\n')
+        json.dump(rules, f, ensure_ascii=False, indent=1)
+        f.write('\n')
+    if not has_tiles:   # no tileset: keep plain terrain rows
+        for m in maps:
+            path = os.path.join(out, m['file'])
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            data.pop('tiles', None)
+            wjson(path, data, compact_rows=True)
 
     wjson(os.path.join(out, 'game.json'), {
         'name': 'Dune II (imported)', 'id': 'com.rtsengine.import.dune2', 'version': '0.1.0', 'build': 1, 'module': 'rts',
         'sourceLanguage': 'en', 'languages': ['en', 'ru'], 'rules': 'rules.json', 'maps': maps, 'orientation': 'landscape',
+        'camera': {'projection': 'ortho', 'pitch': 90, 'yaw': 0, 'pixelsPerCell': 32, 'zoomMin': 8, 'zoomMax': 40, 'rotate': False},
         'external': True,
         'importedFrom': {'game': 'Dune II', 'importer': 'tools/importers/dune2', 'paks': [os.path.basename(p) for p in paks]},
     })
@@ -675,8 +762,8 @@ def main():
         return
     print('Dune II -> %s' % out)
     print('  PAK: %d, файлов: %d' % (rep['paks'], rep['files']))
-    print('  карт: %d, спрайтов: %d (кадров %d), тайлов: %d, картинок: %d, анимаций: %d, звуков: %d' % (
-        rep['maps'], rep['sprites'], rep['frames'], rep['tiles'], rep['pictures'], rep['animations'], rep['sounds']))
+    print('  карт: %d, спрайтов: %d, тайлов: %d, картинок: %d, анимаций: %d, звуков: %d' % (
+        rep['maps'], rep['sprites'], rep['tiles'], rep['pictures'], rep['animations'], rep['sounds']))
     if rep['skipped']:
         print('  пропущено объектов: ' + ', '.join('%s ×%d' % kv for kv in sorted(rep['skipped'].items())))
     for wmsg in rep['warnings']:
