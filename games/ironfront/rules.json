@@ -19,7 +19,7 @@
     "construction_yard": {"name": "Сборочный цех", "structure": {"footprint": [3, 3]}, "health": {"max": 1500, "armor": 2, "armorType": "building"}, "sight": 8,
                           "produces": ["power_plant", "refinery", "barracks", "war_factory", "turret"], "provides": {"power": 10}, "view": {"shape": "hall"}},
     "power_plant": {"name": "Электростанция", "structure": {"footprint": [2, 2]}, "health": {"max": 600, "armorType": "building"},
-                    "cost": {"credits": 300, "time": 10}, "provides": {"power": 100}, "view": {"shape": "plant"}},
+                    "cost": {"credits": 300, "time": 10}, "provides": {"power": 100}, "view": {"shape": "plant", "light": [{"color": [1.0, 0.15, 0.1], "height": 2.2, "radius": 2.5, "intensity": 1.6, "pattern": "pulse", "rate": 0.8, "electric": true, "halo": 0.5}, {"color": [0.7, 0.85, 1.0], "height": 0.8, "radius": 4, "intensity": 1.2, "electric": true, "nightOnly": true}]}},
     "refinery": {"name": "Очистной завод", "structure": {"footprint": [3, 3]}, "health": {"max": 1000, "armorType": "building"},
                  "cost": {"credits": 1200, "time": 20}, "consumes": {"power": 30}, "dropoff": ["ore"], "produces": ["harvester"], "view": {"shape": "refinery"}},
     "barracks": {"name": "Казармы", "structure": {"footprint": [2, 2]}, "health": {"max": 800, "armorType": "building"},
