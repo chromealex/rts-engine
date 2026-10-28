@@ -76,6 +76,7 @@ enum CommandType : uint16_t {
     kCmdUseItem,      // units[0]; param = slot; target / point for the effect (self by default)
     kCmdDropItem,     // units[0]; param = slot
     kCmdPickItem,     // units[0]; point = where the ground item lies
+    kCmdLearn,        // heroes (rules heroes.skills): param = ability index to learn / raise with a skill point
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -136,19 +137,25 @@ enum GameEvent : uint16_t {
     kEvDialog,          // value = index into MechState::dialogs, a = speaking unit (if any), player 0 = everyone
     kEvCamera,          // pos = where to look, value = duration in ms | 1 << 31 when the camera is locked, player
     kEvMissionEnd,      // value 1 victory / 0 defeat, player
+    kEvLearned,       // a = hero, value = ability index | level << 8
+    kEvCrewKilled,    // a = vehicle (now empty), b = shooter
+    kEvCrewed,        // a = vehicle, player = new owner
+    kEvInfected,      // a = victim, value = spawned type
+    kEvSubmerged,     // a = eater (sandworm) leaving; kEvSpawned marks its return
 };
 
 // ---------------------------------------------------------------- components
-enum UnitFlags : uint8_t { kUnitHold = 1, kUnitUnderConstruction = 2, kUnitDisabled = 4 /*power deficit*/, kUnitSilent = 8 /*removed without death effects*/,
+enum UnitFlags : uint16_t { kUnitHold = 1, kUnitUnderConstruction = 2, kUnitDisabled = 4 /*power deficit*/, kUnitSilent = 8 /*removed without death effects*/,
                           kUnitInHand = 16 /*picked up: off the map*/, kUnitPossessed = 32 /*directly controlled*/,
                           kUnitInTransit = 64 /*between bodies (set together with kUnitInHand: off every surface)*/,
-                          kUnitInCargo = 128 /*inside a transport: off the map (agent-mech)*/ };
-constexpr uint8_t kUnitOffMap = kUnitInHand | kUnitInCargo;
+                          kUnitInCargo = 128 /*inside a transport: off the map (agent-mech)*/,
+                          kUnitInfected = 256 /*killed by an infecting unit: rises as the infect type (originals)*/ };
+constexpr uint16_t kUnitOffMap = kUnitInHand | kUnitInCargo;
 
 struct Unit {
     uint16_t type = 0;
     Fixed hp{};
-    uint8_t flags = 0;
+    uint16_t flags = 0;         // UnitFlags (hashed as u32)
     uint8_t lastAttacker = 0;   // owner slot of the last damage source (xp / bounty)
     Vec3 facing{Fixed::fromInt(1), Fixed{}, Fixed{}};
     Fixed energy{};
@@ -209,7 +216,7 @@ struct Combat {
 
 struct Cargo { int16_t res = -1; Fixed amount{}; Entity lastNode = kNullEntity; Vec3 lastPos{}; bool field = false; };
 
-struct ProdItem { int32_t item = 0; Fixed progress{}; Fixed paid{}; bool upgrade = false; }; // item >= 0: type; < 0: tech ~item
+struct ProdItem { int32_t item = 0; Fixed progress{}; Fixed paid{}; bool upgrade = false; Fixed timeMult = Fixed::fromInt(1); }; // item >= 0: type; < 0: tech ~item; timeMult: hero revive
 
 struct Production {
     std::vector<ProdItem> queue;
@@ -249,9 +256,12 @@ struct Projectile {
     Vec3 start{};
     Fixed travel{}, total{};  // arc progress
     Fixed scale = Fixed::fromInt(1);
+    int8_t weapon = -1;       // weapon index of sourceType (bonus damage, armor class, crew kills)
 };
 
-struct Hero { int level = 1; Fixed xp{}; };
+struct Hero { int level = 1; Fixed xp{}; uint8_t skill[8] = {}; uint8_t points = 0; };   // skill / points: rules heroes.skills
+struct Shield { Fixed value{}; uint32_t lastHit = 0; };       // StarCraft shields (health.shields)
+struct Eater { int kills = 0; };                              // neutral eats (sandworm)
 // Interplanetary transfer (kCmdTransit): leaves the shell of `from` at depart, arrives on the shell of `to`.
 // from/to world positions are the shell points at departure (body positions at that tick), for the view.
 struct Transit { int16_t from = 0, to = 0; uint32_t depart = 0, arrive = 0; Vec3 fromWorld{}, toWorld{}; Vec3 arrival{}; };
@@ -337,6 +347,12 @@ struct PlayerEconomy {
     std::vector<uint8_t> typeDisabled;         // per type: switched off by triggers
     std::vector<StatusInst> statuses;          // player statuses (silence, freeze regen, passives, wind)
     uint32_t statusFlags = 0;
+    // fidelity mechanics (RtsOriginals.cpp)
+    std::vector<Fixed> gatherMultRes;          // upkeep per resource (empty: gatherMult for all)
+    int heroesMade = 0;                        // heroes trained so far (free first hero)
+    struct DeadHero { uint16_t type; int level; Fixed xp; uint8_t skill[8]; };
+    std::vector<DeadHero> deadHeroes;          // revive keeps the level and skills
+    std::vector<uint8_t> fieldCells;           // derived: cells covered by own power fields (needsField)
 };
 
 struct WaveDef {
@@ -426,6 +442,9 @@ struct GameState {
     std::vector<uint32_t> laneRoundRobin;    // per garrison entity index: next lane slot
     // planets (map `world` block): bodies, cube-sphere layout of the grid rows (RtsSurface.h); null on flat maps
     std::shared_ptr<const Surface> surface;
+    // fidelity mechanics: eaters (sandworms) that submerged and come back later
+    struct Resurface { uint16_t type; uint8_t owner; uint32_t at; };
+    std::vector<Resurface> resurface;
 };
 
 // ---------------------------------------------------------------- module
@@ -492,7 +511,7 @@ public:
     void issue(Simulation& sim, Entity e, const Order& o, bool queue);
     void moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius);
     void stopMoving(Simulation& sim, Entity e);
-    void dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t dmgType, Entity source, uint8_t sourceOwner);
+    void dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t dmgType, Entity source, uint8_t sourceOwner, const WeaponDef* wd = nullptr);
     Fixed contactDistance(Simulation& sim, Entity a, Entity b);
     bool pay(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed supply, bool emitFail = true);
     void refund(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed fraction);
@@ -535,6 +554,15 @@ public:
     std::vector<Amount> upfrontCost(const std::vector<Amount>& cost) const; // the part paid at once (goods are delivered)
     // lanes between garrison buildings a -> b (main lane first), empty when none
     std::vector<int> lanesBetween(Simulation& sim, Entity a, Entity b) const;
+    // ---- fidelity mechanics (RtsOriginals.cpp)
+    std::vector<Amount> trainCost(Simulation& sim, uint8_t player, uint16_t type, Fixed* timeMult = nullptr) const; // growth, free hero, revive
+    bool heroAllowed(Simulation& sim, uint8_t player, uint16_t type) const;   // limit and tiers
+    bool skillLearned(Simulation& sim, Entity e, int index) const;
+    bool canLearn(Simulation& sim, Entity e, int index) const;
+    bool inField(Simulation& sim, uint8_t player, int16_t field, Vec3 centre, const UnitType& t) const;
+    Fixed gatherMultFor(Simulation& sim, uint8_t player, int res) const;
+    int gatherersAt(Simulation& sim, Entity node) const;
+    bool canCrew(Simulation& sim, Entity unit, Entity vehicle) const;
 
     // ---- agent-mech mechanics (RtsMech*.cpp)
     bool mechOn(Simulation& sim) const { return rules_.mech.any || sim.world().resource<GameState>()->mechActive; }
@@ -565,7 +593,6 @@ public:
     void mechClassDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;
     Fixed mechArmorDamage(Simulation& sim, Entity target, Fixed raw, uint16_t dmgType) const;   // armor model
     Fixed mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg);                          // what is left for hp
-    Fixed gatherMultFor(Simulation& sim, uint8_t owner, int res) const;                         // upkeep per resource
     bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
     void mechTickCombat(Simulation& sim);                                                       // shields
     // stage 2 (RtsMechWorld.cpp, RtsMechEconomy.cpp, RtsMechGroups.cpp)
@@ -660,6 +687,18 @@ private:
     bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
     void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
 
+    // fidelity mechanics hooks (RtsOriginals.cpp)
+    void sysOriginals(Simulation& sim);
+    void hashOriginals(Simulation& sim, Hasher& h);
+    void economyOriginals(Simulation& sim);                         // fields, upkeep per resource, territory income
+    Fixed mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, Entity source);
+    void afterHit(Simulation& sim, Entity target, Entity source, const WeaponDef* wd, bool killed);
+    void onDeathOriginals(Simulation& sim, Entity e, uint8_t owner, Vec3 pos, bool silent);
+    void onHeroSpawn(Simulation& sim, Entity e, uint8_t owner);
+    void gainOn(Simulation& sim, uint8_t player, Fixed ResourceDef::*field, Fixed count);
+    bool crewEnter(Simulation& sim, Entity unit, Entity vehicle);
+    void applyLearn(Simulation& sim, Entity e, int index);
+    Fixed playerModsStat(Simulation& sim, uint8_t player, uint16_t type, Stat s, Fixed& mul) const;
     bool runOrder(Simulation& sim, Entity e, Order& o);
     bool runGather(Simulation& sim, Entity e, Order& o);
     bool runBuild(Simulation& sim, Entity e, Order& o);
@@ -671,6 +710,13 @@ private:
     TriggerSet triggers_;
     struct SlotClaim { uint64_t target = 0; int slot = 0; uint64_t claimer = 0; };
     std::vector<SlotClaim> slotClaims_;   // rebuilt every tick from Combat slots (derived, not state)
+    struct DeathSpawn { uint16_t type; uint8_t owner; Vec3 pos; int count; };
+    std::vector<DeathSpawn> deathSpawns_; // filled and emptied inside sysDeath (infection)
+    mutable std::vector<uint16_t> gatherCount_;   // derived per tick: workers harvesting at each node (by entity index)
+    mutable uint32_t gatherCountTick_ = UINT32_MAX;
+    void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
+    void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
+    void flushDeathSpawns(Simulation& sim);
     std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
 };
 

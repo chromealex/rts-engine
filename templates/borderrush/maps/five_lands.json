@@ -36,8 +36,8 @@
    "#......................#",
    "#......................#",
    "#......................#",
-   "#...#####......#####...#",
-   "#...#####......#####...#",
+   "#......................#",
+   "#......................#",
    "#......................#",
    "#......................#",
    "#......................#",
@@ -63,54 +63,67 @@
  "regions": {
   "rows": [
    "........................",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".AAAAAAAAAAAAAAAAAAAAAA.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".BBBBBBBBBBBBBBBBBBBBBB.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".CCCCCCCCCCCCCCCCCCCCCC.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".DDDDDDDDDDDDDDDDDDDDDD.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   ".EEEEEEEEEEEEEEEEEEEEEE.",
-   "........................"
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".AAAAAAABBBBBBBCCCCCCCC.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".DDDDDDDEEEEEEEFFFFFFFF.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".GGGGGGGHHHHHHHIIIIIIII.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".JJJJJJJKKKKKKKLLLLLLLL.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".MMMMMMMNNNNNNNOOOOOOOO.",
+   ".PPPPPPPQQQQQQQRRRRRRRR.",
+   ".PPPPPPPQQQQQQQRRRRRRRR.",
+   ".PPPPPPPQQQQQQQRRRRRRRR.",
+   ".PPPPPPPQQQQQQQRRRRRRRR.",
+   ".PPPPPPPQQQQQQQRRRRRRRR.",
+   ".PPPPPPPQQQQQQQRRRRRRRR."
   ],
   "names": {
-   "A": "Чужбина",
-   "B": "Равнина",
-   "C": "Перевал",
-   "D": "Холмы",
-   "E": "Родина"
+   "A": "Штат 1",
+   "B": "Штат 2",
+   "C": "Штат 3",
+   "D": "Штат 4",
+   "E": "Штат 5",
+   "F": "Штат 6",
+   "G": "Штат 7",
+   "H": "Штат 8",
+   "I": "Штат 9",
+   "J": "Штат 10",
+   "K": "Штат 11",
+   "L": "Штат 12",
+   "M": "Штат 13",
+   "N": "Штат 14",
+   "O": "Штат 15",
+   "P": "Штат 16",
+   "Q": "Штат 17",
+   "R": "Штат 18"
   }
  },
  "entities": [
@@ -120,7 +133,8 @@
    "pos": [
     12,
     37
-   ]
+   ],
+   "garrison": 12
   },
   {
    "type": "capital",
@@ -128,39 +142,152 @@
    "pos": [
     12,
     5
-   ]
+   ],
+   "garrison": 12
   },
   {
-   "type": "town",
+   "type": "state",
    "owner": 0,
    "pos": [
-    6,
-    29
-   ]
+    4.5,
+    25.5
+   ],
+   "garrison": 14
   },
   {
-   "type": "town",
+   "type": "state",
    "owner": 0,
    "pos": [
-    18,
-    13
-   ]
+    19.5,
+    16.5
+   ],
+   "garrison": 14
   },
   {
-   "type": "town",
+   "type": "state",
    "owner": 0,
    "pos": [
-    17,
-    24
-   ]
+    12.0,
+    25.5
+   ],
+   "garrison": 18
   },
   {
-   "type": "town",
+   "type": "state",
    "owner": 0,
    "pos": [
-    7,
-    18
-   ]
+    12.0,
+    16.5
+   ],
+   "garrison": 18
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    19.5,
+    25.5
+   ],
+   "garrison": 14
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    4.5,
+    16.5
+   ],
+   "garrison": 14
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    4.5,
+    32.5
+   ],
+   "garrison": 10
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    19.5,
+    9.5
+   ],
+   "garrison": 10
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    12.0,
+    32.5
+   ],
+   "garrison": 22
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    12.0,
+    9.5
+   ],
+   "garrison": 22
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    19.5,
+    32.5
+   ],
+   "garrison": 10
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    4.5,
+    9.5
+   ],
+   "garrison": 10
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    4.5,
+    39.5
+   ],
+   "garrison": 8
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    19.5,
+    2.5
+   ],
+   "garrison": 8
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    19.5,
+    39.5
+   ],
+   "garrison": 8
+  },
+  {
+   "type": "state",
+   "owner": 0,
+   "pos": [
+    4.5,
+    2.5
+   ],
+   "garrison": 8
   }
  ]
 }

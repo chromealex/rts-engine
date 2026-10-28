@@ -8,7 +8,7 @@
 #   env: MAX_LOW_OVERHEAD (default 35), DISPLAY (default :97, starts Xvfb if needed)
 set -euo pipefail
 BUILD=${1:-build/linux-release}
-GAME=${2:-games/skirmish}
+GAME=${2:-templates/skirmish}
 FRAMES=${3:-600}
 MAX=${MAX_LOW_OVERHEAD:-35}
 export DISPLAY=${DISPLAY:-:97}

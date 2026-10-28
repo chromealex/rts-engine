@@ -301,12 +301,15 @@ void RtsModule::sysSettlers(Simulation& sim) {
             }
             return false;
         };
+        // goods live in the building; player-wide resources (They Are Billions / Northgard: buildings gather
+        // straight into the stock) are taken from and credited to the player
+        auto& eco = gs.players[o.player];
         if (!ws.running) {
-            for (auto& a : rc.in) if (inv.have[a.res] < a.value) return;
-            for (auto& a : rc.out) if (inv.have[a.res] >= a.value * rc.buffer) return;
+            for (auto& a : rc.in) if ((isGood(a.res) ? inv.have[a.res] : eco.stock[a.res]) < a.value) return;
+            for (auto& a : rc.out) if (isGood(a.res) && inv.have[a.res] >= a.value * rc.buffer) return;
             Entity node; int cell;
             if (!source(node, cell)) return;
-            for (auto& a : rc.in) inv.have[a.res] -= a.value;
+            for (auto& a : rc.in) { if (isGood(a.res)) inv.have[a.res] -= a.value; else eco.stock[a.res] -= a.value; }
             ws.running = true;
             ws.progress = Fixed{};
         }
@@ -317,7 +320,11 @@ void RtsModule::sysSettlers(Simulation& sim) {
         ws.running = false;
         ws.progress = Fixed{};
         Fixed taken{};
-        for (auto& a : rc.out) { inv.have[a.res] += a.value; if (a.res == rc.fromRes || taken.raw == 0) taken = a.value; }
+        for (auto& a : rc.out) {
+            if (isGood(a.res)) inv.have[a.res] += a.value;
+            else addResource(sim, o.player, a.res, a.value);
+            if (a.res == rc.fromRes || taken.raw == 0) taken = a.value;
+        }
         if (rc.fromRes >= 0) depletes.push_back({node, taken, cell});
         sim.emit({kEvProduced, o.player, e, kNullEntity, rc.out[0].res, tr.pos});
     });

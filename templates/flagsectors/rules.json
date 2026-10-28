@@ -1,23 +1,35 @@
-// "Flag Sectors" — Z-like: the map is a row of sectors; standing at a sector's flag captures the sector and
-// every factory in it; each owned sector beyond the first speeds up all production.
+// "Flag Sectors" — Z (Bitmap Brothers): no resources. The map is cut into territories; a robot standing at a territory's
+// flag takes it with every factory in it. Factories build for free, faster with every territory held, and their level
+// (which robots and vehicles they offer) rises with the territories held. Robots come in squads. Vehicles and guns
+// need a driver: snipers shoot drivers out, and any robot can climb into an empty vehicle or gun, whoever built it.
+// Losing the fort loses the game.
+// Not yet here (engine plan): factories that keep producing the chosen unit on their own, bridges and destructible
+// terrain, grenades, APC transport.
 {
-  "victory": "noStructures",
-  "supplyCap": 60,
+  "victory": "keyUnits",
+  "supplyCap": 80,
   "regions": {"buildOnlyOwned": true, "productionPerRegion": 0.15},
-  "resources": {},
+  "resources": {
+  },
   "types": {
-    "fort": {"name": "Форт", "structure": {"footprint": [3, 3]}, "health": {"max": 3000, "armor": 4}, "sight": 9, "supply": 30, "produces": ["robot", "sniper"],
-             "weapons": [{"range": 6, "damage": 15, "cooldown": 1, "projectileSpeed": 18}], "view": {"shape": "hall"}},
-    "factory": {"name": "Завод", "structure": {"footprint": [3, 3]}, "health": {"max": 1500, "armor": 3}, "capturable": true, "invulnerable": true, "sight": 6,
-                "produces": ["robot", "jeep", "light_tank"], "supply": 10, "view": {"shape": "workshop"}},
-    "flag": {"name": "Флаг", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 6, "radius": 2.5, "region": true}, "view": {"shape": "flag"}},
-    "robot": {"name": "Робот", "health": {"max": 70}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 8, "weapons": [{"range": 4.5, "damage": 7, "cooldown": 0.8}],
-              "cost": {"time": 12, "supply": 1}, "view": {"shape": "soldier"}},
-    "sniper": {"name": "Снайпер", "health": {"max": 50}, "move": {"speed": 2.4, "radius": 0.3}, "sight": 11, "weapons": [{"range": 8, "damage": 25, "cooldown": 2.5}],
-               "cost": {"time": 20, "supply": 1}, "view": {"shape": "ranged"}},
-    "jeep": {"name": "Джип", "health": {"max": 160, "armor": 1}, "move": {"speed": 4.2, "radius": 0.5}, "sight": 9, "weapons": [{"range": 5, "damage": 8, "cooldown": 0.5}],
-             "cost": {"time": 18, "supply": 2}, "view": {"shape": "vehicle"}},
-    "light_tank": {"name": "Лёгкий танк", "health": {"max": 400, "armor": 3}, "move": {"speed": 2.4, "radius": 0.6}, "sight": 8,
-                   "weapons": [{"range": 5.5, "damage": 30, "cooldown": 1.8, "projectileSpeed": 16}], "cost": {"time": 30, "supply": 3}, "view": {"shape": "vehicle"}}
+    "fort": {"name": "Форт", "key": true, "structure": {"footprint": [4, 4]}, "health": {"max": 4000, "armor": 4}, "sight": 10, "supply": 40, "produces": ["grunt", "psycho", "tough", "sniper", "pyro", "laser"], "weapons": [{"range": 7, "damage": 20, "cooldown": 1.2, "projectileSpeed": 14}], "view": {"shape": "hall"}},
+    "robot_factory": {"name": "Завод роботов", "structure": {"footprint": [3, 3]}, "health": {"max": 1500, "armor": 3}, "capturable": true, "sight": 6, "supply": 10, "produces": ["grunt", "psycho", "tough", "sniper", "pyro", "laser"], "view": {"shape": "barracks"}},
+    "vehicle_factory": {"name": "Завод техники", "structure": {"footprint": [4, 3]}, "health": {"max": 2000, "armor": 3}, "capturable": true, "sight": 6, "supply": 10, "produces": ["jeep", "light_tank", "medium_tank", "heavy_tank", "apc", "missile_launcher"], "view": {"shape": "workshop"}},
+    "flag": {"name": "Флаг", "structure": {"footprint": [1, 1]}, "invulnerable": true, "capture": {"time": 3, "radius": 1.5, "region": true}, "view": {"shape": "flag"}},
+    "grunt": {"name": "Рядовые", "tags": ["robot"], "squad": {"members": 3}, "health": {"max": 120}, "move": {"speed": 2.4, "radius": 0.45}, "sight": 8, "weapons": [{"range": 4, "damage": 4, "cooldown": 0.6}], "cost": {"time": 30, "supply": 3}, "crews": true, "view": {"shape": "soldier"}},
+    "psycho": {"name": "Психи", "tags": ["robot"], "squad": {"members": 3}, "health": {"max": 135}, "move": {"speed": 2.4, "radius": 0.45}, "sight": 8, "weapons": [{"range": 4.5, "damage": 5, "cooldown": 0.3}], "cost": {"time": 45, "supply": 3}, "crews": true, "view": {"shape": "soldier"}, "requiresRegions": 2},
+    "tough": {"name": "Крепыши", "tags": ["robot"], "squad": {"members": 2}, "health": {"max": 140}, "move": {"speed": 2.4, "radius": 0.4}, "sight": 8, "weapons": [{"range": 5, "damage": 30, "cooldown": 2.5, "projectileSpeed": 14, "splash": 0.6}], "cost": {"time": 60, "supply": 2}, "crews": true, "view": {"shape": "soldier"}, "requiresRegions": 3},
+    "sniper": {"name": "Снайперы", "tags": ["robot"], "squad": {"members": 2}, "health": {"max": 70}, "move": {"speed": 2.4, "radius": 0.4}, "sight": 11, "weapons": [{"range": 9, "damage": 15, "cooldown": 3, "killsCrew": 0.5}], "cost": {"time": 50, "supply": 2}, "crews": true, "view": {"shape": "soldier"}, "requiresRegions": 2},
+    "pyro": {"name": "Поджигатели", "tags": ["robot"], "squad": {"members": 2}, "health": {"max": 120}, "move": {"speed": 2.4, "radius": 0.4}, "sight": 8, "weapons": [{"range": 2.5, "damage": 25, "cooldown": 0.5, "splash": 0.8}], "cost": {"time": 70, "supply": 2}, "crews": true, "view": {"shape": "soldier"}, "requiresRegions": 4},
+    "laser": {"name": "Лазерники", "tags": ["robot"], "squad": {"members": 2}, "health": {"max": 140}, "move": {"speed": 2.4, "radius": 0.4}, "sight": 8, "weapons": [{"range": 6, "damage": 30, "cooldown": 1.2, "projectileSpeed": 40}], "cost": {"time": 90, "supply": 2}, "crews": true, "view": {"shape": "soldier"}, "requiresRegions": 5},
+    "jeep": {"name": "Джип", "tags": ["vehicle"], "health": {"max": 160, "armor": 1}, "move": {"speed": 4.2, "radius": 0.5}, "sight": 8, "weapons": [{"range": 5, "damage": 6, "cooldown": 0.4}], "cost": {"time": 40, "supply": 2}, "crew": "grunt", "crush": {"tags": ["robot"]}, "view": {"shape": "vehicle"}},
+    "light_tank": {"name": "Лёгкий танк", "tags": ["vehicle"], "health": {"max": 400, "armor": 3}, "move": {"speed": 2.6, "radius": 0.5}, "sight": 8, "weapons": [{"range": 5.5, "damage": 30, "cooldown": 1.8, "projectileSpeed": 14}], "cost": {"time": 70, "supply": 2}, "crew": "grunt", "crush": {"tags": ["robot"]}, "view": {"shape": "tank"}, "requiresRegions": 2},
+    "medium_tank": {"name": "Средний танк", "tags": ["vehicle"], "health": {"max": 650, "armor": 4}, "move": {"speed": 2.2, "radius": 0.5}, "sight": 8, "weapons": [{"range": 6, "damage": 45, "cooldown": 2.0, "projectileSpeed": 14}], "cost": {"time": 100, "supply": 2}, "crew": "grunt", "crush": {"tags": ["robot"]}, "view": {"shape": "tank"}, "requiresRegions": 3},
+    "heavy_tank": {"name": "Тяжёлый танк", "tags": ["vehicle"], "health": {"max": 1000, "armor": 6}, "move": {"speed": 1.8, "radius": 0.5}, "sight": 8, "weapons": [{"range": 6.5, "damage": 70, "cooldown": 2.4, "projectileSpeed": 14, "splash": 0.6}], "cost": {"time": 140, "supply": 2}, "crew": "grunt", "crush": {"tags": ["robot"]}, "view": {"shape": "tank"}, "requiresRegions": 5},
+    "apc": {"name": "БТР", "tags": ["vehicle"], "health": {"max": 500, "armor": 4}, "move": {"speed": 3.0, "radius": 0.5}, "sight": 8, "weapons": [{"range": 5, "damage": 8, "cooldown": 0.4}], "cost": {"time": 80, "supply": 2}, "crew": "grunt", "crush": {"tags": ["robot"]}, "view": {"shape": "vehicle"}, "requiresRegions": 3},
+    "missile_launcher": {"name": "Ракетная установка", "tags": ["vehicle"], "health": {"max": 350, "armor": 2}, "move": {"speed": 2.4, "radius": 0.5}, "sight": 8, "weapons": [{"range": 9, "damage": 80, "cooldown": 3.5, "projectileSpeed": 14, "splash": 1.0}], "cost": {"time": 120, "supply": 2}, "crew": "grunt", "crush": {"tags": ["robot"]}, "view": {"shape": "vehicle"}, "requiresRegions": 4},
+    "gatling_gun": {"name": "Пулемётная точка", "tags": ["gun"], "structure": {"footprint": [1, 1]}, "health": {"max": 400, "armor": 3}, "sight": 9, "weapons": [{"range": 6, "damage": 8, "cooldown": 0.3}], "crew": "grunt", "countsForVictory": false, "view": {"shape": "tower", "scale": 0.8}},
+    "light_gun": {"name": "Лёгкая пушка", "tags": ["gun"], "structure": {"footprint": [1, 1]}, "health": {"max": 600, "armor": 4}, "sight": 9, "weapons": [{"range": 7, "damage": 40, "cooldown": 2, "projectileSpeed": 14}], "crew": "grunt", "countsForVictory": false, "view": {"shape": "tower", "scale": 0.8}},
+    "howitzer": {"name": "Гаубица", "tags": ["gun"], "structure": {"footprint": [1, 1]}, "health": {"max": 700, "armor": 4}, "sight": 8, "weapons": [{"range": 12, "damage": 90, "cooldown": 4, "projectileSpeed": 14, "splash": 1.2, "minRange": 3}], "crew": "grunt", "countsForVictory": false, "view": {"shape": "tower", "scale": 0.8}}
   }
 }
