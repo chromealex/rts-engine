@@ -304,13 +304,13 @@ TEST(mech_shields_upkeep_workers) {
     World& w = sim->world();
     run(*sim, 0.2);
     Entity z = findType(*sim, "zealot", 1);
-    CHECK(w.has<game::Shield>(z) && w.get<game::Shield>(z).hp == Fixed::fromInt(50));
+    CHECK(w.has<game::MechShield>(z) && w.get<game::MechShield>(z).hp == Fixed::fromInt(50));
     mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);
-    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::Shield>(z).hp == Fixed::fromInt(20));
+    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::MechShield>(z).hp == Fixed::fromInt(20));
     mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);   // 20 shield, 10 left - 1 armor = 9 to hp
-    CHECK(w.get<game::Shield>(z).hp.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
+    CHECK(w.get<game::MechShield>(z).hp.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
     run(*sim, 4);
-    CHECK(w.get<game::Shield>(z).hp > Fixed::fromInt(10));   // regenerates after the delay
+    CHECK(w.get<game::MechShield>(z).hp > Fixed::fromInt(10));   // regenerates after the delay
     // two peons on a mine with room for one: only one gathers at a time; upkeep halves gold, not wood
     std::vector<Entity> peons;
     w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && mod(*sim).rules().types[u.type].id == "peon") peons.push_back(e); });
@@ -566,7 +566,7 @@ static Json mechLoadMap(const std::string& dir, const std::string& file) {
 TEST(mech_save_states_all_games) {
     namespace fs = std::filesystem;
     std::vector<std::string> games;
-    for (auto& e : fs::directory_iterator(std::string(RTS_SOURCE_DIR) + "/games"))
+    for (auto& e : fs::directory_iterator(std::string(RTS_SOURCE_DIR) + "/templates"))
         if (e.is_directory() && fs::exists(e.path() / "rules.json") && e.path().filename().string()[0] != '_') games.push_back(e.path().string());
     std::sort(games.begin(), games.end());
     CHECK(games.size() >= 20);

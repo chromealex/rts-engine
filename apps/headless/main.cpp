@@ -104,7 +104,7 @@ static void dumpTypes(Simulation& sim) {
 }
 
 static void status(Simulation& sim) {
-    auto* m = sim.module().name() == "rts" ? static_cast<game::RtsModule*>(&sim.module()) : nullptr;
+    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
     auto& gs = m->state(sim);
     std::printf("  t=%4us", sim.tick() / sim.tickRate());
     for (auto& p : sim.players()) {
@@ -127,7 +127,7 @@ static void status(Simulation& sim) {
 // Path query benchmark: random start/goal pairs on passable ground cells (fixed seed), the same queries with
 // the map's pathing mode (HPA* on big maps) and with plain A* (any length, node limit as in the game).
 static int benchPaths(Simulation& sim, const Args& a) {
-    auto* m = sim.module().name() == "rts" ? static_cast<game::RtsModule*>(&sim.module()) : nullptr;
+    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
     game::MapGrid& g = m->state(sim).grid;
     const uint8_t layer = game::kLayerGround;
     Random rng(a.seed);
