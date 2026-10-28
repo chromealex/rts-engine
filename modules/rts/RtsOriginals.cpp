@@ -511,6 +511,21 @@ void RtsModule::sysOriginals(Simulation& sim) {
             }
         }
     }
+    // states (State.io): the land of a region takes the colour of the building that holds it
+    if (tick % 10 == 0 && gs.regionCount > 0) {
+        std::vector<std::pair<int, uint8_t>> flips;
+        w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+            if (!rules_.types[u.type].ownsRegion) return;
+            int ri = regionAt(sim, tr.pos);
+            if (ri >= 0 && gs.regionOwner[size_t(ri)] != o.player) flips.push_back({ri, o.player});
+        });
+        for (auto& [ri, owner] : flips) {
+            gs.regionOwner[size_t(ri)] = owner;
+            if (!rules_.territory.enabled) continue;
+            for (size_t i = 0; i < gs.grid.region.size(); ++i)
+                if (gs.grid.region[i] == ri) setTerritory(sim, int(i), owner);
+        }
+    }
     // eaters (sandworms) submerge after enough meals and come back somewhere else later
     std::vector<Entity> sink;
     w.each<Eater, Unit>([&](Entity e, Eater& ea, Unit& u) {
