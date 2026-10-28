@@ -1,0 +1,56 @@
+{
+ "name": "bench 1000 read",
+ "size": [
+  128,
+  128
+ ],
+ "players": [
+  {
+   "name": "Blue",
+   "team": 1
+  },
+  {
+   "name": "Red",
+   "team": 2
+  }
+ ],
+ "entities": [
+  {
+   "type": "hall",
+   "owner": 1,
+   "pos": [
+    6,
+    6
+   ]
+  },
+  {
+   "type": "hall",
+   "owner": 2,
+   "pos": [
+    121,
+    121
+   ]
+  }
+ ],
+ "triggers": [
+  {
+   "id": "cfg",
+   "once": true,
+   "event": {
+    "type": "start"
+   },
+   "actions": [
+    {
+     "type": "setVariable",
+     "name": "bench_n",
+     "value": 1000
+    },
+    {
+     "type": "setVariable",
+     "name": "bench_mode",
+     "value": 1
+    }
+   ]
+  }
+ ]
+}

@@ -9353,6 +9353,72 @@ TEST(script_std_sell_refund) {   // lua/commands.lua: same formula as the former
     CHECK(m.scripts()->errorCount() == 0);
 }
 
+// Lua lab (docs/lua-coverage.md): prototypes of mechanics the C++ core doesn't have, written with the
+// public Lua API only (fire spread, attrition, unit programs, rewind, bounty flags).
+static std::unique_ptr<Simulation> luaLabGame(uint64_t seed) {
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/lua_lab";
+    Json rules = Json::parseFile(dir + "/rules.json");
+    Json map = Json::parseFile(dir + "/maps/valley.json");
+    std::string err;
+    CHECK(game::embedScripts(rules, map, [&](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    }, &err));
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, map);
+    return sim;
+}
+
+TEST(lua_lab_prototypes) {
+    auto countType = [](Simulation& sim, const char* id) {
+        const int t = mod(sim).rules().findType(id);
+        int n = 0;
+        sim.world().each<game::Unit>([&](Entity, game::Unit& u) { if (u.type == t && u.hp.raw > 0) ++n; });
+        return n;
+    };
+    auto sim = luaLabGame(3);
+    auto& m = mod(*sim);
+    CHECK(m.scripts() && m.scripts()->hasUserScripts());
+    // rewind: units come back to where they were 10 s ago
+    for (int i = 0; i < 20 * 12; ++i) sim->step();
+    Entity p = findType(*sim, "peasant", 1);
+    CHECK(p.valid());
+    const Vec3 at = sim->world().get<Transform>(p).pos;
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {p}; mv.point = at + Vec3{Fixed::fromInt(6), Fixed{}, Fixed{}};
+    m.applyCommand(*sim, mv);
+    for (int i = 0; i < 20 * 5; ++i) sim->step();
+    CHECK(dist2DTest(sim->world().get<Transform>(p).pos, at) > Fixed::fromInt(3));
+    Command rw; rw.player = 1; rw.type = game::kCmdPlayerAbility; rw.param = m.rules().findPlayerAbility("rewind");
+    m.applyCommand(*sim, rw);
+    for (int i = 0; i < 20 * 2; ++i) sim->step();
+    CHECK(dist2DTest(sim->world().get<Transform>(p).pos, at) < Fixed::fromInt(2));
+    const int trees0 = countType(*sim, "tree");
+    // ignite a forest corner (player ability with a script effect = a custom command from the UI)
+    Command c; c.player = 1; c.type = game::kCmdPlayerAbility; c.param = m.rules().findPlayerAbility("ignite");
+    c.point = {Fixed::fromRatio(5, 2), Fixed{}, Fixed::fromRatio(3, 2)};
+    m.addResource(*sim, 1, uint16_t(m.rules().findResource("gold")), Fixed::fromInt(1000));
+    m.applyCommand(*sim, c);
+    for (int i = 0; i < 20 * 20; ++i) sim->step();
+    CHECK(countType(*sim, "fire") > 0 || countType(*sim, "tree") < trees0);
+    for (int i = 0; i < 20 * 40; ++i) sim->step();
+    CHECK(countType(*sim, "tree") < trees0);                        // the fire spread and burnt trees
+    for (auto& e : m.scripts()->log()) if (e.error) std::printf("  lua_lab log: %s\n", e.text.c_str());
+    CHECK(m.scripts()->errorCount() == 0);
+    // determinism with bots
+    auto run = [](uint64_t seed) {
+        auto s = luaLabGame(seed);
+        std::vector<game::RtsAI> bots;
+        for (auto& pl : s->players()) bots.emplace_back(pl.slot, seed);
+        for (int i = 0; i < 20 * 150; ++i) { for (auto& b : bots) b.update(*s); s->step(); }
+        CHECK(mod(*s).scripts()->errorCount() == 0);
+        return s->checksum();
+    };
+    CHECK(run(3) == run(3));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
