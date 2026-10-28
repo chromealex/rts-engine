@@ -90,6 +90,7 @@ add_library(rts_game STATIC
     modules/rts/RtsSphere.cpp
     modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
+    modules/rts/RtsPlanets.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
@@ -483,7 +484,7 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -582,10 +583,13 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
-    target_sources(rts_tests PRIVATE apps/editor/core/McpInstall.cpp)   # one-click MCP setup: config text patching
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
+    if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
+        target_link_libraries(rts_tests PRIVATE rts_editor_core)
+        target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)
+    endif()
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
