@@ -399,6 +399,26 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 Формат полей — в шапке `modules/rts/view/RtsLights.h`. Тестовые переменные: `RTS_TIME_OF_DAY`,
 `RTS_NIGHT`, `RTS_CLOUDS`, `RTS_STORM`.
 
+## Проверка механик через MCP
+
+Агент, который делает игру без кода, проверяет механику точечно, а не только матчем ботов.
+- **`scenario_run`** — сценарий на копии открытой карты (ничего не сохраняется): `clear` (пустая карта без
+  объектов, волн и стартовых юнитов), `spawn` с именами (`"id": "foot", "count": 3` → `foot#1..3`, `"foot"` — все),
+  команды по секундам (те же ключи, что у `play_command`), `bots` для части слотов, `checks` с результатом
+  pass/fail (`alive`, `dead`, `count`, `hp`, `resource`, `event`, `trigger`, `variable`, `distance`, `status`,
+  `result` + сравнение), `watch` + `every` (состояние объектов во времени), `events` (журнал событий).
+- **`play_units` / `play_command`** — команды в живой тест в окне Game (раньше были только внутри редактора, теперь
+  видны MCP-клиентам). Ссылки на объекты: id из `play_units`, имена `id` из карты или фильтр
+  `{type, owner, tags, kind, area, near + radius}`; `queue: true` — очередь (Shift), `ability` по id.
+- **`match_run`** — плюс журнал срабатывания триггеров и `events` (журнал событий по именам).
+- **`rules_lint`** — ключи `rules.json` и карты, которые загрузчик не читает (опечатки, блок не на месте), с
+  подсказкой («did you mean 'armor'?»). Работает на настоящем загрузчике (`JsonAccessLog` в `engine/data/Json.h`);
+  `rules_set`, `rules_merge` и `map_validate` сообщают о таких ключах сразу.
+- **`rules_schema`** — `part: "keys"`: все ключи, которые загрузчик спрашивает в каждом блоке (`types.*.weapons[]`),
+  собранные по всем играм, и ключи, которых нет в `docs/game-format.md`; `part: "doc"` — сам документ.
+- Событие симуляции `kEvTriggerFired` (только для инструментов и представления, не входит в контрольную сумму).
+- Ветка `agent-mech-tools`.
+
 ## Проверено / не проверено
 
 - ✅ Linux: клиент, редактор, тесты; Windows .exe (кросс-сборка MinGW, запуск под Wine).

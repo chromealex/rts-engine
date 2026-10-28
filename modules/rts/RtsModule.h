@@ -98,6 +98,7 @@ enum GameEvent : uint16_t {
     kEvChannelStart, kEvChannelEnd, // a = caster
     kEvAlert,         // player = alerted player, a = first unit of the group, b = target structure
     kEvGarrisonChanged, // a = structure, value = units delta (effects)
+    kEvTriggerFired,    // tools/debug: value = trigger index (Rules triggers first, then map), player = triggering slot, a = unit
 };
 
 // ---------------------------------------------------------------- components
