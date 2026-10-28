@@ -28,16 +28,35 @@ def blob(u, v, r):
     return t * t * (3 - 2 * t)
 
 
-def fire_sheet(x, y):  # 4x4 flipbook: a flame blob that grows and fades over 16 frames
+def vnoise(x, y, seed):
+    def h(i, j):
+        n = (i * 374761393 + j * 668265263 + seed * 2246822519) & 0xffffffff
+        n = ((n ^ (n >> 13)) * 1274126177) & 0xffffffff
+        return ((n ^ (n >> 16)) & 0xffff) / 65535.0
+    xi, yi = math.floor(x), math.floor(y)
+    fx, fy = x - xi, y - yi
+    fx, fy = fx * fx * (3 - 2 * fx), fy * fy * (3 - 2 * fy)
+    a, b, c, d = h(xi, yi), h(xi + 1, yi), h(xi, yi + 1), h(xi + 1, yi + 1)
+    return (a + (b - a) * fx) * (1 - fy) + (c + (d - c) * fx) * fy
+
+
+def fbm(x, y, seed):
+    return sum(vnoise(x * f, y * f, seed + o) * a for o, (f, a) in enumerate(((1, 0.5), (2, 0.25), (4, 0.125), (8, 0.0625)))) / 0.9375
+
+
+def fire_sheet(x, y):  # 4x4 flipbook: a turbulent flame ball that grows, cools and breaks up over 16 frames
     cell, cx, cy = 32, x % 32, y % 32
     f = (y // cell) * 4 + x // cell
-    k = blob(cx - 15.5, (cy - 15.5) * 0.8 - f * 0.3, 6 + f * 0.6) * (1 - f / 20)
-    return (255, 200 + 55 * k, 120 * k, 255 * k)
+    r = 9 + f * 0.45
+    n = fbm(cx / 7.0 + f * 0.37, cy / 7.0 - f * 0.21, 3)
+    k = blob(cx - 15.5, cy - 15.5, r) * (0.55 + 0.9 * n) * (1 - f / 18)
+    k = max(0.0, min(1.0, k))
+    return (255, 120 + 135 * k, 40 + 140 * k * k, 255 * k)
 
 
 def smoke(x, y):  # RGB only, black background: alpha comes from grayscale (import setting)
-    n = (math.sin(x * 0.7) * math.cos(y * 0.5) + math.sin((x + y) * 0.31)) * 0.15 + 0.7
-    g = 255 * blob(x - 31.5, y - 31.5, 30) * n
+    n = fbm(x / 9.0, y / 9.0, 11)
+    g = 255 * blob(x - 31.5, y - 31.5, 31) * max(0.0, min(1.0, 0.2 + 1.1 * n))
     return (g, g, g, 255)
 
 

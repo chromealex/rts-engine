@@ -162,6 +162,7 @@ void Editor::openGame(const std::string& idOrDir) {
 void Editor::reloadFx() {
     fxWarnings.clear();
     gameFx_.reloadAll();
+    if (dev_) { fxTextures_.shutdown(); fxTextures_.init(*dev_); }   // re-imported textures (fx_import_unity) show up
     gameFx_.clearErrors();
     Json bank;
     std::string text;
