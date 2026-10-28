@@ -826,3 +826,77 @@ TEST(mech_designs) {
     if (issues.size()) std::fprintf(stderr, "%s\n", issues.dump().c_str());
 #endif
 }
+
+// ---------------------------------------------------------------- F: morale, rout, flanks, fatigue, charge, supply (stage 4)
+TEST(mech_battle) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(,
+      "morale": {"max": 100, "regen": 2, "hitLoss": 100, "allyDeath": 10, "allyRadius": 4, "waver": 40, "rout": 20, "rally": 60,
+                 "general": {"tags": ["general"], "radius": 8, "regen": 10}, "tags": ["soldier"]},
+      "fatigue": {"run": 10, "fight": 4, "recover": 5, "tired": 50, "exhausted": 90},
+      "supply": {"attrition": 0.02, "speed": 0.8, "tags": ["soldier"]},
+      "types": {
+        "spear": {"tags": ["soldier"], "move": {"speed": 2}, "sight": 8, "health": {"max": 1000}},
+        "archer": {"tags": ["soldier"], "move": {"speed": 0}, "sight": 10, "health": {"max": 1000}, "weapons": [{"range": 6, "damage": 100, "cooldown": 1}]},
+        "captain": {"tags": ["soldier", "general"], "move": {"speed": 2}, "sight": 8, "health": {"max": 500}},
+        "knight": {"tags": ["soldier"], "move": {"speed": 4}, "sight": 30, "health": {"max": 1000},
+                   "weapons": [{"range": 1, "damage": 10, "cooldown": 1}], "charge": {"bonus": 3, "run": 4, "shock": 25}},
+        "dummy": {"move": {"speed": 0}, "health": {"max": 1000}},
+        "depot": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "supplyRadius": 25}
+      }})";
+    std::string map = flatMap(60, 30, R"(,"entities":[
+        {"type":"depot","owner":1,"pos":[2,2]},{"type":"depot","owner":2,"pos":[56,2]},
+        {"type":"spear","owner":1,"pos":[10,10]},{"type":"archer","owner":2,"pos":[6,10]},
+        {"type":"spear","owner":1,"pos":[10,20]},{"type":"archer","owner":2,"pos":[14,20]}])");
+    auto sim = makeSimJson(rules, map);
+    World& w = sim->world();
+    Entity flanked = unitNear(*sim, 10, 10), faced = unitNear(*sim, 10, 20), a1 = unitNear(*sim, 6, 10), a2 = unitNear(*sim, 14, 20);
+    // both spearmen face +x: the first is shot in the back, the second in the face
+    w.get<game::Unit>(flanked).facing = {Fixed::fromInt(1), Fixed{}, Fixed{}};
+    w.get<game::Unit>(faced).facing = {Fixed::fromInt(1), Fixed{}, Fixed{}};
+    run(*sim, 2.6);
+    CHECK(w.has<game::Morale>(flanked) && w.get<game::Morale>(flanked).value < w.get<game::Morale>(faced).value);
+    run(*sim, 3);
+    // the flanked spearman routs and runs away from the archer; the other one only wavers
+    CHECK(w.get<game::Morale>(flanked).state == uint8_t(game::MoraleMode::Routing));
+    CHECK(posOf(*sim, flanked).x > Fixed::fromInt(11));
+    CHECK(w.get<game::Morale>(faced).state != uint8_t(game::MoraleMode::Routing));
+    // with the archers gone the routed unit rallies
+    mod(*sim).dealDamage(*sim, a1, Fixed::fromInt(100000), game::kDamagePure, kNullEntity, 0);
+    mod(*sim).dealDamage(*sim, a2, Fixed::fromInt(100000), game::kDamagePure, kNullEntity, 0);
+    run(*sim, 30);
+    CHECK(w.get<game::Morale>(flanked).state == uint8_t(game::MoraleMode::Steady));
+    // fatigue: a long march tires and slows; supply: far from the depot units lose hp and are slower
+    Entity marcher = unitNear(*sim, 10, 20);
+    Fixed fresh = mod(*sim).stat(*sim, marcher, game::Stat::Speed);
+    sim->submit(mechCmd(1, game::kCmdMove, {marcher}, kNullEntity, at(50, 25)));
+    run(*sim, 7);
+    CHECK(w.get<game::Morale>(marcher).fatigue >= Fixed::fromInt(50));
+    CHECK(w.get<game::Morale>(marcher).outOfSupply);
+    CHECK(mod(*sim).stat(*sim, marcher, game::Stat::Speed) < fresh * Fixed::fromRatio(85, 100));
+    Fixed hp0 = hpOf(*sim, marcher);
+    run(*sim, 3);
+    CHECK(hpOf(*sim, marcher) < hp0);
+    // a death next to a soldier shakes him; a general nearby makes him recover faster
+    Entity s1 = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("spear")), 1, at(5, 26));
+    Entity s2 = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("spear")), 1, at(6, 26));
+    run(*sim, 0.2);
+    Fixed m1 = w.get<game::Morale>(s1).value;
+    mod(*sim).dealDamage(*sim, s2, Fixed::fromInt(100000), game::kDamagePure, kNullEntity, 0);
+    run(*sim, 0.2);
+    CHECK(w.get<game::Morale>(s1).value <= m1 - Fixed::fromInt(9));
+    Fixed low = w.get<game::Morale>(s1).value;
+    mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("captain")), 1, at(7, 27));
+    run(*sim, 0.5);
+    CHECK(w.get<game::Morale>(s1).value >= low + Fixed::fromInt(5));
+    // charge: the first blow after a run-up deals bonus damage
+    Entity dummy = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("dummy")), 2, at(40, 10));
+    Entity knight = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("knight")), 1, at(28, 10));
+    sim->submit(mechCmd(1, game::kCmdAttack, {knight}, dummy));
+    Fixed first{};
+    for (int i = 0; i < 20 * 8 && first.raw == 0; ++i) { sim->step(); if (hpOf(*sim, dummy) < Fixed::fromInt(1000)) first = Fixed::fromInt(1000) - hpOf(*sim, dummy); }
+    CHECK(first == Fixed::fromInt(30));
+    const Fixed after = hpOf(*sim, dummy);
+    for (int i = 0; i < 20 * 3 && hpOf(*sim, dummy) == after; ++i) sim->step();
+    CHECK(after - hpOf(*sim, dummy) == Fixed::fromInt(10));   // the next blow is plain
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+}
