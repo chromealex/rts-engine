@@ -1373,6 +1373,17 @@ creates corners from the visible surface: cliff levels, ramps, fine heights), `t
 (16-bit grayscale PNG, `(w+1) x (h+1)` pixels, height = offset + value / 65535 * scale). Corners are visual unless
 rules `terrain.model` is `heightfield` (see below).
 
+### Detail surface (sub-cell relief)
+
+`"terrain": {"style": "smooth"}` in rules.json / game.json draws the terrain from a visual heightmap with several
+samples per cell instead of one height per cell corner: bevelled cliffs with organic outlines, rounded plateaus and
+ramps on cliff-level maps, bicubic relief with fine noise on heightfield maps, per-pixel lighting, materials blended at
+sub-cell resolution with automatic rock on steep slopes. Default `"classic"` keeps the old look. A map can carry its
+own painted detail: `terrain.detail` = `{"scale": 4, "file": "maps/<name>.detail.r16", "splat": "..."}` (int16 LE,
+1/16 units, `(w*k+1) x (h*k+1)`). Tuning keys `terrain.detailLook`. Editor / MCP: `terrain_detail`, `terrain_sculpt`
+(sub-cell, erode, stamp), `terrain_paint_material`, `heightmap_import/export {detail: true}`. Full description and
+numbers: `docs/terrain.md` § Detail surface. Samples: `starfall` (cliffs), `metaltide` (relief), `frostcrown`.
+
 ## Heightfield terrain
 
 `rules.terrain.model: "heightfield"` + a map with `terrain.corners` / `cornersFile` (without corners the map
