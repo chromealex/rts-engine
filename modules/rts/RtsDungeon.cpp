@@ -534,7 +534,9 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
         return;
     }
     case kCmdPlayerAbility: {
-        int idx = int(cmd.param);
+        int idx = int(cmd.param & 0xFFFF);
+        if (rules_.fidelity) takePoint2(sim, pl, cmd.param);   // pointPair abilities carry their second point
+        else if (cmd.param >> 16) return;
         if (rules_.advancedEffects) { castPlayerAbility(sim, pl, idx, cmd.point, cmd.target); return; }
         if (!canUsePlayerAbility(sim, pl, idx)) return;
         if (rules_.mech.deck && !mechDeckAllows(sim, pl, idx, cmd.point)) return;   // agent-mech: deploy zone
@@ -967,6 +969,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
             Vec3 spot = freeSpotNear(sim, r.from, ut.pathLayer);
             Entity n = spawn(sim, r.type, r.owner, spot);
             sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, spot});
+            if (!rules_.types[w.get<Unit>(r.from).type].autoTrainAdvance) continue;   // births stay home
             w.add<Advancer>(n);
             Vec3 goal;
             auto* prod = w.tryGet<Production>(r.from);

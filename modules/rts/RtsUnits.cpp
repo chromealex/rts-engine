@@ -194,7 +194,37 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
     }
     if (o.state == 1) {
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10) && rules_.mech.workerCaps && !mechNodeHasRoom(sim, o.target, e)) { stopMoving(sim, e); return false; }   // agent-mech: waits for a free place
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) { stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10)); }
+        const Fixed cd = contactDistance(sim, e, o.target);
+        // limited nodes (one worker per patch): a worker that can't get to the patch because others stand there
+        // waits close by instead of asking for a new path every tick
+        const bool queued = nt.maxGatherers > 0 && cd <= Fixed::fromInt(2) && m && !m->moving;
+        if (cd <= Fixed::fromRatio(6, 10) || queued) {
+            const bool full = nt.maxGatherers > 0 && gatherersAt(sim, o.target) >= nt.maxGatherers;
+            if (!full && cd > Fixed::fromRatio(6, 10)) {             // free but out of reach: walk up again now and then
+                if ((sim.tick() + e.index) % 20 == 0) o.state = 0;
+                return false;
+            }
+            if (full) {
+                if ((sim.tick() + e.index) % 8 != 0) return false;   // wait; look for another node a few times a second
+                // node full (WC3 mine: 5 inside, SC patch: one at a time): try a free node close by, else wait
+                Vec3 at = w.get<Transform>(e).pos;
+                Entity alt;
+                Fixed bd = Fixed::fromInt(7);
+                const int16_t nres = w.get<ResourceStock>(o.target).res;
+                w.each<ResourceStock, Unit, Transform>([&](Entity n, ResourceStock& rs, Unit& nu, Transform& ntr) {
+                    if (n == o.target || rs.res != nres || nu.hp.raw <= 0) return;
+                    const UnitType& at2 = rules_.types[nu.type];
+                    if (at2.ownerOnly && w.get<Owner>(n).player != owner) return;
+                    if (at2.maxGatherers > 0 && gatherersAt(sim, n) >= at2.maxGatherers) return;
+                    Fixed d = dist2D(ntr.pos, at);
+                    if (d < bd) { bd = d; alt = n; }
+                });
+                if (alt.valid()) { o.target = alt; o.state = 0; }
+                return false;
+            }
+            stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
+            if (nt.maxGatherers > 0) { gatherersAt(sim, o.target); if (gatherCount_.size() <= o.target.index) gatherCount_.resize(o.target.index + 1, 0); gatherCount_[o.target.index]++; }
+        }
         else if (m && !m->moving) o.state = 0;
         return false;
     }
@@ -363,7 +393,10 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (!o.target.valid()) return true;
         }
         if (o.state == 0) {
-            moveTo(sim, e, w.get<Transform>(o.target).pos, rules_.types[w.get<Unit>(o.target).type].radius + t.radius + Fixed::fromRatio(4, 10));
+            // goal radius from the short side: a 3x2 refinery must not count as reached 1.5 cells away from its long side
+            const UnitType& dt = rules_.types[w.get<Unit>(o.target).type];
+            Fixed near = dt.structure ? Fixed::fromInt(std::min(dt.footprintW, dt.footprintH)) / 2 : dt.radius;
+            moveTo(sim, e, w.get<Transform>(o.target).pos, near + t.radius + Fixed::fromRatio(4, 10));
             o.state = 1;
         }
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
@@ -471,14 +504,18 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         if (o.state == 0 && m) {
             Vec3 tp = w.get<Transform>(o.target).pos;
             m->goal = tp; m->goalRadius = Fixed{}; m->path = {tp}; m->pathPos = 0; m->moving = true;
-            if (!state(sim).roadsOnly) moveTo(sim, e, tp, Fixed{});
+            // close to the target (a crowd at the door) walk straight in instead of asking for a path every tick
+            const bool near = rules_.originals && dist2D(tr.pos, tp) < Fixed::fromInt(4);
+            if (!state(sim).roadsOnly && !near) moveTo(sim, e, tp, Fixed{});
             o.state = 1;
         }
-        if (contactDistance(sim, e, o.target) > Fixed::fromRatio(2, 10)) {
+        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target);
+        if (contactDistance(sim, e, o.target) > (crewing ? Fixed::fromRatio(6, 10) : Fixed::fromRatio(2, 10))) {
             if (m && !m->moving) o.state = 0;
             return false;
         }
-        // arrived: reinforce, assault or capture
+        // arrived: man an empty vehicle (Z), reinforce, assault or capture
+        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
         if (rules_.advancedEffects) { enterGarrison(sim, e, o.target); return true; }
         auto* g = w.tryGet<Garrison>(o.target);
         const uint8_t me = w.get<Owner>(e).player;
@@ -488,14 +525,17 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (to.player == me || (to.player != 0 && to.player != kHostileNeutral && sim.allied(to.player, me))) {
                 ++g->count;
             } else if (g->count > 0) {
-                g->damageAcc += kOne / fxMax(tt.garrisonDefense, Fixed::fromRatio(1, 10));
+                Fixed atk = rules_.originals ? stat(sim, e, Stat::Damage) / fxMax(stat(sim, o.target, Stat::Defense), Fixed::fromRatio(1, 10)) : kOne;
+                g->damageAcc += atk / fxMax(tt.garrisonDefense, Fixed::fromRatio(1, 10));
                 while (g->damageAcc >= kOne && g->count > 0) { --g->count; g->damageAcc -= kOne; }
+                if (rules_.originals) assaultOriginals(sim, e, o.target);
             } else if (tt.capturable) {
                 uint8_t old = to.player;
                 to.player = me;
                 g->count = 1; g->damageAcc = Fixed{}; g->growth = Fixed{}; g->pendingOut = 0;
                 if (auto* p = w.tryGet<Production>(o.target)) p->queue.clear();
                 sim.emit({kEvCaptured, me, o.target, e, old, w.get<Transform>(o.target).pos});
+                if (rules_.originals) captureOriginals(sim, o.target, old, me);
             }
         }
         Unit& uu = w.get<Unit>(e);

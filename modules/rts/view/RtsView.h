@@ -24,6 +24,7 @@
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
 #include "RtsFog.h"
+#include "RtsPlanetGroundFx.h"
 #include "RtsPlanetRender.h"
 #include "RtsOverlays.h"
 #include "RtsTerrainRender.h"
@@ -43,6 +44,7 @@ struct SceneObject {
     float carry = 0;             // > 0: carrying resources
     int16_t carryRes = -1;       // resource index of the cargo
     bool selected = false, hovered = false, visible = true, isProjectile = false;
+    bool unpowered = false;      // disabled by a power deficit / owner in low power (electric lights dim)
     uint8_t action = 0;          // SpriteAction (sprite animations): idle, move, attack, work
     // animation hints (sceneFromSim fills them; editor placements leave the defaults)
     uint8_t order = 0;           // current order: 0 none, else OrderType + 1
@@ -52,9 +54,10 @@ struct SceneObject {
     render::float3 target;
     Entity source;               // projectiles: who fired (muzzle point)
     uint16_t shooterType = UINT16_MAX; // projectiles: type of the unit that fired it (lights)
-    // planets: body index (PlanetWorld) and pos / facing / target body-local (origin = body centre);
-    // -1 = flat map coordinates (on planet maps the view projects them onto the start body, RtsPlanetView.cpp)
+    // planets: body index and pos / facing / target body-local (origin = body centre); -1 = flat map
+    // coordinates; kBodyTransit = between bodies: pos is the world position, facing the travel direction
     int16_t body = -1;
+    static constexpr int16_t kBodyTransit = -2;
 };
 
 struct RtsScene {
@@ -66,6 +69,10 @@ struct RtsScene {
     std::vector<SimEvent> events;
     uint32_t tick = 0;
     double seconds = 0;          // game time (tick / tick rate): drives the day/night cycle
+    // Day/night phase from the simulation (0..1, 0 = midnight, 0.5 = noon), when a gameplay day cycle
+    // exists (mechanic E, rules.cycle); < 0: the lighting block's own clock. Visual and gameplay
+    // night then always agree.
+    float cycle = -1;
     // ground overlays (RtsGroundFx): the fog-of-war viewer (0 = everything) and the sim's lanes (read only)
     uint8_t viewer = 0;
     const std::vector<Lane>* lanes = nullptr;
@@ -158,20 +165,33 @@ public:
     const render::RTSCamera& updatePlanetCamera(double seconds, float dt, int viewH);
     // Screen point -> body + body-local surface point (terrain / ocean picking).
     bool pickPlanet(const render::RTSCamera& cam, float sx, float sy, float w, float h, int& body, render::float3& local) const;
-    // Until the simulation has bodies, the flat sim map lives on the start body's face 2 (centred):
-    bool flatToBody(render::float3 flat, int& body, render::float3& local) const;
-    bool bodyToFlat(int body, render::float3 local, render::float3& flat) const;
+    // Match maps: the simulation's Surface is the source of bodies, orbits, corner heights and cell flags
+    // (map JSON only for visual keys). Call after the sim is set up, before buildTerrain().
+    void setSimWorld(std::shared_ptr<const Surface> surf, const MapGrid& grid, const Json& map);
+    // Sim-space positions (anchor(body) + local, RtsSurface.h) <-> body + body-local position.
+    static bool simToBody(render::float3 sim, int& body, render::float3& local);
+    static render::float3 bodyToSim(int body, render::float3 local) { return anchorF(body) + local; }
+    // Body-local surface point of a face position (cells), e.g. a map "at" {body, face, x, y}.
+    bool facePoint(int body, int face, float x, float y, render::float3& local) const;
     // Where the view draws an object (view world), `lift` above its ground point. Flat maps: {x, lift, z}.
     render::float3 objectViewPos(const SceneObject& o, float lift) const;
     render::float3 bodyToView(int body, render::float3 local) const;
-    // Body and body-local position of a scene object (flat sim objects: mapped onto the start body).
+    // Body and body-local position of a scene object (false: not on a body, e.g. in transit).
     bool objectOnBody(const SceneObject& o, int& body, render::float3& local) const {
         if (o.body >= 0) { body = o.body; local = o.pos; return true; }
-        return flatToBody(o.pos, body, local);
+        return false;
     }
-    // Fog of war of the start body as drawn (6 * N * N, 0 unexplored .. 255 visible); empty = no fog.
-    const std::vector<uint8_t>& planetVision() const { return planetVision_; }
+    // Fog of war of a body as drawn (6 * N * N, 0 unexplored .. 255 visible); empty = no fog.
+    const std::vector<uint8_t>& planetVision(int body) const { static const std::vector<uint8_t> none; return body >= 0 && size_t(body) < planetVision_.size() ? planetVision_[size_t(body)] : none; }
     double planetSeconds() const { return planetSeconds_; }
+    // Particles on planets live in the body-local space of the body the camera looks at (moves with it):
+    // the body and its body-local -> view-world matrix this frame (after updatePlanetCamera).
+    int planetFxBody() const { return planetCam_.body(); }
+    render::mat4 planetFxSpace() const;
+    // particle placement: sim position -> body-local of the camera body, `lift` above the ground (lift < -1e8:
+    // keep the position as it is, e.g. a flyer); false on other bodies. Ground altitude of a body-local point.
+    bool planetFxPlace(render::float3 sim, float lift, render::float3& out, render::float3& up) const;
+    float planetFxAltitude(render::float3 local) const;
     // Object frame in the view world (columns: east, up, south, ground point); false when not on a body.
     bool planetPlacement(const SceneObject& o, render::mat4& out) const;
     void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }
@@ -208,6 +228,7 @@ private:
     struct ModelChoice {
         render::Model* model = nullptr;
         std::vector<render::Material> materials;  // per-type copy with overrides applied
+        std::vector<int> nodeMaterial;            // "assign": node -> index into materials (-1 = the model's)
         render::mat4 fix;                         // forward axis, fit, offset
         ClipSpec clips[kAnimCount];
         bool hasClip[kAnimCount] = {};
@@ -272,6 +293,14 @@ private:
     void buildLook(gfx::Device& dev, const UnitType& t, TypeLook& out);
     bool loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, const std::string& path, ModelChoice& out);
     void configureChoice(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c, bool isShape);
+    // Material library (materials.json): a reference ("steel", {"use": "steel", ...}) flattened into
+    // one override object; library entries inherit with "base".
+    Json resolveMaterial(const UnitType& t, const Json& ref, int depth = 0);
+public:
+    // A material reference / override object applied to `mt` (textures load into `m`).
+    void applyMaterial(gfx::Device& dev, const UnitType& t, render::Model& m, render::Material& mt, const Json& ref);
+    const Json& materialLibrary() const { return materialLib_; }
+private:
     void configureExtras(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c);
     render::Model* loadModelCached(gfx::Device& dev, const UnitType& t, const std::string& path);
     int loadTexture(gfx::Device& dev, const UnitType& t, render::Model& m, const std::string& path);
@@ -296,6 +325,7 @@ private:
 
     const Rules* rules_ = nullptr;
     render::FileReader read_;
+    Json materialLib_ = Json::object();   // materials.json "materials"
     gfx::Device* dev_ = nullptr;
     std::map<std::string, std::unique_ptr<render::Model>> models_;  // by path; shapes as "shape:<name>"
     std::vector<TypeLook> looks_;
@@ -323,18 +353,23 @@ private:
     render::float3 camPos_;
     // planets
     PlanetRenderer planets_;
+    RtsPlanetGroundFx planetGroundFx_;   // territory / roads on sphere faces
+    std::vector<uint8_t> territoryDemo_;  // RTS_PLANET_TERRITORY_DEMO (testing the overlay)
     PlanetCamera planetCam_;
     PlanetViewFrame pframe_;
     double planetSeconds_ = 0;
-    std::vector<uint8_t> barOk_, planetVision_;
-    // flat sim map on the start body (until the sim has bodies): face 2, centred, scaled to fit
-    int demoBody_ = -1, demoW_ = 0, demoH_ = 0;
-    float demoOff_[2] = {0, 0}, demoScale_ = 1;
+    std::vector<uint8_t> barOk_;
+    std::vector<std::vector<uint8_t>> planetVision_;   // per body
+    struct PlanetPlace { int body = -1; render::float3 ground; float lift = 0; };
+    std::unordered_map<uint64_t, PlanetPlace> planetLast_;   // corpses: where an object was last drawn
     bool planetNoShadow_ = false;
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters
 // enemies by fog of war (0 = see everything).
 void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer);
+// Planet maps (sceneFromSim calls it): objects with body-local positions, units in transit with world positions.
+class RtsModule;
+void sceneFromSphere(Simulation& sim, RtsModule& m, const Surface& surf, RtsScene& out, float alpha, uint8_t viewer);
 
 } // namespace rts::game

@@ -2,6 +2,7 @@
 // Window contents live in apps/editor/windows/*.cpp; the agent link in EditorAgent.cpp.
 #include "Editor.h"
 #include "core/SimTools.h"
+#include "engine/fx/FxModelMesh.h"
 #include "imgui.h"
 #include "imgui_internal.h" // DockBuilder
 
@@ -118,6 +119,7 @@ void Editor::init(gfx::Device& dev) {
         return true;
     });
     gameFx_.setGroundHeight([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : view_.heightAt(grid_, x, z); });
+    gameFx_.setMeshLoader([this](const std::string& name, fx::FxMesh& out) { return fx::meshFromModelFile(name, projectReader(ws_.project.dir), out); });
     if (!gameFx_.init(&dev)) ws_.log("fx", gameFx_.lastError(), true);
     reloadFx();
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
@@ -159,7 +161,11 @@ void Editor::focusWindow(const std::string& id) {
 void Editor::openGame(const std::string& idOrDir) {
     std::string err;
     if (playing()) stopPlay();
-    if (!ws_.openGame(idOrDir, &err)) { status = "Не удалось открыть игру: " + err; return; }
+    if (!ws_.openGame(idOrDir, &err)) {
+        status = "Не удалось открыть проект: " + err;
+        ws_.log("editor", status + " (" + idOrDir + ")", true);
+        return;
+    }
     ws_.changes.clear();
     reloadRules();
     selection = {};
@@ -252,9 +258,14 @@ void Editor::fitScene() {
 }
 
 void Editor::focusScene(float x, float z, float distance) {
-    if (view_.planetMode()) { // flat coordinates on the start body (agents' view_focus)
-        int body; float3 local;
-        if (view_.flatToBody({x, 0, z}, body, local)) { view_.planetCamera().focus(body); view_.planetCamera().setDir(local); }
+    if (view_.planetMode()) { // x, z = cells on the face the camera looks at (agents' view_focus)
+        const auto& pc = view_.planetCamera();
+        const game::PlanetSurface* s = view_.planets().surface(pc.body());
+        if (s) {
+            int f; float a, b;
+            s->faceFromDir(pc.dir(), f, a, b);
+            view_.planetCamera().setDir(s->dirFromFace(f, std::clamp(x, 0.0f, float(s->faceSize())), std::clamp(z, 0.0f, float(s->faceSize()))));
+        }
         if (distance > 0) view_.planetCamera().distance = distance;
         return;
     }
@@ -267,10 +278,10 @@ void Editor::flash(float x0, float z0, float x1, float z1, double seconds) { fla
 
 bool Editor::groundAt(const Viewport& vp, const RTSCamera& cam, float sx, float sy, float& x, float& z) const {
     float3 g;
-    if (view_.planetMode()) { // flat map objects live on the start body (until the sim has bodies)
-        int body; float3 local;
-        if (!planetAt(vp, sx, sy, body, local) || !view_.bodyToFlat(body, local, g)) return false;
-        x = g.x; z = g.z;
+    if (view_.planetMode()) { // cells on the face under the cursor (planet tools use planetPosAt)
+        const Json at = planetPosAt(vp, sx, sy);
+        if (!at.isObject()) return false;
+        x = float(at["x"].toDouble()); z = float(at["y"].toDouble());
         return true;
     }
     if (!cam.screenToGround(sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, g)) return false;
@@ -286,6 +297,22 @@ float Editor::snapCoord(float v, int typeIdx) const {
 }
 
 int Editor::pickEntity(const Viewport& vp, const RTSCamera& cam, float sx, float sy) const {
+    if (view_.planetMode()) { // nearest entity on the picked body, 3D distance
+        int body; float3 local;
+        if (!planetAt(vp, sx, sy, body, local)) return -1;
+        int best = -1;
+        float bestD = 1e9f;
+        const auto& d = ws_.map.data;
+        for (size_t i = 0; i < d.entities.size(); ++i) {
+            int eb; float3 el;
+            if (!planetLocal(d.entities[i].at, eb, el) || eb != body) continue;
+            const int t = rules().findType(d.entities[i].type);
+            const float r = t >= 0 ? const_cast<game::RtsView&>(view_).selectionRadius(uint16_t(t)) + 0.2f : 0.6f;
+            const float dd = length(el - local);
+            if (dd < r && dd < bestD) { best = int(i); bestD = dd; }
+        }
+        return best;
+    }
     float x, z;
     if (!groundAt(vp, cam, sx, sy, x, z)) return -1;
     int best = -1;
@@ -334,13 +361,14 @@ void Editor::syncGrid() {
         grid_.fieldAmt[size_t(i)] = Fixed::fromInt(d.fieldAmt[size_t(i)]);
     }
     view_.setTiles(d.extra["tiles"]);
-    {   // planets: the world block (kept verbatim in extra); sculpt / paint rebuild only what changed
-        const std::string text = d.extra["world"].isObject() ? d.extra["world"].dump(0) : std::string();
+    {   // planets: the world block (MapDoc bodies); sculpt / paint rebuild only what changed
+        const Json world = d.planet() ? doc().worldJson() : Json();
+        const std::string text = world.isObject() ? world.dump(0) : std::string();
         uint64_t h = 1469598103934665603ull;
         for (unsigned char c : text) { h ^= c; h *= 1099511628211ull; }
         if (h != worldHash_) {
             Json m = Json::object();
-            if (!text.empty()) m.set("world", d.extra["world"]);
+            if (!text.empty()) m.set("world", world);
             if (worldHash_ == 0 || !view_.planetMode() || text.empty()) view_.setWorld(m); else view_.updateWorld(m);
             worldHash_ = h;
         }
@@ -352,6 +380,27 @@ void Editor::syncGrid() {
 
 bool Editor::planetAt(const Viewport& vp, float sx, float sy, int& body, render::float3& local) const {
     return view_.pickPlanet(view_.planetCamera().camera(), sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, body, local);
+}
+
+Json Editor::planetPosAt(const Viewport& vp, float sx, float sy) const {
+    int body; float3 local;
+    if (!planetAt(vp, sx, sy, body, local)) return Json();
+    const game::PlanetSurface* s = view_.planets().surface(body);
+    if (!s) return Json();
+    int f; float a, b;
+    s->faceFromDir(normalize(local), f, a, b);
+    Json at = Json::object();
+    at.set("body", Json::string(planetBodyId(body)));
+    at.set("face", Json::number(int64_t(f)));
+    at.set("x", Json::number(double(a), 2));
+    at.set("y", Json::number(double(b), 2));
+    return at;
+}
+
+bool Editor::planetLocal(const Json& at, int& body, float3& local) const {
+    if (!at.isObject()) return false;
+    body = view_.planets().world().find(at.getStr("body"));
+    return body >= 0 && view_.facePoint(body, int(at.getInt("face", -1)), float(at["x"].toDouble()), float(at["y"].toDouble()), local);
 }
 
 std::string Editor::planetBodyId(int body) const {
@@ -373,11 +422,16 @@ void Editor::buildEditScene(game::RtsScene& out) const {
         o.type = uint16_t(t);
         o.owner = e.owner < 0 ? uint8_t(game::kHostileNeutral) : uint8_t(std::clamp(e.owner, 0, 16));
         o.pos = {e.x, 0, e.z};
+        if (d.planet()) { // body-local surface point of "at"
+            int body; float3 local;
+            if (!planetLocal(e.at, body, local)) continue;
+            o.body = int16_t(body); o.pos = local;
+        }
         if (rules().types[size_t(t)].garrisonMax > 0) o.garrison = e.garrison >= 0 ? e.garrison : 0;
         o.selected = int(i) == sel || int(i) == roadStart;
         out.objects.push_back(o);
     }
-    for (auto [a, b] : d.roads) out.roads.push_back({{d.entities[size_t(a)].x, 0, d.entities[size_t(a)].z}, {d.entities[size_t(b)].x, 0, d.entities[size_t(b)].z}});
+    if (!d.planet()) for (auto [a, b] : d.roads) out.roads.push_back({{d.entities[size_t(a)].x, 0, d.entities[size_t(a)].z}, {d.entities[size_t(b)].x, 0, d.entities[size_t(b)].z}});
 }
 
 void Editor::drawEditOverlays3D() {
@@ -465,7 +519,10 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     auto& gs = simModule()->state(*sim_);
     // fields / creep changing during play are read by the terrain shader: build once per play session
     if (!playTerrainBuilt_) {
-        if (const Json* gm = simModule()->generatedMap()) view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h); // map "generate"
+        if (const Json* gm = simModule()->generatedMap()) {   // map "generate": the view shows what the sim was built from
+            if ((*gm)["world"].isObject()) { view_.setWorld(*gm); worldHash_ = 0; }
+            view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h);
+        }
         view_.buildTerrain(*dev_, gs.grid);
         playTerrainBuilt_ = true;
     }

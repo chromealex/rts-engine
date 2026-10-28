@@ -463,7 +463,7 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* b = w.tryGet<Boarded>(e)) { h.u32(0xB0A7); h.u64(b->carrier.packed()); h.u32(b->fires); }
     if (auto* v = w.tryGet<Veteran>(e)) { h.u32(0x7E7E); h.i32(v->level); h.fx(v->xp); }
     if (auto* rp = w.tryGet<RallyPath>(e)) { h.u32(0x9A11); h.u32(uint32_t(rp->points.size())); }
-    if (auto* sh = w.tryGet<Shield>(e)) { h.u32(0x5E1D); h.fx(sh->hp); }
+    if (auto* sh = w.tryGet<MechShield>(e)) { h.u32(0x5E1D); h.fx(sh->hp); }
     if (auto* fm = w.tryGet<Formation>(e)) { h.u32(0xF0A3); h.u32(fm->group); h.v3(fm->offset); }
     if (auto* am = w.tryGet<Ammo>(e)) { h.u32(0xA330); for (int k = 0; k < 4; ++k) h.i32(am->left[k]); }
     if (auto* tr = w.tryGet<Trader>(e)) { h.u32(0x7DE4); h.u64(tr->dest.packed()); h.u32(tr->loaded); }

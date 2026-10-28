@@ -91,7 +91,8 @@ struct ModelDraw {
     const Model* model = nullptr;
     mat4 world;                                    // model space -> world
     const std::vector<mat4>* nodeWorld = nullptr;  // pose, model space; null = bind pose
-    const std::vector<Material>* materials = nullptr; // per-instance override (same size as model->materials)
+    const std::vector<Material>* materials = nullptr; // per-instance override (model->materials first, extra ones after)
+    const std::vector<int>* nodeMaterial = nullptr;   // per node: index into materials for its meshes (-1 = own)
     float4 tint{1, 1, 1, 1};                       // rgb multiply (linear), a = opacity (< 1 draws blended)
     float3 team{1, 1, 1};                          // team colour, linear
     float flash = 0;                               // additive highlight (hit feedback)
@@ -174,6 +175,7 @@ private:
     void drawModelBatch(const uint32_t* items, uint32_t count, int phase);
     void renderModels(int phase);   // 0 shadow, 1 opaque, 2 blended, 3 outlines
     void renderReflection();        // water planar reflection (Renderer3DReflect.cpp, lighting agent)
+    void renderSpotShadow();        // depth of the casters seen from the main spot light (same file)
     void computeShadowMatrix(const RTSCamera& cam, float aspect);
     void uploadFrameUniforms(bool forShadow);
 

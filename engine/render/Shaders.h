@@ -56,8 +56,9 @@ namespace rts::render::shaders {
     "        s += texture(tex0, vec3(uv + vec2( 0.5,  0.5) * r, d));\n" \
     "        return s * 0.25;\n" \
     "    }\n" \
-    "    // per-pixel rotation (interleaved gradient noise) turns banding into fine grain\n" \
-    "    float a = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n" \
+    "    // per-pixel rotation (interleaved gradient noise) turns banding into fine grain; a kernel of a\n" \
+    "    // few texels can't band (each tap is a bilinear compare), where the grain would only show as stipple\n" \
+    "    float a = r < u_shadow.w * 3.2 ? 0.0 : 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n" \
     "    vec2 cs = vec2(cos(a), sin(a));\n" \
     "    int n_ = int(u_quality.x);\n" \
     "    float s = 0.0;\n" \
@@ -95,7 +96,7 @@ namespace rts::render::shaders {
     "        s += sm.sample_compare(ss, uv + float2( 0.5,  0.5) * r, d);\n" \
     "        return s * 0.25;\n" \
     "    }\n" \
-    "    float a = 6.2831853 * fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));\n" \
+    "    float a = r < f.shadow.w * 3.2 ? 0.0 : 6.2831853 * fract(52.9829189 * fract(dot(fragCoord, float2(0.06711056, 0.00583715))));\n" \
     "    float2 cs = float2(cos(a), sin(a));\n" \
     "    int cnt = int(f.quality.x);\n" \
     "    float s = 0.0;\n" \

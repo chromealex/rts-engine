@@ -21,7 +21,7 @@ struct Veteran { int level = 1; Fixed xp{}; Entity lastHit = kNullEntity; };
 // Extra rally waypoints of a producer (Shift + rally): new units walk them in order after the rally point.
 struct RallyPath { std::vector<Vec3> points; };
 // StarCraft shields: absorb damage first, regenerate after `delay` seconds without being hit.
-struct Shield { Fixed hp{}; uint32_t lastHit = 0; };
+struct MechShield { Fixed hp{}; uint32_t lastHit = 0; };   // agent-mech shields (type mech.shieldMax); originals has its own Shield
 
 // ---- stage 2
 struct Formation { uint32_t group = 0; uint8_t shape = 0; Vec3 offset{}; };       // offset in formation space (x right, z back)

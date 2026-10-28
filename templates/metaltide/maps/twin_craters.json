@@ -7,11 +7,21 @@
  "players": [
   {
    "name": "Синие",
-   "team": 1
+   "team": 1,
+   "faction": "arm",
+   "start": [
+    10,
+    24
+   ]
   },
   {
    "name": "Красные",
-   "team": 2
+   "team": 2,
+   "faction": "core",
+   "start": [
+    54,
+    24
+   ]
   }
  ],
  "terrain": {
@@ -118,22 +128,6 @@
   ]
  },
  "entities": [
-  {
-   "type": "commander",
-   "owner": 1,
-   "pos": [
-    10,
-    24
-   ]
-  },
-  {
-   "type": "commander",
-   "owner": 2,
-   "pos": [
-    54,
-    24
-   ]
-  },
   {
    "type": "metal_spot",
    "owner": 0,

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include "modules/rts/RtsMap.h"
+#include "modules/rts/RtsSphere.h"
 
 namespace rts::gen {
 
@@ -98,7 +99,33 @@ std::vector<int> repairPath(const Ctx& c, const game::MapGrid& g, int ax, int ay
 Json materialRows(const Ctx& c);          // terrainMaterial rows (Null when no layer matches)
 Json heightsOut(const Ctx& c);            // levels model: fine visual heights per cell (Null when flat)
 
+// GenPlanet.cpp: one cube-sphere body (corners in kHU relative to the sea level, cells per CubeSphere cell id)
+struct PlanetGen {
+    int N = 0;
+    game::CubeSphere S{1};
+    std::vector<int32_t> hc;              // 6 * (N+1)^2 corners
+    std::vector<Vec3> dirs;               // corner directions
+    std::vector<char> cell;               // per cell id: row character
+    std::vector<uint8_t> biome;
+    bool hasSea = false;
+    void init(int n);
+    int cid(int f, int i, int j) const { return f * (N + 1) * (N + 1) + j * (N + 1) + i; }
+    int32_t cellH(int id) const;
+    void setCorner(int f, int i, int j, int32_t v);   // and its seam duplicates
+    void evenSeams();
+};
+Vec3 rotY(Vec3 d, int k, int n);          // rotation by k/n turn about +Y (exact for n = 2, 4)
+void planetHeights(Ctx& c, PlanetGen& pg, int symN);
+void planetFlatten(PlanetGen& pg, Vec3 dir, int64_t arcTurns, int32_t minH);
+void planetClassify(Ctx& c, PlanetGen& pg);
+void planetWrite(Ctx& c, PlanetGen& pg, Json& body);
+bool generatePlanet(Ctx& c, Json& body, std::string* err);
+// GenWorld.cpp: a whole planet map (players, objects, fairness) for planet presets used as the map's "generate"
+bool generateWorld(Ctx& c, const GenRequest& req, Json& map, std::string* err);
+
 // GenContent.cpp
+enum class Kind : uint8_t { Mine, Tree, Spot, Spawner, Creep, Wanderer, NeutralStruct, Other };
+Kind classify(const Ctx& c, int ti);      // what a game type is to the generator (mine, tree, spot, creep, ...)
 void chooseStarts(Ctx& c);
 void placeContent(Ctx& c);
 void validateFairness(Ctx& c);

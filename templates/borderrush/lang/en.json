@@ -3,11 +3,10 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Territorial.io and State.io: paint the map with your soldiers, strike from the air.",
-  "howto.goal": "Hold 85% of the territory.",
-  "howto.tip": "A captured town starts spawning soldiers for you right away — go for towns first.",
-  "howto.step1": "The capital and towns spawn soldiers and earn money by themselves; soldiers paint the ground they stand on.",
-  "howto.step2": "Soldiers march to the nearest front by themselves and paint the ground; select them and right-click to aim the push. A town belongs to whoever owns the ground under it.",
-  "howto.step3": "Research Drill (damage) and Logistics (spawn speed) in the capital — 5 levels each.",
-  "howto.step4": "Airstrike and Drones on the bottom bar, then click the map: the airstrike hits an area for money, drones are free but have charges."
+  "howto.like": "State.io: take states with your armies.",
+  "howto.goal": "Take every state.",
+  "howto.tip": "Strike while a neighbour's army is away.",
+  "howto.step1": "Your states breed soldiers, gray ones don't.",
+  "howto.step2": "Drag from your state to another — the army walks there in a straight line; one soldier always stays home.",
+  "howto.step3": "Armies that meet fight on the way; a state is yours when no defender is left."
 }

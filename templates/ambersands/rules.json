@@ -1,52 +1,185 @@
-// "Amber Sands" — Dune II-like: structures only on rock, spice blooms on open sand harvested into
-// credits that are capped by refinery/silo storage, power from wind traps, a sandworm roaming the sand
-// (sand-only movement, hostile to everyone). Sidebar construction from the construction yard.
+// "Amber Sands" — Dune II: three Houses (Atreides, Harkonnen, Ordos) with their own special units and
+// palace weapons. Structures stand only on rock; the MCV deploys into a construction yard that builds
+// structures sidebar-style. Harvesters bring spice from the fields; spice is credited 1:1 and capped by
+// the storage of the yard, refineries and silos. Spice fields do not grow back: new spice comes only from
+// spice blooms, which burst into a field when a unit drives over them. Vehicles crush infantry.
+// Sandworms roam the open sand, swallow units whole and submerge after a few meals.
+// Unit limit: every unit takes 1 supply, every construction yard gives 25 (Dune II MaxUnit).
+// Prices and hit points follow the public Dune II tables (the same data as tools/importers/dune2).
 {
   "victory": "noStructures",
   "supplyCap": 200,
-  "buildRadius": 8,
+  "maxQueue": 5,
+  "buildRadius": 2,
   "sellRefund": 0.5,
+  // concrete: a structure not standing on the owner's slabs is finished at 50% hp (less with partial concrete)
+  // and weathers down to 50% (2 minutes when fully bare); repairs bring it back, the weather keeps eating it
+  "foundation": {"startHp": 0.5, "decay": 0.25, "floor": 0.5},
   "resources": {
-    "credits": {"name": "Кредиты", "start": 2500, "capped": true, "storage": 3000},
-    "spice": {"name": "Пряность", "field": true, "regrow": 0.5, "cellMax": 150, "convertsTo": {"credits": 4}},
-    "power": {"name": "Энергия", "kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense"]}
+    "spice": {"name": "Пряность", "field": true, "regrow": 0, "cellMax": 100, "convertsTo": {"credits": 1}},   // first: drawn orange
+    "credits": {"name": "Кредиты", "start": 1000, "capped": true, "storage": 0},
+    "power": {"name": "Энергия", "kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense", "radar"]}
   },
-  "armorTypes": ["infantry", "vehicle", "building"],
-  "damageTable": {"bullet": {"vehicle": 0.4, "building": 0.3}, "shell": {"infantry": 0.5, "vehicle": 1.2, "building": 1.0}},
-  "types": {
-    "mcv": {"name": "МСЦ", "health": {"max": 1000, "armorType": "vehicle"}, "move": {"speed": 1.8, "radius": 0.8}, "sight": 6,
-            "cost": {"credits": 2500, "time": 60}, "deploysTo": "construction_yard", "view": {"shape": "vehicle", "scale": 1.3}},
-    "construction_yard": {"name": "Сборочный цех", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 1500, "armor": 2, "armorType": "building"}, "sight": 8,
-                          "produces": ["windtrap", "refinery", "barracks", "war_factory", "turret", "silo"], "provides": {"power": 10}, "view": {"shape": "hall"}},
-    "windtrap": {"name": "Электростанция", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 600, "armorType": "building"},
-                    "cost": {"credits": 300, "time": 10}, "provides": {"power": 100}, "view": {"shape": "plant"}},
-    "refinery": {"name": "Очистной завод", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 1000, "armorType": "building"},
-                 "cost": {"credits": 800, "time": 20}, "consumes": {"power": 30}, "dropoff": ["spice"], "storage": {"credits": 1500}, "produces": ["harvester"], "view": {"shape": "refinery"}},
-    "barracks": {"name": "Казармы", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 800, "armorType": "building"},
-                 "cost": {"credits": 400, "time": 12}, "consumes": {"power": 20}, "produces": ["trooper", "bazooka"], "view": {"shape": "barracks"}},
-    "war_factory": {"name": "Завод техники", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 1500, "armor": 1, "armorType": "building"},
-                    "cost": {"credits": 1500, "time": 25}, "requires": ["refinery"], "consumes": {"power": 30}, "produces": ["quad", "combat_tank", "mcv"], "view": {"shape": "workshop"}},
-    "turret": {"name": "Турель", "tags": ["defense"], "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 400, "armor": 2, "armorType": "building"}, "sight": 8,
-               "cost": {"credits": 600, "time": 12}, "requires": ["barracks"], "consumes": {"power": 25},
-               "weapons": [{"range": 6, "damage": 30, "cooldown": 1.5, "damageType": "shell", "projectileSpeed": 18}], "view": {"shape": "tower"}},
-    "harvester": {"name": "Харвестер", "health": {"max": 600, "armor": 2, "armorType": "vehicle"}, "move": {"speed": 2.4, "radius": 0.7}, "sight": 5,
-                  "cost": {"credits": 800, "time": 18}, "gather": {"spice": {"carry": 100, "time": 6}}, "view": {"shape": "vehicle"}},
-    "trooper": {"name": "Стрелок", "health": {"max": 50, "armorType": "infantry"}, "move": {"speed": 2.2, "radius": 0.25}, "sight": 7,
-                 "weapons": [{"range": 4.5, "damage": 12, "cooldown": 1, "damageType": "bullet"}], "cost": {"credits": 100, "time": 5}, "view": {"shape": "soldier", "scale": 0.7}},
-    "bazooka": {"name": "Гранатомётчик", "health": {"max": 45, "armorType": "infantry"}, "move": {"speed": 2.0, "radius": 0.25}, "sight": 7,
-                  "weapons": [{"range": 5, "damage": 35, "cooldown": 2.5, "damageType": "shell", "projectileSpeed": 12, "targets": ["ground", "air"]}],
-                  "cost": {"credits": 300, "time": 8}, "view": {"shape": "ranged", "scale": 0.7}},
-    "quad": {"name": "Лёгкий танк", "health": {"max": 300, "armor": 2, "armorType": "vehicle"}, "move": {"speed": 3.0, "radius": 0.6}, "sight": 7,
-                   "weapons": [{"range": 4.5, "damage": 25, "cooldown": 1.2, "damageType": "shell", "projectileSpeed": 16}], "cost": {"credits": 700, "time": 12}, "view": {"shape": "vehicle"}},
-    "combat_tank": {"name": "Тяжёлый танк", "health": {"max": 600, "armor": 4, "armorType": "vehicle"}, "move": {"speed": 2.2, "radius": 0.7}, "sight": 7,
-                   "weapons": [{"range": 5, "damage": 45, "cooldown": 1.6, "damageType": "shell", "projectileSpeed": 16}], "cost": {"credits": 1150, "time": 18}, "view": {"shape": "vehicle", "scale": 1.2}},
-    "silo": {"name": "Хранилище", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 400, "armorType": "building"}, "cost": {"credits": 150, "time": 8}, "requires": ["refinery"],
-             "consumes": {"power": 5}, "storage": {"credits": 1500}, "view": {"shape": "silo"}},
-    "sandworm": {"name": "Песчаный червь", "health": {"max": 4000, "armor": 5, "armorType": "vehicle"}, "move": {"speed": 2.0, "layer": "sand", "radius": 0.9}, "sight": 6,
-                 "weapons": [{"range": 1, "damage": 120, "cooldown": 5}], "neutral": {"wander": true, "wanderRadius": 8}, "countsForVictory": false, "view": {"shape": "worm", "scale": 2}}
+  "factions": {
+    "atreides": {"name": "Атрейдес", "start": [{"type": "mcv", "offset": [0, 0]}, {"type": "infantry", "offset": [3, 2]}, {"type": "trike", "offset": [-2, 3]}]},
+    "harkonnen": {"name": "Харконнен", "start": [{"type": "mcv", "offset": [0, 0]}, {"type": "troopers", "offset": [3, 2]}, {"type": "quad", "offset": [-2, 3]}]},
+    "ordos": {"name": "Ордос", "start": [{"type": "mcv", "offset": [0, 0]}, {"type": "infantry", "offset": [3, 2]}, {"type": "raider", "offset": [-2, 3]}]}
   },
+  "armorTypes": ["infantry", "light", "heavy", "building"],
+  "damageTable": {
+    "bullet": {"infantry": 1.0, "light": 0.75, "heavy": 0.3, "building": 0.3},
+    "cannon": {"infantry": 0.5, "light": 1.0, "heavy": 1.0, "building": 0.75},
+    "rocket": {"infantry": 0.35, "light": 1.0, "heavy": 1.25, "building": 1.0},
+    "sonic": {"infantry": 1.25, "light": 1.0, "heavy": 0.75, "building": 0.5},
+    "worm": {"infantry": 1.0, "light": 1.0, "heavy": 1.0, "building": 0.0}
+  },
+  "playerAbilities": [
+    {"id": "death_hand", "name": "Рука смерти", "cooldown": 300, "initialCooldown": 300, "target": "point", "requires": ["palace_harkonnen"],
+     "effects": [{"type": "projectile", "speed": 10, "delivery": {"arc": true, "scatter": 3},
+                  "effects": [{"type": "damage", "amount": 600, "radius": 4, "damageType": "rocket", "falloff": 0.6, "affects": "any"}]}]},
+    {"id": "fremen", "name": "Фримены", "cooldown": 300, "initialCooldown": 300, "target": "point", "requires": ["palace_atreides"],
+     "effects": [{"type": "spawn", "unit": "fremen", "count": 2}]},
+    {"id": "saboteur", "name": "Диверсант", "cooldown": 240, "initialCooldown": 240, "target": "point", "requires": ["palace_ordos"],
+     "effects": [{"type": "spawn", "unit": "saboteur", "count": 1}]}
+  ],
   "triggers": [
     {"id": "free-harvester", "event": {"type": "built", "unit": "refinery"}, "once": false,
-     "actions": [{"type": "spawn", "unit": "harvester", "count": 1}]}
-  ]
+     "actions": [{"type": "spawn", "unit": "harvester", "count": 1}]},
+    {"id": "bloom-north", "event": {"type": "every", "seconds": 150}, "once": false,
+     "conditions": [{"type": "count", "player": "neutral", "unit": "spice_bloom", "<": 4}],
+     "actions": [{"type": "spawn", "unit": "spice_bloom", "count": 1, "area": "desert_north", "player": "neutral"}]},
+    {"id": "bloom-south", "event": {"type": "every", "seconds": 170}, "once": false,
+     "conditions": [{"type": "count", "player": "neutral", "unit": "spice_bloom", "<": 4}],
+     "actions": [{"type": "spawn", "unit": "spice_bloom", "count": 1, "area": "desert_south", "player": "neutral"}]}
+  ],
+  "types": {
+    // ------------------------------------------------------------ structures
+    "const_yard": {"name": "Сборочный цех", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 800, "armorType": "building"}, "sight": 5,
+                   "cost": {"credits": 400, "time": 40}, "storage": {"credits": 1000}, "supply": 25,
+                   "produces": ["concrete", "large_concrete", "windtrap", "refinery", "silo", "barracks", "wor", "light_factory", "heavy_factory", "hightech_factory", "outpost",
+                                "repair", "ix", "starport", "palace_atreides", "palace_harkonnen", "palace_ordos", "turret", "rocket_turret", "wall"],
+                   "view": {"shape": "hall"}},
+    "windtrap": {"name": "Ветровая ловушка", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 400, "armorType": "building"},
+                 "cost": {"credits": 300, "time": 30}, "provides": {"power": 100}, "view": {"shape": "tower"}},
+    "refinery": {"name": "Очистной завод", "structure": {"footprint": [3, 2], "terrain": "rock"}, "health": {"max": 900, "armorType": "building"},
+                 "cost": {"credits": 400, "time": 40}, "consumes": {"power": 30}, "requires": ["windtrap"], "dropoff": ["spice"], "storage": {"credits": 1000},
+                 "view": {"shape": "factory"}},
+    "silo": {"name": "Хранилище пряности", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 300, "armorType": "building"},
+             "cost": {"credits": 150, "time": 15}, "consumes": {"power": 5}, "requires": ["refinery"], "storage": {"credits": 1000}, "view": {"shape": "house"}},
+    "barracks": {"name": "Казармы", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 600, "armorType": "building"},
+                 "cost": {"credits": 300, "time": 30}, "consumes": {"power": 10}, "requires": ["windtrap"], "factions": ["atreides", "ordos"],
+                 "produces": ["soldier", "infantry"], "view": {"shape": "barracks"}},
+    "wor": {"name": "Тренировочный лагерь", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 800, "armorType": "building"},
+            "cost": {"credits": 400, "time": 35}, "consumes": {"power": 10}, "requires": ["windtrap"], "factions": ["harkonnen", "ordos"],
+            "produces": ["trooper", "troopers"], "view": {"shape": "barracks"}},
+    "light_factory": {"name": "Лёгкий завод", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 700, "armorType": "building"},
+                      "cost": {"credits": 400, "time": 35}, "consumes": {"power": 20}, "requires": ["refinery"],
+                      "produces": ["trike", "raider", "quad"], "view": {"shape": "workshop"}},
+    "heavy_factory": {"name": "Тяжёлый завод", "structure": {"footprint": [3, 2], "terrain": "rock"}, "health": {"max": 1000, "armorType": "building"},
+                      "cost": {"credits": 600, "time": 50}, "consumes": {"power": 35}, "requires": ["light_factory", "outpost"],
+                      "produces": ["harvester", "mcv", "tank", "launcher", "siege_tank", "sonic_tank", "devastator", "deviator"], "view": {"shape": "factory"}},
+    "hightech_factory": {"name": "Высокотехнологичный завод", "structure": {"footprint": [3, 2], "terrain": "rock"}, "health": {"max": 800, "armorType": "building"},
+                         "cost": {"credits": 500, "time": 45}, "consumes": {"power": 35}, "requires": ["light_factory", "outpost"],
+                         "produces": ["carryall", "ornithopter"], "view": {"shape": "factory"}},
+    "outpost": {"name": "Радарный пост", "tags": ["radar"], "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 1000, "armorType": "building"},
+                "cost": {"credits": 400, "time": 40}, "consumes": {"power": 30}, "requires": ["windtrap"], "sight": 10, "view": {"shape": "tower"}},
+    "repair": {"name": "Ремонтный цех", "structure": {"footprint": [3, 2], "terrain": "rock"}, "health": {"max": 400, "armorType": "building"},
+               "cost": {"credits": 700, "time": 50}, "consumes": {"power": 20}, "requires": ["heavy_factory"], "view": {"shape": "workshop"}},
+    "ix": {"name": "Дом IX", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 800, "armorType": "building"},
+           "cost": {"credits": 500, "time": 45}, "consumes": {"power": 40}, "requires": ["heavy_factory"], "view": {"shape": "structure"}},
+    "starport": {"name": "Космопорт", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 1000, "armorType": "building"},
+                 "cost": {"credits": 500, "time": 50}, "consumes": {"power": 50}, "requires": ["heavy_factory"],
+                 "produces": ["tank", "launcher", "siege_tank", "harvester", "mcv", "carryall", "trike", "quad"], "view": {"shape": "structure"}},
+    "palace_atreides": {"name": "Дворец Атрейдесов", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 2000, "armorType": "building"},
+                        "cost": {"credits": 999, "time": 80}, "consumes": {"power": 80}, "requires": ["starport"], "factions": ["atreides"], "unique": true, "view": {"shape": "hall"}},
+    "palace_harkonnen": {"name": "Дворец Харконненов", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 2000, "armorType": "building"},
+                         "cost": {"credits": 999, "time": 80}, "consumes": {"power": 80}, "requires": ["starport"], "factions": ["harkonnen"], "unique": true, "view": {"shape": "hall"}},
+    "palace_ordos": {"name": "Дворец Ордосов", "structure": {"footprint": [3, 3], "terrain": "rock"}, "health": {"max": 2000, "armorType": "building"},
+                     "cost": {"credits": 999, "time": 80}, "consumes": {"power": 80}, "requires": ["starport"], "factions": ["ordos"], "unique": true, "view": {"shape": "hall"}},
+    "turret": {"name": "Пушечная турель", "tags": ["defense"], "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 400, "armor": 2, "armorType": "heavy"},
+               "cost": {"credits": 125, "time": 15}, "consumes": {"power": 10}, "requires": ["outpost"], "sight": 6,
+               "weapons": [{"range": 5, "damage": 30, "cooldown": 1.6, "projectileSpeed": 14, "damageType": "cannon"}], "view": {"shape": "tower"}},
+    "rocket_turret": {"name": "Ракетная турель", "tags": ["defense"], "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 400, "armor": 2, "armorType": "heavy"},
+                      "cost": {"credits": 250, "time": 20}, "consumes": {"power": 20}, "requires": ["outpost"], "sight": 9,
+                      "weapons": [{"range": 8, "minRange": 2, "damage": 40, "cooldown": 2.4, "projectileSpeed": 10, "damageType": "rocket", "targets": ["ground", "air"]}],
+                      "view": {"shape": "tower"}},
+    "wall": {"name": "Стена", "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 300, "armor": 3, "armorType": "heavy"},
+             "cost": {"credits": 50, "time": 4}, "countsForVictory": false, "requires": ["const_yard"], "weathers": false, "view": {"shape": "rock"}},
+    // concrete slabs: placed like a structure, they become concrete ground of the owner (no hp, nothing to target)
+    "concrete": {"name": "Бетонная плита", "tags": ["concrete"], "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 20},
+                 "foundation": true, "cost": {"credits": 5, "time": 2}, "countsForVictory": false, "sellable": false, "requires": ["const_yard"], "view": {"shape": "rock", "scale": 0.3}},
+    "large_concrete": {"name": "Большая бетонная плита", "tags": ["concrete"], "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 80},
+                       "foundation": true, "cost": {"credits": 20, "time": 6}, "countsForVictory": false, "sellable": false, "requires": ["const_yard"], "view": {"shape": "rock", "scale": 0.3}},
+
+    // ------------------------------------------------------------ infantry (crushed by vehicles)
+    "soldier": {"name": "Солдат", "tags": ["infantry"], "health": {"max": 40, "armorType": "infantry"}, "move": {"speed": 1.2, "radius": 0.25}, "sight": 4,
+                "weapons": [{"range": 2.5, "damage": 4, "cooldown": 1.0, "damageType": "bullet"}], "cost": {"credits": 60, "time": 8, "supply": 1},
+                "crush": {"tags": ["bloom"]}, "view": {"shape": "soldier", "scale": 0.6}},
+    "infantry": {"name": "Пехота", "tags": ["infantry"], "health": {"max": 100, "armorType": "infantry"}, "move": {"speed": 1.1, "radius": 0.35}, "sight": 4,
+                 "squad": {"members": 3}, "weapons": [{"range": 2.5, "damage": 10, "cooldown": 1.0, "damageType": "bullet"}], "cost": {"credits": 100, "time": 12, "supply": 1},
+                 "crush": {"tags": ["bloom"]}, "view": {"shape": "soldier", "scale": 0.7}},
+    "trooper": {"name": "Гранатомётчик", "tags": ["infantry"], "health": {"max": 50, "armorType": "infantry"}, "move": {"speed": 1.0, "radius": 0.25}, "sight": 4,
+                "weapons": [{"range": 4.5, "damage": 18, "cooldown": 1.6, "projectileSpeed": 10, "damageType": "rocket", "targets": ["ground", "air"]}],
+                "cost": {"credits": 100, "time": 10, "supply": 1}, "crush": {"tags": ["bloom"]}, "view": {"shape": "ranged", "scale": 0.6}},
+    "troopers": {"name": "Отряд гранатомётчиков", "tags": ["infantry"], "health": {"max": 140, "armorType": "infantry"}, "move": {"speed": 0.95, "radius": 0.35}, "sight": 4,
+                 "squad": {"members": 3}, "weapons": [{"range": 4.5, "damage": 40, "cooldown": 1.6, "projectileSpeed": 10, "damageType": "rocket", "targets": ["ground", "air"]}],
+                 "cost": {"credits": 200, "time": 16, "supply": 1}, "crush": {"tags": ["bloom"]}, "view": {"shape": "ranged", "scale": 0.7}},
+    "fremen": {"name": "Фримены", "tags": ["infantry"], "health": {"max": 220, "armorType": "infantry"}, "move": {"speed": 1.3, "radius": 0.35}, "sight": 6,
+               "squad": {"members": 3}, "weapons": [{"range": 4.5, "damage": 40, "cooldown": 1.4, "projectileSpeed": 12, "damageType": "rocket"}],
+               "crush": {"tags": ["bloom"]}, "view": {"shape": "ranged", "scale": 0.7}},
+    "saboteur": {"name": "Диверсант", "tags": ["infantry"], "health": {"max": 40, "armorType": "infantry"}, "move": {"speed": 1.6, "radius": 0.25}, "sight": 4,
+                 "weapons": [{"range": 1, "damage": 500, "cooldown": 5, "damageType": "cannon"}], "crush": {"tags": ["bloom"]}, "view": {"shape": "soldier", "scale": 0.6}},
+
+    // ------------------------------------------------------------ vehicles (crush infantry and blooms)
+    "trike": {"name": "Трайк", "tags": ["vehicle"], "health": {"max": 100, "armorType": "light"}, "move": {"speed": 4.0, "radius": 0.4}, "sight": 5,
+              "weapons": [{"range": 3, "damage": 6, "cooldown": 0.6, "damageType": "bullet"}], "cost": {"credits": 150, "time": 12, "supply": 1},
+              "factions": ["atreides"], "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "vehicle", "scale": 0.7}},
+    "raider": {"name": "Рейдер", "tags": ["vehicle"], "health": {"max": 80, "armorType": "light"}, "move": {"speed": 4.6, "radius": 0.4}, "sight": 5,
+               "weapons": [{"range": 3, "damage": 6, "cooldown": 0.6, "damageType": "bullet"}], "cost": {"credits": 150, "time": 12, "supply": 1},
+               "factions": ["ordos"], "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "vehicle", "scale": 0.7}},
+    "quad": {"name": "Квадроцикл", "tags": ["vehicle"], "health": {"max": 130, "armorType": "light"}, "move": {"speed": 3.3, "radius": 0.45}, "sight": 5,
+             "weapons": [{"range": 3, "damage": 9, "cooldown": 0.7, "damageType": "bullet"}], "cost": {"credits": 200, "time": 15, "supply": 1},
+             "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "vehicle", "scale": 0.8}},
+    "tank": {"name": "Боевой танк", "tags": ["vehicle"], "health": {"max": 300, "armor": 2, "armorType": "heavy"}, "move": {"speed": 2.5, "radius": 0.5}, "sight": 5,
+             "weapons": [{"range": 4, "damage": 30, "cooldown": 1.6, "projectileSpeed": 16, "damageType": "cannon"}], "cost": {"credits": 300, "time": 24, "supply": 1},
+             "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "tank", "scale": 0.8}},
+    "siege_tank": {"name": "Осадный танк", "tags": ["vehicle"], "health": {"max": 450, "armor": 3, "armorType": "heavy"}, "move": {"speed": 2.0, "radius": 0.5}, "sight": 5,
+                   "weapons": [{"range": 5, "damage": 50, "cooldown": 2.0, "projectileSpeed": 14, "splash": 0.8, "damageType": "cannon"}], "cost": {"credits": 600, "time": 36, "supply": 1},
+                   "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "tank", "scale": 0.95}},
+    "launcher": {"name": "Ракетная установка", "tags": ["vehicle"], "health": {"max": 150, "armorType": "light"}, "move": {"speed": 2.5, "radius": 0.5}, "sight": 6,
+                 "weapons": [{"range": 9, "minRange": 3, "damage": 70, "cooldown": 3.0, "projectileSpeed": 10, "splash": 1.0, "damageType": "rocket", "targets": ["ground", "air"]}],
+                 "cost": {"credits": 450, "time": 30, "supply": 1}, "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "tank", "scale": 0.85}},
+    "sonic_tank": {"name": "Звуковой танк", "tags": ["vehicle"], "health": {"max": 250, "armor": 2, "armorType": "heavy"}, "move": {"speed": 2.4, "radius": 0.55}, "sight": 6,
+                   "weapons": [{"range": 7, "damage": 60, "cooldown": 2.6, "splash": 1.2, "damageType": "sonic"}], "cost": {"credits": 600, "time": 40, "supply": 1},
+                   "requires": ["ix"], "factions": ["atreides"], "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "tank", "scale": 0.9}},
+    "devastator": {"name": "Девастатор", "tags": ["vehicle"], "health": {"max": 700, "armor": 5, "armorType": "heavy"}, "move": {"speed": 1.5, "radius": 0.5}, "sight": 5,
+                   "weapons": [{"range": 5, "damage": 70, "cooldown": 2.0, "projectileSpeed": 16, "damageType": "cannon"}], "cost": {"credits": 800, "time": 50, "supply": 1},
+                   "requires": ["ix"], "factions": ["harkonnen"], "crush": {"tags": ["infantry", "bloom"]},
+                   "onDeath": [{"type": "damage", "amount": 150, "radius": 2.5, "damageType": "cannon", "affects": "any"}], "view": {"shape": "tank", "scale": 1.1}},
+    "deviator": {"name": "Девиатор", "tags": ["vehicle"], "health": {"max": 200, "armorType": "light"}, "move": {"speed": 2.4, "radius": 0.55}, "sight": 6,
+                 "weapons": [{"range": 8, "minRange": 2, "damage": 20, "cooldown": 3.5, "projectileSpeed": 10, "damageType": "rocket",
+                              "onHit": {"chance": 0.6, "effects": [{"type": "capture", "duration": 20}]}}],
+                 "cost": {"credits": 750, "time": 45, "supply": 1}, "requires": ["ix"], "factions": ["ordos"], "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "tank", "scale": 0.9}},
+    "harvester": {"name": "Харвестер", "tags": ["vehicle"], "health": {"max": 300, "armor": 1, "armorType": "heavy"}, "move": {"speed": 1.8, "radius": 0.45}, "sight": 3,
+                  "gather": {"spice": {"carry": 700, "time": 25}}, "cost": {"credits": 300, "time": 30, "supply": 1}, "crush": {"tags": ["infantry", "bloom"]},
+                  "view": {"shape": "vehicle", "scale": 1.1}},
+    "mcv": {"name": "МСЦ", "tags": ["vehicle"], "health": {"max": 300, "armor": 1, "armorType": "heavy"}, "move": {"speed": 1.6, "radius": 0.45}, "sight": 3,
+            "deploysTo": "const_yard", "cost": {"credits": 900, "time": 50, "supply": 1}, "crush": {"tags": ["infantry", "bloom"]}, "view": {"shape": "vehicle", "scale": 1.1}},
+
+    // ------------------------------------------------------------ air
+    "carryall": {"name": "Транспортник", "tags": ["air"], "health": {"max": 200, "armorType": "light"}, "move": {"speed": 6, "radius": 0.6, "layer": "air"}, "sight": 4,
+                 "cost": {"credits": 800, "time": 40, "supply": 1}, "view": {"shape": "flyer"}},
+    "ornithopter": {"name": "Орнитоптер", "tags": ["air"], "health": {"max": 75, "armorType": "light"}, "move": {"speed": 7, "radius": 0.5, "layer": "air"}, "sight": 6,
+                    "weapons": [{"range": 3, "damage": 35, "cooldown": 2.0, "projectileSpeed": 12, "damageType": "rocket"}], "cost": {"credits": 600, "time": 35, "supply": 1},
+                    "factions": ["atreides", "ordos"], "view": {"shape": "flyer", "scale": 0.9}},
+
+    // ------------------------------------------------------------ desert
+    "spice_bloom": {"name": "Пряностный нарыв", "tags": ["bloom"], "health": {"max": 1}, "sight": 0, "countsForVictory": false,
+                    "deathField": {"resource": "spice", "radius": 4, "amount": 120},
+                    "onDeath": [{"type": "damage", "amount": 25, "radius": 1.5, "affects": "any"}], "view": {"shape": "mushroom", "scale": 0.8}},
+    "sandworm": {"name": "Песчаный червь", "health": {"max": 3000, "armorType": "heavy"}, "move": {"speed": 2.4, "radius": 0.7, "layer": "sand"}, "sight": 10,
+                 "weapons": [{"range": 1.2, "damage": 2000, "cooldown": 4, "damageType": "worm"}],
+                 "neutral": {"wander": true, "wanderRadius": 40, "leash": 60, "eats": 3, "resurface": 90},
+                 "countsForVictory": false, "view": {"shape": "worm", "scale": 1.6}}
+  }
 }

@@ -38,6 +38,15 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     if (!models_.count("shape:generic")) buildShapes(dev);
     looks_.clear();
     warnings_.clear();
+    {   // shared materials of the game (docs/models.md "Material library")
+        materialLib_ = Json::object();
+        std::string text;
+        if (read_("materials.json", text)) {
+            try { materialLib_ = Json::parse(text)["materials"]; }
+            catch (const std::exception& e) { warnings_.push_back(std::string("materials.json: ") + e.what()); }
+            if (!materialLib_.isObject()) materialLib_ = Json::object();
+        }
+    }
     for (auto& w : overlays_.set().warnings) warnings_.push_back(w);
     anims_.clear();
     for (auto& t : rules.types) {
@@ -64,6 +73,7 @@ void RtsView::shutdown(gfx::Device& dev) {
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
     groundFx_.shutdown(dev);
+    planetGroundFx_.shutdown(dev);
     planets_.shutdown(dev);
     overlays_.shutdown(dev);
 }
@@ -198,6 +208,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.lanes = R.lanes.enabled ? &gs.lanes : nullptr;
     out.laneSignature = gs.laneSignature;
     out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
+    if (const Surface* surf = gs.surface.get()) { sceneFromSphere(sim, *m, *surf, out, alpha, viewer); return; }   // RtsPlanetView.cpp
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         if (u.flags & kUnitInCargo) return;   // inside a transport (agent-mech)
         SceneObject so;
@@ -208,6 +219,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         const UnitType& ut = R.types[u.type];
         so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
         if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
+        so.unpowered = (u.flags & kUnitDisabled) || (o.player < gs.players.size() && gs.players[o.player].productionMult < Fixed::fromInt(1));
         if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
         if (auto* tp = w.tryGet<Transport>(e); tp && !tp->cargo.empty()) so.garrison = int(tp->cargo.size());   // passengers
         if (auto* c = w.tryGet<Cargo>(e)) { so.carry = float(c->amount.toDouble()); so.carryRes = c->res; }
@@ -230,6 +242,8 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
             uint8_t v = gs.grid.inside(x, y) ? gs.vision[viewer][size_t(gs.grid.index(x, y))] : 0;
             so.visible = ut.structure && o.player == 0 ? v >= 1 : v == 2;
         }
+        if (so.visible && ut.trap >= 0 && viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer) && w.has<TrapState>(e) &&
+            (m->statusFlags(sim, e) & kStInvisible) && !(m->statusFlags(sim, e) & kStRevealed)) so.visible = false;   // hidden trap
         out.objects.push_back(so);
     });
     w.each<Projectile, Transform>([&](Entity e, Projectile& pr, Transform& t) {

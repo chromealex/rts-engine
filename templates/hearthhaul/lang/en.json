@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "The Settlers and Knights and Merchants: production chains, carriers and roads.",
+  "howto.like": "Knights and Merchants: goods, roads and serfs.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "Start with a woodcutter, sawmill and quarry near the storehouse — without planks every build stops.",
-  "howto.step1": "Goods live in buildings and serfs carry them along roads. The Road button on the bottom bar lays a road with a drag; Connect road on a building card links it to the network.",
-  "howto.step2": "The woodcutter gives logs, the sawmill turns them into planks, the quarry gives stone: planks and stone build everything else.",
-  "howto.step3": "Bread: farm (grain) → mill (flour) → bakery (bread). The armoury makes swords from planks.",
-  "howto.step4": "The school trains serfs, labourers and recruits. A recruit plus a sword at the barracks becomes a swordsman.",
-  "howto.step5": "Soldiers need an inn: hungry fighters walk there to eat bread."
+  "howto.tip": "A building without a road to the storehouse gets nothing — road first.",
+  "howto.step1": "Serfs carry goods only on roads. The sawmill makes planks, mill and bakery bread, swine farm and butcher sausages.",
+  "howto.step2": "The mint makes coins from gold ore and coal; the school trains for coins.",
+  "howto.step3": "A soldier is a recruit plus kit from the storehouse: axe, shield, leather or iron armour, bow, sword.",
+  "howto.step4": "Soldiers eat bread at the inn."
 }
