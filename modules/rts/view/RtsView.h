@@ -67,6 +67,10 @@ struct RtsScene {
     std::vector<SimEvent> events;
     uint32_t tick = 0;
     double seconds = 0;          // game time (tick / tick rate): drives the day/night cycle
+    // Day/night phase from the simulation (0..1, 0 = midnight, 0.5 = noon), when a gameplay day cycle
+    // exists (mechanic E, rules.cycle); < 0: the lighting block's own clock. Visual and gameplay
+    // night then always agree.
+    float cycle = -1;
     // ground overlays (RtsGroundFx): the fog-of-war viewer (0 = everything) and the sim's lanes (read only)
     uint8_t viewer = 0;
     const std::vector<Lane>* lanes = nullptr;

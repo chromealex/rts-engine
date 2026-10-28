@@ -269,16 +269,16 @@ float RtsLights::lightningAt(double seconds, float storm) {
     return out;
 }
 
-void RtsLights::updateSky(Lighting& l, double seconds) {
+void RtsLights::updateSky(Lighting& l, double seconds, float cycle) {
     if (!haveBase_) { base_ = l; haveBase_ = true; }
-    const bool cycle = cycle_ || preview_;
-    if (!cycle) {
+    const bool active = cycle_ || preview_ || cycle >= 0;
+    if (!active) {
         night_ = dusk_ = 0;
         if (touched_) { l = base_; touched_ = false; }
         return;
     }
     touched_ = true;
-    float t = preview_ ? previewTime_ : startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
+    float t = preview_ ? previewTime_ : cycle >= 0 ? cycle : startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
     t -= std::floor(t);
     timeOfDay_ = t;
     // sun elevation: +1 noon, 0 dawn/dusk, -1 midnight
