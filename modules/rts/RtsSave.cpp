@@ -15,7 +15,8 @@ namespace rts::game {
 void io(Archive& a, Unit& x) { a(x.type, x.hp, x.flags, x.lastAttacker, x.facing, x.energy); }
 void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer, x.flow); }
 void io(Archive& a, Orders& x) { a(x.queue); }
-void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck); }
+void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck,
+                                      x.flowGoalCell, x.flowArea, x.flowNear, x.flowArrived); }
 void io(Archive& a, Combat& x) { a(x.cooldown, x.target, x.acquireTimer, x.autoTarget, x.chargeTarget, x.chargeStart, x.slotTarget, x.slot, x.slotTick, x.slotPos); }
 void io(Archive& a, Cargo& x) { a(x.res, x.amount, x.lastNode, x.lastPos, x.field); }
 void io(Archive& a, ProdItem& x) { a(x.item, x.progress, x.paid, x.upgrade); }
