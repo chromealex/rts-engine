@@ -64,6 +64,7 @@ void GameClient::init(gfx::Device& dev) {
     overlay_.init(dev, "fonts/ui.ttf", 17.0f);
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
+    r3d_.setMaterialQuality(Renderer3D::defaultMaterialQualityFor(dev, platform::isTouchDevice()));
     r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
     fx_.init(dev, rules_);
@@ -206,6 +207,7 @@ void GameClient::startMatch(size_t idx) {
     selection_.clear();
     for (auto& g : groups_) g.clear();
     view_.setTiles(map["tiles"]);
+    view_.setTerrainMaterial(map["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();

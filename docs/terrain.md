@@ -48,3 +48,13 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
 | `agent-terrain` | terrain rendering (chunks, LOD, splat materials, quality tiers, water), visual `terrain` block, editor sculpt/paint ops + window + MCP |
 | `agent-terrain-fx` | territory colours and glowing borders, diggable rock blocks and gold veins, lanes (MW2 splines) and K&M roads |
 | `agent-terrain-sim` | `terrain.model`, heightfield in the simulation, `cornersFile`, hierarchical pathfinding, sample heightfield game map |
+
+## View implementation (agent-terrain)
+- `modules/rts/view/RtsTerrainSurface.h`: the surface math (levels mode as before; heightfield = two triangles per
+  cell, diagonal (0,0)-(1,1)). `RtsView::heightAt` and the editor's sculpt ops use it; the mesh is built from it.
+- `RtsTerrainRender.*`: 32x32 chunks with a per-chunk input hash (only dirty chunks rebuild), frustum culling, CDLOD
+  (5 levels, geomorph + skirts) on heightfield maps above 256 cells, per-cell textures for fields / creep / fog of war,
+  water sheet or water bodies. `RtsGroundFx` is invalidated whenever terrain geometry changes.
+- Materials, tiers, editor ops and MCP tools: `docs/game-format.md` § Terrain materials.
+- Measured (VM, Mesa llvmpipe, 1280x800, whole 1024² map in view): LOD off 1.19M triangles / 374 ms,
+  LOD on 41k / 112 ms; gameplay zoom 32k triangles / ~20 ms on 512² and 1024² alike; full build 1024² ~100 ms.

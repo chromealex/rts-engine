@@ -722,6 +722,56 @@ Map size: 4..2048 cells per side. The editor saves `corners` inline up to 256x25
 `cornersFile` (`maps/<map name>.r16`, next to the map) above that; loaders (game, headless, editor, MCP) read
 the file through the content reader, so it also works from packs.
 
+## Terrain materials (visual `terrain` block)
+
+Presentation only (`modules/rts/view/RtsTerrainRender.*`). Optional keys in the same `terrain` block as the overlays
+(rules.json or game.json; game.json wins per key). **Without them every game looks exactly as before** (vertex
+colours per cell kind, plateaus with sharp cliff walls, ramps, soft colour transitions, apron, one water sheet).
+
+```json
+"terrain": {
+  "layers": [                                   // up to 4 tiling splat layers (world-space, mipmapped, wrap)
+    {"id": "snow",  "texture": "textures/terrain/snow_repeat.png", "normal": "textures/terrain/snow_n_repeat.png", "scale": 6, "tint": [1, 1, 1]},
+    {"id": "earth", "texture": "textures/terrain/earth_repeat.png", "scale": 4}
+  ],
+  "cells": {"grass": {"layer": "snow", "color": [0.9, 0.93, 0.97]},  // layer id, or {layer, color (vertex colour override)}
+            "sand": "earth", "ramp": "earth", "rock": "earth", "blocked": "earth", "lakebed": "earth", "shallows": "earth", "dug": "earth"},
+  "cliff": {"texture": "textures/terrain/rock_repeat.png", "normal": "textures/terrain/rock_n_repeat.png",
+            "scale": 3, "tint": [1, 1, 1], "slope": [0.3, 0.55]},     // blended in where 1 - normal.y is in that range
+  "splatStrength": 1,                           // 0..1: mix of the textures over the vertex colours
+  "water": {"mode": "auto", "color": [0.22, 0.45, 0.62, 0.78], "offset": -0.12},
+  "lod": "auto", "lodRange": 128                // heightfield maps: CDLOD on above 256 cells per side ("on"/"off")
+}
+```
+
+| key | meaning |
+|---|---|
+| `layers` | splat layers (≤ 4): `texture` albedo (sRGB), optional `normal` (tangent-space, +Y up), `scale` world units per repeat, `tint`. Loaded with `TextureCache::resolve(path, …, tiling)`: **never taken from an atlas page** (name them `*_repeat.png` so the packer skips them too) |
+| `cells` | cell kind → layer id or index; kinds: `grass` (.), `sand` (, no-build), `ramp` (/), `rock` (R), `blocked` (#), `lakebed` (~), `shallows` (=), `dug` (diggable rock floor). `color` overrides the vertex colour of the kind on every tier |
+| `cliff` | texture on cliff walls and steep slopes (Medium: one projection, High: triplanar + normal map) |
+| `water.mode` | `sheet` = one plane under the whole map (classic, default for cliff-level maps), `bodies` = each connected water area gets its own surface just below its lowest shore (lakes on plateaus, valleys of heightfield maps; default for heightfield maps), `auto` |
+| `lod`, `lodRange` | big heightfield maps: chunks drawn with 2^k cell steps (k ≤ 4) by camera distance, geomorphing in the vertex shader, skirts against cracks |
+
+**Map key `terrainMaterial`** (optional, visual): rows of `0`..`3` (layer index) per cell, other characters = by cell
+kind. Painted with the editor's **Рельеф** window or `terrain_material`.
+
+**Quality tiers** (pause menu *Ground textures*, `Renderer3D::materialQuality()`, capped by the device default;
+`RTS_TERRAIN=low|medium|high` overrides for testing): Low = vertex colours (weak Mali / Adreno / PowerVR, also every
+game without `layers`), Medium = splat textures + cliff texture, High = + normal maps and triplanar cliffs. Shaders:
+`modules/rts/view/RtsTerrainShaders.h` (GLSL + MSL, sun + soft shadows + point lights + clouds as the lit shader).
+
+**Performance**: the terrain is cut into 32x32-cell chunks, frustum-culled; the editor rebuilds only chunks whose cells
+changed; during a match nothing is rebuilt: resource fields, creep and (heightfield maps) fog of war are read by the
+shader from small per-cell textures. `RTS_TERRAIN_STATS=1` prints chunks / triangles / frame time. Sample:
+`games/frostcrown` (generated CC0 textures, `tools/terrain/make_textures.py`).
+
+**Editor / MCP** (heightfield maps, `apps/editor/core/TerrainOps.cpp`, window **Рельеф**):
+`terrain_sculpt {op: raise|lower|smooth|flatten|noise|set, x, y | points, radius, strength, seed}` (the first sculpt
+creates corners from the visible surface: cliff levels, ramps, fine heights), `terrain_heights {points | grid}`,
+`terrain_material {layer, x, y, radius}`, `heightmap_export {file, scale?}` / `heightmap_import {file, scale, offset}`
+(16-bit grayscale PNG, `(w+1) x (h+1)` pixels, height = offset + value / 65535 * scale). Corners are visual unless
+rules `terrain.model` is `heightfield` (see below).
+
 ## Heightfield terrain
 
 `rules.terrain.model: "heightfield"` + a map with `terrain.corners` / `cornersFile` (without corners the map
@@ -750,7 +800,7 @@ Everything is integer / fixed point and deterministic.
 
 MCP: `map_info.heightfield` (`corners`, `min`, `max`, `storage`, `model`), `map_heightfield {"enabled"}` adds a flat
 heightfield or removes it, `map_validate` warns when the model is heightfield but the map has no corners and flags
-units/structures standing on slopes too steep for them. Sculpting tools: see `docs/terrain.md` (agent-terrain).
+units/structures standing on slopes too steep for them. Sculpting: `terrain_sculpt`, heightmap PNG import/export (see Terrain materials). The view draws the relief from the corners (two triangles per cell, diagonal (0,0)-(1,1)); `RtsView::heightAt` follows the same triangles, so models and overlays sit on the drawn ground.
 
 ## Sample games (data only, `games/<id>/`; maps from `games/_tools/mapgen.py`)
 

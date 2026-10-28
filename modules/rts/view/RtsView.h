@@ -22,6 +22,7 @@
 #include "Rts2DView.h"
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
+#include "RtsTerrainRender.h"
 
 namespace rts::game {
 
@@ -68,8 +69,14 @@ public:
     // reader: content files (models, textures); default platform::readContentFile.
     bool init(gfx::Device& dev, const Rules& rules, render::FileReader reader = {});
     void shutdown(gfx::Device& dev);
-    // Terrain mesh from the grid; call again after the editor changes the grid.
+    // Terrain from the grid (chunked: only chunks whose cells changed are rebuilt); call again after
+    // the editor changes the grid. Resource fields / creep changing in a match need no call (the
+    // terrain shader reads them from per-cell textures).
     void buildTerrain(gfx::Device& dev, const MapGrid& grid);
+    // Optional painted material layer per cell (map key "terrainMaterial": rows of digits 0..3, '.' =
+    // by cell kind; see docs/game-format.md). Takes effect at the next buildTerrain().
+    void setTerrainMaterial(const Json& rows, int w, int h) { terrain_.setMaterialLayer(parseMaterialRows(rows, w, h)); }
+    const TerrainRenderer& terrainRenderer() const { return terrain_; }
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid);
     // ImGui: bars, counts. ox/oy: top-left of the view on screen; drawList: ImDrawList* (default: background list)
     void drawOverlays(const render::RTSCamera& cam, const RtsScene& s, float viewW, float viewH, float ox = 0, float oy = 0, void* drawList = nullptr);
@@ -161,7 +168,8 @@ private:
     std::vector<TypeLook> looks_;
     std::vector<std::string> warnings_;
     std::unordered_map<uint64_t, EntityAnim> anims_;   // presentation only: iteration order never matters
-    render::Mesh terrain_, water_, projectile_;
+    render::Mesh projectile_;
+    TerrainRenderer terrain_;    // chunked terrain + water (RtsTerrainRender.cpp)
     bool hasTerrain_ = false;
     std::unique_ptr<Rts2DView> twoD_;
     std::string contentBase_;

@@ -128,7 +128,7 @@ void Renderer3D::beginScene(const RTSCamera& cam, int fbW, int fbH) {
     viewProj_ = cam.proj(aspect, dev_->info().clipDepthZeroToOne) * cam.view();
     camPos_ = cam.eye();
     cam_ = cam;
-    items_.clear(); lines_.clear(); tris_.clear(); custom_.clear();
+    items_.clear(); lines_.clear(); tris_.clear(); custom_.clear(); customOpaque_.clear();
     modelItems_.clear(); jointData_.clear();
     computeShadowMatrix(cam, aspect);
     lights.begin(cam, aspect);
@@ -263,6 +263,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     // ---- main pass (left open for the caller's UI)
     dev_->beginPass(screenPass);
     dev_->setViewport({0, 0, sceneW_ > 0 ? sceneW_ : dev_->framebufferWidth(), sceneH_ > 0 ? sceneH_ : dev_->framebufferHeight()});
+    for (auto& fn : customOpaque_) fn(*dev_);
     dev_->setPipeline(litPipe_);
     uploadFrameUniforms(false);
     dev_->setTexture(0, shadowMap_);
