@@ -225,6 +225,8 @@ void RtsLights::configure(const Json& game, const Json& map, const Json& lights)
         sunDirSet_ = d.size() >= 3;
         if (sunDirSet_) sunDir_ = normalize(float3{float(d[0].fx().toDouble()), std::max(float(d[1].fx().toDouble()), 0.2f), float(d[2].fx().toDouble())});
     }
+    shadowSoftness_ = pick("shadowSoftness", -1, -1.0f);
+    if (shadowSoftness_ >= 0) shadowSoftness_ = std::clamp(shadowSoftness_, 0.02f, 1.0f);
     if (const char* c = std::getenv("RTS_CLOUDS")) { clouds_ = std::clamp(float(std::atof(c)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* st = std::getenv("RTS_STORM")) { storm_ = std::clamp(float(std::atof(st)), 0.0f, 1.0f); cycle_ = true; }
     if (const char* t = std::getenv("RTS_TIME_OF_DAY")) { startTime_ = float(std::atof(t)); cycle_ = true; }
@@ -252,6 +254,8 @@ float RtsLights::lightningAt(double seconds, float storm) {
 void RtsLights::updateSky(Lighting& l, double seconds) {
     if (!haveBase_) { base_ = l; haveBase_ = true; }
     if (sunDirSet_) base_.sunDir = sunDir_;
+    // penumbra radius: the game / map value, else the renderer default (nothing else sets it)
+    base_.shadowSoftness = l.shadowSoftness = shadowSoftness_ >= 0 ? shadowSoftness_ : render::Lighting{}.shadowSoftness;
     const bool cycle = cycle_ || preview_;
     if (!cycle) {
         night_ = dusk_ = 0;
