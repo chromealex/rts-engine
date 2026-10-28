@@ -10,17 +10,22 @@
   },
 
   // Build-time compression per platform (sound files only; the synth sounds here have none).
+  // Hundreds of mushrooms meet at once: pops and spore hits share one budget.
+  "groups": {
+    "pops": { "max": 8, "cooldown": 0.015 }
+  },
+
   "build": {
     "desktop": { "sounds": "keep", "music": "vorbis", "musicQuality": 0.5 },
     "mobile":  { "sounds": "adpcm", "music": "vorbis", "musicQuality": 0.3, "maxRate": 32000 }
   },
 
   "sounds": {
-    "pop":      { "synth": { "wave": "sine", "freq": [950, 280], "duration": 0.07, "release": 0.05, "volume": 0.4 },
+    "pop":      { "group": "pops", "synth": { "wave": "sine", "freq": [950, 280], "duration": 0.07, "release": 0.05, "volume": 0.4 },
                   "pitch": [0.8, 1.3], "maxInstances": 5, "cooldown": 0.03 },
     "spores":   { "synth": { "wave": "noise", "freq": [3000, 800], "duration": 0.14, "attack": 0.03, "lowpass": 1800, "volume": 0.35 },
                   "pitch": [0.9, 1.1], "maxInstances": 3, "cooldown": 0.1 },
-    "sporeHit": { "synth": { "wave": "sine", "freq": [600, 400], "duration": 0.05, "volume": 0.25 },
+    "sporeHit": { "group": "pops", "synth": { "wave": "sine", "freq": [600, 400], "duration": 0.05, "volume": 0.25 },
                   "pitch": [0.9, 1.2], "maxInstances": 3, "cooldown": 0.05 },
     "captured": { "synth": [ { "wave": "triangle", "freq": 587, "duration": 0.1, "volume": 0.45 },
                              { "wave": "triangle", "freq": 880, "duration": 0.22, "delay": 0.09, "release": 0.18, "volume": 0.45 } ],

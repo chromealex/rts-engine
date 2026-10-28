@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../Editor.h"
+#include "../EditorUtil.h"
 
 namespace rts::editor {
 
@@ -24,8 +25,9 @@ public:
         vp_.ensure(ed.device(), int(avail.x * dpi), int(avail.y * dpi));
         ImVec2 p = ImGui::GetCursorScreenPos();
         vp_.originX = p.x; vp_.originY = p.y; vp_.pointsW = avail.x; vp_.pointsH = avail.y;
-        ed.renderScene(vp_, ed.sceneCam, !ed.playing());
+        // image first (like the Game window): the screen overlays renderScene adds (bars, labels) stay on top of it
         vp_.image(ed.device(), avail.x, avail.y);
+        ed.renderScene(vp_, ed.sceneCam, !ed.playing());
         ed.sceneViewport = &vp_;
         if (ImGui::IsWindowFocused() || vp_.hovered) input(ed);
         hud(ed);
@@ -33,25 +35,73 @@ public:
 
 private:
     void toolbar(Editor& ed) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
-        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 6, ImGui::GetCursorPosY() + 3));
         static const char* names[] = {"Выбор", "Объекты", "Клетки", "Уровни", "Высота", "Поля", "Регионы", "Зоны", "Старты", "Дороги", "Ластик"};
+        static const char* icons[] = {ICON_SELECT, ICON_OBJECTS, ICON_CELLS, ICON_LEVELS, ICON_HEIGHT, ICON_FIELDS, ICON_REGIONS, ICON_ZONES,
+                                      ICON_STARTS, ICON_ROADS, ICON_ERASER};
+        static_assert(sizeof names / sizeof *names == size_t(Tool::Count) && sizeof icons / sizeof *icons == size_t(Tool::Count));
+        const float bottom = ui::beginToolbar();
+        ui::beginSegment();
         for (int i = 0; i < int(Tool::Count); ++i) {
-            if (i) ImGui::SameLine(0, 2);
-            bool on = ed.tool == Tool(i);
-            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            if (ImGui::SmallButton(names[i])) { ed.tool = Tool(i); ed.roadStart = -1; }
-            if (on) ImGui::PopStyleColor();
+            if (i == 1 || i == 10) { ui::endSegment(); ImGui::SameLine(0, 8); ui::beginSegment(); } // select | edit tools | eraser
+            else if (i) ImGui::SameLine();
+            if (ui::toolButton(icons[i], names[i], ed.tool == Tool(i))) { ed.tool = Tool(i); ed.roadStart = -1; }
         }
-        ImGui::SameLine(0, 12);
-        if (ImGui::SmallButton("Вся карта")) ed.fitScene();
-        ImGui::PopStyleVar();
+        ui::endSegment();
+        ui::toolbarDivider();
+        if (ui::toolButton(ICON_FIT, "Вся карта (F)")) ed.fitScene();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", names[int(ed.tool)]);
+        ui::endToolbar(bottom);
+    }
+
+    // planet maps: wheel zoom (surface -> planet -> system), RMB drag turn + pitch, MMB drag / WASD move over
+    // the surface, Tab next body, F back to the start body
+    void planetInput(Editor& ed) {
+        ImGuiIO& io = ImGui::GetIO();
+        game::PlanetCamera& pc = ed.view().planetCamera();
+        if (vp_.hovered && io.MouseWheel != 0) pc.zoom(std::pow(0.88f, io.MouseWheel));
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && vp_.hovered) looking_ = true;
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && vp_.hovered) panning_ = true;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Right)) looking_ = false;
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Middle)) panning_ = false;
+        if (looking_) {
+            pc.rotate(-io.MouseDelta.x * 0.006f);
+            pc.pitch = std::clamp(pc.pitch + io.MouseDelta.y * 0.005f, 0.15f, 1.55f);
+        }
+        if (panning_) pc.pan(io.MouseDelta.x, io.MouseDelta.y, vp_.pointsH);
+        if (!io.WantTextInput && (ImGui::IsWindowFocused() || vp_.hovered)) {
+            const float speed = std::max(pc.distance, 6.0f) * 0.9f * io.DeltaTime * (io.KeyShift ? 3.0f : 1.0f);
+            if (ImGui::IsKeyDown(ImGuiKey_W)) pc.move(0, speed);
+            if (ImGui::IsKeyDown(ImGuiKey_S)) pc.move(0, -speed);
+            if (ImGui::IsKeyDown(ImGuiKey_D)) pc.move(speed, 0);
+            if (ImGui::IsKeyDown(ImGuiKey_A)) pc.move(-speed, 0);
+            if (ImGui::IsKeyDown(ImGuiKey_Q)) pc.rotate(io.DeltaTime * 1.6f);
+            if (ImGui::IsKeyDown(ImGuiKey_E)) pc.rotate(-io.DeltaTime * 1.6f);
+            if (ImGui::IsKeyPressed(ImGuiKey_Tab, false)) {
+                const auto& W = ed.view().planets().world();
+                for (size_t k = 1; k <= W.bodies.size(); ++k) {
+                    const int b = int((size_t(pc.body()) + k) % W.bodies.size());
+                    if (W.bodies[size_t(b)].surface()) { pc.focus(b); break; }
+                }
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_F, false)) ed.fitScene();
+        }
     }
 
     void input(Editor& ed) {
         ImGuiIO& io = ImGui::GetIO();
         RTSCamera& cam = ed.sceneCam;
         const float mx = io.MousePos.x, my = io.MousePos.y;
+        if (ed.planetMap()) { // camera from the planet controls; tools below still work on the start body
+            planetInput(ed);
+            if (ed.playing()) return;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && vp_.hovered) down(ed, mx, my, io);
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (dragging_ || painting_) && (io.MouseDelta.x != 0 || io.MouseDelta.y != 0)) drag(ed, mx, my, io);
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) up(ed, mx, my);
+            hoverX_ = mx; hoverY_ = my;
+            return;
+        }
         // camera
         if (vp_.hovered && io.MouseWheel != 0) cam.distance = std::clamp(cam.distance * std::pow(0.88f, io.MouseWheel), cam.minDistance, cam.maxDistance);
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Right) && vp_.hovered) looking_ = true;
@@ -220,6 +270,19 @@ private:
     void hud(Editor& ed) {
         ImDrawList* dl = ImGui::GetWindowDrawList();
         float x, z;
+        if (ed.planetMap()) { // body / face / cell under the cursor
+            int body; float3 local;
+            if (vp_.hovered && ed.planetAt(vp_, hoverX_, hoverY_, body, local)) {
+                const game::PlanetSurface* s = ed.view().planets().surface(body);
+                int f = 0; float a = 0, b = 0;
+                if (s) s->faceFromDir(normalize(local), f, a, b);
+                char buf[128];
+                std::snprintf(buf, sizeof buf, "%s  грань %d  x %.1f  y %.1f  высота %.2f", ed.planetBodyId(body).c_str(), f, a, b, s ? s->heightAt(normalize(local)) : 0.0f);
+                dl->AddText(ImVec2(vp_.originX + 8, vp_.originY + vp_.pointsH - 22), IM_COL32(255, 255, 255, 200), buf);
+            }
+            dl->AddText(ImVec2(vp_.originX + 8, vp_.originY + 8), IM_COL32(220, 230, 255, 200), "Планеты: колесо — масштаб, ПКМ — поворот, СКМ / WASD — движение, Tab — следующее тело");
+            return;
+        }
         if (!ed.playing() && vp_.hovered && ed.groundAt(vp_, ed.sceneCam, hoverX_, hoverY_, x, z)) {
             bool brushTool = ed.tool == Tool::Terrain || ed.tool == Tool::Level || ed.tool == Tool::Height || ed.tool == Tool::Field || ed.tool == Tool::Region;
             const RTSCamera& cam = ed.sceneCam;

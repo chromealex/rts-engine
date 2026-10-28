@@ -246,6 +246,16 @@ void Editor::registerGuiOps() {
             w->open = p.getBool("open", true);
             return okSummary(std::string(w->open ? "Открыто окно " : "Закрыто окно ") + w->title());
         });
+    add("editor_theme", "Editor look: 'mode' dark | light, 'accent' blue | violet | teal | orange (saved with the layout).",
+        R"({"properties": {"mode": {"type": "string", "enum": ["dark", "light"]}, "accent": {"type": "string", "enum": ["blue", "violet", "teal", "orange"]}}})",
+        [this, okSummary](const Json& p) {
+            EditorTheme::Mode m = theme_.mode();
+            if (p.has("mode")) m = p.getStr("mode") == "light" ? EditorTheme::Mode::Light : EditorTheme::Mode::Dark;
+            int a = theme_.accentIndex();
+            for (int i = 0; i < EditorTheme::kAccentCount; ++i) if (p.getStr("accent") == EditorTheme::accent(i).id) a = i;
+            theme_.set(m, a);
+            return okSummary(std::string("Тема: ") + (m == EditorTheme::Mode::Light ? "светлая" : "тёмная") + ", акцент " + EditorTheme::accent(a).name);
+        });
     add("editor_select", "Select something in the editor (Inspector shows it): entity index, player (1-based), area/region/type/resource/tech/faction key.",
         R"({"properties": {"kind": {"type": "string", "enum": ["entity", "player", "area", "region", "type", "resource", "tech", "faction", "map", "none"]}, "index": {"type": "integer"}, "key": {"type": "string"}}, "required": ["kind"]})",
         [this, okSummary](const Json& p) {

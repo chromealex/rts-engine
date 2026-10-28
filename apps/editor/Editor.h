@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "EditorTheme.h"
 #include "EditorWindow.h"
 #include "core/Net.h"
 #include "core/Workspace.h"
@@ -97,6 +98,10 @@ public:
     // camera of the Scene window (agents fly it with view_focus)
     render::RTSCamera sceneCam;
     void focusScene(float x, float z, float distance = -1);
+    // planet maps (world block): the Scene camera is the view's orbit camera; picking returns a body point
+    bool planetMap() const { return view_.planetMode(); }
+    bool planetAt(const Viewport& vp, float sx, float sy, int& body, render::float3& local) const;
+    std::string planetBodyId(int body) const;
     void fitScene();
 
     // play-test (Game window)
@@ -129,10 +134,16 @@ public:
     void renderScene(Viewport& vp, const render::RTSCamera& cam, bool editOverlays);
     void renderGame(Viewport& vp, const render::RTSCamera& cam);
 
+    // overlays (Overlays window / overlay_preview): ids drawn regardless of their conditions, and a
+    // structure type whose ghost overlays (build grid, placement) are previewed at the cursor
+    std::vector<std::string> overlayPreview;
+    int overlayPreviewType = -1;
+
     // particle effects of the play-test (fx/fx.json + fx/*.json of the open game)
     fx::ParticleSystem& gameFx() { return gameFx_; }
     void reloadFx();                           // after fx files changed (Effects window, agents)
     std::vector<std::string> fxWarnings;       // from the last reloadFx()
+    int fxRevision = 0;                        // bumped when fx files change (agents): the Effects window re-reads
 
     // helpers for windows
     bool groundAt(const Viewport& vp, const render::RTSCamera& cam, float sx, float sy, float& x, float& z) const;
@@ -149,6 +160,8 @@ public:
     const std::vector<std::unique_ptr<EditorWindow>>& windows() const { return windows_; }
     void resetLayout() { resetLayout_ = true; }
     void launchOnDevice(const std::string& device, bool landscape);
+    void focusWindow(const std::string& id);   // open + bring to front (by stable id)
+    EditorTheme& theme() { return theme_; }
 
     // statistics
     struct FrameStats { float frameMs = 0, simMs = 0; uint32_t drawCalls = 0; };
@@ -158,9 +171,12 @@ public:
 
 private:
     void drawMenuBar();
+    void drawTopBarControls();   // breadcrumb, play controls, MCP pill (inside the main menu bar)
+    void drawPlayControls();
     void drawDockspace();
     void drawGamePicker();
     void drawStatusBar();
+    float statusBarHeight() const { return ImGui::GetFontSize() + 12; }
     void drawActivityToasts();
     void handleShortcuts();
     void syncGrid();
@@ -170,8 +186,13 @@ private:
     void pollAgentLink();
     void registerGuiOps();
     void registerPlayOps();   // EditorPlayOps.cpp
+    void registerFxPreviewOps();   // EditorFxOps.cpp: fx_preview
+    // Particles of the Scene / Game views (EditorFxOps.cpp): after beginScene (dt, previews, event bridge,
+    // particle lights into r3d_.lights); render them after Renderer3D::render.
+    void tickFx(const render::RTSCamera& cam, int w, int h, const std::vector<game::SceneObject>* objects);
     void samplePlayStats();
     void deliverShots(gfx::Device& dev);
+    void setOverlayContext(const Viewport& vp, const render::RTSCamera& cam, bool play);   // input state for RtsOverlays
 
     Options opt_;
     Workspace ws_;
@@ -181,11 +202,15 @@ private:
     game::RtsView view_;
     bool showPicker_ = false;
     bool resetLayout_ = false;
+    bool layoutChecked_ = false;
+    int lastPlaySlot_ = 0;       // what the top bar Play button starts (0 = bots)
+    EditorTheme theme_;
     int focusFirst_ = 0;
     std::vector<std::unique_ptr<EditorWindow>> windows_;
 
     game::MapGrid grid_;
     uint64_t gridRevision_ = ~0ull;
+    uint64_t worldHash_ = 0;   // map world block as last given to the view (planets)
     double gridRebuildAt_ = 0;
     bool playTerrainBuilt_ = false;
     game::RtsScene scene_;
@@ -201,6 +226,10 @@ private:
     game::RtsFx gameFxBridge_;
     render::TextureCache fxTextures_;          // sprite textures of effects (same loader as sprites)
     double fxTime_ = -1;
+    struct FxPreview { std::string name; fx::float3 pos{}; float scale = 1; fx::float4 tint{1, 1, 1, 1}; bool loop = false; fx::FxHandle h; double next = 0;
+                       bool moving = false; float moveT = 0; };   // moving: circles 2 m around pos (trails, perMeter)
+    FxPreview fxPreview_;                      // fx_preview: the effect an agent is looking at
+    bool fxFrozen_ = false;                    // fx_preview {freeze}: particles hold still for screenshots
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;
     int human_ = 0;
@@ -210,6 +239,7 @@ private:
     struct PendingShot { int client; int64_t id; std::string device; };
     std::vector<PendingShot> shots_;
     bool captureArmed_ = false;
+    bool overlayKeys_[int(platform::Key::Count)] = {};
 };
 
 } // namespace rts::editor

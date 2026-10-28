@@ -270,6 +270,7 @@ set(RTS_RUNTIME_SRC
     engine/render/Renderer3DModels.cpp
     engine/render/Lights.cpp
     engine/render/QualityGovernor.cpp
+    engine/render/Renderer3DReflect.cpp
     engine/render/ImGuiLayer.cpp)
 
 if(RTS_PLATFORM STREQUAL "macos")
@@ -317,7 +318,8 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp
-    modules/rts/view/RtsFog.cpp)
+    modules/rts/view/RtsFog.cpp
+    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
@@ -423,7 +425,7 @@ endif()
 if(RTS_BUILD_EDITOR)
     # windows register themselves (RTS_EDITOR_WINDOW): any .cpp in apps/editor/windows is part of the editor
     file(GLOB RTS_EDITOR_WINDOWS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/windows/*.cpp)
-    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp
+    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp apps/editor/EditorTheme.cpp
                    ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_link_libraries(rts_editor PRIVATE rts_game_fx)
@@ -434,7 +436,9 @@ if(RTS_BUILD_EDITOR)
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/Info.plist.in")
         # engine assets (UI font) inside the bundle, so the editor works when moved elsewhere
         add_custom_command(TARGET rts_editor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources/content/engine")
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources/content/engine"
+            # editor fonts and icons (EditorTheme.cpp): content path engine/editor-fonts/
+            COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts" "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources/content/engine/editor-fonts")
     elseif(WIN32)
         set_target_properties(rts_editor PROPERTIES WIN32_EXECUTABLE TRUE)
     endif()
@@ -508,6 +512,7 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
+    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
@@ -531,11 +536,11 @@ add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_link_libraries(rts_ui PUBLIC rts_rmlui rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 
@@ -585,7 +590,88 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
 endif()
 if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
     target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/PlanetOps.cpp)   # planet-render agent: planet sculpt / paint
 endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)
+endif()
+
+# ---------------------------------------------------------------------------
+# Overlays (overlays agent): data-driven helper elements (build grids, ranges, rally lines, damage
+# numbers, bars). rts_overlay_data: GPU-free schema / validation / templates, shared by the view and
+# the editor core (MCP overlay_* operations); the evaluator + renderer live in rts_game_view.
+# ---------------------------------------------------------------------------
+add_library(rts_overlay_data STATIC modules/rts/view/RtsOverlayData.cpp)
+target_link_libraries(rts_overlay_data PUBLIC rts_game)
+target_include_directories(rts_overlay_data PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsOverlays.cpp modules/rts/view/RtsOverlaysDraw.cpp)
+target_link_libraries(rts_game_view PUBLIC rts_overlay_data)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/OverlayOps.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_overlay_data)
+endif()
+
+# VFX tools (vfx tools agent): Unity particle importer tests (Python, stdlib only) and the fx_* editor
+# operations (list / get / set / delete / templates / import_unity / bind; fx_preview in the editor GUI).
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME unity_vfx_importer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/importers/unity_vfx/test_import.py)
+    endif()
+endif()
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/FxOps.cpp apps/editor/core/FxTemplates.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_game_fx)
+endif()
+if(TARGET rts_editor)
+    target_sources(rts_editor PRIVATE apps/editor/EditorFxOps.cpp)   # fx_preview (GUI)
+endif()
+
+# Splash & icons (splash agent). rts_splash: game.json "splash" timeline + the in-engine loading
+# screen (RHI quads, GLSL + MSL) driven by apps/client/ClientSplash.cpp. rts_branding: host-only
+# icon / launch screen generation (resize, .ico, .icns, Android/iOS/web/Linux sets, previews) used
+# by rtsbuild, the editor core (branding_* / icons_preview / splash_preview) and the tests.
+# ---------------------------------------------------------------------------
+add_library(rts_splash STATIC engine/splash/SplashData.cpp engine/splash/SplashScreen.cpp)
+target_include_directories(rts_splash PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(rts_splash PUBLIC rts_engine rts_atlas)
+# rtsbuild: window colour before the first frame (0xRRGGBB from game.json splash.background)
+set(RTS_SPLASH_BACKGROUND "" CACHE STRING "Window background before the first frame, 0xRRGGBB (set by rtsbuild)")
+foreach(t rts_client main)
+    if(TARGET ${t})
+        target_sources(${t} PRIVATE apps/client/ClientSplash.cpp)
+        target_link_libraries(${t} PRIVATE rts_splash)
+        if(RTS_SPLASH_BACKGROUND)
+            target_compile_definitions(${t} PRIVATE RTS_SPLASH_BACKGROUND=${RTS_SPLASH_BACKGROUND})
+        endif()
+    endif()
+endforeach()
+# Generated packaging assets (rtsbuild --target ...): Windows icon resource, iOS launch storyboard.
+if(TARGET rts_client AND RTS_PLATFORM STREQUAL "windows" AND RTS_GEN_DIR AND EXISTS "${RTS_GEN_DIR}/app.rc")
+    enable_language(RC)
+    target_sources(rts_client PRIVATE "${RTS_GEN_DIR}/app.rc")
+endif()
+set(RTS_IOS_LAUNCH_STORYBOARD "")   # Info.plist: launch storyboard key when rtsbuild generated one
+if(TARGET rts_client AND RTS_PLATFORM STREQUAL "ios" AND RTS_GEN_DIR AND EXISTS "${RTS_GEN_DIR}/LaunchScreen.storyboard")
+    target_sources(rts_client PRIVATE "${RTS_GEN_DIR}/LaunchScreen.storyboard")
+    set_property(TARGET rts_client APPEND PROPERTY RESOURCE "${RTS_GEN_DIR}/LaunchScreen.storyboard")
+    set(RTS_IOS_LAUNCH_STORYBOARD "<key>UILaunchStoryboardName</key><string>LaunchScreen</string>")
+endif()
+if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
+    add_library(rts_branding STATIC tools/branding/BrandImage.cpp tools/branding/Icons.cpp tools/branding/Splash.cpp)
+    target_include_directories(rts_branding PRIVATE third_party/stb_image_write)
+    target_link_libraries(rts_branding PUBLIC rts_splash)
+    foreach(t rtsbuild rts_tests)
+        if(TARGET ${t})
+            target_link_libraries(${t} PRIVATE rts_branding)
+        endif()
+    endforeach()
+    if(TARGET rtsbuild)
+        target_sources(rtsbuild PRIVATE tools/rtsbuild/Branding.cpp)
+    endif()
+endif()
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/BrandingOps.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_branding)
 endif()

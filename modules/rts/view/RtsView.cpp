@@ -16,20 +16,7 @@ namespace {
 float3 toF(const Vec3& v) { return {float(v.x.toDouble()), float(v.y.toDouble()), float(v.z.toDouble())}; }
 } // namespace
 
-float4 RtsView::playerColor(int p) {
-    static const float4 colors[] = {
-        {0.70f, 0.70f, 0.68f, 1}, // neutral
-        {0.20f, 0.45f, 0.95f, 1}, // 1 blue
-        {0.92f, 0.22f, 0.20f, 1}, // 2 red
-        {0.25f, 0.80f, 0.30f, 1}, // 3 green
-        {0.97f, 0.80f, 0.15f, 1}, // 4 yellow
-        {0.68f, 0.35f, 0.90f, 1}, // 5 purple
-        {0.15f, 0.82f, 0.85f, 1}, // 6 teal
-        {0.98f, 0.55f, 0.15f, 1}, // 7 orange
-        {0.95f, 0.45f, 0.72f, 1}, // 8 pink
-    };
-    return colors[p >= 0 && p < 9 ? p : 0];
-}
+float4 RtsView::playerColor(int p) { return overlayPlayerColor(p); }   // palette shared with the overlays
 
 bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     rules_ = &rules;
@@ -43,10 +30,14 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
         try { if (read_(rulesPath, text)) rj = Json::parse(text); } catch (...) {}
         fog_.setLook(parseFogLook(rj["fogOfWar"], game["fogOfWar"]));
         fogMeshDirty_ = true;
+        // overlays: built-ins + rules "overlays" + game.json "overlays" (by id)
+        overlays_.init(rules, rj["overlays"], game["overlays"], contentBase_);
+        overlays_.initGpu(dev);
     }
     if (!models_.count("shape:generic")) buildShapes(dev);
     looks_.clear();
     warnings_.clear();
+    for (auto& w : overlays_.set().warnings) warnings_.push_back(w);
     anims_.clear();
     for (auto& t : rules.types) {
         TypeLook l;
@@ -58,6 +49,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     lights_.init(rules);
     groundFx_.init(dev, rules, read_, contentBase_);
     terrain_.init(dev, rules, read_, contentBase_);
+    planets_.init(dev, terrain_.look(), read_, contentBase_);
     return true;
 }
 
@@ -71,6 +63,8 @@ void RtsView::shutdown(gfx::Device& dev) {
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
     groundFx_.shutdown(dev);
+    planets_.shutdown(dev);
+    overlays_.shutdown(dev);
 }
 
 bool RtsView::spriteHit(const RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const {
@@ -87,6 +81,7 @@ float RtsView::selectionRadius(uint16_t type) const {
 
 
 void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid) {
+    if (planets_.active()) { drawPlanets(r, s, time, vision, grid); return; }   // RtsPlanetView.cpp
     const bool tiles = twoD_ && twoD_->hasTiles();
     if (twoD_) twoD_->beginFrame(r.camera(), time);
     bars_.assign(s.objects.size(), {});
@@ -114,11 +109,7 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
             float g = heightAt(grid, o.pos.x, o.pos.z);
             twoD_->addObject(o, g);
             bars_[i] = twoD_->barPoint(o, g);
-            if (o.visible && (o.selected || o.hovered)) {
-                uint32_t col = o.selected ? (o.owner == 0 ? rgba(255, 255, 160, 230) : rgba(120, 255, 120, 230)) : rgba(255, 255, 255, 130);
-                r.circleXZ({o.pos.x, 0, o.pos.z}, selectionRadius(o.type), col, 32, g + 0.05f);
-            }
-            continue;
+            continue;   // selection rings: overlays
         }
         if (o.type >= looks_.size()) continue;
         // editor placements have no entity: key them by position in the list
@@ -132,11 +123,6 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         drawObject(r, st, o, ground, 1.0f);
         if (L.air) { // ground shadow blob helps reading the height
             r.circleXZ({o.pos.x, ground, o.pos.z}, 0.35f, rgba(0, 0, 0, 90), 16, ground + 0.03f);
-        }
-        if (o.selected || o.hovered) {
-            float rad = selectionRadius(o.type);
-            uint32_t col = o.selected ? (o.owner == 0 ? rgba(255, 255, 160, 230) : rgba(120, 255, 120, 230)) : rgba(255, 255, 255, 130);
-            r.circleXZ({o.pos.x, 0, o.pos.z}, rad, col, 32, ground + 0.05f);
         }
     }
     // corpses (entity already removed) play their death and fade; stale states are dropped
@@ -158,7 +144,6 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         }
         ++it;
     }
-    for (auto& mk : s.moveMarkers) r.circleXZ(mk, 0.35f, rgba(120, 255, 120, 200), 16, 0.06f);
     if (twoD_) {
         twoD_->endFrame(grid);
         twoD_->submit(r, grid, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
@@ -174,54 +159,28 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         else fog_.draw(r, time, low);
     }
     lights_.draw(r, s, time, vision, grid, *this);
+    // selection / hover rings, move markers, placement footprint and game overlays (after the fog sheet)
+    overlays_.drawWorld(r, s, time, vision, grid, *this);
 }
 
 void RtsView::drawOverlays(const RTSCamera& cam, const RtsScene& s, float w, float h, float ox, float oy, void* drawList) {
-    ImDrawList* dl = drawList ? static_cast<ImDrawList*>(drawList) : ImGui::GetBackgroundDrawList();
-    ImFont* font = ImGui::GetFont();
-    const float fs = ImGui::GetFontSize();
-    char buf[32];
-    for (size_t oi = 0; oi < s.objects.size(); ++oi) {
-        const auto& o = s.objects[oi];
-        if (!o.visible || o.isProjectile) continue;
-        const UnitType& t = rules_->types[o.type];
-        float2 sp;
-        if (twoD_ && twoD_->hasSprite(o.type) && oi < bars_.size()) {
-            if (!cam.worldToScreen(bars_[oi], w, h, sp)) continue;
-            sp.y -= 4;
-        } else {
-        float top = t.structure ? 1.6f * looks_[o.type].scale * std::max(1.0f, std::max(t.footprintW, t.footprintH) * 0.6f) : 1.2f * looks_[o.type].scale;
-        if (looks_[o.type].air) top += 2.4f;
-        if (!cam.worldToScreen({o.pos.x, top, o.pos.z}, w, h, sp)) continue;
-        }
-        sp.x += ox; sp.y += oy;
-        if (o.garrison >= 0) {
-            std::snprintf(buf, sizeof buf, "%d", o.garrison);
-            float4 c = playerColor(o.owner);
-            float size = fs * 1.2f;
-            ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, buf);
-            ImVec2 at(sp.x - ts.x * 0.5f, sp.y - ts.y * 0.5f);
-            dl->AddRectFilled(ImVec2(at.x - 6, at.y - 1), ImVec2(at.x + ts.x + 6, at.y + ts.y + 1),
-                              ImGui::ColorConvertFloat4ToU32(ImVec4(c.x * 0.45f, c.y * 0.45f, c.z * 0.45f, 0.85f)), 7);
-            dl->AddText(font, size, at, IM_COL32_WHITE, buf);
-            continue;
-        }
-        bool showHp = !t.invulnerable && (o.selected || o.hovered || o.hp < 0.999f);
-        if (showHp) {
-            float bw = t.structure ? 46.0f : 26.0f, bh = 4.0f;
-            ImVec2 a(sp.x - bw * 0.5f, sp.y), b(sp.x + bw * 0.5f, sp.y + bh);
-            dl->AddRectFilled(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1), IM_COL32(0, 0, 0, 170));
-            float f = std::clamp(o.hp, 0.0f, 1.0f);
-            ImU32 col = f > 0.6f ? IM_COL32(80, 220, 90, 255) : f > 0.3f ? IM_COL32(240, 200, 60, 255) : IM_COL32(230, 70, 60, 255);
-            dl->AddRectFilled(a, ImVec2(a.x + bw * f, b.y), col);
-        }
-        if (o.build < 1.0f) {
-            float bw = 46.0f;
-            ImVec2 a(sp.x - bw * 0.5f, sp.y + 7);
-            dl->AddRectFilled(ImVec2(a.x - 1, a.y - 1), ImVec2(a.x + bw + 1, a.y + 4), IM_COL32(0, 0, 0, 170));
-            dl->AddRectFilled(a, ImVec2(a.x + bw * o.build, a.y + 3), IM_COL32(120, 190, 255, 255));
-        }
+    // bars, garrison counts, labels, damage numbers: RtsOverlays (built-in overlays reproduce the old look)
+    overlays_.drawScreen(cam, s, w, h, ox, oy, drawList, *this);
+}
+
+bool RtsView::overlayTop(const RTSCamera& cam, const SceneObject& o, size_t oi, float w, float h, float2& sp) const {
+    if (!rules_ || o.type >= rules_->types.size() || o.type >= looks_.size()) return false;
+    const UnitType& t = rules_->types[o.type];
+    if (planets_.active()) // anchors computed by drawPlanets (view world; hidden behind the planet / far away)
+        return oi < bars_.size() && oi < barOk_.size() && barOk_[oi] && cam.worldToScreen(bars_[oi], w, h, sp);
+    if (twoD_ && twoD_->hasSprite(o.type) && oi < bars_.size()) {
+        if (!cam.worldToScreen(bars_[oi], w, h, sp)) return false;
+        sp.y -= 4;
+        return true;
     }
+    float top = t.structure ? 1.6f * looks_[o.type].scale * std::max(1.0f, std::max(t.footprintW, t.footprintH) * 0.6f) : 1.2f * looks_[o.type].scale;
+    if (looks_[o.type].air) top += 2.4f;
+    return cam.worldToScreen({o.pos.x, top, o.pos.z}, w, h, sp);
 }
 
 void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
