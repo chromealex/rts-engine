@@ -63,7 +63,10 @@ struct StatMod { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromI
 struct ModTarget { uint64_t tags = 0; uint16_t type = kNoType; bool all = false; };
 
 // ------------------------------------------------------------------ combat
-enum Layer : uint8_t { kLayerGround = 1, kLayerAir = 2, kLayerNaval = 4, kLayerSandOnly = 8 };
+enum Layer : uint8_t { kLayerGround = 1, kLayerAir = 2, kLayerNaval = 4, kLayerSandOnly = 8,
+                      kLayerOrbit = 16 /* planets: orbit shell; units also carry kLayerAir (free movement, see over) */ };
+// Can a weapon with these target layers hit a unit of `layer`? Orbit units only by weapons listing "orbit".
+inline bool layerHit(uint8_t targets, uint8_t layer) { return (layer & kLayerOrbit) ? (targets & kLayerOrbit) != 0 : (targets & layer) != 0; }
 
 struct WeaponDef {
     std::string id;
@@ -161,6 +164,7 @@ struct UnitType {
     uint8_t pathLayer = kLayerGround;          // layer | slope class << 4: what pathing / passability get
     Fixed maxSlope = Fixed::fromInt(-1);       // move.maxSlope (heightfield terrain); <0: the layer's default
     Fixed speed{};
+    Fixed transitSpeed{};                      // move.transitSpeed: interplanetary transfer speed (orbit units; 0 = 10 x speed)
     int footprintW = 0, footprintH = 0;
     Fixed sight = Fixed::fromInt(8);
     std::vector<WeaponDef> weapons;

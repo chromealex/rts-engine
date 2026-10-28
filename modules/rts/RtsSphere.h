@@ -13,6 +13,7 @@
 #pragma once
 #include "engine/core/Fixed.h"
 #include <cstdint>
+#include <vector>
 
 namespace rts::game {
 
@@ -38,7 +39,7 @@ Vec3 sphereTangentToward(Vec3 dir, Vec3 to);
 
 class CubeSphere {
 public:
-    explicit CubeSphere(int faceSize = 1) : n_(faceSize < 1 ? 1 : faceSize) {}
+    explicit CubeSphere(int faceSize = 1);
     int faceSize() const { return n_; }
     int cellCount() const { return 6 * n_ * n_; }
     int cornerCount() const { return 6 * (n_ + 1) * (n_ + 1); }
@@ -60,6 +61,10 @@ public:
     // corner, where only three faces meet). Cube-corner cells therefore have 7 neighbours.
     int neighbor(int id, int dx, int dy) const;
     int neighbors8(int id, int out[8]) const;          // compacted list, returns count (7 or 8)
+    // Cell at offset (dx, dy) in the face grid of `id`, continued across seams by unfolding the cube (first along
+    // x, then along y in the continued frame). Exact inside a face; -1 when the walk would pass a cube corner
+    // or |dx|, |dy| >= N. Lattice distances are preserved, so offset loops make discs across seams.
+    int offset(int id, int dx, int dy) const;
 
     int cornerId(int face, int i, int j) const { return face * (n_ + 1) * (n_ + 1) + j * (n_ + 1) + i; }
     // All ids of the corner (face, i, j) incl. itself, ascending; returns count (1, 2 or 3).
@@ -70,8 +75,12 @@ public:
     // Unit tangents of the face grid at a direction: east = +a, south = +b (projected onto the tangent plane).
     static void faceTangents(int face, Vec3 dir, Vec3& east, Vec3& south);
 
+    // Warped face coordinate s' = tan(s / 8 turn) at integer cell coordinate k (0..N): cell edges.
+    Fixed edgeWarp(int k) const { return warp_[size_t(k < 0 ? 0 : k > n_ ? n_ : k)]; }
+
 private:
     int n_;
+    std::vector<Fixed> warp_;   // N + 1 cell-edge values, strictly increasing; inverse warp by binary search
 };
 
 } // namespace rts::game

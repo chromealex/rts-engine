@@ -5458,6 +5458,260 @@ TEST(sphere_great_circle_steps) {
     CHECK(fxAbs(e.length() - Fixed::fromInt(1)) < Fixed::fromRatio(1, 100));
 }
 
+// golden generator hashes (pure integer pipeline: identical on every platform / compiler)
+#define GEN_GOLD_NOISE 0xb63f6f508d85105full
+#define GEN_GOLD_CLASSIC 0xbca2c83d9c0791c8ull
+#define GEN_GOLD_CONTINENTS 0x169af2ca325ff112ull
+#define GEN_GOLD_ISLANDS 0x954d027fe4f6f9f7ull
+#define GEN_GOLD_HIGHLANDS 0x9e9e30de7fecd4e7ull
+#define GEN_GOLD_CANYONS 0x7fcf37e9490ffb17ull
+#define GEN_GOLD_LANES 0x6010e5d33a6a8fdbull
+#define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
+#define GEN_GOLD_METAL 0x5e11afce218433b2ull
+#define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
+
+// ---------------- terrain / map generator (agent-terrain-gen) ----------------
+#include "modules/rts/gen/MapGen.h"
+#include "modules/rts/gen/GenNoise.h"
+#include "modules/rts/gen/GenField.h"
+#include "modules/rts/RtsSphere.h"
+
+static const char* kGenRules = R"({
+  "resources": {"gold": {"start": 500}, "wood": {"start": 200}, "ore": {"field": true, "cellMax": 100}},
+  "types": {
+    "hall":   {"structure": {"footprint": [4, 4]}, "health": {"max": 1500}, "produces": ["worker"], "dropoff": ["gold", "wood", "ore"]},
+    "worker": {"move": {"speed": 2.4, "radius": 0.35}, "gather": {"gold": {}, "wood": {}, "ore": {}}, "builds": ["hall"], "cost": {"gold": 50, "time": 10}},
+    "mine":   {"structure": {"footprint": [3, 3]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 10000}},
+    "tree":   {"structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 80}},
+    "ogre":   {"health": {"max": 300}, "move": {"speed": 2}, "neutral": {"leash": 8}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}]},
+    "spot":   {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+    "drill":  {"structure": {"footprint": [2, 2], "on": "spot"}, "income": {"gold": 1}}
+  }
+})";
+
+static uint64_t genHash(const std::string& preset, uint64_t seed, int players, const std::string& rulesText = kGenRules,
+                        const std::string& sym = "auto", Json* out = nullptr) {
+    Json rj = Json::parse(rulesText);
+    game::Rules rules = game::loadRules(rj);
+    gen::GenRequest req;
+    req.preset = preset; req.seed = seed; req.players = players; req.symmetry = sym;
+    Json map = Json::parse(R"({"name": "g", "size": [48, 48], "players": []})");
+    std::string err;
+    if (!gen::generateMap(req, rules, rj, map, &err)) { std::printf("  gen error: %s\n", err.c_str()); return 0; }
+    if (out) *out = map;
+    return gen::mapHash(map);
+}
+
+TEST(gen_noise_deterministic) {
+    // fixed sample values: bit-identical on every platform (pure integer maths)
+    uint64_t h = 1469598103934665603ull;
+    gen::Fbm f; f.octaves = 5; f.warp = 32768; f.ridged = 16384;
+    for (int i = 0; i < 64; ++i) {
+        h = (h ^ uint64_t(uint32_t(gen::fbm2(int64_t(i) * 40503, int64_t(i) * 91233 - 400000, 7, f)))) * 1099511628211ull;
+        h = (h ^ uint64_t(uint32_t(gen::gradNoise3(int64_t(i) * 30011, -int64_t(i) * 12345, int64_t(i) * 777, 9)))) * 1099511628211ull;
+        h = (h ^ uint64_t(uint32_t(gen::valueNoise2(int64_t(i) * 70001, int64_t(i) * 3, 3)))) * 1099511628211ull;
+    }
+    std::printf("  noise hash %016llx\n", (unsigned long long)h);
+    CHECK(h == GEN_GOLD_NOISE);
+    // ranges
+    int lo = 0, hi = 0;
+    for (int i = 0; i < 2000; ++i) { int v = gen::gradNoise2(int64_t(i) * 9973, int64_t(i) * 5003, 1); lo = std::min(lo, v); hi = std::max(hi, v); }
+    CHECK(lo >= -65536 && hi <= 65536 && lo < -20000 && hi > 20000);
+}
+
+TEST(gen_symmetry_images) {
+    std::string err;
+    gen::Sym s;
+    CHECK(gen::Sym::make("auto", 4, 40, 40, s, &err) && s.kind == gen::Sym::Rot4);
+    CHECK(gen::Sym::make("auto", 4, 48, 32, s, &err) && s.kind == gen::Sym::Mirror4);
+    CHECK(!gen::Sym::make("mirror", 3, 40, 40, s, &err) && err.find("needs 2 players") != std::string::npos);
+    for (const char* k : {"point", "mirror", "mirror-y", "rot4", "mirror4"}) {
+        const int n = std::string(k) == "rot4" || std::string(k) == "mirror4" ? 4 : 2;
+        CHECK(gen::Sym::make(k, n, 40, 40, s, &err));
+        bool ok = true;
+        for (int y = 0; y < 40; ++y)
+            for (int x = 0; x < 40; ++x) {   // folding then imaging returns the cell
+                int fx, fy, ix, iy;
+                const int kk = s.foldCell(x, y, fx, fy);
+                s.imageCell(kk, fx, fy, ix, iy);
+                if (ix != x || iy != y || s.foldCell(fx, fy, ix, iy) != 0) ok = false;
+            }
+        CHECK(ok);
+    }
+}
+
+TEST(gen_golden_maps) {
+    // same request -> identical map; golden hashes pin the output (change them only on purpose)
+    const uint64_t a = genHash("classic", 7, 2), b = genHash("classic", 7, 2), c = genHash("classic", 8, 2);
+    CHECK(a == b && a != c);
+    struct G { const char* preset; int players; uint64_t gold; };
+    const G gold[] = {{"classic", 2, GEN_GOLD_CLASSIC}, {"continents", 4, GEN_GOLD_CONTINENTS}, {"islands", 2, GEN_GOLD_ISLANDS},
+                      {"highlands", 3, GEN_GOLD_HIGHLANDS}, {"canyons", 2, GEN_GOLD_CANYONS}, {"lanes", 2, GEN_GOLD_LANES}};
+    for (auto& g : gold) {
+        const uint64_t h = genHash(g.preset, 7, g.players);
+        std::printf("  %s/%d %016llx\n", g.preset, g.players, (unsigned long long)h);
+        CHECK(h == g.gold);
+    }
+}
+
+TEST(gen_fair_and_connected) {
+    for (const char* preset : {"classic", "continents", "highlands", "canyons"})
+        for (uint64_t seed = 1; seed <= 3; ++seed)
+            for (int np : {2, 4}) {
+                Json m;
+                genHash(preset, seed, np, kGenRules, "auto", &m);
+                const Json& g = m["generated"];
+                CHECK(g.getBool("connected"));
+                if (!g.getBool("connected")) {
+                    std::printf("  not connected: %s seed %d players %d %s\n", preset, int(seed), np, g["warnings"].dump(-1).c_str());
+                    if (const char* dbg = std::getenv("RTS_GEN_DUMP")) { FILE* f = std::fopen(dbg, "w"); if (f) { std::fputs(m.dump().c_str(), f); std::fclose(f); } }
+                }
+                CHECK(int(m["players"].size()) == np);
+                // symmetric layouts: every start is an image of player 1's start, objects per owner equal
+                int own[9] = {};
+                for (auto& e : m["entities"].items()) { const int o = int(e.getInt("owner")); if (o >= 1 && o <= 8) own[o]++; }
+                for (int p = 2; p <= np; ++p) CHECK(own[p] == own[1]);
+                CHECK(own[1] > 0);
+                if (np == 2) CHECK(g.getInt("pathSpread", 0) <= 1);
+            }
+}
+
+TEST(gen_match_hook_and_replay) {
+    // a map with "generate": every loader regenerates the same map from the match seed
+    Json rj = Json::parse(kGenRules);
+    auto run = [&](uint64_t seed) {
+        Json map = Json::parse(R"({"name": "m", "size": [40, 40], "players": [{"name": "A"}],
+                                   "generate": {"preset": "classic", "seed": "match", "players": 2}})");
+        CHECK(gen::prepareGenerate(map, [](const std::string&, std::string&) { return false; }, nullptr));
+        CHECK(map["players"].size() == 2);
+        SimConfig cfg; cfg.seed = seed;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rj, map);
+        for (int i = 0; i < 40; ++i) sim.step();
+        return sim.checksum();
+    };
+    CHECK(run(11) == run(11));
+    CHECK(run(11) != run(12));
+    // readable errors
+    Json bad = Json::parse(R"({"size": [40, 40], "players": [{}, {}], "generate": {"preset": "nope"}})");
+    SimConfig cfg;
+    Simulation sim(cfg, std::make_unique<game::RtsModule>());
+    std::string what;
+    try { sim.setup(rj, bad); } catch (const std::exception& e) { what = e.what(); }
+    CHECK(what.find("unknown preset 'nope'") != std::string::npos);
+}
+
+TEST(gen_caves_and_heightfield) {
+    const std::string caveRules = R"({"resources": {"gold": {"start": 100}},
+      "diggable": {"D": {"hardness": 3}, "G": {"hardness": 5, "yields": {"gold": 100}}, "J": {"hardness": 8, "yields": {"gold": 20}, "infinite": true}},
+      "types": {"heart": {"key": true, "structure": {"footprint": [3, 3]}, "produces": ["imp"]},
+                "imp": {"move": {"speed": 3}, "digs": {"rate": 1}, "cost": {"gold": 10}}}})";
+    Json m;
+    const uint64_t h = genHash("caves", 5, 2, caveRules, "auto", &m);
+    std::printf("  caves %016llx\n", (unsigned long long)h);
+    CHECK(h == GEN_GOLD_CAVES);
+    std::string rows;
+    for (auto& r : m["terrain"]["rows"].items()) rows += r.str();
+    CHECK(rows.find('D') != std::string::npos && rows.find('G') != std::string::npos);
+    CHECK(m["generated"].getBool("connected"));
+    const std::string hfRules = std::string(kGenRules).substr(0, std::string(kGenRules).size() - 2) + R"(, "terrain": {"model": "heightfield", "maxSlope": 0.8}})";
+    Json hm;
+    const uint64_t hh = genHash("metal", 5, 2, hfRules, "auto", &hm);
+    std::printf("  metal %016llx\n", (unsigned long long)hh);
+    CHECK(hh == GEN_GOLD_METAL);
+    CHECK(hm["terrain"]["corners"].size() == size_t(49 * 49));   // the map's own size wins over the preset size
+    CHECK(hm["generated"].getBool("connected"));
+}
+
+TEST(gen_planet_seams) {
+    Json rj = Json::parse(kGenRules);
+    game::Rules rules = game::loadRules(rj);
+    Json map = Json::parse(R"({"size": [16, 16], "players": [{}, {}, {}],
+        "world": {"bodies": [{"id": "terra", "kind": "planet", "radius": 64, "faceSize": 12,
+                              "generate": {"preset": "rocky", "seed": 3, "players": 3}}]}})");
+    std::string err;
+    CHECK(gen::applyGenerate(map, rules, rj, 1, 3, &err));
+    const Json& body = map["world"]["bodies"][size_t(0)];
+    const Json& cs = body["terrain"]["corners"];
+    CHECK(cs.size() == size_t(6 * 13 * 13));
+    CHECK(body["terrain"]["faces"].size() == 6);
+    game::CubeSphere S(12);
+    bool seams = true;
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= 12; ++j)
+            for (int i = 0; i <= 12; ++i) {
+                int ids[3]; const int n = S.cornerDuplicates(f, i, j, ids);
+                for (int q = 1; q < n; ++q) if (cs[size_t(ids[q])].integer() != cs[size_t(ids[0])].integer()) seams = false;
+            }
+    CHECK(seams);
+    CHECK(body["generated"]["starts"].size() == 3);
+    // three sites on a sphere: maximally separated means well over a quarter turn apart
+    CHECK(body["generated"]["minStartArc"].fx() > Fixed::fromRatio(25, 100));
+    Json again = Json::parse(R"({"size": [16, 16], "players": [{}, {}, {}],
+        "world": {"bodies": [{"id": "terra", "kind": "planet", "radius": 64, "faceSize": 12,
+                              "generate": {"preset": "rocky", "seed": 3, "players": 3}}]}})");
+    CHECK(gen::applyGenerate(again, rules, rj, 99, 3, &err));
+    CHECK(gen::mapHash(again) == gen::mapHash(map));
+    std::printf("  planet %016llx\n", (unsigned long long)gen::mapHash(map));
+    CHECK(gen::mapHash(map) == GEN_GOLD_PLANET);
+}
+
+// ---- planet view (agent-planet-render): float cube-sphere surface of RtsPlanet.h
+#include "modules/rts/view/RtsPlanet.h"
+TEST(planet_view_surface_seams_and_picking) {
+    using namespace rts::render;
+    rts::game::PlanetBody b;
+    b.radius = 40; b.faceSize = 16;
+    const int N = 16, S = (N + 1) * (N + 1);
+    b.corners.assign(size_t(6 * S), 0);
+    rts::game::CubeSphere cs(N);
+    // heights as a function of the corner direction: duplicates on seams get equal values
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                const Vec3 d = cs.cornerDir(f, i, j);
+                b.corners[size_t(cs.cornerId(f, i, j))] = int16_t((d.x.toDouble() * 3 + d.y.toDouble() * 2) * 16);
+            }
+    rts::game::PlanetSurface s;
+    s.init(b);
+    bool seamsShared = true;   // every duplicated corner has the same position on all its faces
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                int dup[3];
+                const int n = cs.cornerDuplicates(f, i, j, dup);
+                for (int k = 0; k < n; ++k) {
+                    const int g = dup[k] / S, jj = (dup[k] % S) / (N + 1), ii = dup[k] % (N + 1);
+                    const float3 a = s.cornerPos(f, i, j), c = s.cornerPos(g, ii, jj);
+                    if (a.x != c.x || a.y != c.y || a.z != c.z) seamsShared = false;
+                }
+            }
+    CHECK(seamsShared);
+    // float face mapping round-trips and agrees with the corner table
+    int f; float fa, fb;
+    s.faceFromDir(s.dirFromFace(4, 3.25f, 11.5f), f, fa, fb);
+    CHECK(f == 4 && std::fabs(fa - 3.25f) < 1e-3f && std::fabs(fb - 11.5f) < 1e-3f);
+    const float3 cd = s.cornerDir(2, 5, 7), fd = s.dirFromFace(2, 5, 7);
+    CHECK(length(cd - fd) < 1e-4f);   // Q16 vs float
+    // height at a corner direction = that corner's height; ray from outside hits the surface there
+    CHECK(std::fabs(s.heightAt(cd) - s.cornerHeight(2, 5, 7)) < 1e-3f);
+    float3 hit;
+    const float3 target = s.surfacePoint(cd);
+    CHECK(s.raycast(cd * 200.0f, cd * -1.0f, hit));
+    CHECK(length(hit - target) < 0.05f);
+    CHECK(!s.raycast(cd * 200.0f, cd, hit));   // pointing away: no hit
+    // map world block: bodies, orbit parents, start
+    Json map = Json::parse(R"({"world": {"bodies": [{"id": "sun", "kind": "star", "radius": 10},
+        {"id": "p", "kind": "planet", "radius": 20, "faceSize": 4, "orbit": {"around": "sun", "radius": 100, "period": 10, "phase": 0.25}}],
+        "start": "p"}})");
+    std::vector<std::string> warn;
+    rts::game::PlanetWorld w = rts::game::loadPlanetWorld(map, &warn);
+    CHECK(w.bodies.size() == 2 && w.start == 1 && w.bodies[1].parent == 0 && warn.empty()); // no corners: a smooth sphere
+    const float3 c0 = w.center(1, 0), c5 = w.center(1, 5);   // quarter turn, then half a period later
+    CHECK(std::fabs(c0.x) < 1e-3f && std::fabs(c0.z - 100) < 1e-3f && std::fabs(c5.z + 100) < 1e-2f);
+    CHECK(rts::game::loadPlanetWorld(Json::parse("{}")).empty());
+}
+
 // ---------------- Sound groups and steal modes ----------------
 
 TEST(audio_groups_share_a_limit) {
@@ -5773,6 +6027,188 @@ TEST(icons_generate_platform_sets) {
     CHECK(strip.width > 320 && strip.height > 90);
     fs::remove_all(dir);
 }
+
+// ---------------- Planets: surface, world block, orbit layer, transit ----------------
+static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/games/planets";
+
+TEST(planet_surface_offsets_and_hash_buckets) {
+    using namespace rts::game;
+    CubeSphere s(12);
+    // offsets inside a face are exact; across seams they agree with neighbour steps
+    int bad = 0;
+    for (int id = 0; id < s.cellCount(); ++id) {
+        for (int k = 0; k < 4; ++k) {
+            static const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            if (s.offset(id, d[k][0], d[k][1]) != s.neighbor(id, d[k][0], d[k][1])) ++bad;
+        }
+        // a 2-step walk ends near (2 cells) the start, never on itself
+        for (int dx = -2; dx <= 2; ++dx) {
+            const int o = s.offset(id, dx, 0);
+            if (o < 0) continue;
+            const Fixed arc = sphereArcTurns(s.cellCenterDir(id), s.cellCenterDir(o));
+            if ((dx != 0 && o == id) || arc > Fixed::fromRatio(3 * (dx < 0 ? -dx : dx) + 1, 4 * 12 * 2)) ++bad;
+        }
+    }
+    CHECK(bad == 0);
+    Surface S;
+    BodyDef b; b.id = "p"; b.radius = Fixed::fromInt(20); b.faceSize = 12;
+    S.bodies = {b};
+    S.build();
+    CHECK(S.W == 12 && S.H == 72 && S.bucketCount() == 6 * 3 * 3);
+    // every cell centre maps back to its cell, and lies on body 0 at radius
+    int bad2 = 0;
+    for (int c = 0; c < S.W * S.H; ++c) {
+        const Vec3 p = S.cellCenter(c);
+        if (S.cellAt(p) != c || S.bodyAt(p) != 0 || fxAbs(S.altitude(p)) > Fixed::fromRatio(1, 100)) ++bad2;
+        std::vector<int32_t> near;
+        S.bucketsAround(p, Fixed::fromInt(3), near);
+        if (std::find(near.begin(), near.end(), S.bucketOf(p)) == near.end()) ++bad2;
+    }
+    CHECK(bad2 == 0);
+    // ground distance is the chord, symmetric
+    const Vec3 a = S.cellCenter(S.gridCell(0, 4, 6, 6)), c = S.cellCenter(S.gridCell(0, 5, 6, 6));
+    CHECK(S.groundDist(a, c) == S.groundDist(c, a) && S.groundDist(a, c) > Fixed::fromInt(39));
+    CHECK(!Surface::onSphere(Vec3{Fixed::fromInt(2048), Fixed{}, Fixed::fromInt(2048)}) && Surface::onSphere(a));
+}
+
+TEST(planet_world_loads_and_paths_cross_seams) {
+    auto sim = makeSim(kPlanets, "maps/two_worlds.json", 1);
+    auto& m = mod(*sim);
+    const game::Surface* S = m.surface(*sim);
+    CHECK(S != nullptr);
+    if (!S) return;
+    CHECK(S->bodies.size() == 3 && S->findBody("terra") == 1 && S->startBody == 1);
+    CHECK(S->bodies[1].hasSurface() && !S->bodies[0].hasSurface());
+    // commanders on opposite faces of terra
+    Entity c1 = findType(*sim, "commander", 1), c2 = findType(*sim, "commander", 2);
+    CHECK(c1.valid() && c2.valid());
+    const Vec3 p1 = sim->world().get<Transform>(c1).pos, p2 = sim->world().get<Transform>(c2).pos;
+    CHECK(m.bodyOf(*sim, p1) == 1 && m.bodyOf(*sim, p2) == 1);
+    // ground path from one pole to the other: crosses at least two face seams, every step a neighbour
+    auto& g = m.state(*sim).grid;
+    std::vector<Vec3> path;
+    CHECK(g.findPath(p1, p2, game::kLayerGround, path, 400000));
+    CHECK(path.size() >= 2);
+    if (!path.empty()) CHECK(path.back() == p2);
+    // the route (waypoints joined by great-circle chords) visits at least one face besides the two poles
+    std::vector<int> faces;
+    Vec3 prev = p1;
+    for (auto& p : path) {
+        for (int k = 1; k <= 16; ++k) {
+            int b, f, x, y;
+            S->cellFace(S->cellAt(prev + (p - prev) * Fixed::fromRatio(k, 16)), b, f, x, y);
+            if (std::find(faces.begin(), faces.end(), f) == faces.end()) faces.push_back(f);
+        }
+        prev = p;
+    }
+    CHECK(faces.size() >= 3);
+    // a move order gets the commander around the planet
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {c1}; mv.point = S->cellCenter(S->gridCell(1, 0, 12, 12));
+    sim->submit(mv);
+    const Fixed before = S->groundDist(sim->world().get<Transform>(c1).pos, mv.point);
+    for (int i = 0; i < 20 * 15; ++i) sim->step();
+    const Vec3 now = sim->world().get<Transform>(c1).pos;
+    CHECK(S->groundDist(now, mv.point) < before - Fixed::fromInt(10));
+    CHECK(fxAbs(S->altitude(now) - S->heightAt(now)) < Fixed::fromRatio(1, 20));   // stays on the surface
+    // body orbits: terra moves around the sun, luna around terra, positions are Fixed and periodic
+    const Vec3 t0 = m.bodyWorldPosition(*sim, 1, 0), t1 = m.bodyWorldPosition(*sim, 1, 20 * 1200);
+    CHECK(fxAbs((t0 - t1).length()) < Fixed::fromRatio(1, 2));
+    CHECK(fxAbs((m.bodyWorldPosition(*sim, 2, 777) - m.bodyWorldPosition(*sim, 1, 777)).length() - Fixed::fromInt(60)) < Fixed::fromRatio(1, 4));
+    // vision: own commander's cell is visible, the enemy pole is not
+    int b, f, x, y;
+    S->cellFace(S->cellAt(now), b, f, x, y);
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 2);
+    S->cellFace(S->cellAt(p2), b, f, x, y);
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 0);
+}
+
+TEST(planet_orbit_units_and_transit) {
+    auto sim = makeSim(kPlanets, "maps/two_worlds.json", 2);
+    auto& m = mod(*sim);
+    const game::Surface* S = m.surface(*sim);
+    if (!S) { CHECK(false); return; }
+    const int gun = m.rules().findType("gunship");
+    CHECK(gun >= 0 && (m.rules().types[size_t(gun)].layer & game::kLayerOrbit));
+    Entity c1 = findType(*sim, "commander", 1);
+    const Vec3 home = sim->world().get<Transform>(c1).pos;
+    Entity g1 = m.spawn(*sim, uint16_t(gun), 1, home);
+    const Vec3 gp = sim->world().get<Transform>(g1).pos;
+    CHECK(fxAbs((gp - game::Surface::anchor(1)).length() - S->bodies[1].shellRadius()) < Fixed::fromRatio(1, 50));   // on the shell
+    // can't transit to its own body or a star; can to luna
+    CHECK(!m.canTransit(*sim, g1, 1) && !m.canTransit(*sim, g1, 0) && m.canTransit(*sim, g1, 2));
+    Command t; t.player = 1; t.type = game::kCmdTransit; t.units = {g1}; t.param = 2;
+    sim->submit(t);
+    for (int i = 0; i < 3; ++i) sim->step();   // input delay
+    CHECK(sim->world().has<game::Transit>(g1));
+    const auto tx = sim->world().get<game::Transit>(g1);
+    CHECK(tx.arrive > tx.depart && (sim->world().get<game::Unit>(g1).flags & game::kUnitInTransit));
+    // halfway: the world position lies between the two shell points
+    const Vec3 mid = m.worldPosition(*sim, g1, (tx.depart + tx.arrive) / 2);
+    CHECK(fxAbs((mid - (tx.fromWorld + tx.toWorld) * Fixed::fromRatio(1, 2)).length()) < Fixed::fromInt(3));   // within a tick of travel
+    while (sim->tick() <= tx.arrive) sim->step();
+    CHECK(!sim->world().has<game::Transit>(g1));
+    const Vec3 arr = sim->world().get<Transform>(g1).pos;
+    CHECK(m.bodyOf(*sim, arr) == 2);
+    CHECK(fxAbs((arr - game::Surface::anchor(2)).length() - S->bodies[2].shellRadius()) < Fixed::fromRatio(1, 50));
+    // an orbit unit sees the surface below it
+    int b, f, x, y;
+    S->cellFace(S->cellAt(arr), b, f, x, y);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 2);
+    // ground weapons without "orbit" can't hit it, the defender's can
+    const auto& peewee = m.rules().types[size_t(m.rules().findType("peewee"))];
+    const auto& defender = m.rules().types[size_t(m.rules().findType("defender"))];
+    CHECK(!game::layerHit(peewee.weapons[0].targets, m.rules().types[size_t(gun)].layer));
+    CHECK(game::layerHit(defender.weapons[0].targets, m.rules().types[size_t(gun)].layer));
+}
+
+TEST(planet_matches_deterministic_and_replay) {
+    auto run = [](uint64_t seed, std::vector<Command>* rec, const std::vector<Command>* play) {
+        auto sim = makeSim(kPlanets, "maps/two_worlds.json", seed);
+        game::RtsAI a(1, seed), b(2, seed);
+        if (play) for (const Command& c : *play) sim->submit(c);   // recorded with their execution ticks
+        for (int t = 0; t < 20 * 90; ++t) {
+            if (!play) { a.update(*sim); b.update(*sim); }
+            sim->step();
+        }
+        if (rec) *rec = sim->executedCommands();
+        return sim->checksum();
+    };
+    std::vector<Command> cmds;
+    const uint64_t c1 = run(3, &cmds, nullptr), c2 = run(3, nullptr, nullptr);
+    CHECK(c1 == c2);
+    CHECK(!cmds.empty());
+    CHECK(run(3, nullptr, &cmds) == c1);   // replaying the recorded commands gives the same state
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/MapDoc.h"
+TEST(planet_mapdoc_round_trip_and_validate) {
+    editor::MapDoc doc;
+    std::string err;
+    CHECK(doc.load(kPlanets + "/maps/two_worlds.json", &err));
+    CHECK(doc.data.planet() && doc.data.bodies.size() == 3);
+    const Json orig = Json::parseFile(kPlanets + "/maps/two_worlds.json");
+    const Json back = doc.toJson();
+    CHECK(back["world"]["bodies"][size_t(1)]["terrain"]["corners"] == orig["world"]["bodies"][size_t(1)]["terrain"]["corners"]);
+    CHECK(back["entities"][size_t(0)]["at"] == orig["entities"][size_t(0)]["at"]);
+    CHECK(back["players"][size_t(0)]["start"] == orig["players"][size_t(0)]["start"]);
+    CHECK(!back.has("size") && !back.has("terrain"));
+    const Json rulesJson = Json::parseFile(kPlanets + "/rules.json");
+    const game::Rules rules = game::loadRules(rulesJson);
+    auto issues = doc.validate(rules, rulesJson);
+    int errors = 0;
+    for (auto& i : issues) if (i.error) { ++errors; std::printf("    issue: %s\n", i.text.c_str()); }
+    CHECK(errors == 0);
+    // a seam mismatch is reported, a bad position is an error
+    doc.data.bodies[1].corners[0] += 5;
+    doc.data.entities[0].at.set("face", Json::number(int64_t(9)));
+    issues = doc.validate(rules, rulesJson);
+    bool seam = false, pos = false;
+    for (auto& i : issues) { seam |= !i.error && i.text.find("швах") != std::string::npos; pos |= i.error && i.text.find("0..5") != std::string::npos; }
+    CHECK(seam && pos);
+}
+#endif
 
 int main() {
     for (auto& [name, fn] : registry()) {
