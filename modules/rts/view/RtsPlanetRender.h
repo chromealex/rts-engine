@@ -35,7 +35,9 @@ public:
     // Fog of war of one body: per cell 0 unexplored, 128 explored, 255 visible (6 * N * N); null = off.
     void setVision(int body, const std::vector<uint8_t>* field, const FogLook& look);
     // Edits (editor sculpt): new corner heights for a body; rebuilds the affected chunks.
-    void updateHeights(int body, const std::vector<int16_t>& corners);
+    void updateHeights(int body, const std::vector<int16_t>& corners);   // only chunks over changed corners rebuild
+    // Cell flags of a body changed (painting): colours / splat of every chunk of that body rebuild.
+    void updateFlags(int body, const std::vector<uint8_t>& flags);
 
     struct Options { bool orbits = true, atmosphere = true, sky = true; float lodRange = 48; };
     Options options;
@@ -67,6 +69,7 @@ private:
         FogLook fogLook;
     };
     void buildTree(Body& b, int idx);
+    void computeBounds(Body& b, Chunk& c);
     void buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b, Chunk& c);
     void freeChunk(gfx::Device& dev, Chunk& c);
     render::float3 cornerColor(const PlanetBody& pb, const PlanetSurface& s, int face, int i, int j, uint32_t& splat) const;

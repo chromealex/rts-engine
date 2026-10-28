@@ -227,6 +227,12 @@ void Editor::fitScene() {
     sceneCam.minDistance = 3.0f;
     sceneCam.distance = std::clamp(float(std::max(d.w, d.h)) * 0.95f + 8, sceneCam.minDistance, sceneCam.maxDistance);
     sceneFlying_ = false;
+    if (view_.planetMode()) { // planets: start body, whole planet in view
+        const auto& W = view_.planets().world();
+        view_.planetCamera().reset(W, W.start, view_.planets().surface(W.start), 0);
+        view_.planetCamera().distance = W.empty() ? 100.0f : W.bodies[size_t(W.start)].radius * 2.4f;
+        return;
+    }
     // 2D games: projection and angle of game.json "camera" (zoom stays the editor's)
     game::CameraSetup cs = game::cameraSetupFrom(ws_.project.manifest);
     sceneCam.ortho = cs.ortho;
@@ -234,6 +240,12 @@ void Editor::fitScene() {
 }
 
 void Editor::focusScene(float x, float z, float distance) {
+    if (view_.planetMode()) { // flat coordinates on the start body (agents' view_focus)
+        int body; float3 local;
+        if (view_.flatToBody({x, 0, z}, body, local)) { view_.planetCamera().focus(body); view_.planetCamera().setDir(local); }
+        if (distance > 0) view_.planetCamera().distance = distance;
+        return;
+    }
     sceneGoal_ = {x, 0, z};
     sceneFlying_ = true;
     if (distance > 0) sceneCam.distance = std::clamp(distance, sceneCam.minDistance, sceneCam.maxDistance);
@@ -243,6 +255,12 @@ void Editor::flash(float x0, float z0, float x1, float z1, double seconds) { fla
 
 bool Editor::groundAt(const Viewport& vp, const RTSCamera& cam, float sx, float sy, float& x, float& z) const {
     float3 g;
+    if (view_.planetMode()) { // flat map objects live on the start body (until the sim has bodies)
+        int body; float3 local;
+        if (!planetAt(vp, sx, sy, body, local) || !view_.bodyToFlat(body, local, g)) return false;
+        x = g.x; z = g.z;
+        return true;
+    }
     if (!cam.screenToGround(sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, g)) return false;
     x = g.x; z = g.z;
     return true;
@@ -304,9 +322,29 @@ void Editor::syncGrid() {
         grid_.fieldAmt[size_t(i)] = Fixed::fromInt(d.fieldAmt[size_t(i)]);
     }
     view_.setTiles(d.extra["tiles"]);
+    {   // planets: the world block (kept verbatim in extra); sculpt / paint rebuild only what changed
+        const std::string text = d.extra["world"].isObject() ? d.extra["world"].dump(0) : std::string();
+        uint64_t h = 1469598103934665603ull;
+        for (unsigned char c : text) { h ^= c; h *= 1099511628211ull; }
+        if (h != worldHash_) {
+            Json m = Json::object();
+            if (!text.empty()) m.set("world", d.extra["world"]);
+            if (worldHash_ == 0 || !view_.planetMode() || text.empty()) view_.setWorld(m); else view_.updateWorld(m);
+            worldHash_ = h;
+        }
+    }
     view_.setTerrainMaterial(d.extra["terrainMaterial"], d.w, d.h);
     view_.buildTerrain(*dev_, grid_);
     gridRevision_ = doc().revision;
+}
+
+bool Editor::planetAt(const Viewport& vp, float sx, float sy, int& body, render::float3& local) const {
+    return view_.pickPlanet(view_.planetCamera().camera(), sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, body, local);
+}
+
+std::string Editor::planetBodyId(int body) const {
+    const auto& W = view_.planets().world();
+    return body >= 0 && size_t(body) < W.bodies.size() ? W.bodies[size_t(body)].id : std::string();
 }
 
 void Editor::buildEditScene(game::RtsScene& out) const {
@@ -389,16 +427,20 @@ void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) 
     if (!vp.color.valid()) return;
     if (playing()) { renderGame(vp, cam); return; }
     buildEditScene(scene_);
-    r3d_.beginScene(cam, vp.w, vp.h);
+    const bool planets = view_.planetMode();
+    // planet maps: the orbit camera of the view (Scene window input drives it)
+    const RTSCamera& useCam = planets ? view_.updatePlanetCamera(0, float(ImGui::GetIO().DeltaTime), vp.h) : cam;
+    r3d_.beginScene(useCam, vp.w, vp.h);
     view_.draw(r3d_, scene_, time_, nullptr, grid_);
-    if (editOverlays) drawEditOverlays3D();
+    if (editOverlays && !planets) drawEditOverlays3D();
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
     pass.depthTarget = vp.depth;
     pass.clearColor[0] = 0.13f; pass.clearColor[1] = 0.15f; pass.clearColor[2] = 0.17f;
+    if (planets) pass.clearColor[0] = pass.clearColor[1] = pass.clearColor[2] = 0.0f;
     r3d_.render(pass);
     dev_->endPass();
-    view_.drawOverlays(cam, scene_, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
+    view_.drawOverlays(useCam, scene_, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
 
 void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {

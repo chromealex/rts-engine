@@ -133,6 +133,38 @@ void PlanetSurface::init(const PlanetBody& b) {
     for (size_t k = 0; k < dirs_.size(); ++k) normals_[k] = size_t(canon_[k]) < k ? normals_[size_t(canon_[k])] : normalAt(dirs_[k]);
 }
 
+void PlanetSurface::updateHeights(const PlanetBody& b, const Rect (&rect)[6]) {
+    const int N = n_;
+    // heights: same averaging of duplicates as init()
+    CubeSphere cs(N);
+    for (int f = 0; f < 6; ++f) {
+        const Rect& r = rect[f];
+        if (r.x1 < r.x0) continue;
+        for (int j = std::max(0, r.y0); j <= std::min(N, r.y1); ++j)
+            for (int i = std::max(0, r.x0); i <= std::min(N, r.x1); ++i) {
+                int dup[3];
+                const int cnt = cs.cornerDuplicates(f, i, j, dup);
+                float h = 0;
+                for (int d = 0; d < cnt; ++d) h += size_t(dup[d]) < b.corners.size() ? float(b.corners[size_t(dup[d])]) : 0.0f;
+                for (int d = 0; d < cnt; ++d) heights_[size_t(dup[d])] = h / float(cnt) / 16.0f;
+            }
+    }
+    minH_ = 1e9f; maxH_ = -1e9f;
+    for (float h : heights_) { minH_ = std::min(minH_, h); maxH_ = std::max(maxH_, h); }
+    for (int f = 0; f < 6; ++f) {
+        const Rect& r = rect[f];
+        if (r.x1 < r.x0) continue;
+        for (int j = std::max(0, r.y0 - 1); j <= std::min(N, r.y1 + 1); ++j)
+            for (int i = std::max(0, r.x0 - 1); i <= std::min(N, r.x1 + 1); ++i) {
+                const size_t k = size_t(cornerIndex(f, i, j));
+                normals_[k] = normalAt(dirs_[k]);
+                int dup[3];
+                const int cnt = cs.cornerDuplicates(f, i, j, dup);
+                for (int d = 0; d < cnt; ++d) normals_[size_t(dup[d])] = normals_[k];
+            }
+    }
+}
+
 uint8_t PlanetSurface::cellFlags(int face, int x, int y) const {
     const size_t i = (size_t(face) * size_t(n_) + size_t(y)) * size_t(n_) + size_t(x);
     return i < flags_.size() ? flags_[i] : uint8_t(kCellGround);

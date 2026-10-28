@@ -143,6 +143,9 @@ public:
     // ---- planets (RtsPlanetView.cpp): maps with a `world` block (docs/planets.md)
     // Reads map["world"]; no block = the flat view, unchanged. Call before buildTerrain().
     void setWorld(const Json& map);
+    // Editor: the world block changed (sculpt / paint): same bodies -> only changed chunks rebuild and the
+    // camera stays; different bodies -> setWorld.
+    void updateWorld(const Json& map);
     bool planetMode() const { return planets_.active(); }
     PlanetCamera& planetCamera() { return planetCam_; }
     const PlanetCamera& planetCamera() const { return planetCam_; }
