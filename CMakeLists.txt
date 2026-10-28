@@ -73,8 +73,11 @@ add_library(rts_game STATIC
     modules/rts/RtsData.cpp
     modules/rts/RtsMap.cpp
     modules/rts/RtsHpa.cpp
+    modules/rts/RtsMapSphere.cpp
     modules/rts/RtsSphere.cpp
+    modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
+    modules/rts/RtsPlanets.cpp
     modules/rts/RtsEconomy.cpp
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
@@ -424,7 +427,7 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -567,6 +570,10 @@ if(RTS_BUILD_TESTS)
     if(TARGET rts_modelconv)   # model conversion step of packs (models agent)
         target_link_libraries(rts_tests PRIVATE rts_modelconv)
         target_compile_definitions(rts_tests PRIVATE RTS_TEST_MODELCONV=1)
+    endif()
+    if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
+        target_link_libraries(rts_tests PRIVATE rts_editor_core)
+        target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)
     endif()
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
