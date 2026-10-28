@@ -3,7 +3,15 @@
 // build size (rtsbuild --estimate: the real content pack, no app build), the heaviest files, and
 // per-file settings: zstd level or store, image size per platform, leave a file out. Settings are
 // stored in game.json ("packaging", "atlas"), so builds from the command line and CI match.
+// Toolchains: for the selected platform the window checks in the background what the build needs
+// (rtsbuild --check-toolchain, tools/rtsbuild/Toolchains.h), shows what is found / missing and
+// installs it (rtsbuild --install-toolchain) through the same streamed runner as builds. A build
+// that stops with RTS_MISSING_TOOLCHAIN offers to install and rebuild.
 #include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <deque>
+#include <future>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -11,6 +19,7 @@
 #include <filesystem>
 #include "../Editor.h"
 #include "../EditorUtil.h"
+#include "imgui_internal.h" // settings handler: editor prefs in editor_layout.ini
 
 namespace fs = std::filesystem;
 
@@ -63,7 +72,26 @@ public:
     int order() const override { return 5; }
     bool openByDefault() const override { return false; }
 
+    BuildWindow() {
+        // "Устанавливать недостающее автоматически" is a preference of this user, not of the game
+        if (!ImGui::GetCurrentContext()) return;
+        ImGuiSettingsHandler h;
+        h.TypeName = "RtsBuild";
+        h.TypeHash = ImHashStr("RtsBuild");
+        h.UserData = this;
+        h.ReadOpenFn = [](ImGuiContext*, ImGuiSettingsHandler* hh, const char* name) -> void* { return std::strcmp(name, "Prefs") == 0 ? hh->UserData : nullptr; };
+        h.ReadLineFn = [](ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line) {
+            int v = 0;
+            if (std::sscanf(line, "AutoInstall=%d", &v) == 1) static_cast<BuildWindow*>(entry)->autoInstall_ = v != 0;
+        };
+        h.WriteAllFn = [](ImGuiContext*, ImGuiSettingsHandler* hh, ImGuiTextBuffer* buf) {
+            buf->appendf("[%s][Prefs]\nAutoInstall=%d\n\n", hh->TypeName, static_cast<BuildWindow*>(hh->UserData)->autoInstall_ ? 1 : 0);
+        };
+        ImGui::AddSettingsHandler(&h);
+    }
+
     void update(Editor& ed, double dt) override {
+        updateToolchains(ed);
         if (estimating_ && !ed.ws().building()) { estimating_ = false; loadReports(ed); }
         if (dirtyIn_ > 0 && (dirtyIn_ -= dt) <= 0 && autoEstimate_ && open) estimate(ed);
         // first look at the window: estimate right away, the numbers are the point of it
@@ -78,6 +106,8 @@ public:
         if (ws.project.dir.empty()) { ui::emptyStateHere(ICON_BUILD, "Игра не открыта", "Игра → Открыть"); return; }
         if (lastProject_ != ws.project.dir) { lastProject_ = ws.project.dir; reports_.clear(); }
         header(ed);
+        toolchainPanel(ed);
+        missingPopup(ed);
         ImGui::Separator();
         if (ImGui::BeginTable("##build", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
             ImGui::TableSetupColumn("settings", ImGuiTableColumnFlags_WidthFixed, 300);
@@ -110,20 +140,180 @@ private:
         ImGui::BeginDisabled(ws.building());
         if (ui::button(ICON_HARD_DRIVE, "Оценить размер")) estimate(ed);
         ImGui::SameLine();
-        if (ui::button(ICON_BUILD, ("Собрать: " + std::string(kTargets[target_].name)).c_str(), true)) {
-            ws.startBuild(kTargets[target_].id, release_ ? "Release" : "Debug", buildFlags());
-            if (auto* c = ed.window("console")) c->open = true;
-        }
+        if (ui::button(ICON_BUILD, ("Собрать: " + std::string(kTargets[target_].name)).c_str(), true)) build(ed, kTargets[target_].id);
         ImGui::SameLine();
-        if (ui::button(ICON_LAYOUT, "Все платформы")) {
-            ws.startBuild("all", release_ ? "Release" : "Debug", buildFlags());
-            if (auto* c = ed.window("console")) c->open = true;
-        }
+        if (ui::button(ICON_LAYOUT, "Все платформы")) build(ed, "all");
         ImGui::EndDisabled();
         ImGui::SameLine();
         ImGui::Checkbox("Пересчитывать сразу", &autoEstimate_);
         ui::help("После каждого изменения настроек размер оценивается заново (собирается только пак контента, без приложения — секунды).");
-        if (ws.building()) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s %s", ICON_REFRESH, estimating_ ? "оценка…" : "идёт сборка…"); }
+        if (ws.building()) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s %s", ICON_REFRESH, estimating_ ? "оценка…" : ws.runLabel().rfind("toolchain-", 0) == 0 ? "идёт установка…" : "идёт сборка…"); }
+    }
+
+    void build(Editor& ed, const std::string& target) {
+        ed.ws().startBuild(target, release_ ? "Release" : "Debug", buildFlags() + (autoInstall_ ? " --install-missing" : ""));
+        lastBuildTarget_ = target;
+        if (auto* c = ed.window("console")) c->open = true;
+    }
+
+    // ------------------------------------------------------------ toolchains
+    struct Check { Json status; std::string error; };
+
+    void requestCheck(Editor& ed, const std::string& target) {
+        if (checking_.valid()) { recheck_ = true; return; }
+        checkingTarget_ = target;
+        Workspace* ws = &ed.ws();
+        checking_ = std::async(std::launch::async, [ws, target] {
+            Check c;
+            try { c.status = ws->toolchainCheck(target); } catch (const std::exception& e) { c.error = e.what(); }
+            return c;
+        });
+    }
+
+    void updateToolchains(Editor& ed) {
+        auto& ws = ed.ws();
+        if (checking_.valid() && checking_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+            checks_[checkingTarget_] = checking_.get();
+            if (recheck_) { recheck_ = false; checks_.erase(kTargets[target_].id); }
+        }
+        const std::string tid = kTargets[target_].id;
+        if (open && !checking_.valid() && !checks_.count(tid)) requestCheck(ed, tid);
+        // a run of rtsbuild finished: after an install re-check (and rebuild); after a build look for missing tools
+        if (ws.runCount() == seenRuns_ || ws.building()) return;
+        seenRuns_ = ws.runCount();
+        const std::string label = ws.runLabel();
+        if (label.rfind("toolchain-", 0) == 0) {
+            checks_.clear();
+            if (ws.buildResult() != 0) { installQueue_.clear(); rebuildAfter_.clear(); installError_ = "установка не удалась — подробности в Console"; return; }
+            installError_.clear();
+            if (!installQueue_.empty()) { startInstall(ed, installQueue_.front()); installQueue_.pop_front(); return; }
+            if (!rebuildAfter_.empty()) { std::string t = rebuildAfter_; rebuildAfter_.clear(); build(ed, t); }
+            return;
+        }
+        if (label.rfind("build-", 0) == 0 && ws.buildResult() != 0) {
+            missing_.clear();
+            std::string log = ws.buildLog();
+            for (size_t pos = 0; (pos = log.find("RTS_MISSING_TOOLCHAIN ", pos)) != std::string::npos;) {
+                size_t e = log.find('\n', pos);
+                std::string line = log.substr(pos + 22, e == std::string::npos ? std::string::npos : e - pos - 22);
+                pos = e == std::string::npos ? log.size() : e;
+                if (size_t c = line.find(':'); c != std::string::npos) missing_.push_back({line.substr(0, c), line.substr(c + 1)});
+            }
+            if (!missing_.empty()) { showMissing_ = true; open = true; checks_.clear(); }
+        }
+    }
+
+    void startInstall(Editor& ed, const std::string& what) {
+        try { ed.ws().startTool("--install-toolchain " + what, "toolchain-" + what, false); }
+        catch (const std::exception& e) { installError_ = e.what(); return; }
+        if (auto* c = ed.window("console")) c->open = true;
+    }
+
+    static std::string targetName(const std::string& id) {
+        for (auto& t : kTargets) if (id == t.id) return t.name;
+        return id;
+    }
+
+    void toolchainPanel(Editor& ed) {
+        auto& ws = ed.ws();
+        const Target& t = kTargets[target_];
+        auto it = checks_.find(t.id);
+        if (it == checks_.end()) { ImGui::TextDisabled("%s Проверяю инструменты для %s…", ICON_REFRESH, t.name); return; }
+        if (!it->second.error.empty()) { ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "Проверка инструментов не удалась: %s", it->second.error.c_str()); return; }
+        const Json& st = it->second.status;
+        const ImVec4 red(1, 0.42f, 0.38f, 1), green(0.45f, 0.85f, 0.5f, 1), yellow(1, 0.8f, 0.3f, 1);
+        ImGui::PushID("toolchain");
+        if (!st.getBool("hostSupported", true)) {
+            ImGui::TextColored(yellow, "%s %s — на этом компьютере собирается только набор иконок.", ICON_INFO, st.getStr("hostNote").c_str());
+            ImGui::PopID();
+            return;
+        }
+        const bool ok = st.getBool("ok", false);
+        bool anyAuto = false;
+        for (auto& r : st["requirements"].items()) if (!r.getBool("found") && r.getBool("required") && r.getBool("autoInstall")) anyAuto = true;
+        if (ok) ImGui::TextColored(green, "%s Всё для сборки %s установлено", ICON_CHECK, t.name);
+        else ImGui::TextColored(red, "%s Для сборки %s нужно:", ICON_WARNING, t.name);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(ws.building() || checking_.valid());
+        if (ImGui::SmallButton(ICON_REFRESH " Проверить снова")) { checks_.erase(t.id); requestCheck(ed, t.id); }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Устанавливать недостающее автоматически", &autoInstall_)) ImGui::MarkIniSettingsDirty();
+        ui::help("«Собрать» сначала поставит то, чего не хватает (rtsbuild --install-missing), в папку ~/.rtsengine/toolchains — без прав администратора. "
+                 "Удалить всё установленное: удалите эту папку.");
+        for (auto& r : st["requirements"].items()) {
+            if (r.getBool("found") || (!r.getBool("required") && r.getStr("id") != "ninja")) continue;
+            ImGui::PushID(r.getStr("id").c_str());
+            const bool req = r.getBool("required");
+            ImGui::Bullet();
+            ImGui::TextColored(req ? red : yellow, "%s — %s", r.getStr("name").c_str(), r.getStr("detail", "не установлен").c_str());
+            if (r.getBool("autoInstall")) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", r.getStr("size", "?").c_str());
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Установщик: %s", r.getStr("install").c_str());
+                if (!req) { ImGui::SameLine(); ImGui::TextDisabled("необязательно"); }
+            } else if (r.has("manual")) {
+                // read-only field: the command can be selected and copied
+                std::string m = r.getStr("manual");
+                ImGui::Indent();
+                ImGui::TextDisabled("Вручную:");
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(std::max(200.0f, ImGui::GetContentRegionAvail().x - 110));
+                ImGui::InputText("##manual", m.data(), m.size() + 1, ImGuiInputTextFlags_ReadOnly);
+                ImGui::SameLine();
+                if (ImGui::SmallButton(ICON_COPY " Копировать")) ImGui::SetClipboardText(m.c_str());
+                ImGui::Unindent();
+            }
+            ImGui::PopID();
+        }
+        if (!ok && anyAuto) {
+            ImGui::BeginDisabled(ws.building());
+            if (ui::button(ICON_DOWNLOAD, "Установить автоматически", true)) { installQueue_.clear(); rebuildAfter_.clear(); startInstall(ed, t.id); }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("в %s", st.getStr("toolchainsDir").c_str());
+        }
+        if (ws.building() && ws.runLabel().rfind("toolchain-", 0) == 0) { ImGui::SameLine(); ImGui::TextColored(yellow, "%s идёт установка — ход в Console", ICON_REFRESH); }
+        if (!installError_.empty()) ImGui::TextColored(red, "%s", installError_.c_str());
+        int found = 0;
+        for (auto& r : st["requirements"].items()) found += r.getBool("found") ? 1 : 0;
+        if (found && ImGui::TreeNode("found", "Найдено: %d", found)) {
+            for (auto& r : st["requirements"].items()) {
+                if (!r.getBool("found")) continue;
+                std::string v = r.getStr("version");
+                ImGui::TextColored(green, "%s", ICON_CHECK);
+                ImGui::SameLine();
+                ImGui::Text("%s%s", r.getStr("name").c_str(), v.empty() ? "" : ("  " + v).c_str());
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", r.getStr("path").c_str());
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+
+    void missingPopup(Editor& ed) {
+        if (showMissing_) { ImGui::OpenPopup("Не хватает инструментов###toolchain-missing"); showMissing_ = false; }
+        ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
+        if (!ImGui::BeginPopupModal("Не хватает инструментов###toolchain-missing", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
+        ImGui::TextWrapped("Сборка остановлена: на этом компьютере не хватает инструментов.");
+        for (auto& [target, ids] : missing_) ImGui::BulletText("%s: %s", targetName(target).c_str(), ids.c_str());
+        ImGui::Spacing();
+        ImGui::TextWrapped("Их можно установить автоматически в ~/.rtsengine/toolchains (без прав администратора, загрузка может быть большой: "
+                           "Emscripten ≈ 400 МБ, Android NDK ≈ 700 МБ). После установки сборка запустится снова.");
+        ImGui::Spacing();
+        if (ui::button(ICON_DOWNLOAD, "Установить и собрать", true)) {
+            installQueue_.clear();
+            for (size_t i = 1; i < missing_.size(); ++i) installQueue_.push_back(missing_[i].first);
+            rebuildAfter_ = lastBuildTarget_.empty() ? missing_[0].first : lastBuildTarget_;
+            startInstall(ed, missing_[0].first);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Только установить")) { installQueue_.clear(); for (size_t i = 1; i < missing_.size(); ++i) installQueue_.push_back(missing_[i].first); rebuildAfter_.clear(); startInstall(ed, missing_[0].first); ImGui::CloseCurrentPopup(); }
+        ImGui::SameLine();
+        if (ImGui::Button("Закрыть")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
     }
 
     std::string buildFlags() const {
@@ -400,6 +590,14 @@ private:
     int askedFor_ = -1;
     std::string outDir_, filter_, error_, lastProject_;
     std::map<std::string, Json> reports_;
+    // toolchains
+    bool autoInstall_ = false, recheck_ = false, showMissing_ = false;
+    std::future<Check> checking_;
+    std::string checkingTarget_, lastBuildTarget_, rebuildAfter_, installError_;
+    std::map<std::string, Check> checks_;
+    std::deque<std::string> installQueue_;
+    std::vector<std::pair<std::string, std::string>> missing_;   // target -> missing ids
+    int seenRuns_ = 0;
 };
 
 RTS_EDITOR_WINDOW(BuildWindow);
