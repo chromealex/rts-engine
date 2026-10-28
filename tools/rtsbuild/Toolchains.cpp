@@ -305,6 +305,24 @@ Requirement reqPython(ToolchainStatus& st, const ToolEnv& env) {
     return r;
 }
 
+// The engine is C++20 (lambda captures of structured bindings need clang 16+): older
+// Emscripten (Ubuntu's 3.1.6) fails on it.
+constexpr const char* kMinEmscripten = "3.1.40";
+bool emTooOld(const std::string& ver) {
+    auto parts = [](const std::string& v) {
+        std::vector<int> r;
+        std::string cur;
+        for (char c : v + ".") {
+            if (std::isdigit(static_cast<unsigned char>(c))) cur += c;
+            else if (!cur.empty()) { r.push_back(std::atoi(cur.c_str())); cur.clear(); if (c != '.') break; }
+            else break;
+        }
+        return r;
+    };
+    auto have = parts(ver);
+    return !have.empty() && have < parts(kMinEmscripten);   // unknown version: trust it
+}
+
 // An activated emsdk: emcc exists and the config written by `emsdk activate` is there.
 bool emsdkReady(const fs::path& dir, const ToolEnv& env) {
     return !exeIn(dir / "upstream" / "emscripten", "emcc", env).empty() && isFile(dir / ".emscripten");
@@ -326,6 +344,7 @@ Requirement reqEmsdk(ToolchainStatus& st, const ToolEnv& env) {
         }
         std::string ver = readFile(d / "upstream" / "emscripten" / "emscripten-version.txt");
         ver.erase(std::remove_if(ver.begin(), ver.end(), [](char c) { return c == '"' || c == '\n' || c == '\r'; }), ver.end());
+        if (emTooOld(ver)) { r.detail = "в " + d.string() + " Emscripten " + ver + " — слишком старый (нужен " + kMinEmscripten + "+)"; continue; }
         foundAt(r, d, ver);
         st.binDirs.push_back(d);
         st.binDirs.push_back(d / "upstream" / "emscripten");
@@ -342,8 +361,13 @@ Requirement reqEmsdk(ToolchainStatus& st, const ToolEnv& env) {
     }
     // Homebrew / distro emscripten: emcmake on PATH manages its own config
     if (fs::path p = findExecutable("emcmake", env); !p.empty()) {
-        foundAt(r, p.parent_path(), toolVersion(findExecutable("emcc", env), env));
-        st.binDirs.push_back(p.parent_path());
+        std::string ver = toolVersion(findExecutable("emcc", env), env);
+        if (!emTooOld(ver)) {
+            foundAt(r, p.parent_path(), ver);
+            st.binDirs.push_back(p.parent_path());
+            return r;
+        }
+        r.detail = "найден " + p.parent_path().string() + "/emcc " + ver + " — слишком старый (нужен " + kMinEmscripten + "+), будет установлен emsdk";
         return r;
     }
     if (r.detail.empty()) r.detail = "не установлен";
