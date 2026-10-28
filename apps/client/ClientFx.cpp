@@ -76,7 +76,7 @@ void ClientFx::update(Simulation& sim, const game::RtsScene& scene, const render
     ps_.update(dt);
     static const bool dbg = std::getenv("RTS_FX_DEBUG") != nullptr;
     static int frames = 0;
-    if (dbg && ++frames % 30 == 0) std::fprintf(stderr, "[fx] played %d rejected %d particles %d culled %d\n", bridge_.played(), bridge_.rejected(), ps_.stats().particles, ps_.stats().culled);
+    if (dbg && ++frames % 30 == 0) std::fprintf(stderr, "[fx] played %d rejected %d particles %d culled %d drawn %d\n", bridge_.played(), bridge_.rejected(), ps_.stats().particles, ps_.stats().culled, ps_.stats().drawn);
 }
 
 void ClientFx::addLights(render::LightSystem& lights) {
