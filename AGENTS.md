@@ -94,7 +94,7 @@ DISPLAY=:97 RTS_SHADOWS=medium RTS_SCREENSHOT=/tmp/shot.ppm RTS_EXIT_AFTER_FRAME
 
 Environment knobs: `RTS_CONTENT` (content root), `RTS_SHADOWS=off|low|medium|high`, `RTS_AUDIO=off|null`
 (null: real audio thread without hardware), `RTS_AUDIO_CAPTURE=mix.wav` (record what was played),
-`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`.
+`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`, `RTS_SPLASH=off|full` (loading screen; default: full splash, only the loading time with `--map`).
 
 A change is done when: it builds without warnings on gcc/clang (`-Wall -Wextra`), tests pass, the
 headless matches still finish, visual changes were checked on a screenshot, Metal code paths that
@@ -123,6 +123,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | Terrain simulation (heightfield model, slopes, LOS, `cornersFile`, HPA* for big maps) | `modules/rts/RtsHpa.cpp`, heightfield parts of `modules/rts/RtsMap.*` / `RtsData` (`terrain` block), `MapDoc` corners plumbing, `docs/terrain.md` (sim part), `games/metaltide` map | agent-terrain-sim (MAIN merges) |
 | Terrain overlays: territory colours + glowing borders, diggable rock blocks / veins / dig marks, MW2 lanes, road ribbons (visual `terrain.territory/dig/lanes/roads`) | `modules/rts/view/RtsGroundFx*`, `docs/game-format.md` § Terrain overlays; hooks: `RtsView.{h,cpp}` (member, init/draw/shutdown, `RtsScene` lane/viewer fields), `RtsTerrain.cpp` (invalidate + flat dig cells), `Renderer3D::bindLitFrame` | agent-terrain-fx (MAIN merges) |
 | Terrain rendering: chunked terrain + CDLOD, heightfield surface (`RtsView::heightAt`), splat materials / quality tiers, water bodies, sculpt / material / heightmap ops + **Рельеф** window + MCP | `modules/rts/view/RtsTerrain*.{h,cpp}` (`RtsTerrainRender`, `RtsTerrainSurface.h`, `RtsTerrainShaders.h`), `apps/editor/core/TerrainOps.*`, `apps/editor/windows/TerrainWindow.cpp`, `tools/terrain`, `games/frostcrown` terrain block + textures, `docs/game-format.md` § Terrain materials; hooks: `Renderer3D::drawCustomOpaque`, `TextureCache::resolve(tiling)`, Metal vertex textures, pause-menu material tier | agent-terrain (MAIN merges) |
+| Splash & icons: game.json `icons` / `splash`, icon + launch screen generation per platform, in-engine loading screen, Branding window + MCP | `engine/splash`, `tools/branding`, `tools/rtsbuild/Branding.*`, `apps/client/ClientSplash.*`, `apps/editor/core/BrandingOps.*`, `apps/editor/windows/BrandingWindow.cpp`, `games/_tools/brandart.py`, `games/skirmish/branding`, `docs/game-format.md` § Icons and splash; hooks: `GameClient::initStep`, `rtsMain`, `platform/web/shell.html` splash, `platform/ios/Info.plist.in` storyboard key, window colour in PlatformWin32/PlatformMac | splash agent (MAIN merges) |
 | Other areas | as assigned by the user | the agent the user assigned |
 
 If your task is not in this table, the user's first message to you defines your area: write it
