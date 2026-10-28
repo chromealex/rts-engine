@@ -122,7 +122,10 @@ void SplashScreen::loadImage(int index) {
     const Layer& l = spec_.layers[size_t(li)];
     const std::string& path = fi < 0 ? l.sheet : l.images[size_t(fi)];
     atlas::Image img;
-    if (!images_ || !images_->load(path, img) || img.empty()) {
+    std::string bytes;
+    // atlased by the build (ImageSource) or a plain file
+    bool ok = images_ && images_->atlased(path) ? images_->load(path, img) : read_(path, bytes) && atlas::decodeImageFile(bytes, img);
+    if (!ok || img.empty()) {
         warnings_.push_back("splash: cannot load " + path);
         return;
     }
