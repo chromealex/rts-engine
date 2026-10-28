@@ -169,12 +169,30 @@ bool MapGrid::findPathSphere(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3
     bool found = false, routed = false;
     // long trips on big bodies: HPA* route refined with A* (RtsHpaSphere.cpp)
     const int body = surf->bodyOfCell(s);
-    if (goalOk && sphereHpaBody(body)) {
+    if (sphereHpaBody(body)) {
+        // goal inside a structure / obstacle (walking up to a building): head for the nearest passable cell
+        // around it instead of letting A* exhaust its node budget (the result is "not found", as on flat maps)
+        int target = gl;
+        if (!goalOk) {
+            target = -1;
+            for (int r = 1; r <= 4 && target < 0; ++r)
+                for (int dy = -r; dy <= r && target < 0; ++dy)
+                    for (int dx = -r; dx <= r && target < 0; ++dx) {
+                        if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                        const int c = surf->offset(gl, dx, dy);
+                        if (c >= 0 && passable(c % w, c / w, layer)) target = c;
+                    }
+        }
         const int N = surf->cubeOf(body).faceSize();
-        const Fixed cellsApart = (surf->cellDir(s) - surf->cellDir(gl)).length() * Fixed::fromInt(4 * N) / kFxTwoPi;
-        if (cellsApart > Fixed::fromInt(2 * SphereHpaTopo::kC)) {
-            routed = found = hpaPathSphere(s, gl, layer, cells);
+        const Fixed cellsApart = target < 0 ? Fixed{} : (surf->cellDir(s) - surf->cellDir(target)).length() * Fixed::fromInt(4 * N) / kFxTwoPi;
+        if (target >= 0 && cellsApart > Fixed::fromInt(2 * SphereHpaTopo::kC)) {
+            routed = hpaPathSphere(s, target, layer, cells);
+            found = routed && goalOk;
             ++hpaStats[routed ? 0 : 1];
+        } else if (target >= 0 && !goalOk) {   // short trip to a blocked goal: small A* to the cell next to it
+            routed = astarSphere(s, target, layer, maxNodes, cells) && !cells.empty() && cells.back() == target;
+            found = false;
+            if (!routed) cells.clear();
         }
     }
     if (!routed) { cells.clear(); found = astarSphere(s, gl, layer, maxNodes, cells); }

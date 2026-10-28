@@ -155,7 +155,10 @@ static int play(const Args& a) {
         std::ofstream(mapPath) << m.dump();
     }
     Json mapJson = loadMap(mapPath, a.project);
+    const auto setupT0 = std::chrono::steady_clock::now();
     sim.setup(Json::parseFile(rulesPath), mapJson);
+    if (!a.quiet && (a.benchPaths > 0 || mapJson["world"].isObject()))   // planets / benchmarks: setup cost incl. the HPA* graphs
+        std::printf("Setup: %.0f ms\n", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - setupT0).count());
     if (auto* rm = dynamic_cast<game::RtsModule*>(&sim.module()); rm && rm->generatedMap()) {
         const Json& gm = *rm->generatedMap();
         if (!a.quiet) {
