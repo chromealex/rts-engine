@@ -4989,6 +4989,186 @@ TEST(lighting_quality_governor) {
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
 }
 
+
+// ---------------- overlays (data-driven helper elements; overlays agent) ----------------
+#include "engine/platform/Platform.h"
+#include "modules/rts/view/RtsOverlayData.h"
+#include "modules/rts/view/RtsView.h"
+
+static game::Rules skirmishRules() { return game::loadRules(Json::parseFile(kSkirmish + "/rules.json")); }
+static std::string overlayError(const game::Rules& R, const char* json) {
+    try { game::parseOverlay(R, Json::parse(json)); } catch (const std::exception& e) { return e.what(); }
+    return "";
+}
+static bool hasText(const std::string& s, const char* part) { return s.find(part) != std::string::npos; }
+
+TEST(overlay_builtins_are_data) {
+    game::Rules R = skirmishRules();
+    game::OverlaySet set = game::loadOverlaySet(R, Json(), Json());
+    CHECK(set.warnings.empty());
+    std::vector<std::string> ids;
+    for (auto& d : set.defs) { ids.push_back(d.id); CHECK(d.builtin); CHECK(d.enabled); }
+    CHECK((ids == std::vector<std::string>{"selection", "hover", "move_markers", "placement", "garrison_count", "health_bars", "build_progress"}));
+    const game::OverlayDef& sel = set.defs[0];
+    CHECK(sel.anchor == game::OvAnchor::Selected && sel.shape == game::OvShape::Ring && sel.radiusFrom == game::OvRadius::Selection);
+    CHECK(sel.style.ground == game::OvGround::Flat && sel.style.segments == 32 && sel.style.thickness == 0);
+    // exact old colours: rgba(120, 255, 120, 230) and the neutral rgba(255, 255, 160, 230)
+    CHECK(render::rgbaf(sel.style.color) == render::rgba(120, 255, 120, 230));
+    CHECK(render::rgbaf(sel.style.colors[game::kColNeutral]) == render::rgba(255, 255, 160, 230));
+    const game::OverlayDef& hp = set.defs[5];
+    CHECK(hp.shape == game::OvShape::Bar && hp.style.space == game::OvSpace::Screen && hp.barW == 26 && hp.barWStructure == 46);
+    CHECK(hp.style.stops.size() == 3 && hp.style.stops[0].first < hp.style.stops[1].first);
+    CHECK(hp.anchorFilter.flagsOff == (game::kOvInvulnerable | game::kOvGarrison));
+}
+
+TEST(overlay_override_and_merge_by_id) {
+    game::Rules R = skirmishRules();
+    Json rules = Json::parse(R"([
+        {"id": "health_bars", "enabled": false},
+        {"id": "selection", "style": {"thickness": 0.06}},
+        {"id": "grid", "when": "placing", "anchor": "ghost", "shape": {"type": "grid", "radius": 3, "predicate": "buildable"}}])");
+    Json game = Json::parse(R"([{"id": "grid", "shape": {"radius": 5}}, {"id": "hover", "replace": true, "anchor": "hovered", "shape": "ring"}])");
+    game::OverlaySet set = game::loadOverlaySet(R, rules, game);
+    CHECK(set.warnings.empty());
+    const game::OverlayDef* hp = nullptr; const game::OverlayDef* sel = nullptr; const game::OverlayDef* grid = nullptr; const game::OverlayDef* hov = nullptr;
+    for (auto& d : set.defs) {
+        if (d.id == "health_bars") hp = &d;
+        if (d.id == "selection") sel = &d;
+        if (d.id == "grid") grid = &d;
+        if (d.id == "hover") hov = &d;
+    }
+    CHECK(hp && !hp->enabled && hp->builtin);
+    CHECK(sel && sel->style.thickness > 0.05f && render::rgbaf(sel->style.color) == render::rgba(120, 255, 120, 230)); // colour kept
+    CHECK(grid && grid->shape == game::OvShape::Grid && grid->radius == 5 && grid->pred == game::OvPred::Buildable);  // game.json wins
+    CHECK(hov && hov->radiusFrom == game::OvRadius::Fixed && !hov->builtin);   // replaced entirely
+    CHECK(set.defs.size() == 8);
+}
+
+TEST(overlay_validation_errors) {
+    game::Rules R = skirmishRules();
+    CHECK(overlayError(R, R"({"id": "a", "shape": "ring", "anchor": {"type": "entities", "types": ["dragon"]}})") ==
+          "overlay 'a'.anchor.types: unknown type 'dragon'");
+    CHECK(hasText(overlayError(R, R"({"id": "b", "shape": "hexagon"})"), "unknown shape 'hexagon'"));
+    CHECK(hasText(overlayError(R, R"({"id": "c", "anchor": "cursor", "shape": {"type": "bar"}})"), "a bar needs an entity anchor"));
+    CHECK(hasText(overlayError(R, R"({"id": "d", "shape": "ring", "colour": "red"})"), "unknown key 'colour'"));
+    CHECK(hasText(overlayError(R, R"({"id": "e", "shape": "ring", "style": {"color": "#12"}})"), "bad hex colour"));
+    CHECK(hasText(overlayError(R, R"({"id": "f", "shape": "ring", "when": {"key": "Hyper"}})"), "unknown key 'Hyper'"));
+    CHECK(hasText(overlayError(R, R"({"id": "g", "shape": "ring", "when": {"selected": {"owner": "friend"}}})"), "unknown owner 'friend'"));
+    CHECK(hasText(overlayError(R, R"({"id": "h", "shape": "ring", "anchor": "cursor", "when": {"flags": ["shiny"]}})"), "unknown flag 'shiny'"));
+    CHECK(hasText(overlayError(R, R"({"id": "i", "shape": "text", "event": {"on": "explode"}})"), "unknown event 'explode'"));
+    CHECK(hasText(overlayError(R, R"({"id": "j", "shape": "line", "anchor": "selected"})"), "needs \"to\""));
+    CHECK(hasText(overlayError(R, R"({"id": "k", "shape": "ring", "when": {"status": "frozen"}})"), "unknown status 'frozen'"));
+    CHECK(hasText(overlayError(R, R"({"shape": "ring"})"), "missing \"id\""));
+    CHECK(overlayError(R, R"({"id": "ok", "shape": {"type": "ring", "radius": "range:0"}, "anchor": {"type": "selected", "owner": "own"},
+                              "when": {"any": [{"key": "Alt"}, {"zoom": [0, 40]}]}, "style": {"color": [1, 0.5, 0.2, 0.8], "dash": [0.5, 0.3]}})").empty());
+    bool dup = false;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "x", "shape": "ring"}, {"id": "x", "shape": "circle"}])")); }
+    catch (const std::exception& e) { dup = hasText(e.what(), "duplicate id"); }
+    CHECK(dup);
+    // partial overrides of built-ins are valid lists (checked merged over the default)
+    bool partialOk = true;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "selection", "style": {"thickness": 0.07}}, {"id": "health_bars", "enabled": false}])")); }
+    catch (const std::exception&) { partialOk = false; }
+    CHECK(partialOk);
+    bool partialBad = false;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "selection", "style": {"colr": 1}}])")); }
+    catch (const std::exception& e) { partialBad = hasText(e.what(), "unknown key 'colr'"); }
+    CHECK(partialBad);
+    // a broken entry in game data is skipped with a warning; the rest still loads
+    game::OverlaySet set = game::loadOverlaySet(R, Json::parse(R"([{"id": "bad", "shape": "nope"}])"), Json());
+    CHECK(set.warnings.size() == 1 && set.defs.size() == 7);
+}
+
+TEST(overlay_templates_are_valid) {
+    game::Rules R = skirmishRules();
+    Json tpl = game::overlayTemplates();
+    CHECK(tpl.size() >= 10);
+    for (auto& t : tpl.items()) {
+        std::string err;
+        try { game::parseOverlay(R, t["overlay"]); } catch (const std::exception& e) { err = e.what(); }
+        if (!err.empty()) std::printf("  template %s: %s\n", t.getStr("id").c_str(), err.c_str());
+        CHECK(err.empty());
+    }
+}
+
+TEST(overlay_conditions_on_sim_state) {
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 1);
+    for (int i = 0; i < 20; ++i) sim->step();
+    game::RtsModule& m = mod(*sim);
+    const game::Rules& R = m.rules();
+    game::RtsScene scene;   // like sceneFromSim (RtsView.cpp needs the renderer, not linked here)
+    sim->world().each<game::Unit, Owner, Transform>([&](Entity e, game::Unit& u, Owner& ow, Transform& tr) {
+        game::SceneObject so;
+        so.entity = e; so.type = u.type; so.owner = ow.player;
+        so.pos = {float(tr.pos.x.toDouble()), 0, float(tr.pos.z.toDouble())};
+        so.hp = float((u.hp / R.types[u.type].maxHp).toDouble());
+        scene.objects.push_back(so);
+    });
+    scene.tick = sim->tick();
+    int own = -1, enemy = -1, worker = -1;
+    for (size_t i = 0; i < scene.objects.size(); ++i) {
+        auto& o = scene.objects[i];
+        if (o.isProjectile) continue;
+        if (o.owner == 1 && own < 0 && !R.types[o.type].structure) own = int(i);
+        if (o.owner == 1 && R.types[o.type].id == "peasant") worker = int(i);
+        if (o.owner == 2 && enemy < 0) enemy = int(i);
+    }
+    CHECK(own >= 0 && enemy >= 0);
+    if (own < 0 || enemy < 0) return;
+    scene.objects[size_t(own)].selected = true;
+    scene.objects[size_t(enemy)].visible = true;
+    game::RtsOverlays ov;
+    Json extra = Json::parse(R"([{"id": "hits", "event": {"on": "hit", "owner": "own"}, "shape": {"type": "text", "text": "-{value}"}},
+                                 {"id": "enemyHits", "event": {"on": "hit", "owner": "enemy"}, "shape": {"type": "text", "text": "x"}}])");
+    ov.init(R, extra, Json(), "");
+    CHECK(ov.set().warnings.empty());
+    bool keys[int(platform::Key::Count)] = {};
+    keys[int(platform::Key::LeftShift)] = true;
+    game::OverlayContext ctx;
+    ctx.sim = sim.get(); ctx.player = 1; ctx.keys = keys; ctx.keyCount = int(platform::Key::Count);
+    ctx.placeType = R.findType("barracks");
+    ov.setContext(ctx);
+    auto& gs = m.state(*sim);
+    gs.trig.vars["alarm"] = Fixed::fromInt(3);
+    ov.prepare(scene, 1.0, &gs.vision[1], gs.grid, 30);
+    auto cond = [&](const char* when) {
+        Json e = Json::parse(std::string(R"({"id": "t", "shape": "ring", "anchor": "cursor", "when": )") + when + "}");
+        return game::parseOverlay(R, e).when;
+    };
+    const game::SceneObject& o = scene.objects[size_t(own)];
+    const game::SceneObject& en = scene.objects[size_t(enemy)];
+    CHECK(ov.relation(1) == game::kRelOwn && ov.relation(2) == game::kRelEnemy && ov.relation(0) == game::kRelNeutral);
+    CHECK(ov.test(cond(R"({"selected": {"owner": "own"}})"), nullptr));      // something own is selected
+    CHECK(!ov.test(cond(R"({"selected": {"owner": "enemy"}})"), nullptr));
+    CHECK(ov.test(cond(R"("selected")"), &o) && !ov.test(cond(R"("selected")"), &en));   // per entity
+    CHECK(ov.test(cond(R"({"selected": false})"), &en));
+    CHECK(ov.test(cond(R"({"owner": "enemy"})"), &en) && !ov.test(cond(R"({"owner": "enemy"})"), &o));
+    CHECK(ov.test(cond(R"({"flags": ["unit", "!structure"]})"), &o));
+    if (worker >= 0) CHECK(ov.test(cond(R"({"types": ["peasant"]})"), &scene.objects[size_t(worker)]));
+    CHECK(ov.test(cond(R"("placing")"), nullptr) && ov.test(cond(R"({"placing": ["barracks", "farm"]})"), nullptr));
+    CHECK(!ov.test(cond(R"({"placing": "tower"})"), nullptr));
+    CHECK(ov.test(cond(R"({"key": "Shift"})"), nullptr) && !ov.test(cond(R"({"key": ["Shift", "Q"]})"), nullptr));
+    CHECK(ov.test(cond(R"({"state": "playing"})"), nullptr) && !ov.test(cond(R"("paused")"), nullptr));
+    CHECK(ov.test(cond(R"({"var": {"name": "alarm", ">=": 3}})"), nullptr) && !ov.test(cond(R"({"flag": "quiet"})"), nullptr));
+    CHECK(ov.test(cond(R"({"zoom": [10, 40]})"), nullptr) && !ov.test(cond(R"({"zoom": [50, 90]})"), nullptr));
+    CHECK(ov.test(cond(R"({"any": [{"key": "Q"}, {"not": "paused"}]})"), nullptr));
+    CHECK(ov.test(cond(R"({"hp": [0.5, 2]})"), &o) && !ov.test(cond(R"({"hp": [0, 0.5]})"), &o));
+    // cell predicates read the grid / fog of the local player
+    const int cx = int(std::floor(o.pos.x)), cz = int(std::floor(o.pos.z));
+    CHECK(ov.cellTest(game::OvPred::Visible, cx, cz));
+    CHECK(ov.cellTest(game::OvPred::Buildable, cx, cz) == (gs.grid.areaBuildable(cx, cz, 1, 1)));
+    CHECK(ov.cellTest(game::OvPred::Blocked, -5, -5) == false);
+    // events become popups: a hit on the own unit, filtered by the owner of the entity hit
+    scene.events.push_back({uint16_t(game::kEvHit), 2, o.entity, en.entity, Fixed::fromInt(7).raw, sim->world().get<Transform>(o.entity).pos});
+    scene.tick += 1;
+    ov.prepare(scene, 1.1, &gs.vision[1], gs.grid, 30);
+    CHECK(ov.popupCount() == 1);
+    ov.prepare(scene, 1.2, &gs.vision[1], gs.grid, 30);   // same tick: not spawned twice
+    CHECK(ov.popupCount() == 1);
+    ov.prepare(scene, 5.0, &gs.vision[1], gs.grid, 30);   // expired after its lifetime
+    CHECK(ov.popupCount() == 0);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;

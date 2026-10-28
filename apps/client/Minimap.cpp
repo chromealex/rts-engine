@@ -51,7 +51,7 @@ void Minimap::release(gfx::Device& dev) {
 }
 
 void Minimap::update(gfx::Device& dev, const GameState& gs, const Rules& rules, const RtsScene& scene, const std::vector<uint8_t>* vision,
-                     const float3 (&q)[4], bool haveQuad) {
+                     const float3 (&q)[4], bool haveQuad, const std::vector<OverlayMinimapMark>* marks) {
     if (!tex_.valid() || gs.grid.w != gridW_ || gs.grid.h != gridH_) return;
     const float ppc = 1.0f / cellsPerPx_;
     for (int y = 0; y < h_; ++y)
@@ -88,6 +88,21 @@ void Minimap::update(gfx::Device& dev, const GameState& gs, const Rules& rules, 
         const float r = t.structure ? std::max(1.0f, float(std::max(t.footprintW, t.footprintH)) * 0.5f) : 0.6f;
         fill(o.pos.x, o.pos.z, std::max(r, cellsPerPx_ * 0.75f), c);
     }
+    if (marks) // overlays with style.space "minimap" (pings, alerts): rings / discs blended over the image
+        for (auto& m : *marks) {
+            const float a = float(m.rgba >> 24) / 255.0f;
+            const float cx = m.x * ppc, cy = m.z * ppc, r = std::max(1.0f, m.radius * ppc);
+            const int x0 = std::max(0, int(cx - r - 1)), x1 = std::min(w_ - 1, int(cx + r + 1));
+            const int y0 = std::max(0, int(cy - r - 1)), y1 = std::min(h_ - 1, int(cy + r + 1));
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x) {
+                    const float d = std::hypot(x + 0.5f - cx, y + 0.5f - cy);
+                    if (m.ring ? std::abs(d - r) > 0.75f : d > r) continue;
+                    uint32_t& px = pixels_[size_t(y) * size_t(w_) + size_t(x)];
+                    auto mix = [&](int s) { return int(float((px >> s) & 255u) * (1 - a) + float((m.rgba >> s) & 255u) * a); };
+                    px = rgba(mix(0), mix(8), mix(16));
+                }
+        }
     if (haveQuad) { // camera frustum on the ground
         for (int k = 0; k < 4; ++k) {
             const float3 a = q[k], b = q[(k + 1) % 4];
