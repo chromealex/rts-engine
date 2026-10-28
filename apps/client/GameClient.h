@@ -24,6 +24,7 @@
 #include "engine/sim/Simulation.h"
 #include "engine/ui/UiLayer.h"
 #include "modules/rts/RtsAI.h"
+#include "modules/rts/RtsLocalize.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
@@ -65,6 +66,7 @@ struct UiState {
     std::string gameName, error, platformInfo;
     std::vector<std::string> maps;
     std::vector<UiAction> languages;
+    std::string lang;                  // active language: argument of the `tr` transform in documents
     // lobby (Lobby.cpp)
     std::string lobby;             // connect | connecting | browse | room
     std::string netStatus, netError, roomTitle, roomInfo, spectators, waitHint;
@@ -179,7 +181,6 @@ private:
     Rml::ElementDocument* menuDoc_ = nullptr;
     Rml::ElementDocument* hudDoc_ = nullptr;
     Rml::ElementDocument* lobbyDoc_ = nullptr;
-    bool reloadDocs_ = false;
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;

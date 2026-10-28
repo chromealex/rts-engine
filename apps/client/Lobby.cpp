@@ -266,7 +266,7 @@ void GameClient::buildLobby(UiState& s) {
         }
         for (size_t i = 0; i < netMaps_.size(); ++i) {
             UiAction a;
-            a.label = netMaps_[i].title;
+            a.label = mapTitle(netMaps_[i].file, netMaps_[i].title);
             a.cost = std::to_string(netMaps_[i].players());
             a.id = addAction([this, i] { netAction("create", int(i)); });
             s.createMaps.push_back(a);
