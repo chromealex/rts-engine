@@ -31,6 +31,7 @@ private:
     void special(Simulation& sim, RtsModule& m);   // deploy, sidebar placement, claims, auto-build, upgrades, research
     void dungeon(Simulation& sim, RtsModule& m);   // mark digs toward objectives, paint rooms
     void settlers(Simulation& sim, RtsModule& m);  // roads to buildings, production chains
+    void originals(Simulation& sim, RtsModule& m); // RtsAIOriginals.cpp: hero skills, crews, garrison upgrades
     bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
