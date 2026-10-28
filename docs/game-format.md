@@ -241,10 +241,14 @@ stays silent.
 ```json
 {
   "volume": {"master": 1, "sfx": 0.9, "ui": 0.7, "voice": 1, "music": 0.6, "ambient": 0.7},
+  "spatial": {"minDistance": 10, "maxDistance": 55, "airAbsorption": 1500, "speedOfSound": 150,
+              "reverb": {"size": 0.6, "damping": 0.45, "wet": 0.4, "near": 0.04, "far": 0.65}},
   "sounds": {
     "swing": {"files": ["sfx/swing1.ogg", "sfx/swing2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 4, "cooldown": 0.05},
     "alarm": {"file": "voice/under_attack.ogg", "bus": "voice", "priority": 10},
-    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"}
+    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"},
+    "boom":  {"file": "sfx/boom.ogg", "minDistance": 14, "maxDistance": 80, "far": {"sound": "boom_far", "from": 0.25}},
+    "boom_far": {"file": "sfx/boom_far.ogg", "maxDistance": 120, "air": 0.5}
   },
   "music": {
     "menu":  "music/menu.ogg",
@@ -261,6 +265,26 @@ stays silent.
 
 `volume`: mix level per bus, 0..4 (default 1); the player's own volume settings multiply on top.
 
+### spatial — 3D sound and distance
+
+Positional sounds are placed in 3D around the listener (the RTS client puts the ear on the view
+ray above the camera's focus; units on cliffs and flyers are higher). Distances are world units
+(map cells). Zooming out raises the ear, so the battle sounds farther away; the audible area
+grows with the square root of the zoom.
+
+| key | meaning |
+|---|---|
+| `model` | distance curve: `inverse` (default, natural), `linear`, `exponential` |
+| `minDistance`, `maxDistance` | full volume up to min, silent at max (12, 60); the last 20 % of the range always fades out |
+| `rolloff` | steepness of the curve (1) |
+| `airAbsorption` | Hz of the low-pass at max distance: far sounds lose their highs (2500; `false` = off) |
+| `reverb` | `false`, or `{"size": 0.5, "damping": 0.5, "wet": 0.35, "near": 0.05, "far": 0.6}` — `near` / `far` = reverb send at min / max distance: far sounds get roomy and lose their attack |
+| `speedOfSound` | world units per second; distant sounds arrive late (0 = off; capped at 3 s) |
+| `rear` | 0..1: sources behind the listener get duller and a bit quieter (0) |
+
+The distance keys (`model`, `minDistance`, `maxDistance`, `rolloff`) are defaults for every sound;
+a sound can override them and add `air` / `reverb` multipliers (below).
+
 ### sounds
 
 | key | meaning |
@@ -274,6 +298,10 @@ stays silent.
 | `cooldown` | seconds between two starts (0) — 40 archers firing together make a few sounds, not 40 |
 | `priority` | -100..100 (0): when all voices are busy, the lowest priority (oldest first) is stopped; a new sound below everything playing is dropped |
 | `loop` | loops until stopped (false) |
+| `model`, `minDistance`, `maxDistance`, `rolloff` | override the `spatial` defaults: small sounds (footsteps, swords) fade early, explosions carry far |
+| `air` | multiplier of the air absorption, 0..4 (1; 0 = keeps its highs at any distance) |
+| `reverb` | multiplier of the distance reverb send, 0..4 (1; 0 = always dry) |
+| `far` | a distant variant: `"boom_far"` or `{"sound": "boom_far", "from": 0.3}` — both play together and crossfade from `from` (fraction of this sound's distance range) to max distance; the far sound keeps its own distances, so it can carry farther (a low rumble instead of a crack) |
 
 `synth` — a sound made from parameters instead of a file (prototypes, playables); an object or an
 array of layers that are mixed:
