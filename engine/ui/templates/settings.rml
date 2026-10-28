@@ -1,0 +1,34 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        function Settings_reset()
+            ui.popup("dialog", {title = game.tr("meta.reset"), text = game.tr("meta.reset_confirm"),
+                                ok = function() profile.reset() end})
+        end
+        ui.set("languages", game.languages())
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-header">
+            <button class="back" onclick="ui.back()">@meta.back</button>
+            <div class="screen-title">$TITLE</div>
+        </div>
+        <div class="screen-body">
+            <h2>@menu.language</h2>
+            <div class="row">
+                <button data-for="l : languages" data-class-active="l.id == game.language" data-event-click="call('game.setLanguage', l.id)">{{l.name}}</button>
+            </div>
+            <div class="spacer"></div>
+            <button class="big secondary" onclick="game.howto(true)">@ui.howto</button>
+            <button class="big secondary" onclick="Settings_reset()">@meta.reset</button>
+        </div>
+    </div>
+</div>
+</body>
+</rml>

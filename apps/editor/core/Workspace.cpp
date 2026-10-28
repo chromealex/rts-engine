@@ -2,6 +2,7 @@
 #include "ScenarioOps.h"
 #include "SchemaOps.h"
 namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // CampaignOps.cpp
+namespace rts::editor { void registerUiOps(Workspace& ws); }         // UiOps.cpp (screens, ui_preview)
 #include "SimTools.h"
 #include "TileOps.h"
 #include "TerrainOps.h"
@@ -170,7 +171,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerUiOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {

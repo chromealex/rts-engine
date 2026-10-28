@@ -8911,6 +8911,48 @@ TEST(ui_lua_sandbox) {
     lua_close(L);
 }
 
+
+// ---- UI meta layer: engine/ui/lib/meta.lua and the screen templates compile; JSON <-> Lua round trip
+TEST(ui_lua_meta_and_templates) {
+    auto readFile = [](const std::string& p, std::string& out) {
+        std::ifstream f(p, std::ios::binary);
+        if (!f) return false;
+        std::stringstream ss; ss << f.rdbuf(); out = ss.str();
+        return true;
+    };
+    const std::string root = RTS_SOURCE_DIR;
+    lua_State* L = luaL_newstate();
+    std::string code, err;
+    CHECK(readFile(root + "/engine/assets/ui/lib/meta.lua", code));
+    CHECK(luaL_loadbufferx(L, code.data(), code.size(), "@meta.lua", "t") == LUA_OK);
+    lua_settop(L, 0);
+    int scripts = 0;
+    for (auto& e : std::filesystem::directory_iterator(root + "/engine/ui/templates")) {
+        if (e.path().extension() != ".rml") continue;
+        std::string rml;
+        CHECK(readFile(e.path().string(), rml));
+        for (size_t at = rml.find("<script>"); at != std::string::npos; at = rml.find("<script>", at + 1)) {
+            const size_t end = rml.find("</script>", at);
+            std::string body = rml.substr(at + 8, end - at - 8);
+            for (size_t k = body.find("$NAME"); k != std::string::npos; k = body.find("$NAME")) body.replace(k, 5, "x");
+            const bool ok = luaL_loadbufferx(L, body.data(), body.size(), e.path().filename().string().c_str(), "t") == LUA_OK;
+            if (!ok) std::printf("    %s\n", lua_tostring(L, -1));
+            CHECK(ok);
+            lua_settop(L, 0);
+            ++scripts;
+        }
+    }
+    CHECK(scripts >= 6);
+    // JSON round trip: integers stay integers, floats floats, arrays arrays, keys sorted
+    Json j = Json::parse(R"({"b": [1, 2, 3], "a": {"x": 1.5, "y": true, "s": "привет"}, "e": {}})");
+    ui::luaPushJson(L, j);
+    Json back = ui::luaToJson(L, -1);
+    CHECK(back["b"].isArray() && back["b"].items().size() == 3 && back["b"].items()[2].numberLiteral() == "3");
+    CHECK(back["a"]["x"].numberLiteral() == "1.5" && back["a"].getBool("y") && back["a"].getStr("s") == "привет");
+    CHECK(back.members().front().first == "a");
+    lua_close(L);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

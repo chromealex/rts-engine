@@ -22,6 +22,7 @@
 #include "engine/render/ImGuiLayer.h"
 #include "engine/render/QualityGovernor.h"
 #include "engine/render/Renderer3D.h"
+#include "engine/services/Store.h"
 #include "engine/sim/Simulation.h"
 #include "engine/ui/UiLayer.h"
 #include "modules/rts/RtsAI.h"
@@ -139,7 +140,9 @@ public:
     void autostart(size_t i) { startMatch(i); }
     void forceLanguage(std::string tag) { forcedLanguage_ = std::move(tag); }
     void spectate() { spectator_ = true; }
-    void showHowto() { howtoOpen_ = true; }   // --howto: open "How to play" over the menu
+    void showHowto() { howtoOpen_ = true; }
+    // --ui-screen name [--ui-params json] [--ui-profile json] [--ui-lua code]: show one game screen (MCP ui_preview)
+    void previewScreen(std::string luaCode) { uiPreview_ = true; uiPreviewLua_ = std::move(luaCode); }   // --howto: open "How to play" over the menu
 
     // called from UI event listeners
     void minimapPointer(float u, float v);   // u, v in [0, 1] of the minimap image
@@ -194,6 +197,10 @@ private:
     void initLua();
     void runGameScript();
     void shutdownLua();
+    void luaEmit(const char* name, const Json& data);   // game.on(name, fn) handlers
+    void luaTick(double dt);
+    const char* screenName() const;
+    std::string saveDir() const;                         // storage.*: per-game folder in the user data dir
     // ClientActions.cpp: player abilities, rect tools, hand, possession, "How to play"
     void buildTools(UiState& s);
     void buildToolCard(UiState& s);
@@ -232,6 +239,13 @@ private:
     Rml::ElementDocument* lobbyDoc_ = nullptr;
     Rml::ElementDocument* howtoDoc_ = nullptr;
     lua_State* lua_ = nullptr;     // UI scripts (ClientScript.cpp); closed after the UI
+    std::shared_ptr<bool> luaAlive_;             // async callbacks (store, ads) check it before calling Lua
+    std::map<std::string, store::Purchase> purchases_;   // by token, until the script finishes them
+    Json lastResult_;                            // last match: game.lastResult(), "matchEnd" event
+    bool engineMenu_ = true;                     // false: the game's screens replace menu.rml
+    bool engineMenuShown_ = true;
+    bool uiPreview_ = false;                     // --ui-screen: MCP preview of one screen
+    std::string uiPreviewLua_;
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;

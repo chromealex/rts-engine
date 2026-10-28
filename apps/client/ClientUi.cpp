@@ -190,8 +190,26 @@ void GameClient::shutdownUi() {
 }
 
 void GameClient::setScreen(Screen s) {
+    const bool changed = screen_ != s;
     screen_ = s;
     if (s != Screen::Playing) { boxing_ = panning_ = sendDrag_ = false; mode_ = Mode::Normal; }
+    if (!changed) return;
+    if (s == Screen::Over && sim_) {   // UI scripts: rewards, progress (game.on("matchEnd", fn))
+        const int res = sim_->result();
+        auto* me = sim_->player(human_);
+        Json r = Json::object();
+        r.set("won", Json::fromBool(!spectator_ && res > 0 && me && me->team == res));
+        r.set("result", Json::number(int64_t(res)));
+        r.set("seconds", Json::number(int64_t(sim_->tick() / std::max<uint32_t>(1, sim_->tickRate()))));
+        r.set("map", Json::number(int64_t(mapIndex_ + 1)));
+        r.set("mapTitle", Json::string(mapIndex_ < maps_.size() ? maps_[mapIndex_].title : ""));
+        r.set("difficulty", Json::number(int64_t(difficulty_)));
+        r.set("spectator", Json::fromBool(spectator_));
+        r.set("online", Json::fromBool(netMatch_));
+        lastResult_ = r;
+        luaEmit("matchEnd", r);
+    }
+    luaEmit("screen", Json::string(screenName()));
 }
 
 void GameClient::minimapPointer(float u, float v) {
@@ -255,6 +273,10 @@ void GameClient::updateUi() {
         s.minimapStyle = fmt("width: %.0fdp; height: %.0fdp;", gs.grid.w * k, gs.grid.h * k);
     }
 
+    if (menuDoc_ && engineMenu_ != engineMenuShown_) {   // game.engineMenu(false): the game's own screens
+        if (engineMenu_) menuDoc_->Show(Rml::ModalFlag::None, Rml::FocusFlag::None); else menuDoc_->Hide();
+        engineMenuShown_ = engineMenu_;
+    }
     actions_.swap(nextActions_);
     // push only what changed: unchanged variables keep their elements (and hover/press state)
 #define RTS_SYNC(name)                                       \

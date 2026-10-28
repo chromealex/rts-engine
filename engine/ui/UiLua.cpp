@@ -6,7 +6,9 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <memory>
 
 namespace rts::ui {
@@ -128,5 +130,80 @@ bool luaRunString(lua_State* L, const std::string& code, const std::string& name
     return runLoaded(L, luaL_loadbufferx(L, code.data(), code.size(), name.c_str(), "t"), error);
 }
 
+
+void luaPushJson(lua_State* L, const Json& j) {
+    luaL_checkstack(L, 4, "json too deep");
+    switch (j.type()) {
+    case Json::Type::Null: lua_pushnil(L); break;
+    case Json::Type::Bool: lua_pushboolean(L, j.boolean()); break;
+    case Json::Type::String: { const std::string s = j.str(); lua_pushlstring(L, s.data(), s.size()); break; }
+    case Json::Type::Number: {
+        const std::string& t = j.numberLiteral();
+        if (t.find_first_of(".eE") == std::string::npos) lua_pushinteger(L, lua_Integer(std::strtoll(t.c_str(), nullptr, 10)));
+        else lua_pushnumber(L, std::strtod(t.c_str(), nullptr));
+        break;
+    }
+    case Json::Type::Array: {
+        lua_createtable(L, int(j.items().size()), 0);
+        lua_Integer k = 1;
+        for (auto& v : j.items()) { luaPushJson(L, v); lua_rawseti(L, -2, k++); }
+        break;
+    }
+    case Json::Type::Object: {
+        lua_createtable(L, 0, int(j.members().size()));
+        for (auto& [k, v] : j.members()) { luaPushJson(L, v); lua_setfield(L, -2, k.c_str()); }
+        break;
+    }
+    }
+}
+
+static Json toJson(lua_State* L, int idx, int depth) {
+    idx = lua_absindex(L, idx);
+    switch (lua_type(L, idx)) {
+    case LUA_TBOOLEAN: return Json::fromBool(lua_toboolean(L, idx));
+    case LUA_TSTRING: { size_t n; const char* s = lua_tolstring(L, idx, &n); return Json::string(std::string(s, n)); }
+    case LUA_TNUMBER: {
+        if (lua_isinteger(L, idx)) return Json::number(int64_t(lua_tointeger(L, idx)));
+        char b[48];
+        std::snprintf(b, sizeof b, "%.14g", double(lua_tonumber(L, idx)));
+        std::string t = b;
+        if (t.find_first_of(".eE") == std::string::npos) t += ".0";   // keep it a float on the way back
+        if (t.find_first_of("ni") != std::string::npos) return Json();  // nan / inf
+        return Json::numberText(t);
+    }
+    case LUA_TTABLE: {
+        if (depth > 32) return Json();
+        luaL_checkstack(L, 4, "table too deep");
+        const lua_Integer n = lua_Integer(lua_rawlen(L, idx));
+        bool array = true;
+        std::vector<std::string> keys;
+        lua_Integer count = 0;
+        lua_pushnil(L);
+        while (lua_next(L, idx)) {
+            ++count;
+            if (lua_type(L, -2) == LUA_TSTRING) { keys.push_back(lua_tostring(L, -2)); array = false; }
+            else if (!lua_isinteger(L, -2) || lua_tointeger(L, -2) < 1 || lua_tointeger(L, -2) > n) array = false;
+            lua_pop(L, 1);
+        }
+        if (array && count == n && n > 0) {
+            Json a = Json::array();
+            for (lua_Integer i = 1; i <= n; ++i) { lua_rawgeti(L, idx, i); a.push(toJson(L, -1, depth + 1)); lua_pop(L, 1); }
+            return a;
+        }
+        std::sort(keys.begin(), keys.end());
+        Json o = Json::object();
+        for (auto& k : keys) {
+            lua_getfield(L, idx, k.c_str());
+            const int t = lua_type(L, -1);
+            if (t != LUA_TFUNCTION && t != LUA_TUSERDATA && t != LUA_TLIGHTUSERDATA && t != LUA_TTHREAD) o.set(k, toJson(L, -1, depth + 1));
+            lua_pop(L, 1);
+        }
+        return o;
+    }
+    default: return Json();
+    }
+}
+
+Json luaToJson(lua_State* L, int index) { return toJson(L, index, 0); }
 
 } // namespace rts::ui

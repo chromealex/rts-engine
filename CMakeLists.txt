@@ -843,4 +843,6 @@ endif()
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/BrandingOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_branding)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/UiOps.cpp)   # UI agent: game screens + ui_preview
+    target_link_libraries(rts_editor_core PUBLIC rts_lua)
 endif()

@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "engine/data/Json.h"
+
 typedef struct lua_State lua_State;
 
 namespace rts::ui {
@@ -27,5 +29,11 @@ void luaSandbox(lua_State* L, LuaReader read, std::vector<std::string> requireDi
 // syntax or runtime error.
 bool luaRunFile(lua_State* L, const LuaReader& read, const std::string& path, std::string* error = nullptr);
 bool luaRunString(lua_State* L, const std::string& code, const std::string& name, std::string* error = nullptr);
+
+// JSON <-> Lua values (profiles, catalogs). Objects become tables with string keys, arrays sequences
+// (1-based); integers stay integers. luaToJson: a table with keys 1..n only is an array, any other table
+// an object (keys sorted, so saved files are stable); functions / userdata are skipped; depth <= 32.
+void luaPushJson(lua_State* L, const Json& j);
+Json luaToJson(lua_State* L, int index);
 
 } // namespace rts::ui

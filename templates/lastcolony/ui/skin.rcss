@@ -46,6 +46,14 @@ input.text:focus { border-color: #e7b866; }
 #kb .key:active { border-color: #e7b866; }
 #kb .key.on { border-color: #e7b866; color: #ffe2a6; }
 
+/* the game's own screens (ui/screens, screens.rcss) */
+.screen { decorator: vertical-gradient(#352920ff #0f0c09ff); }
+.screen-title { color: #e7b866; }
+.currency { color: #e0bd80; }
+.badge, .avatar, .progress-fill { background-color: #e7b866; }
+.card, .list-row, .stat { border-color: #ffffff18; }
+.stat-value { color: #e7b866; }
+
 .panel { border-top-width: 4dp; border-bottom-width: 4dp; }
 /* the survival timer is what matters */
 #topbar .item.warn { font-size: 18dp; }
