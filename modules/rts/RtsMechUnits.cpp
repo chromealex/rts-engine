@@ -64,6 +64,7 @@ void RtsModule::mechOnHit(Simulation& sim, Entity target, Entity source) {
 }
 
 void RtsModule::mechVeteranKill(Simulation& sim, Entity victim) {
+    if (rules_.mech.infection || rules_.mech.ruinsAny) mechTacticsDeath(sim, victim);
     if (!rules_.mech.veterancy) return;
     World& w = sim.world();
     auto* vv = w.tryGet<Veteran>(victim);
@@ -199,13 +200,15 @@ bool RtsModule::applyMechCommand2(Simulation& sim, const Command& cmd) {
 
 void RtsModule::mechTick(Simulation& sim) {
     mechTickCombat(sim);
+    mechTickTactics(sim);
+    mechTickSociety(sim);
     World& w = sim.world();
     const Fixed dt = sim.dt();
     std::vector<Entity> addVet;
     w.each<Unit>([&](Entity e, Unit& u) {
         if (u.hp.raw <= 0) return;
         const UnitType& t = rules_.types[u.type];
-        if (rules_.mech.veterancy && !w.has<Veteran>(e)) addVet.push_back(e);   // every object records its last hitter
+        if ((rules_.mech.veterancy || rules_.mech.infection) && !w.has<Veteran>(e)) addVet.push_back(e);   // every object records its last hitter
         if (!t.mech.toggles.empty()) {
             auto* st = w.tryGet<Statuses>(e);
             if (!st) return;

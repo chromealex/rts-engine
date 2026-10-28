@@ -42,7 +42,7 @@ const CmdName kCommands[] = {
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
     {"transit", kCmdTransit}, {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
     {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
-    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem},
+    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty},
 };
 
 Vec3 readPoint(const Json& p) {
@@ -237,6 +237,13 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
             break;
         }
         c.param = need(idx, "ability of the first unit's type", id);
+    }
+    if (p.has("resource")) {   // trade / tribute / bounty: readable fields instead of the packed param
+        const int64_t res = need(R.findResource(p.getStr("resource")), "resource", p.getStr("resource"));
+        const int64_t amount = p["amount"].integer(0);
+        if (c.type == kCmdTrade) c.param = res | (p.getBool("sell", false) ? 256 : 0);
+        else if (c.type == kCmdTribute) c.param = res | (p["to"].integer(0) << 8) | (amount << 16);
+        else if (c.type == kCmdBounty) c.param = res | (amount << 8);
     }
     if (p.has("rect")) {
         const Json& r = p["rect"];
