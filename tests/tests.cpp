@@ -9131,7 +9131,7 @@ Json crowdMap(int n, uint64_t seed) {
     Json mv = Json::object(), ff = Json::object(); ff.set("minGroup", Json::number(int64_t(8))); mv.set("flowField", ff); m.set("movement", mv);
     return m;
 }
-struct CrowdRun { int arrived = 0, settled = 0; double t90 = -1; uint64_t sum = 0; std::vector<Command> cmds; };
+struct CrowdRun { int arrived = 0, settled = 0; double t90 = -1; uint64_t sum = 0; std::vector<Command> cmds; bool roundTrip = true; };
 CrowdRun crowdRun(int units, uint64_t seed, const std::vector<Command>* replay = nullptr) {
     SimConfig cfg; cfg.seed = seed;
     auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
@@ -9157,6 +9157,16 @@ CrowdRun crowdRun(int units, uint64_t seed, const std::vector<Command>* replay =
     CrowdRun r;
     for (int t = 0; t < window * 20; ++t) {
         sim->step();
+        if (t == window * 12 && !replay) {   // save / load mid-settling (crowd state on Mobile): both copies stay identical
+            const std::string bytes = sim->serialize();
+            SimConfig cb; cb.seed = seed;
+            Simulation b(cb, std::make_unique<game::RtsModule>());
+            b.setup(Json::parseFile(kSkirmish + "/rules.json"), crowdMap(96, seed));
+            std::string err;
+            if (bytes.empty() || !b.deserialize(bytes, &err)) r.roundTrip = false;
+            for (int i = 0; i < 200 && r.roundTrip; ++i) { sim->step(); b.step(); ++t; if (sim->checksum() != b.checksum()) r.roundTrip = false; }
+            if (r.roundTrip && sim->serialize() != b.serialize()) r.roundTrip = false;
+        }
         if (t % 20 == 0 && r.t90 < 0) {
             int near = 0;
             for (Entity e : c.units) if ((sim->world().get<Transform>(e).pos - c.point).xz().length() < arriveR) ++near;
@@ -9179,6 +9189,7 @@ TEST(crowd_flow_group_arrives_and_settles) {
     CHECK(a.arrived * 10 >= 200 * 9);    // >= 90% inside the crowd disc within the window
     CHECK(a.settled * 10 >= 200 * 9);    // and they stopped there (no circling)
     CHECK(a.t90 > 0);
+    CHECK(a.roundTrip);                  // serialize / deserialize while the crowd settles: exact
     const CrowdRun b = crowdRun(200, 3);
     CHECK(a.sum == b.sum);               // deterministic
     const CrowdRun rp = crowdRun(200, 3, &a.cmds);
