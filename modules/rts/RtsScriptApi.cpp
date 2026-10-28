@@ -79,40 +79,41 @@ bool readFilter(lua_State* L, Vm& vm, int idx, Filter& f) {
     if (lua_isnoneornil(L, idx)) return true;
     if (!lua_istable(L, idx)) { vm.err = "filter table expected"; return false; }
     idx = lua_absindex(L, idx);
+    const int top = lua_gettop(L);   // every field read is undone with settop (also on errors)
     auto field = [&](const char* k) { lua_pushstring(L, k); return lua_rawget(L, idx); };
     bool ok = true;
-    if (field("owner") != LUA_TNIL) { int64_t v; ok = ok && argInt(L, vm, -1, v, "filter.owner"); f.owner = int(v); }
-    lua_pop(L, 1);
+    if (field("owner") != LUA_TNIL) { int64_t v = -1; ok = ok && argInt(L, vm, -1, v, "filter.owner"); f.owner = int(v); }
+    lua_settop(L, top);
     if (ok && field("type") != LUA_TNIL) { f.type = typeArg(L, vm, -1); ok = f.type >= 0; }
-    lua_pop(L, 1);
+    lua_settop(L, top);
     if (ok && field("tag") != LUA_TNIL) {
         const char* t = lua_tostring(L, -1);
         f.tags = t ? vm.module->rules().tagMask(t) : 0;
         if (!f.tags) { vm.err = std::string("unknown tag '") + (t ? t : "?") + "'"; ok = false; }
     }
-    lua_pop(L, 1);
+    lua_settop(L, top);
     if (ok && field("kind") != LUA_TNIL) {
         std::string k = lua_tostring(L, -1) ? lua_tostring(L, -1) : "";
         f.kind = k == "unit" ? 1 : k == "structure" ? 2 : -1;
         if (f.kind < 0) { vm.err = "filter.kind: \"unit\" or \"structure\""; ok = false; }
     }
-    lua_pop(L, 1);
+    lua_settop(L, top);
     if (ok && field("area") != LUA_TNIL) {
         const char* a = lua_tostring(L, -1);
         f.area = a ? vm.module->triggers().findArea(a) : -1;
         if (f.area < 0) { vm.err = std::string("unknown area '") + (a ? a : "?") + "'"; ok = false; }
     }
-    lua_pop(L, 1);
+    lua_settop(L, top);
     if (ok && field("radius") != LUA_TNIL) {
         f.circle = true;
         ok = argFx(L, vm, -1, f.radius, "filter.radius");
-        lua_pop(L, 1);
-        if (ok) { field("x"); ok = argFx(L, vm, -1, f.center.x, "filter.x"); lua_pop(L, 1); }
+        lua_settop(L, top);
+        if (ok) { field("x"); ok = argFx(L, vm, -1, f.center.x, "filter.x"); lua_settop(L, top); }
         if (ok) { field("z"); ok = argFx(L, vm, -1, f.center.z, "filter.z"); }
     }
-    lua_pop(L, 1);
-    if (ok && field("limit") != LUA_TNIL) { int64_t v; ok = argInt(L, vm, -1, v, "filter.limit"); f.limit = int(v); }
-    lua_pop(L, 1);
+    lua_settop(L, top);
+    if (ok && field("limit") != LUA_TNIL) { int64_t v = 0; ok = argInt(L, vm, -1, v, "filter.limit"); f.limit = int(v); }
+    lua_settop(L, top);
     return ok;
 }
 // Matching living units sorted by entity index (deterministic and independent of ECS history).
