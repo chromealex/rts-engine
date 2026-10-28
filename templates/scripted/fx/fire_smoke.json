@@ -1,0 +1,13 @@
+// Badly damaged building (loops while hp < "below"): flames licking up and a thin smoke column.
+{
+  "emitters": [
+    { "comment": "flames", "texture": "builtin:smoke", "blend": "additive", "rate": 14, "loop": true,
+      "life": [0.4, 0.7], "speed": [0.8, 1.6], "spread": 15, "shape": "disc", "radius": 0.6, "drag": 1,
+      "size": [0.45, 0.7], "sizeOverLife": [[0, 1], [1, 0.3]], "rotation": [0, 360], "spin": [-120, 120],
+      "color": [[0, "#ffd070e0"], [0.5, "#ff6a1890"], [1, "#40100000"]] },
+    { "comment": "smoke", "texture": "builtin:smoke", "blend": "alpha", "rate": 6, "loop": true,
+      "life": [1.6, 2.4], "speed": [1, 1.6], "spread": 12, "shape": "disc", "radius": 0.4,
+      "gravity": [0.25, 0.3, 0], "drag": 0.4, "size": [0.7, 1.0], "sizeOverLife": [[0, 0.6], [1, 2.2]],
+      "rotation": [0, 360], "spin": [-20, 20], "color": [[0, "#2a2724a0"], [1, "#5a565000"]] }
+  ]
+}

@@ -26,10 +26,10 @@ const char* const kEventNames[] = {
     "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
     "objective", "dialog", "camera", "missionEnd",
     "learned", "crewKilled", "crewed", "infected", "submerged", "trapFired", "groupTeleport", "paved",   // originals / fidelity
-    "morale",
+    "morale", "turn",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
-static_assert(kEventCount == size_t(kEvMorale) + 1, "kEventNames must list every GameEvent");
+static_assert(kEventCount == size_t(kEvTurn) + 1, "kEventNames must list every GameEvent");
 
 struct CmdName { const char* name; uint16_t type; };
 const CmdName kCommands[] = {
@@ -44,7 +44,7 @@ const CmdName kCommands[] = {
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
     {"transit", kCmdTransit}, {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
     {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
-    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty},
+    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty}, {"rotate", kCmdRotate}, {"lock", kCmdLock}, {"end_turn", kCmdEndTurn},
 };
 
 Vec3 readPoint(const Json& p) {
@@ -209,6 +209,7 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
         if (!c.target.valid()) throw std::runtime_error("target matches no live object");
     }
     c.point = readPoint(p);
+    if (p.has("y")) c.point.y = toFixed(p["y"].toDouble(0));   // altitude for 3D flyers
     if (!p.has("at") && !p.has("x") && c.target.valid() && refs.sim.world().alive(c.target))
         c.point = refs.sim.world().get<Transform>(c.target).pos;
     c.param = p["param"].integer(0);
@@ -239,6 +240,10 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
             break;
         }
         c.param = need(idx, "ability of the first unit's type", id);
+    }
+    if (c.type == kCmdRotate && p.has("dir")) {   // conveyors: "e", "s", "w", "n"
+        const std::string d = p.getStr("dir");
+        c.param = d == "e" ? 1 : d == "s" ? 2 : d == "w" ? 3 : d == "n" ? 4 : need(-1, "dir (e, s, w, n)", d);
     }
     if (p.has("resource")) {   // trade / tribute / bounty: readable fields instead of the packed param
         const int64_t res = need(R.findResource(p.getStr("resource")), "resource", p.getStr("resource"));
@@ -295,6 +300,24 @@ Json entityJson(const SimRefs& refs, Entity e) {
     if (auto* v = w.tryGet<Veteran>(e); v && v->level > 1) j.set("rank", Json::number(int64_t(v->level)));
     if (auto* sh = w.tryGet<MechShield>(e)) j.set("shield", Json::number(sh->hp.toDouble(), 1));
     if (auto* sh = w.tryGet<Shield>(e)) j.set("shield", Json::number(sh->value.toDouble(), 1));
+    if (auto* b = w.tryGet<Belt>(e)) {
+        static const char* n[] = {"?", "e", "s", "w", "n"};
+        j.set("dir", Json::string(n[b->dir % 5]));
+        const MechState& ms = refs.sim.world().resource<GameState>()->mech;
+        int x, y; refs.sim.world().resource<GameState>()->grid.cellXY(w.get<Transform>(e).pos, x, y);
+        const auto& gg = refs.sim.world().resource<GameState>()->grid;
+        if (gg.inside(x, y) && size_t(gg.index(x, y)) < ms.beltRes.size() && ms.beltRes[size_t(gg.index(x, y))] >= 0) {
+            Json it = Json::object();
+            it.set(R.resources[size_t(ms.beltRes[size_t(gg.index(x, y))])].id, Json::number(ms.beltAmt[size_t(gg.index(x, y))].toDouble(), 1));
+            j.set("carries", it);
+        }
+    }
+    if (auto* cr = w.tryGet<Crafter>(e)) {
+        Json in = Json::object(), out = Json::object();
+        for (size_t k = 0; k < cr->in.size() && k < R.resources.size(); ++k) if (cr->in[k].raw > 0) in.set(R.resources[k].id, Json::number(cr->in[k].toDouble(), 1));
+        for (size_t k = 0; k < cr->out.size() && k < R.resources.size(); ++k) if (cr->out[k].raw > 0) out.set(R.resources[k].id, Json::number(cr->out[k].toDouble(), 1));
+        j.set("input", in); j.set("output", out);
+    }
     if (auto* mo = w.tryGet<Morale>(e); mo && mo->init) {
         static const char* n[] = {"steady", "wavering", "routing"};
         if (R.mech.morale) { j.set("morale", Json::number(mo->value.toDouble(), 1)); j.set("moraleState", Json::string(n[mo->state % 3])); }
