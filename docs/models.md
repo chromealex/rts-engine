@@ -16,6 +16,16 @@ same pipeline: PBR materials, team colours, skeletal clips and procedural animat
 }
 ```
 
+With several models one is picked per object. An entry can be an object: `"file"` plus any view
+keys that differ for that model (they replace the type's keys), e.g. a glTF tank and a voxel tank
+with other node names in one type:
+
+```json
+"model": [ "models/tank.glb",
+           { "file": "models/voxel_tank.vox", "variant": "", "materials": {},
+             "procedural": [ { "type": "aim", "node": "Turret" } ] } ]
+```
+
 A model that fails to load (missing file, unsupported feature) falls back to the shape with a warning
 `type 'footman': models/knight.glb: file not found (using the built-in shape)`. Warnings go to stderr,
 to the editor console and to `RtsView::warnings()`. Nothing in a view block can stop a game from
@@ -39,8 +49,8 @@ gallery, `--start T --fixed-dt 0.016` make screenshots reproducible.
 
 In the editor, **Окна → Models** shows the selected type rendered by the view (portrait), its
 clips, materials, variants and nodes (the names to use in `procedural`, `attach`, `fx`, `muzzle`)
-and the warnings of its view block. Model files of the open game are watched: saving a `.glb` /
-`.gltf` / `.obj` / `.fbx` reloads the views. Agents get the same data through the MCP operation
+and the warnings of its view block. Model files of the open game are watched: saving any model file
+reloads the views (converted formats are re-converted first, see below). Agents get the same data through the MCP operation
 `model_info` (`{"type": "footman"}`).
 
 ## Formats
@@ -50,12 +60,25 @@ and the warnings of its view block. Model files of the open game are watched: sa
 | glTF 2.0 `.glb`, `.gltf` (+ `.bin`, images, data URIs) | node hierarchy, meshes (triangles / strips / fans, indexed or not), all accessor types incl. normalized and sparse (`KHR_mesh_quantization`), skins (any joint count: meshes are split into palettes of 80 joints), TRS animations with step / linear / cubic-spline keys, metallic-roughness materials with base colour / metallic-roughness / normal / occlusion / emissive textures, alpha modes, double sided, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_emissive_strength`, `KHR_materials_pbrSpecularGlossiness` (converted), `KHR_materials_variants` |
 | Wavefront `.obj` + `.mtl` | positions, UVs, normals, polygons, negative indices, vertex colours, groups/objects as nodes; `Kd`, `d`/`Tr`, `Ns`, `Ke`, `Pr`/`Pm`, `map_Kd`, `map_Bump`/`norm`, `map_Ke` |
 | Autodesk FBX `.fbx` (binary and ASCII, FBX 6.x / 7.x, via [ufbx](https://github.com/ufbx/ufbx)) | converted on load to Y up, right-handed, metres (unit scale applied to geometry and translations, node scales stay clean; pivots and geometric transforms baked); node hierarchy, polygon meshes (triangulated), normals (generated when missing), UV0, vertex colours, tangents, one primitive per material, skins (cluster bind matrices, 4 strongest influences per vertex, unweighted vertices stay rigid with the mesh node, split into palettes of 80 joints), every animation stack becomes a clip (baked to linear T/R/S keys at 30 fps, constant channels dropped); materials from Lambert / Phong / PBR shaders: base colour × factor, roughness / metalness factors, normal map, emission, opacity (< 1 → `Blend`), double sided, unlit; textures from the file name relative to the `.fbx` (falling back to the bare file name next to it) or embedded in the file |
+| Collada `.dae` (1.4 / 1.5, UTF-8 / UTF-16) | `<unit>` and `Y_UP` / `Z_UP` / `X_UP` applied through a `root` node; node hierarchy from `<matrix>` / translate / rotate / scale / lookat stacks, `instance_geometry` / `instance_controller` / `instance_node`; `triangles`, `polylist`, `polygons`, `trifans`, `tristrips` with positions, normals (smoothed when missing), first UV set, vertex colours; profile_COMMON phong / blinn / lambert / constant (diffuse colour or texture via sampler → surface → image, emission, transparency, shininess → roughness, double sided, bump → normal map) bound per instance; skins (bind-shape matrix, joints by sid / id / name under `<skeleton>`, 4 strongest weights, palettes of 80 joints); animations (nested, matrix and single-value targets like `rotZ.ANGLE`, LINEAR / STEP / BEZIER) split by `library_animation_clips` (else one clip `Default`); skeleton-only files with clips (0 A.D.) load with a warning. Not supported (warning): morph controllers, material / visibility animation, `<skew>`, extra UV sets, lines, splines, embedded images, HERMITE (linear) |
+| 3D Studio `.3ds` | meshes with UVs and the local matrix, materials (diffuse, shininess, transparency, texture map; 8.3 names matched case-insensitively), smoothing groups split normals, keyframer hierarchy and tracks → node tree + clip `Take 001`; Z up converted. Ignored: bump / specular / opacity maps, objects parented to cameras or lights keep no animation |
+| Stanford `.ply` (ASCII, binary LE / BE) | any property types, positions, normals (smoothed when missing), UVs (`s/t`, `u/v`, `texture_u/v`, per-corner `texcoord`), vertex colours, polygon lists, `comment TextureFile`; Y up as Stanford / MeshLab write it (`comment up_axis Z` converts). Point clouds are an error |
+| `.stl` (ASCII and binary) | several solids, facet normals (recomputed when zero), VisCAM / Materialise colours; Z up converted |
+| MagicaVoxel `.vox` | models, palette (default when absent), scene graph (transform / group / shape nodes with names, translations, rotations; shared meshes; hidden nodes and layers skipped), greedy-meshed visible faces with flat normals, palette colours as vertex colours, `MATL` emission and metal; Z up converted, MagicaVoxel's front (−Y) faces +Z; **team colour: the last 8 palette slots (colour indices 248–255, the bottom row of MagicaVoxel's palette)** — their brightness shades the team colour; several frames → clip `Idle` (10 fps). Glass / transparency ignored |
+| Tiberian Sun / Red Alert 2 `.vxl` + `.hva` | from the user's own copy. Every section is a node named like it (`Body`, `Turret`, `Barrel`: aim / recoil presets work), greedy-meshed; palette from the file, else `<name>.pal`, `unittem.pal` / `unit.pal` next to it or one folder up (grey ramp + warning otherwise); remap range (16–31) = team colour shaded by the ramp; HVA frame 0 is the bind pose, more frames → clip `Idle` (15 fps); a `barrel` section follows the `turret`; Z up / facing +X converted. Normal tables ignored (flat normals) |
+| Warcraft III `.mdx` (binary) / `.mdl` (text), versions 800 and Reforged 900–1100, + `.blp` textures (BLP1 JPEG / paletted, BLP2 paletted / DXT1/3/5 / BGRA) | from the user's own copy or community models (never committed). Z up / facing +X converted to Y up / facing +Z, 128 units = 1 cell. Every object (bone, helper, attachment, emitter, ...) is a node under `root` (attachments like `Hand Right Ref`, `Overhead Ref` work as sockets); pivot-based transforms become TRS nodes (bind translation = pivot − parent pivot, inverse bind = T(−pivot)); classic vertex groups (bones averaged, ≤ 4) or Reforged `SKIN` weights; every sequence is a clip named like it (`Stand - 2`, `Attack Slam`), keys in [start, end] plus loop-seam boundary keys, Hermite / Bezier → cubic spline, global sequences tiled per clip. Materials: team-colour layer (replaceable id 1) under the texture → `team: alpha` (BaseAlpha), only team colour → tint, team glow → tinted glow sprite; filter Transparent → alpha test 0.75, Blend / Additive / Modulate → blend (approximated); unshaded, two-sided; HD: diffuse / normal / ORM (+ team mask from ORM alpha) / emissive. Textures are looked up relative to the model, by file name next to it, then relative to its parent folders (WC3 archive paths like `Units\Human\Footman\Footman.blp` work if the folder layout is kept), then as converted `.png` / `.tga` / `.dds`. Not rendered: particles, ribbons, lights; geoset alpha animation (geosets hidden in `Stand` are dropped), billboards, texture animation. Test unit: `tools/models/gen_mdx_sample.py` |
+| Total Annihilation `.3do` (+ `.gaf` textures) | from the user's own copy. Every piece is a node with its exact name (`base`, `turret`, `sleeve`, `barrel`, `flare`: aim / recoil / spin presets move them), offsets from 16.16 fixed point, (x, y, −z) as Spring reads it (faces +Z); polygons fan-triangulated, flat shaded (selection primitive, lines and duplicate faces skipped). Colours from the TA palette: `<model>.pal`, `palette.pal` or `../palettes/PALETTE.PAL` (built-in approximation + warning otherwise). Textures from GAF (`<name>.gaf`, or a converted `.png` / `.tga` / `.jpg`, in the model folder, `textures/`, `../textures/`); missing ones keep the palette colour (one warning). Team colour: GAF entries with ≥ 10 frames (one per player) → mask of the pixels that differ between frames 0 and 1; converted textures listed in `teamtex.txt` use their magenta pixels. No clips (TA animates pieces from scripts — use `procedural`) |
+| C&C Generals / Zero Hour `.w3d` (+ `.dds` / `.tga`) | from the user's own copy. Hierarchy pivots → nodes (names kept: `Turret`, `Barrel`, `FireFX01`), HLOD with the highest-detail LOD (or the older HMODEL), meshes (first material pass: textures, vertex colours, alpha test / blend, unlit), skins (one or two bone influences, palettes of 80 joints), animations (uncompressed, time-coded and adaptive-delta channels) named after the part behind the dot (`ABTank_SKN.ABTank_ATKA` → `ABTank_ATKA`); Z up / +X → Y up / +Z. **Separate files:** a hierarchy the model names but doesn't contain is read from `<HierarchyName>.w3d` next to it (with its animations); more animations are listed in `<model>.anims.txt` next to the model (one `.w3d` per line, `#` comments). Textures: the name, then `.dds` / `.tga`, in the model folder, `../Textures/`, `../textures/`, `textures/`, `Art/Textures/`. Team colour: meshes named `HOUSECOLOR…` → tint, textures `ZHCA…` → alpha (BaseAlpha), `ZHCD…` → tint (approximation, warning). Not supported: visibility / morph channels, Euler channels, passes after the first, emitters, pre-3.0 meshes |
 | built-in shapes | units `worker soldier ranged vehicle tank flyer mushroom generic`; structures `hall house barracks workshop factory tower mine tree rock mushroomhouse structure` |
 
 Not supported (warning, skipped): `TEXCOORD_1` / extra FBX UV and colour sets, more than 4 joint
 influences, cameras, lights, FBX blend shapes, vertex caches and non-transform property animation,
 roughness / metalness textures of FBX materials. glTF morph targets are supported (below). Draco / meshopt geometry and KTX2 / WebP textures are an error when the file requires them
-(re-export without compression). Textures: PNG, JPEG, TGA, KTX2 (below).
+(re-export without compression). Textures: PNG, JPEG, TGA, BMP, KTX2 (below), BLP and DDS (classic formats, detected by content).
+
+**DDS textures** (W3D and any texture path; detected by content): DXT1–5, ATI1/BC4, ATI2/BC5
+(normal maps: blue rebuilt), DX10 headers, uncompressed bit-mask formats (A8R8G8B8, R5G6B5, L8, …);
+BC1 / BC3 / BC7 keep all mips compressed for the GPU, like KTX2. Signed and volume DDS are rejected.
 
 **KTX2 textures.** Any texture path (OBJ `map_*`, material overrides `texture` / `teamMask` /
 `normalMap` / `emissiveMap`, glTF images with a plain `source`) may point at a `.ktx2` file; it is
@@ -76,6 +99,41 @@ The parser (`engine/render/TextureCodec.h`) keeps the raw blocks of every mip in
 `Image::compressed` for direct GPU upload; until the RHI uploads them, level 0 is also decoded on
 the CPU into `Image::rgba`, so KTX2 textures already work everywhere, only uncompressed in VRAM.
 ASTC has no CPU decoder yet: ASTC files are skipped with a warning until the GPU path lands.
+
+### Converted formats (`modelconv`)
+
+Everything else that [assimp](https://github.com/assimp/assimp) imports — Blender `.blend` (up to
+2.7x), LightWave `.lwo` / `.lws` / `.lxo`, DirectX `.x`, MilkShape `.ms3d`, Quake `.md2` / `.md3` /
+`.md5mesh`, Valve `.smd`, Blitz3D `.b3d`, AC3D `.ac`, 3ds Max `.ase`, `.3mf`, `.off`, `.cob`, `.iqm`,
+`.irr`, `.ogex`, `.x3d`, `.pmx`, `.vrm` and more (`modelconv --formats` lists them) — is converted on
+the host into a glTF binary **sidecar** next to the source:
+
+```
+games/mygame/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
+games/mygame/models/ship.lwo.glb   <- what the game loads
+```
+
+`render::loadModel` reads `<path>.glb` for any path whose format the runtime doesn't read, so
+`rules.json` keeps the original name and the source stays the file you edit. Who converts:
+
+- **the editor**: when a type uses such a model, and every time the file is saved (Models window,
+  the same watcher as hot reload); the console shows `сконвертирована модель …` or the error;
+- **rtsbuild**: every build converts the game's convertible models that have no sidecar yet, ships
+  only the `.glb` and leaves the sources out of the pack (`модель models/ship.lwo: converted to …`);
+- **by hand / agents**: `modelconv models/ship.lwo` (one file; `--json` for scripts and MCP),
+  `modelconv --project games/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
+
+The converter triangulates, generates missing normals, keeps 4 bone weights per vertex, names
+unnamed clips (`Default`, `Clip1`, …), and rewrites texture paths from the authoring machine
+(`C:\art\ship.png`) to the file next to the model; textures are not embedded, they ship as they are
+(PNG, JPEG, TGA, BMP, KTX2, DDS). Meshes whose bones are missing from the hierarchy are exported
+unskinned (warning). Files assimp can't read are reported (`modelconv: models/old.blend: …`), never
+a crash: on Linux and macOS each conversion runs in a child process.
+
+`modelconv` needs assimp (BSD-3): configure the tools with `-DRTS_ASSIMP=ON` — an installed assimp
+(`find_package`) is used, otherwise v5.4.3 is downloaded from GitHub once (`RTS_FETCH_ASSIMP`).
+Without it (the default) the tools still build: sidecars you already have are used and packed, models
+without one are reported by rtsbuild. The game itself never links assimp.
 
 Conventions: Y up, glTF assets face +Z (`"forward"` changes it), one world unit = one map cell. Model
 files are read through the content system (loose files, `.rpak` packs, Android assets, web preload),

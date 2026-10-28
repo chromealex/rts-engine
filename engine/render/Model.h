@@ -1,6 +1,7 @@
 // Models: node hierarchy, meshes, PBR materials, textures, skins and animation clips.
 //
-// Sources: glTF 2.0 (.gltf / .glb), Wavefront OBJ (+ .mtl), FBX (.fbx), and procedural meshes built with
+// Sources: glTF 2.0 (.gltf / .glb), Wavefront OBJ (+ .mtl), FBX (.fbx), voxels (.vox, .vxl), PLY, STL,
+// 3DS, Collada (.dae), classic RTS formats (.mdx / .mdl, .3do, .w3d), and procedural meshes built with
 // MeshBuilder (the built-in shapes). Every source ends up in the same Model structure, so the
 // renderer, the animation system and the game view treat them identically.
 //
@@ -176,6 +177,31 @@ std::unique_ptr<Model> loadGltf(const std::string& path, const std::string& byte
 std::unique_ptr<Model> loadObj(const std::string& path, const std::string& text, const FileReader& read, std::vector<std::string>* warnings);
 // FBX (binary / ASCII) through ufbx; converted to Y up, right-handed, metres.
 std::unique_ptr<Model> loadFbx(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+// Voxels: MagicaVoxel .vox (scene graph -> nodes, palette colours as vertex colours) and
+// Tiberian Sun / Red Alert 2 .vxl (+ .hva section transforms next to it, + palette).
+std::unique_ptr<Model> loadVox(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> loadVxl(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+// Interchange: Stanford .ply (ASCII / binary), .stl (ASCII / binary), 3D Studio .3ds, Collada .dae.
+std::unique_ptr<Model> loadPly(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> loadStl(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> load3ds(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> loadDae(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+// Classic RTS formats, read from the user's own copy of a game (never committed): Warcraft III
+// .mdx / .mdl (+ .blp textures), Total Annihilation .3do, C&C Generals .w3d (+ .dds / .tga).
+std::unique_ptr<Model> loadMdx(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> loadMdl(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> load3do(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+std::unique_ptr<Model> loadW3d(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
+// Formats the runtime does not read (.blend, .lwo, .x, .ms3d, ...) are converted to glTF on the
+// host (tools/models/modelconv, assimp); the converted file sits next to the source as
+// "<file>.glb" and loadModel picks it up for the original path.
+bool isNativeModelFormat(const std::string& path);
+
+// Textures of classic formats (decodeImage detects them by magic): Blizzard BLP1 / BLP2 and DDS
+// (DXT1/3/5, BC4/5, uncompressed). Return false when the bytes are not that format or broken.
+bool decodeBlp(const std::string& bytes, Image& out);
+bool decodeDds(const std::string& bytes, Image& out);
+
 // PNG / JPEG / TGA from memory into RGBA8. Returns false on failure.
 bool decodeImage(const std::string& bytes, Image& out);
 
