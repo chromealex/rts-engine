@@ -1,6 +1,7 @@
 // Internal helpers shared by platform implementations.
 #pragma once
 #include "Platform.h"
+#include "engine/pack/Chunks.h"
 #include "engine/pack/Pack.h"
 #include <cstdio>
 #include <fstream>
@@ -23,6 +24,9 @@ struct State {
     pack::PackSet packs;   // mounted .rpak files, searched before loose content files
     std::string packsRoot; // content root the auto-mounted packs belong to
     bool packsInit = false;
+    pack::ChunkManager chunks;   // downloads of split-pack chunks
+    bool sourcesSet = false;     // setContentSources() overrides game.json
+    double contentWait = 30;     // native: seconds readContentFile waits for a file being downloaded
     bool textInput = false;   // startTextInput() called and not stopped
     TextInputArea textArea;
     float keyboardH = 0;      // logical points covered by the on-screen keyboard
@@ -45,6 +49,8 @@ inline bool readFileStd(const std::string& path, std::string& out) {
 using PackOpener = std::function<std::unique_ptr<pack::Source>(const std::string& path)>;
 void ensurePacks(const PackOpener& open);
 bool mountPackWith(const PackOpener& open, const std::string& path);
+// Queues the download of the pack chunk holding `rel`, if it isn't here yet.
+void requestChunkFor(const std::string& rel);
 // Per-platform on-screen keyboard (PlatformCommon.cpp has the no-op for desktops).
 void showSoftKeyboard(bool show, const TextInputArea& area);
 // Called by the platform when the OS keyboard changes (any thread on Android: queued, see there).
@@ -68,6 +74,7 @@ public:
     static constexpr double kMaxDt = 0.25;
     explicit FrameClock(bool fixedStep = false) : fixed_(fixedStep) {}
     double tick(double nowSeconds) {
+        pollContent();   // pack chunk downloads progress between frames
         double dt = started_ ? nowSeconds - last_ : 1.0 / 60.0;
         last_ = nowSeconds; started_ = true;
         if (fixed_) return 1.0 / 60.0;
