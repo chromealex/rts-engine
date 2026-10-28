@@ -94,7 +94,6 @@ uint64_t mapHash(const Json& map) {
 
 // ------------------------------------------------------------------ the pipeline
 
-bool generatePlanet(Ctx& c, Json& body, std::string* err);   // GenPlanet.cpp
 
 bool generateMap(const GenRequest& req, const game::Rules& rules, const Json& rulesJson, Json& map, std::string* err, const Json* visual) {
     Ctx c(rules, rulesJson);
@@ -106,10 +105,15 @@ bool generateMap(const GenRequest& req, const game::Rules& rules, const Json& ru
     c.np = req.players;
     c.shape = lower(c.pstr("shape", "classic"));
     c.model = rules.terrain.model;
-    if (c.shape == "planet") { if (err) *err = "generate: preset '" + req.preset + "' makes planets: use it in world.bodies[].generate"; return false; }
     // template map: player 1's kit + neutral object counts
     if (map["generate"]["templateData"].isObject()) c.tmpl = map["generate"]["templateData"];
     else { c.tmpl = map; c.tmpl.erase("generate"); }
+    if (c.shape == "planet") {   // whole planet map (GenWorld.cpp)
+        for (auto& l : map["generate"]["layerIds"].items()) c.layerIds.push_back(l.str());
+        if (visual) for (auto& l : (*visual)["layers"].items()) c.layerIds.push_back(l.getStr("id"));
+        if (c.layerIds.empty()) for (auto& l : rulesJson["terrain"]["layers"].items()) c.layerIds.push_back(l.getStr("id"));
+        return generateWorld(c, req, map, err);
+    }
     const Json& sz = c.P["size"];
     c.w = int(sz.isArray() ? sz[size_t(0)].integer(64) : map["size"][size_t(0)].integer(64));
     c.h = int(sz.isArray() ? sz[size_t(1)].integer(64) : map["size"][size_t(1)].integer(64));
