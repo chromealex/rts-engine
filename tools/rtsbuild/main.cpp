@@ -280,6 +280,10 @@ fs::path contentPack(Options& o) {
     rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
     std::vector<std::string> notes;
     addImports(o, w, rules, notes);
+    // Game folders produced by importers (tools/importers) carry converted third-party data.
+    try {
+        if (Json::parseFile((o.project / "game.json").string()).getBool("external")) w.markExternal();
+    } catch (const std::exception&) {}
     std::string err;
     if (w.addDirectory(game.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
         die(err);
