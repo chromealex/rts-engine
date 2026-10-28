@@ -686,7 +686,16 @@ if(MSVC)
 else()
     target_compile_options(rts_lua PRIVATE -w)
 endif()
-target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp)
+target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp
+    modules/rts/RtsScriptStd.cpp)
+# the engine's standard Lua library (rule-level mechanics) is compiled in: modules/rts/lua/*.lua
+file(GLOB RTS_STD_LUA CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/*.lua)
+set(RTS_STD_LUA_H ${CMAKE_CURRENT_BINARY_DIR}/gen/RtsStdLua.h)
+add_custom_command(OUTPUT ${RTS_STD_LUA_H}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${RTS_STD_LUA_H} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua -P ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/embed.cmake
+    DEPENDS ${RTS_STD_LUA} ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/embed.cmake VERBATIM)
+target_sources(rts_game PRIVATE ${RTS_STD_LUA_H})
+target_include_directories(rts_game PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen)
 target_link_libraries(rts_game PUBLIC rts_lua)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/ScriptOps.cpp)

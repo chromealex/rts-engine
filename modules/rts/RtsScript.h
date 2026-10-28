@@ -56,6 +56,8 @@ struct ScriptStore {
     struct Timer { uint32_t tick = 0; uint32_t seq = 0; std::string fn, arg; }; // game.after(); arg serialized
     std::vector<Timer> timers;                  // sorted by (tick, seq)
     uint32_t timerSeq = 0;
+    bool userScripts = false;                   // the game has its own simulation scripts: hashed only then (the
+                                                // standard library keeps its state in the C++ GameState)
     void hash(Hasher& h) const;
 };
 
@@ -78,7 +80,12 @@ std::string checkScriptSyntax(const std::string& name, const std::string& text, 
 // The API reference for agents and the editor (functions, events, rules) as JSON.
 Json scriptApiReference();
 
-// The simulation VM of one match (owned by RtsModule, created in setup only when there are scripts).
+// Systems implemented by the engine's standard Lua library (modules/rts/lua/<name>.lua defines
+// std.<name>(tick)); a game overrides one with scripts/std/<name>.lua.
+enum class StdFn : uint8_t { Victory, Count };
+
+// The simulation VM of one match (owned by RtsModule). It always runs the standard library;
+// game scripts (rules/map "scripts") are loaded on top.
 class ScriptEngine {
 public:
     explicit ScriptEngine(RtsModule& module);
@@ -89,6 +96,9 @@ public:
     // Create the VM and run every file (errors are logged, never thrown).
     void load(Simulation& sim, const Json& rules, const Json& map);
     void tick(Simulation& sim);   // the "scripts" system (last in the tick)
+    // A standard-library system (no instruction budget: engine code). Errors are logged once.
+    void callStd(Simulation& sim, StdFn fn);
+    bool hasUserScripts() const { return userScripts_; }
 
     // Entry points for data: trigger condition / action {"type": "script", "fn": ...} and the ability
     // effect {"type": "script", "fn": ...} (queued, runs in this tick's scripts phase).
@@ -107,6 +117,7 @@ private:
     std::unique_ptr<Impl> impl_;
     std::vector<ScriptLogEntry> log_;
     int errors_ = 0;
+    bool userScripts_ = false;
     friend struct Impl;
 };
 

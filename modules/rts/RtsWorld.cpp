@@ -1,16 +1,10 @@
 // World rules: vision with cliff levels, creep, control points / flags / regions, tickets,
-// neutral creeps and wanderers, scripted waves and lane waves, victory conditions.
+// neutral creeps and wanderers, scripted waves and lane waves (victory conditions: lua/victory.lua).
 #include "RtsInternal.h"
 #include <algorithm>
 
 namespace rts::game {
 using namespace detail;
-
-namespace {
-bool isWavePlayer(const GameState& gs, uint8_t slot) {
-    return std::find(gs.wavePlayers.begin(), gs.wavePlayers.end(), slot) != gs.wavePlayers.end();
-}
-} // namespace
 
 // ================================================================= vision
 
@@ -361,75 +355,6 @@ void RtsModule::sysWaves(Simulation& sim) {
     }
 }
 
-// ================================================================= victory
-
-void RtsModule::sysVictory(Simulation& sim) {
-    if (sim.tick() % 10 != 0) return;
-    World& w = sim.world();
-    GameState& gs = state(sim);
-    if (gs.winnerTeam >= 0) return;
-    const VictoryRules& v = gs.victory;
-    bool anyKeyType = false;
-    for (auto& t : rules_.types) if (t.key) anyKeyType = true;
-
-    for (auto& p : sim.players()) {
-        if (!p.alive || isWavePlayer(gs, p.slot)) continue;
-        bool has = false;
-        w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) {
-            if (has || o.player != p.slot || u.hp.raw <= 0) return;
-            const UnitType& t = rules_.types[u.type];
-            if (!t.countsForVictory) return;
-            const bool building = u.flags & kUnitUnderConstruction;
-            switch (v.mode) {
-            case VictoryMode::NoStructures: has = (t.structure && !building) || t.deploysTo != kNoType; break; // an MCV is a base
-            case VictoryMode::NoUnits: has = !t.structure; break;
-            case VictoryMode::KeyUnits: has = anyKeyType ? t.key : (t.structure && !building); break;
-            case VictoryMode::Score: has = v.keyLoses ? (anyKeyType ? t.key : t.structure) : true; break;
-            case VictoryMode::Territory: has = true; break;
-            default: has = true; break; // NoEntities, Tickets, Survive
-            }
-        });
-        if (v.mode == VictoryMode::Tickets && p.team < gs.tickets.size() && gs.tickets[p.team].raw <= 0) has = false;
-        if (v.mode == VictoryMode::Territory && rules_.territory.enabled) has = territoryOf(sim, p.slot) > 0; // out when no ground is left
-        if (!has) {
-            p.alive = false;
-            sim.emit({kEvPlayerDefeated, p.slot, kNullEntity, kNullEntity, 0, {}});
-        }
-    }
-
-    const uint32_t limit = uint32_t((v.surviveSeconds * int64_t(sim.tickRate())).toInt());
-    auto aliveTeams = [&]() {
-        std::vector<uint8_t> teams;
-        for (auto& p : sim.players())
-            if (p.alive && !isWavePlayer(gs, p.slot) && std::find(teams.begin(), teams.end(), p.team) == teams.end()) teams.push_back(p.team);
-        return teams;
-    };
-    if (v.mode == VictoryMode::Survive) {
-        auto teams = aliveTeams();
-        if (teams.empty()) {
-            // defenders fell: the wave side wins (or a draw if waves have no team of their own)
-            gs.winnerTeam = gs.wavePlayers.empty() ? 0 : teamOf(sim, gs.wavePlayers.front());
-        } else if (sim.tick() >= limit) {
-            gs.winnerTeam = teams.size() == 1 ? teams[0] : 0;
-        }
-    } else if (v.mode == VictoryMode::Territory && gs.territoryTotal > 0) {
-        // a team holding the required share of all claimable cells wins
-        std::vector<int> cells(256, 0);
-        for (auto& p : sim.players()) if (p.alive && !isWavePlayer(gs, p.slot)) cells[p.team] += territoryOf(sim, p.slot);
-        for (uint8_t t : aliveTeams())
-            if (Fixed::fromInt(cells[t]) >= v.share * gs.territoryTotal) { gs.winnerTeam = t; break; }
-    } else if (v.mode == VictoryMode::Score && sim.tick() >= limit) {
-        auto teams = aliveTeams();
-        int best = -1;
-        Fixed bestScore{};
-        bool tie = false;
-        for (uint8_t t : teams) {
-            Fixed s = t < gs.score.size() ? gs.score[t] : Fixed{};
-            if (best < 0 || s > bestScore) { best = t; bestScore = s; tie = false; }
-            else if (s == bestScore) tie = true;
-        }
-        gs.winnerTeam = best < 0 || tie ? 0 : best;
-    }
-}
+// victory: modules/rts/lua/victory.lua (standard Lua library, std.victory)
 
 } // namespace rts::game

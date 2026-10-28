@@ -5800,10 +5800,11 @@ static bool scriptLogHas(Simulation& sim, const std::string& text, bool error = 
 }
 static Fixed gold(Simulation& sim, uint8_t p) { return mod(sim).state(sim).players[p].stock[size_t(mod(sim).rules().findResource("gold"))]; }
 
-TEST(script_no_scripts_no_vm) {
+TEST(script_no_scripts_no_vm) {   // only the standard library: no "scripts" system, ScriptStore not hashed
     auto sim = makeSim(kSkirmish, "maps/valley.json", 3);
-    CHECK(mod(*sim).scripts() == nullptr);
-    CHECK(sim->world().resource<game::ScriptStore>() == nullptr);
+    CHECK(mod(*sim).scripts() && !mod(*sim).scripts()->hasUserScripts());
+    CHECK(sim->world().resource<game::ScriptStore>() && !sim->world().resource<game::ScriptStore>()->userScripts);
+    CHECK(mod(*sim).scripts()->errorCount() == 0);
 }
 
 TEST(script_syntax_and_float_literals) {
@@ -5997,7 +5998,7 @@ TEST(script_view_scripts) {
     Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
     Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
     sim.setup(rules, map);
-    CHECK(mod(sim).scripts() == nullptr);                   // view scripts alone: no simulation VM
+    CHECK(!mod(sim).scripts()->hasUserScripts());           // view scripts alone: no simulation scripts
     const uint64_t before = sim.checksum();
     game::ViewScripts vs;
     CHECK(vs.load(sim, rules, map, 1));
