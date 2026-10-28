@@ -321,6 +321,13 @@ void registerTerrainDetailOps(Workspace& ws) {
 
 // ------------------------------------------------------------------ helpers used by TerrainOps / validate
 
+void paintDetailMaterial(Workspace& ws, float x, float z, float radius, int layer, float strength, float hardness) {
+    ensureDetail(ws, 4);
+    ensureSplat(ws);
+    paintSplat(ws.map.data, x, z, radius, std::clamp(layer, 0, 3), strength, hardness);
+    ws.map.touched();
+}
+
 bool detailSculpt(Workspace& ws, Sculpt op, const std::vector<std::pair<float, float>>& pts, float radius, float strength, float hardness,
                   uint32_t seed, const std::string& stampName, float angle, int& x0, int& y0, int& x1, int& y1, std::string* err) {
     MapData& d = ws.map.data;
