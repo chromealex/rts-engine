@@ -19,6 +19,18 @@ namespace rts::render::shaders {
     "layout(std140) uniform " BLOCK " { vec4 l_map; vec4 l_info; vec4 l_cloud; vec4 l_sky; vec4 l_env; vec4 l_pos[8]; vec4 l_col[8]; vec4 l_spot[8]; };\n" \
     "uniform mediump sampler2D " TEX ";\n" \
     "float nightGlow() { return l_info.w; }\n" \
+    "/* unlit (2D) shaders: day/night tint and the light map at a world point; a block that was never */\n" \
+    "/* bound (map range != 4) leaves sprites as they were */\n" \
+    "bool lightsBound() { return abs(l_info.y - 4.0) < 0.01; }\n" \
+    "vec3 unlitTint() { return lightsBound() ? l_env.yzw : vec3(1.0); }\n" \
+    "vec3 mapLight(vec3 wpos) {\n" \
+    "    if (!lightsBound() || l_map.w < 0.5) return vec3(0.0);\n" \
+    "    vec2 uv = (wpos.xz - l_map.xy) * l_map.z;\n" \
+    "    vec2 e = min(uv, 1.0 - uv);\n" \
+    "    float fade = clamp(min(e.x, e.y) * 7.0, 0.0, 1.0);\n" \
+    "    if (l_info.z > 0.5) uv.y = 1.0 - uv.y;\n" \
+    "    return texture(" TEX ", uv).rgb * (l_info.y * fade);\n" \
+    "}\n" \
     "float cloudShade(vec3 p) { /* drifting cloud shadows on the sun: a few sines, no texture */\n" \
     "    if (l_sky.x <= 0.0) return 1.0;\n" \
     "    vec2 q = p.xz * l_cloud.z + l_cloud.xy;\n" \
@@ -96,6 +108,16 @@ namespace rts::render::shaders {
 // each fragment function's signature).
 #define RTS_MSL_LIGHTS \
     "struct LightU { float4 map; float4 info; float4 cloud; float4 sky; float4 env; float4 pos[8]; float4 col[8]; float4 spot[8]; };\n" \
+    "static bool lightsBound(constant LightU& l) { return abs(l.info.y - 4.0) < 0.01; }\n" \
+    "static float3 unlitTint(constant LightU& l) { return lightsBound(l) ? l.env.yzw : float3(1.0); }\n" \
+    "static float3 mapLight(constant LightU& l, texture2d<float> lm, sampler ls, float3 wpos) {\n" \
+    "    if (!lightsBound(l) || l.map.w < 0.5) return float3(0.0);\n" \
+    "    float2 uv = (wpos.xz - l.map.xy) * l.map.z;\n" \
+    "    float2 e = min(uv, 1.0 - uv);\n" \
+    "    float fade = clamp(min(e.x, e.y) * 7.0, 0.0, 1.0);\n" \
+    "    if (l.info.z > 0.5) uv.y = 1.0 - uv.y;\n" \
+    "    return lm.sample(ls, uv).rgb * (l.info.y * fade);\n" \
+    "}\n" \
     "static float cloudShade(constant LightU& l, float3 p) {\n" \
     "    if (l.sky.x <= 0.0) return 1.0;\n" \
     "    float2 q = p.xz * l.cloud.z + l.cloud.xy;\n" \
