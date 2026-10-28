@@ -188,8 +188,9 @@ jobs:
         with: { name: game-web, path: "build/web/index.*\nweb-smoke/" }
 
   # ---------------------------------------------------------------- Native plugins (docs/plugins.md)
-  # Compiles every plugin against the real SDKs: Gradle (Play Billing, RuStore Pay, AdMob, Yandex Ads)
-  # and CocoaPods + Xcode (StoreKit, AdMob, Yandex Ads). Test ad ids only.
+  # Compiles every plugin against the real SDKs: Gradle (Play Billing, RuStore Pay, AdMob, Yandex Ads,
+  # AppLovin MAX, ironSource LevelPlay) and CocoaPods + Xcode (StoreKit, AdMob, Yandex Ads, AppLovin,
+  # ironSource). Test ad ids only. Then checks that unselected plugins never get into a build.
   plugins-android:
     name: Plugins (Android SDKs)
     runs-on: ubuntu-24.04
@@ -207,6 +208,8 @@ jobs:
           python3 .github/scripts/plugins-testgame.py build/plugins-game
           build/host/rtsbuild --project build/plugins-game --target android --out build/plugins-dist --config Debug
           ls -la build/plugins-dist/android/*.apk
+      - name: Only selected plugins get into a build
+        run: python3 .github/scripts/check-plugin-isolation.py build/host/rtsbuild build/isolation
       - name: Yandex Games plugin protocol
         run: node plugins/yandex-games/web/test.mjs
 
@@ -220,7 +223,7 @@ jobs:
           cmake -S . -B build/host -DCMAKE_BUILD_TYPE=Release -DRTS_BUILD_CLIENT=OFF -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF
           cmake --build build/host --target rtsbuild
           python3 .github/scripts/plugins-testgame.py build/plugins-game
-          build/host/rtsbuild --project build/plugins-game --target ios --out build/plugins-dist --plugins appstore,admob,yandex-ads
+          build/host/rtsbuild --project build/plugins-game --target ios --out build/plugins-dist --plugins appstore,admob,yandex-ads,applovin,ironsource
 
   # ---------------------------------------------------------------- Cross-platform determinism
   determinism:

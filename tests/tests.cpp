@@ -5037,6 +5037,8 @@ TEST(plugin_bridge_calls_replies_events) {
     auto echo = std::make_shared<EchoPlugin>();
     plugins::registerPlugin("echo", echo);
     CHECK(plugins::available("echo") && !plugins::available("no-such-plugin"));
+    // desktop mocks exist only when the game lists them (a shipped build must not offer fake purchases)
+    if (!std::getenv("RTS_MOCK_PLUGINS")) CHECK(!plugins::available("mock-store") && !plugins::available("mock-ads"));
     std::vector<std::string> got;
     plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
     CHECK(got.empty()); // replies never arrive inside call()
