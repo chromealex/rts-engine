@@ -6028,6 +6028,188 @@ TEST(icons_generate_platform_sets) {
     fs::remove_all(dir);
 }
 
+// ---------------- Planets: surface, world block, orbit layer, transit ----------------
+static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/games/planets";
+
+TEST(planet_surface_offsets_and_hash_buckets) {
+    using namespace rts::game;
+    CubeSphere s(12);
+    // offsets inside a face are exact; across seams they agree with neighbour steps
+    int bad = 0;
+    for (int id = 0; id < s.cellCount(); ++id) {
+        for (int k = 0; k < 4; ++k) {
+            static const int d[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            if (s.offset(id, d[k][0], d[k][1]) != s.neighbor(id, d[k][0], d[k][1])) ++bad;
+        }
+        // a 2-step walk ends near (2 cells) the start, never on itself
+        for (int dx = -2; dx <= 2; ++dx) {
+            const int o = s.offset(id, dx, 0);
+            if (o < 0) continue;
+            const Fixed arc = sphereArcTurns(s.cellCenterDir(id), s.cellCenterDir(o));
+            if ((dx != 0 && o == id) || arc > Fixed::fromRatio(3 * (dx < 0 ? -dx : dx) + 1, 4 * 12 * 2)) ++bad;
+        }
+    }
+    CHECK(bad == 0);
+    Surface S;
+    BodyDef b; b.id = "p"; b.radius = Fixed::fromInt(20); b.faceSize = 12;
+    S.bodies = {b};
+    S.build();
+    CHECK(S.W == 12 && S.H == 72 && S.bucketCount() == 6 * 3 * 3);
+    // every cell centre maps back to its cell, and lies on body 0 at radius
+    int bad2 = 0;
+    for (int c = 0; c < S.W * S.H; ++c) {
+        const Vec3 p = S.cellCenter(c);
+        if (S.cellAt(p) != c || S.bodyAt(p) != 0 || fxAbs(S.altitude(p)) > Fixed::fromRatio(1, 100)) ++bad2;
+        std::vector<int32_t> near;
+        S.bucketsAround(p, Fixed::fromInt(3), near);
+        if (std::find(near.begin(), near.end(), S.bucketOf(p)) == near.end()) ++bad2;
+    }
+    CHECK(bad2 == 0);
+    // ground distance is the chord, symmetric
+    const Vec3 a = S.cellCenter(S.gridCell(0, 4, 6, 6)), c = S.cellCenter(S.gridCell(0, 5, 6, 6));
+    CHECK(S.groundDist(a, c) == S.groundDist(c, a) && S.groundDist(a, c) > Fixed::fromInt(39));
+    CHECK(!Surface::onSphere(Vec3{Fixed::fromInt(2048), Fixed{}, Fixed::fromInt(2048)}) && Surface::onSphere(a));
+}
+
+TEST(planet_world_loads_and_paths_cross_seams) {
+    auto sim = makeSim(kPlanets, "maps/two_worlds.json", 1);
+    auto& m = mod(*sim);
+    const game::Surface* S = m.surface(*sim);
+    CHECK(S != nullptr);
+    if (!S) return;
+    CHECK(S->bodies.size() == 3 && S->findBody("terra") == 1 && S->startBody == 1);
+    CHECK(S->bodies[1].hasSurface() && !S->bodies[0].hasSurface());
+    // commanders on opposite faces of terra
+    Entity c1 = findType(*sim, "commander", 1), c2 = findType(*sim, "commander", 2);
+    CHECK(c1.valid() && c2.valid());
+    const Vec3 p1 = sim->world().get<Transform>(c1).pos, p2 = sim->world().get<Transform>(c2).pos;
+    CHECK(m.bodyOf(*sim, p1) == 1 && m.bodyOf(*sim, p2) == 1);
+    // ground path from one pole to the other: crosses at least two face seams, every step a neighbour
+    auto& g = m.state(*sim).grid;
+    std::vector<Vec3> path;
+    CHECK(g.findPath(p1, p2, game::kLayerGround, path, 400000));
+    CHECK(path.size() >= 2);
+    if (!path.empty()) CHECK(path.back() == p2);
+    // the route (waypoints joined by great-circle chords) visits at least one face besides the two poles
+    std::vector<int> faces;
+    Vec3 prev = p1;
+    for (auto& p : path) {
+        for (int k = 1; k <= 16; ++k) {
+            int b, f, x, y;
+            S->cellFace(S->cellAt(prev + (p - prev) * Fixed::fromRatio(k, 16)), b, f, x, y);
+            if (std::find(faces.begin(), faces.end(), f) == faces.end()) faces.push_back(f);
+        }
+        prev = p;
+    }
+    CHECK(faces.size() >= 3);
+    // a move order gets the commander around the planet
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {c1}; mv.point = S->cellCenter(S->gridCell(1, 0, 12, 12));
+    sim->submit(mv);
+    const Fixed before = S->groundDist(sim->world().get<Transform>(c1).pos, mv.point);
+    for (int i = 0; i < 20 * 15; ++i) sim->step();
+    const Vec3 now = sim->world().get<Transform>(c1).pos;
+    CHECK(S->groundDist(now, mv.point) < before - Fixed::fromInt(10));
+    CHECK(fxAbs(S->altitude(now) - S->heightAt(now)) < Fixed::fromRatio(1, 20));   // stays on the surface
+    // body orbits: terra moves around the sun, luna around terra, positions are Fixed and periodic
+    const Vec3 t0 = m.bodyWorldPosition(*sim, 1, 0), t1 = m.bodyWorldPosition(*sim, 1, 20 * 1200);
+    CHECK(fxAbs((t0 - t1).length()) < Fixed::fromRatio(1, 2));
+    CHECK(fxAbs((m.bodyWorldPosition(*sim, 2, 777) - m.bodyWorldPosition(*sim, 1, 777)).length() - Fixed::fromInt(60)) < Fixed::fromRatio(1, 4));
+    // vision: own commander's cell is visible, the enemy pole is not
+    int b, f, x, y;
+    S->cellFace(S->cellAt(now), b, f, x, y);
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 2);
+    S->cellFace(S->cellAt(p2), b, f, x, y);
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 0);
+}
+
+TEST(planet_orbit_units_and_transit) {
+    auto sim = makeSim(kPlanets, "maps/two_worlds.json", 2);
+    auto& m = mod(*sim);
+    const game::Surface* S = m.surface(*sim);
+    if (!S) { CHECK(false); return; }
+    const int gun = m.rules().findType("gunship");
+    CHECK(gun >= 0 && (m.rules().types[size_t(gun)].layer & game::kLayerOrbit));
+    Entity c1 = findType(*sim, "commander", 1);
+    const Vec3 home = sim->world().get<Transform>(c1).pos;
+    Entity g1 = m.spawn(*sim, uint16_t(gun), 1, home);
+    const Vec3 gp = sim->world().get<Transform>(g1).pos;
+    CHECK(fxAbs((gp - game::Surface::anchor(1)).length() - S->bodies[1].shellRadius()) < Fixed::fromRatio(1, 50));   // on the shell
+    // can't transit to its own body or a star; can to luna
+    CHECK(!m.canTransit(*sim, g1, 1) && !m.canTransit(*sim, g1, 0) && m.canTransit(*sim, g1, 2));
+    Command t; t.player = 1; t.type = game::kCmdTransit; t.units = {g1}; t.param = 2;
+    sim->submit(t);
+    for (int i = 0; i < 3; ++i) sim->step();   // input delay
+    CHECK(sim->world().has<game::Transit>(g1));
+    const auto tx = sim->world().get<game::Transit>(g1);
+    CHECK(tx.arrive > tx.depart && (sim->world().get<game::Unit>(g1).flags & game::kUnitInTransit));
+    // halfway: the world position lies between the two shell points
+    const Vec3 mid = m.worldPosition(*sim, g1, (tx.depart + tx.arrive) / 2);
+    CHECK(fxAbs((mid - (tx.fromWorld + tx.toWorld) * Fixed::fromRatio(1, 2)).length()) < Fixed::fromInt(3));   // within a tick of travel
+    while (sim->tick() <= tx.arrive) sim->step();
+    CHECK(!sim->world().has<game::Transit>(g1));
+    const Vec3 arr = sim->world().get<Transform>(g1).pos;
+    CHECK(m.bodyOf(*sim, arr) == 2);
+    CHECK(fxAbs((arr - game::Surface::anchor(2)).length() - S->bodies[2].shellRadius()) < Fixed::fromRatio(1, 50));
+    // an orbit unit sees the surface below it
+    int b, f, x, y;
+    S->cellFace(S->cellAt(arr), b, f, x, y);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(m.cellVision(*sim, 1, b, f, x, y) == 2);
+    // ground weapons without "orbit" can't hit it, the defender's can
+    const auto& peewee = m.rules().types[size_t(m.rules().findType("peewee"))];
+    const auto& defender = m.rules().types[size_t(m.rules().findType("defender"))];
+    CHECK(!game::layerHit(peewee.weapons[0].targets, m.rules().types[size_t(gun)].layer));
+    CHECK(game::layerHit(defender.weapons[0].targets, m.rules().types[size_t(gun)].layer));
+}
+
+TEST(planet_matches_deterministic_and_replay) {
+    auto run = [](uint64_t seed, std::vector<Command>* rec, const std::vector<Command>* play) {
+        auto sim = makeSim(kPlanets, "maps/two_worlds.json", seed);
+        game::RtsAI a(1, seed), b(2, seed);
+        if (play) for (const Command& c : *play) sim->submit(c);   // recorded with their execution ticks
+        for (int t = 0; t < 20 * 90; ++t) {
+            if (!play) { a.update(*sim); b.update(*sim); }
+            sim->step();
+        }
+        if (rec) *rec = sim->executedCommands();
+        return sim->checksum();
+    };
+    std::vector<Command> cmds;
+    const uint64_t c1 = run(3, &cmds, nullptr), c2 = run(3, nullptr, nullptr);
+    CHECK(c1 == c2);
+    CHECK(!cmds.empty());
+    CHECK(run(3, nullptr, &cmds) == c1);   // replaying the recorded commands gives the same state
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/MapDoc.h"
+TEST(planet_mapdoc_round_trip_and_validate) {
+    editor::MapDoc doc;
+    std::string err;
+    CHECK(doc.load(kPlanets + "/maps/two_worlds.json", &err));
+    CHECK(doc.data.planet() && doc.data.bodies.size() == 3);
+    const Json orig = Json::parseFile(kPlanets + "/maps/two_worlds.json");
+    const Json back = doc.toJson();
+    CHECK(back["world"]["bodies"][size_t(1)]["terrain"]["corners"] == orig["world"]["bodies"][size_t(1)]["terrain"]["corners"]);
+    CHECK(back["entities"][size_t(0)]["at"] == orig["entities"][size_t(0)]["at"]);
+    CHECK(back["players"][size_t(0)]["start"] == orig["players"][size_t(0)]["start"]);
+    CHECK(!back.has("size") && !back.has("terrain"));
+    const Json rulesJson = Json::parseFile(kPlanets + "/rules.json");
+    const game::Rules rules = game::loadRules(rulesJson);
+    auto issues = doc.validate(rules, rulesJson);
+    int errors = 0;
+    for (auto& i : issues) if (i.error) { ++errors; std::printf("    issue: %s\n", i.text.c_str()); }
+    CHECK(errors == 0);
+    // a seam mismatch is reported, a bad position is an error
+    doc.data.bodies[1].corners[0] += 5;
+    doc.data.entities[0].at.set("face", Json::number(int64_t(9)));
+    issues = doc.validate(rules, rulesJson);
+    bool seam = false, pos = false;
+    for (auto& i : issues) { seam |= !i.error && i.text.find("швах") != std::string::npos; pos |= i.error && i.text.find("0..5") != std::string::npos; }
+    CHECK(seam && pos);
+}
+#endif
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
