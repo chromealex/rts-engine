@@ -42,7 +42,15 @@ void GameClient::fitPlanetCamera() {
     char id[64] = {};
     if (const char* e = std::getenv("RTS_PLANET_CAM")) {
         std::sscanf(e, "%f,%f,%63s", &dist, &pitchDeg, id);
-        if (id[0] && W.find(id) >= 0) { body = W.find(id); dir = {0, 0, 0}; }
+        if (id[0] && W.find(id) >= 0) { // look at the first unit on that body (or the face 2 centre)
+            body = W.find(id); dir = {0, 0, 0};
+            int bestScore = -1;   // own units first, orbit units preferred
+            for (auto& o : scene_.objects) {
+                if (o.body != body || o.isProjectile || !o.visible) continue;
+                const int score = (o.owner == me ? 2 : 0) + ((rules_.types[o.type].layer & kLayerOrbit) ? 1 : 0);
+                if (score > bestScore) { bestScore = score; dir = o.pos; }
+            }
+        }
     }
     pc.reset(W, body, view_.planets().surface(body), scene_.seconds, dir);
     if (dist > 0) pc.distance = dist;
