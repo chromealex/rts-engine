@@ -540,7 +540,26 @@ def spellbunkers():
     write("spellbunkers", m, "rune_field")
 
 
-GAMES = {f.__name__: f for f in [frostcrown, starfall, ironfront, ambersands, metaltide, fourages, holdtheline,
+def shroomwars():
+    # Mushroom Wars 2: each side brings a hero (four skills), villages / towers / forges with levels
+    kenor = ["tower_defense", "explosive_shells", "close_ranks", "bomb"]
+    marty = ["energy_shield", "fast_growth", "freeze", "ultimate_charge"]
+    m = Map("Twin Valleys", 48, 28, duel(a={"loadout": kenor}, b={"loadout": marty}))
+    m.border()
+    m.rect(22, 4, 4, 5, '#')
+    m.disc(14, 22, 1.5, '#')
+    m.ent("village3", 1, [5, 14], garrison=25)
+    m.ent("village1", 1, [9, 22], garrison=6)
+    m.ent("village1", 0, [13, 6], garrison=8)
+    m.ent("village2", 0, [16, 14], garrison=12)
+    m.ent("tower1", 0, [11, 14], garrison=10)
+    m.ent("forge", 0, [20, 22], garrison=10)
+    m.ent("village5", 0, [24, 14], garrison=30, sym=False)
+    m.ent("tower2", 0, [24, 24], garrison=15, sym=False)
+    write("shroomwars", m, "twin_valleys")
+
+
+GAMES = {f.__name__: f for f in [shroomwars, frostcrown, starfall, ironfront, ambersands, metaltide, fourages, holdtheline,
                                    lastcolony, clanlands, flagsectors, laneclash, underlord, borderrush, hearthhaul, sporelanes,
                                    spellbunkers]}
 
