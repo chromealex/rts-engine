@@ -696,7 +696,7 @@ endif()
 target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
 # terrain / map generator (agent-terrain-gen): integer noise, erosion, biomes, fair starts, presets, planets
 target_sources(rts_game PRIVATE modules/rts/gen/GenNoise.cpp modules/rts/gen/GenField.cpp modules/rts/gen/GenTerrain.cpp
-    modules/rts/gen/GenContent.cpp modules/rts/gen/GenPlanet.cpp modules/rts/gen/MapGen.cpp)
+    modules/rts/gen/GenContent.cpp modules/rts/gen/GenPlanet.cpp modules/rts/gen/GenWorld.cpp modules/rts/gen/MapGen.cpp)
 add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
 target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp modules/rts/view/RtsSpriteShadow.cpp)
