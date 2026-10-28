@@ -84,9 +84,19 @@ void Simulation::step() {
         world_.flush();
     }
 
-    for (auto& s : systems_) {
-        s.fn(*this);
-        world_.flush();
+    if (profClock_) {
+        profNs_.resize(systems_.size(), 0);
+        for (size_t i = 0; i < systems_.size(); ++i) {
+            const int64_t t0 = profClock_();
+            systems_[i].fn(*this);
+            world_.flush();
+            profNs_[i] += profClock_() - t0;
+        }
+    } else {
+        for (auto& s : systems_) {
+            s.fn(*this);
+            world_.flush();
+        }
     }
     ++tick_;
 }
