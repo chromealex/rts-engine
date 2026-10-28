@@ -1,0 +1,14 @@
+// fourages — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Age of Empires II: four resources, villagers, research and rock-paper-scissors units.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "When the berries run out, build farms around a mill — endless food.",
+  "howto.step1": "Villagers gather food (berries, farms), wood (oaks), gold and stone.",
+  "howto.step2": "Put a mill, lumber camp and mining camp next to resources — shorter trips, faster income. Houses raise population.",
+  "howto.step3": "The town center trains villagers and shoots at raiders.",
+  "howto.step4": "Barracks: militia, spearmen, ram; archery range: archers; stable: knights. Blacksmith and range research upgrades.",
+  "howto.step5": "Spearmen beat knights, knights beat archers, archers beat infantry; rams break buildings."
+}

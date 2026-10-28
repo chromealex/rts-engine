@@ -132,6 +132,7 @@ void EffectParser::delivery(const std::string& where, const Json& j, DeliveryDef
     else if (!mo.empty() && mo != "static") fail(where, "motion must be static, toward, lane, wander or follow");
     d.maxTriggers = int(j.getInt("maxTriggers", 0));
     d.sight = j.getFx("sight");
+    d.blocksVision = j.getFx("blocksVision");
     if (const Json& tp = j["teleportTo"]; tp.isArray()) { d.teleport = true; d.teleportOffset = {tp[0].fx(), Fixed{}, tp[1].fx()}; }
     if (j.has("deathSpawn")) d.deathSpawn = typeRef(where + " deathSpawn", j.getStr("deathSpawn"));
     d.jumps = int(j.getInt("jumps", 0));

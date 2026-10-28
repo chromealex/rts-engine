@@ -1,0 +1,14 @@
+// frostcrown — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Warcraft III: a hero with abilities, neutral creep camps and upkeep.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "A small army with a strong hero beats a crowd: upkeep eats your income.",
+  "howto.step1": "Peons mine gold and chop lumber in the pine woods; the great hall trains more peons.",
+  "howto.step2": "Burrows raise supply. Upkeep: above 30 supply income drops to 70%, above 55 to 40%.",
+  "howto.step3": "The war mill trains grunts, hunters and demolishers — demolishers have an area Barrage.",
+  "howto.step4": "The altar summons the hero, the Blademaster. He levels up; abilities (Whirlwind, Chain Lightning, Rejuvenation, Bloodlust, War Cry) are card buttons.",
+  "howto.step5": "Trolls and ogres are neutral camps: kill them with the hero for experience."
+}

@@ -107,6 +107,7 @@ struct DeliveryDef {
     AreaMotion motion = AreaMotion::Static;
     int maxTriggers = 0;                // contact areas: uses (mines)
     Fixed sight{};                      // reveals this radius to the owner
+    Fixed blocksVision{};               // smoke: a sight blocker of this height over the area (fogOfWar.lineOfSight)
     bool teleport = false;              // portal: units entering are moved to the second point
     Vec3 teleportOffset{};
     uint16_t deathSpawn = 0xFFFF;       // units dying inside spawn this type for the caster (souls)
