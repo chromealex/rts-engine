@@ -113,15 +113,11 @@ private:
         if (p >= e) r_.fail("unexpected end of file");
         const char* s = p;
         while (p < e && !std::isspace(static_cast<unsigned char>(*p))) ++p;
-        double v = 0;
-        auto res = std::from_chars(s, p, v);
-        if (res.ec != std::errc() || res.ptr != p) {
-            // "nan", "inf" or a leading '+': fall back to strtod on a copy
-            std::string tok(s, p);
-            char* end = nullptr;
-            v = std::strtod(tok.c_str(), &end);
-            if (end == tok.c_str()) r_.fail("bad number '" + tok.substr(0, 20) + "'");
-        }
+        // strtod on a copy: floating-point std::from_chars needs macOS 26 / iOS 26 in Apple's libc++
+        std::string tok(s, p);
+        char* end = nullptr;
+        double v = std::strtod(tok.c_str(), &end);
+        if (end == tok.c_str()) r_.fail("bad number '" + tok.substr(0, 20) + "'");
         r_.seek(size_t(p - b_.data()));
         return v;
     }
