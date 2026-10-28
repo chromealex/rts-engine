@@ -1,6 +1,7 @@
 // Android: NativeActivity (android_native_app_glue) + EGL + OpenGL ES 3.
 // Content is packed into the APK under assets/content and read through AAssetManager.
 #include "../PlatformCommon.h"
+#include "../Plugins.h"
 #include "../../gfx/Gfx.h"
 
 #include <EGL/egl.h>
@@ -318,6 +319,42 @@ jstring toJString(JNIEnv* env, const std::string& s) {
 }
 } // namespace
 
+// ---- native plugins: Java classes registered in the manifest (RtsActivity / RtsPlugin.java)
+namespace {
+struct AndroidPluginBackend : plugins::detail::Backend {
+    bool available(const std::string& name) override {
+        JNIEnv* env = gameThreadEnv();
+        if (!env) return false;
+        jobject act = g_app->activity->clazz;
+        jclass cls = env->GetObjectClass(act);
+        jmethodID m = env->GetMethodID(cls, "pluginAvailable", "(Ljava/lang/String;)Z");
+        jstring js = toJString(env, name);
+        bool r = m && env->CallBooleanMethod(act, m, js);
+        if (env->ExceptionCheck()) { env->ExceptionClear(); r = false; }
+        env->DeleteLocalRef(js);
+        env->DeleteLocalRef(cls);
+        return r;
+    }
+    void call(const std::string& name, const std::string& method, const std::string& args, uint64_t id) override {
+        JNIEnv* env = gameThreadEnv();
+        if (!env) { plugins::detail::completeCall(id, false, "no JNI environment"); return; }
+        jobject act = g_app->activity->clazz;
+        jclass cls = env->GetObjectClass(act);
+        jmethodID m = env->GetMethodID(cls, "pluginCall", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V");
+        if (!m) {
+            if (env->ExceptionCheck()) env->ExceptionClear();
+            plugins::detail::completeCall(id, false, "activity has no pluginCall: not RtsActivity");
+        } else {
+            jstring a = toJString(env, name), b = toJString(env, method), c = toJString(env, args);
+            env->CallVoidMethod(act, m, a, b, c, jlong(id));
+            if (env->ExceptionCheck()) { env->ExceptionClear(); plugins::detail::completeCall(id, false, "pluginCall threw"); }
+            env->DeleteLocalRef(a); env->DeleteLocalRef(b); env->DeleteLocalRef(c);
+        }
+        env->DeleteLocalRef(cls);
+    }
+} g_pluginBackend;
+} // namespace
+
 std::string clipboardText() {
     JNIEnv* env = gameThreadEnv();
     if (!env) return state().clipboard;
@@ -415,6 +452,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 
     g_app->onAppCmd = onCmd;
     g_app->onInputEvent = onInput;
+    plugins::detail::setBackend(&g_pluginBackend);
     while (!S.quit) {
         int events = 0;
         android_poll_source* src = nullptr;
@@ -464,6 +502,12 @@ JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeSafeArea(JN
     rts::platform::TextMsg m{rts::platform::TextMsg::SafeArea, {}};
     m.inset[0] = l; m.inset[1] = t; m.inset[2] = r; m.inset[3] = b;
     rts::platform::pushText(std::move(m));
+}
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativePluginReply(JNIEnv* env, jclass, jlong id, jboolean ok, jstring data) {
+    rts::plugins::detail::completeCall(uint64_t(id), ok != JNI_FALSE, rts::platform::utf8(env, data));
+}
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativePluginEvent(JNIEnv* env, jclass, jstring plugin, jstring event, jstring data) {
+    rts::plugins::emit(rts::platform::utf8(env, plugin), rts::platform::utf8(env, event), rts::platform::utf8(env, data));
 }
 JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeTextInputEnded(JNIEnv*, jclass) {
     rts::platform::pushText({rts::platform::TextMsg::Ended, {}});
