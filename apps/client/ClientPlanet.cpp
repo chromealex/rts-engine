@@ -6,6 +6,8 @@
 //   R / F (PageUp / PageDown): camera pitch
 #include "GameClient.h"
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace rts::client {
 
@@ -17,6 +19,29 @@ bool GameClient::objectScreen(const SceneObject& o, float lift, float2& sp) cons
     const float W = platform::windowWidth(), H = platform::windowHeight();
     if (!planet()) return cam_.worldToScreen({o.pos.x, lift, o.pos.z}, W, H, sp);
     return cam_.worldToScreen(view_.objectViewPos(o, lift), W, H, sp);
+}
+
+// Start over the player's base on the start body. RTS_PLANET_CAM="distance[,pitch deg[,body id]]"
+// overrides the start view (screenshots of the planet / system zoom levels).
+void GameClient::fitPlanetCamera() {
+    PlanetCamera& pc = view_.planetCamera();
+    const PlanetWorld& W = view_.planets().world();
+    int body = W.start;
+    float3 dir{0, 0, 0};
+    for (auto& o : scene_.objects) if (o.owner == human_ && rules_.types[o.type].structure) {
+        int b; float3 local;
+        if (view_.flatToBody(o.pos, b, local)) { body = b; dir = local; }
+        break;
+    }
+    float dist = -1, pitchDeg = -1;
+    char id[64] = {};
+    if (const char* e = std::getenv("RTS_PLANET_CAM")) {
+        std::sscanf(e, "%f,%f,%63s", &dist, &pitchDeg, id);
+        if (id[0] && W.find(id) >= 0) { body = W.find(id); dir = {0, 0, 0}; }
+    }
+    pc.reset(W, body, view_.planets().surface(body), scene_.seconds, dir);
+    if (dist > 0) pc.distance = dist;
+    if (pitchDeg > 0) pc.pitch = pitchDeg * 3.14159265f / 180.0f;
 }
 
 void GameClient::planetCameraKeys(double dt) {

@@ -224,7 +224,7 @@ void GameClient::startMatch(size_t idx) {
 }
 
 void GameClient::fitCamera() {
-    if (planet()) { view_.planetCamera().reset(view_.planets().world(), view_.planets().world().start, view_.planets().surface(view_.planets().world().start), scene_.seconds); return; }
+    if (planet()) { fitPlanetCamera(); return; }
     auto& g = mod().state(*sim_).grid;
     float3 c{g.w * 0.5f, 0, g.h * 0.5f};
     bool small = std::max(g.w, g.h) <= 48;
