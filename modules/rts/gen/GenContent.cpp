@@ -549,35 +549,75 @@ void placeContent(Ctx& c) {
         }
     c.info.set("objects", counts);
 
-    // ---- resource fields (Red Alert ore, Dune spice): around spawners, else patches near bases + far
+    // ---- resource fields (Red Alert ore, Dune spice): around spawners, plus the template's fields (near ones keep
+    // their offset from the base, far ones go to reachable random spots); without a template: patches near + far
+    auto addField = [&](const std::string& rid, P2 p, int radius, const Json& amount) {
+        Json f = Json::object();
+        f.set("resource", Json::string(rid));
+        Json cc = Json::array(); cc.push(Json::number(int64_t(p.x >> 16))); cc.push(Json::number(int64_t(p.y >> 16)));
+        f.set("center", cc);
+        f.set("radius", Json::number(int64_t(radius)));
+        if (amount.isNumber()) f.set("amount", amount);
+        c.fields.push(f);
+    };
+    auto fieldSpot = [&](P2& p, int radius) {        // nudge onto open, reachable ground away from structures
+        for (int r = 0; r <= 6; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::max(std::abs(dx), std::abs(dy)) != r) continue;
+                    const int x = int(p.x >> 16) + dx, y = int(p.y >> 16) + dy;
+                    if (!c.inside(x, y) || !pl.reachableAt({int64_t(x) << 16, int64_t(y) << 16})) continue;
+                    int good = 0, all = 0;
+                    for (int yy = y - radius; yy <= y + radius; ++yy)
+                        for (int xx = x - radius; xx <= x + radius; ++xx) {
+                            if (!c.inside(xx, yy) || (xx - x) * (xx - x) + (yy - y) * (yy - y) > radius * radius) continue;
+                            ++all;
+                            if ((pl.g.flags[size_t(c.ci(xx, yy))] & game::kCellGround) && c.occ[size_t(c.ci(xx, yy))] != 1) ++good;
+                        }
+                    if (all && good * 4 >= all * 3) { p = {int64_t(x) << 16, int64_t(y) << 16}; return true; }
+                }
+        return false;
+    };
     for (size_t r = 0; r < c.R.resources.size(); ++r) {
         if (!c.R.resources[r].field) continue;
         const std::string rid = c.R.resources[r].id;
-        int spawner = -1;
-        for (size_t i = 0; i < c.R.types.size(); ++i) if (c.R.types[i].fieldSpawnRes == int(r)) spawner = int(i);
         const int radius = std::clamp(c.pint("fieldRadius", 4), 1, 12);
-        auto addField = [&](P2 p) {
-            Json f = Json::object();
-            f.set("resource", Json::string(rid));
-            Json cc = Json::array(); cc.push(Json::number(int64_t(p.x >> 16))); cc.push(Json::number(int64_t(p.y >> 16)));
-            f.set("center", cc);
-            f.set("radius", Json::number(int64_t(radius)));
-            c.fields.push(f);
-        };
-        if (spawner >= 0) {
-            for (auto& e : c.entities.items())
-                if (e.getStr("type") == c.R.types[size_t(spawner)].id) addField({e["pos"][size_t(0)].fx().raw, e["pos"][size_t(1)].fx().raw});
-        } else {
-            const int nearN = std::max(1, c.pint("fieldsNear", 1)), farN = std::max(0, c.pint("fieldsFar", 1));
-            for (int n = 0; n < nearN; ++n) {
-                P2 off = rot(P2{int64_t(c.baseRadius + radius + 2) << 16, 0}, int64_t(rng.below(65536)));
-                for (int k = 0; k < c.np; ++k) addField(anySym ? pl.imageOf(k, P2{c.starts[0].x + off.x, c.starts[0].y + off.y}) : kitPos(k, rot(off, -frameTurn)));
-            }
-            for (int n = 0; n < farN; ++n) {
-                P2 p{int64_t(radius + 1 + rng.below(uint32_t(std::max(1, c.w - 2 * radius - 2)))) << 16, int64_t(radius + 1 + rng.below(uint32_t(std::max(1, c.h - 2 * radius - 2)))) << 16};
-                if (anySym) c.sym.fold(p.x, p.y, p.x, p.y);
-                for (int k = 0; k < (anySym ? c.np : 1); ++k) addField(pl.imageOf(k, p));
-            }
+        for (size_t i = 0; i < c.R.types.size(); ++i)
+            if (c.R.types[i].fieldSpawnRes == int(r))
+                for (auto& e : c.entities.items())
+                    if (e.getStr("type") == c.R.types[i].id) addField(rid, {e["pos"][size_t(0)].fx().raw, e["pos"][size_t(1)].fx().raw}, radius, Json());
+        std::vector<std::pair<P2, int>> nearF;   // template fields: offset from player 1's anchor
+        int farN = 0, farR = radius;
+        bool tmplFields = false;
+        for (auto& f : tmpl["fields"].items()) {
+            if (f.getStr("resource") != rid || !f["center"].isArray()) continue;
+            tmplFields = true;
+            const P2 p{f["center"][size_t(0)].fx().raw, f["center"][size_t(1)].fx().raw};
+            const int fr = int(f.getInt("radius", 3));
+            int64_t dn = INT64_MAX; int an = 0;
+            for (int k = 0; k < tnp; ++k) if (anchors[size_t(k)].x >= 0 && dist(p, anchors[size_t(k)]) < dn) { dn = dist(p, anchors[size_t(k)]); an = k; }
+            if (dn <= nearR + (int64_t(4) << 16)) { if (an == 0) nearF.push_back({{p.x - anchors[0].x, p.y - anchors[0].y}, fr}); }
+            else { ++farN; farR = fr; }
+        }
+        if (!tmplFields && c.P["kit"].isNull() && tmpl["entities"].items().empty()) {   // no template at all
+            nearF.push_back({rot(P2{int64_t(c.baseRadius + radius + 2) << 16, 0}, int64_t(rng.below(65536))), radius});
+            farN = 2;
+        }
+        farN = (farN + tnp / 2) / std::max(1, tnp);
+        farN = std::max(0, c.pint("fieldsFar", farN));
+        for (auto& [off0, fr] : nearF) {
+            P2 off = rot(off0, frameTurn), p0{c.starts[0].x + off.x, c.starts[0].y + off.y};
+            if (!fieldSpot(p0, fr)) continue;
+            for (int k = 0; k < c.np; ++k) addField(rid, anySym ? pl.imageOf(k, p0) : kitPos(k, rot(off, -frameTurn)), fr, Json());
+        }
+        for (int n = 0, tries = 0; n < farN && tries < 200; ++tries) {
+            P2 p{int64_t(farR + 1 + rng.below(uint32_t(std::max(1, c.w - 2 * farR - 2)))) << 16, int64_t(farR + 1 + rng.below(uint32_t(std::max(1, c.h - 2 * farR - 2)))) << 16};
+            if (anySym && !c.sym.inDomain(p.x, p.y)) continue;
+            bool farOk = true;
+            for (auto& st : c.starts) if (dist(p, st) < nearR) farOk = false;
+            if (!farOk || !fieldSpot(p, farR)) continue;
+            for (int k = 0; k < (anySym ? c.np : 1); ++k) addField(rid, pl.imageOf(k, p), farR, Json());
+            ++n;
         }
     }
 
@@ -743,6 +783,7 @@ void validateFairness(Ctx& c) {
             int64_t len = 0;
             bool found;
             if (dig) {   // caves: BFS through diggable rock (imps dig the way)
+                g.nearestPassable(ax, ay, game::kLayerGround, 8);
                 std::vector<uint8_t> seen = reachable(c, g, ax, ay, true);
                 g.nearestPassable(bx, by, game::kLayerGround, 6);
                 found = seen[size_t(c.ci(bx, by))] != 0;
