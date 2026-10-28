@@ -704,10 +704,15 @@ OverlaySet loadOverlaySet(const Rules& R, const Json& rulesOverlays, const Json&
 void validateOverlays(const Rules& R, const Json& list) {
     if (!list.isArray()) throw std::runtime_error("overlays: expected a list");
     std::vector<std::string> ids;
+    const Json builtins = builtinOverlays();
     for (auto& e : list.items()) {
-        OverlayDef d = parseOverlay(R, e);
-        if (std::find(ids.begin(), ids.end(), d.id) != ids.end()) throw std::runtime_error("overlay '" + d.id + "': duplicate id");
-        ids.push_back(d.id);
+        const std::string id = e.getStr("id");
+        if (id.empty()) throw std::runtime_error("overlay: missing \"id\"");
+        if (std::find(ids.begin(), ids.end(), id) != ids.end()) throw std::runtime_error("overlay '" + id + "': duplicate id");
+        ids.push_back(id);
+        bool builtin = false;   // overrides of built-ins may be partial: checked merged below
+        for (auto& b : builtins.items()) builtin = builtin || b.getStr("id") == id;
+        if (!builtin || e.getBool("replace")) parseOverlay(R, e);
     }
     // the merged result must parse too (partial overrides of built-ins)
     Json merged = builtinOverlays();

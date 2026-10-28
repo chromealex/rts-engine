@@ -637,7 +637,12 @@ void RtsOverlays::drawScreenInst(const OverlayDef& d, size_t di, const Inst& in,
         ImFont* font = ImGui::GetFont();
         const float size = ImGui::GetFontSize() * d.size[0];
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0, txt.c_str());
-        const ImVec2 at(x - ts.x * 0.5f, y - ts.y * 0.5f);
+        // HUD anchors: the point is the box corner (negative coordinates: right / bottom edge); elsewhere centred
+        ImVec2 at(x - ts.x * 0.5f, y - ts.y * 0.5f);
+        if (d.anchor == OvAnchor::Screen) {
+            at.x = d.point[0] < 0 ? x - ts.x - s.padX : x + s.padX;
+            at.y = d.point[1] < 0 ? y - ts.y - s.padY : y + s.padY;
+        }
         if (s.hasBackground)
             dl->AddRectFilled(ImVec2(at.x - s.padX, at.y - s.padY), ImVec2(at.x + ts.x + s.padX, at.y + ts.y + s.padY), bgColor(), s.rounding);
         if (s.shadow) dl->AddText(font, size, ImVec2(at.x + 1, at.y + 1), imCol({0, 0, 0, c.w * 0.75f}), txt.c_str());
