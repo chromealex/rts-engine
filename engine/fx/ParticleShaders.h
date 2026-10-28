@@ -9,7 +9,8 @@
 //     tile-based GPUs).
 //
 // U0 (per draw): mat4 viewProj; vec4 fog (rgb display-space colour, w density);
-//                vec4 camPos (xyz); vec4 params (x: 1 = additive blend -> fog fades alpha instead of colour)
+//                vec4 camPos (xyz); vec4 params (x: 1 = additive blend -> fog fades alpha instead of colour;
+//                y: 1 = premultiplied colour -> the fog colour is premultiplied too)
 // Vertex: a_pos (float3), a_uv (float2), a_col (ubyte4 normalized)
 #pragma once
 
@@ -26,7 +27,7 @@ void main() {
     gl_Position = u_viewProj * vec4(a_pos, 1.0);
     float f = 1.0 - exp(-length(a_pos - u_camPos.xyz) * u_fog.w);
     vec4 c = a_col;
-    c.rgb = mix(c.rgb, u_fog.rgb, f * (1.0 - u_params.x));
+    c.rgb = mix(c.rgb, u_fog.rgb * mix(1.0, c.a, u_params.y), f * (1.0 - u_params.x));
     c.a *= 1.0 - f * u_params.x;
     v_col = c;
     v_uv = a_uv;
@@ -53,7 +54,7 @@ vertex VOut vs_main(VIn in [[stage_in]], constant U0& u [[buffer(1)]]) {
     o.pos = u.viewProj * float4(in.pos, 1.0);
     float f = 1.0 - exp(-length(in.pos - u.camPos.xyz) * u.fog.w);
     float4 c = in.col;
-    c.rgb = mix(c.rgb, u.fog.rgb, f * (1.0 - u.params.x));
+    c.rgb = mix(c.rgb, u.fog.rgb * mix(1.0, c.a, u.params.y), f * (1.0 - u.params.x));
     c.a *= 1.0 - f * u.params.x;
     o.col = half4(c);
     o.uv = in.uv;

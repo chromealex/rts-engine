@@ -9,9 +9,14 @@
 // 3D distance); those are left out of the map so nothing is counted twice.
 // Halos: optional camera-facing additive glows around lights (a cheap stand-in for bloom).
 // Night glow: emissive materials are boosted by (1 + nightGlow) — windows light up at night.
+// Reflections: glossy / metallic materials get highlights from the lights and mirror the lit ground
+// along the reflected ray (Medium+, one fetch). High: water gets a real planar reflection of the
+// units, buildings and light glows (mirrored pass at half resolution, terrain and effects skipped).
 //
 // Owned by Renderer3D (`Renderer3D::lights`): add lights between beginScene() and render().
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 #include "../gfx/Gfx.h"
@@ -29,6 +34,19 @@ struct PointLight {
     float priority = 0;          // added to the score when picking per-pixel lights (High)
     float halo = 0;              // > 0: camera-facing glow of this world size around pos
     float haloAlpha = 1;         // halo brightness (display space, additive)
+    // Spot light (cosOuter > -1): a cone along `dir`; full light inside cosInner, none outside cosOuter.
+    float3 dir{0, -1, 0};
+    float cosOuter = -2, cosInner = -2;
+    float groundY = -1e9f;       // ground under the light (light map projection of spots); default: pos.y - 1
+    float beam = 0;              // spot: strength of the visible light shaft (display space, additive)
+
+    void makeSpot(float3 direction, float coneAngleDeg, float softness = 0.6f) {
+        dir = normalize(direction);
+        const float half = coneAngleDeg * 0.5f * 0.0174532925f;
+        cosOuter = std::cos(half);
+        cosInner = std::cos(half * (1.0f - std::clamp(softness, 0.02f, 1.0f)));
+    }
+    bool spot() const { return cosOuter > -1.5f; }
 };
 
 // Light uniform block (U2 of the lit shader, U4 of the model shader; std140 and MSL match).
@@ -36,9 +54,11 @@ struct LightUniforms {
     float map[4];                // origin.x, origin.z, 1 / extent, enabled
     float info[4];               // x per-pixel light count, y map range, z uv flipY, w night glow
     float cloud[4];              // noise offset.xz, noise scale, coverage 0..1
-    float sky[4];                // x cloud shadow strength 0..1
+    float sky[4];                // x cloud shadow strength 0..1, y water reflection strength, zw 1 / view size
+    float env[4];                // x environment reflections (glossy materials sample the light map)
     float pos[8][4];             // xyz, radius
-    float col[8][4];             // rgb * intensity, unused
+    float col[8][4];             // rgb * intensity, spot cosInner
+    float spot[8][4];            // spot direction xyz, cosOuter (< -1.5: point light)
 };
 
 class LightSystem {
@@ -63,9 +83,17 @@ public:
     size_t count() const { return lights_.size(); }
 
     void renderMap();            // Renderer3D::render, before the main pass (own render pass)
-    // After setPipeline() of a lit pipeline: light uniforms + light map texture.
-    void bind(int uniformSlot = 2, int textureSlot = 1);
-    void drawHalos(const mat4& viewProj);  // inside the main pass, after the opaque scene (also draws decals)
+    // After setPipeline() of a lit pipeline: light uniforms + light map texture (+ the water
+    // reflection texture for the lit shader).
+    void bind(int uniformSlot = 2, int textureSlot = 1, int reflectionSlot = -1);
+
+    // Planar water reflection (Renderer3D::renderReflection): High tier only.
+    void setWaterReflections(bool on) { reflectOn_ = on; }
+    bool waterReflections() const { return reflectOn_; }
+    bool reflectionsWanted() const { return reflectOn_ && quality_ == LightQuality::High && dev_; }
+    bool beginReflection(int viewW, int viewH, float3 clearColor);   // opens the pass (half res)
+    void endReflection();
+    void drawHalos(const mat4& viewProj, bool decals = true);  // inside the main pass, after the opaque scene
 
     // Contact shadows / AO: soft dark decals on the ground under objects (all tiers, very cheap).
     // center on the ground; half extents along world X / Z; box = rounded rectangle (buildings).
@@ -74,15 +102,22 @@ public:
     bool contactShadows() const { return contact_; }
 
 private:
-    struct MapVertex { float x, y, u, v, r, g, b, a; };
+    // spot: direction + height above ground, cone (cosOuter, cosInner, radius) — cosOuter < -1.5 = point
+    struct MapVertex { float x, y, u, v, r, g, b, a, dx, dy, dz, h, co, ci, rad, pad; };
     struct HaloVertex { float x, y, z, u, v, r, g, b, a; };
     void createMap(int size);
+    // Dynamic vertex data is appended (ring) instead of rewritten: Metal keeps one copy of a dynamic
+    // buffer per frame in flight, so two uploads in one frame (water reflection + main pass, or the
+    // editor's two views) would overwrite each other. Returns the byte offset to draw from.
+    size_t stream(gfx::BufferHandle buf, size_t& cursor, size_t capacity, const void* data, size_t bytes);
     void pickPixelLights();
 
     gfx::Device* dev_ = nullptr;
     gfx::ShaderHandle shader_, haloShader_;
     gfx::PipelineHandle pipe_, haloPipe_;
     gfx::BufferHandle vb_, haloVB_;
+    size_t vbCursor_ = 0, haloCursor_ = 0, beamCursor_ = 0, decalCursor_ = 0;
+    size_t vbCap_ = 0, smallCap_ = 0;
     gfx::TextureHandle map_, mapDepth_, black_;
     int mapSize_ = 0;
     LightQuality quality_ = LightQuality::Medium;
@@ -93,10 +128,16 @@ private:
     std::vector<uint8_t> perPixel_;
     std::vector<MapVertex> verts_;
     std::vector<HaloVertex> halos_, decals_;
-    gfx::ShaderHandle decalShader_;
-    gfx::PipelineHandle decalPipe_;
+    gfx::ShaderHandle decalShader_, beamShader_;
+    gfx::PipelineHandle decalPipe_, beamPipe_;
+    std::vector<HaloVertex> beams_;
+    gfx::BufferHandle beamVB_;
     gfx::BufferHandle decalVB_;
     bool contact_ = true;
+    gfx::TextureHandle reflColor_, reflDepth_;
+    int reflW_ = 0, reflH_ = 0;
+    float viewW_ = 1, viewH_ = 1;
+    bool reflectOn_ = true, reflReady_ = false;
     LightUniforms u_{};
     float nightGlow_ = 0;
     uint32_t mapFrame_ = 0;

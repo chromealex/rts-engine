@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include "../Editor.h"
+#include "../EditorUtil.h"
 
 namespace rts::editor {
 
@@ -24,8 +25,9 @@ public:
         vp_.ensure(ed.device(), int(avail.x * dpi), int(avail.y * dpi));
         ImVec2 p = ImGui::GetCursorScreenPos();
         vp_.originX = p.x; vp_.originY = p.y; vp_.pointsW = avail.x; vp_.pointsH = avail.y;
-        ed.renderScene(vp_, ed.sceneCam, !ed.playing());
+        // image first (like the Game window): the screen overlays renderScene adds (bars, labels) stay on top of it
         vp_.image(ed.device(), avail.x, avail.y);
+        ed.renderScene(vp_, ed.sceneCam, !ed.playing());
         ed.sceneViewport = &vp_;
         if (ImGui::IsWindowFocused() || vp_.hovered) input(ed);
         hud(ed);
@@ -33,19 +35,24 @@ public:
 
 private:
     void toolbar(Editor& ed) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
-        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 6, ImGui::GetCursorPosY() + 3));
         static const char* names[] = {"Выбор", "Объекты", "Клетки", "Уровни", "Высота", "Поля", "Регионы", "Зоны", "Старты", "Дороги", "Ластик"};
+        static const char* icons[] = {ICON_SELECT, ICON_OBJECTS, ICON_CELLS, ICON_LEVELS, ICON_HEIGHT, ICON_FIELDS, ICON_REGIONS, ICON_ZONES,
+                                      ICON_STARTS, ICON_ROADS, ICON_ERASER};
+        static_assert(sizeof names / sizeof *names == size_t(Tool::Count) && sizeof icons / sizeof *icons == size_t(Tool::Count));
+        const float bottom = ui::beginToolbar();
+        ui::beginSegment();
         for (int i = 0; i < int(Tool::Count); ++i) {
-            if (i) ImGui::SameLine(0, 2);
-            bool on = ed.tool == Tool(i);
-            if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
-            if (ImGui::SmallButton(names[i])) { ed.tool = Tool(i); ed.roadStart = -1; }
-            if (on) ImGui::PopStyleColor();
+            if (i == 1 || i == 10) { ui::endSegment(); ImGui::SameLine(0, 8); ui::beginSegment(); } // select | edit tools | eraser
+            else if (i) ImGui::SameLine();
+            if (ui::toolButton(icons[i], names[i], ed.tool == Tool(i))) { ed.tool = Tool(i); ed.roadStart = -1; }
         }
-        ImGui::SameLine(0, 12);
-        if (ImGui::SmallButton("Вся карта")) ed.fitScene();
-        ImGui::PopStyleVar();
+        ui::endSegment();
+        ui::toolbarDivider();
+        if (ui::toolButton(ICON_FIT, "Вся карта (F)")) ed.fitScene();
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%s", names[int(ed.tool)]);
+        ui::endToolbar(bottom);
     }
 
     // planet maps: wheel zoom (surface -> planet -> system), RMB drag turn + pitch, MMB drag / WASD move over

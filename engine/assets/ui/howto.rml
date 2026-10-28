@@ -1,0 +1,34 @@
+<rml>
+<head>
+    <title>howto</title>
+    <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="skin.rcss"/>
+</head>
+<!-- "How to play": shown over the main menu and the pause modal. Texts are the game's language keys
+     howto.like, howto.goal, howto.step1.., howto.tip (games/<id>/lang/<language>.json).
+     Model "game": hasHowto, howtoOpen, howtoLike, howtoGoal, howtoSteps[], howtoTip, gameName; event howto() toggles. -->
+<body>
+<div class="root" data-model="game" data-class-touch="touch">
+    <div id="howto-bg" data-if="howtoOpen">
+        <div id="howto" class="panel">
+            <h1>{{gameName}}</h1>
+            <div class="howto-like" data-if="howtoLike != ''">
+                <span class="howto-label">{{ 'ui.howto_like' | tr(lang) }}</span> {{howtoLike}}
+            </div>
+            <h2>{{ 'ui.howto_goal' | tr(lang) }}</h2>
+            <p class="howto-goal">{{howtoGoal}}</p>
+            <h2>{{ 'ui.howto_steps' | tr(lang) }}</h2>
+            <div class="howto-step" data-for="st, i : howtoSteps">
+                <span class="howto-num">{{i + 1}}</span>
+                <div class="howto-text">{{st}}</div>
+            </div>
+            <div data-if="howtoTip != ''">
+                <h2>{{ 'ui.howto_tip' | tr(lang) }}</h2>
+                <p class="howto-tip">{{howtoTip}}</p>
+            </div>
+            <button class="wide howto-close" data-event-click="howto()">{{ 'ui.close' | tr(lang) }}</button>
+        </div>
+    </div>
+</div>
+</body>
+</rml>

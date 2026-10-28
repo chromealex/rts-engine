@@ -369,6 +369,9 @@ public:
             case BlendMode::Additive:
                 glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD);
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ONE); break;
+            case BlendMode::Premultiplied:
+                glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD);
+                glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
         }
         attribsDirty_ = true;
     }

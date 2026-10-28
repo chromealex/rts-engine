@@ -1,0 +1,353 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &2000000000000001
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4100000000000001}
+  - component: {fileID: 198100000000000001}
+  - component: {fileID: 199100000000000001}
+  - component: {fileID: 114100000000000001}
+  m_Layer: 0
+  m_Name: Magic Aura
+  m_IsActive: 1
+--- !u!4 &4100000000000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000000000000001}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 4100000000000002}
+  m_Father: {fileID: 0}
+--- !u!198 &198100000000000001
+ParticleSystem:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000000000000001}
+  serializedVersion: 8
+  lengthInSec: 2
+  simulationSpeed: 1
+  looping: 1
+  prewarm: 1
+  playOnAwake: 1
+  startDelay:
+    serializedVersion: 2
+    minMaxState: 0
+    scalar: 0
+  moveWithTransform: 0
+  scalingMode: 1
+  InitialModule:
+    serializedVersion: 3
+    enabled: 1
+    startLifetime:
+      serializedVersion: 2
+      minMaxState: 0
+      scalar: 1.5
+    startSpeed:
+      serializedVersion: 2
+      minMaxState: 0
+      scalar: 0.2
+    startColor:
+      serializedVersion: 2
+      minMaxState: 4
+      maxGradient:
+        serializedVersion: 2
+        key0: {r: 0.4, g: 0.7, b: 1, a: 1}
+        key1: {r: 0.8, g: 0.5, b: 1, a: 1}
+        ctime0: 0
+        ctime1: 65535
+        atime0: 0
+        atime1: 65535
+        m_Mode: 0
+        m_NumColorKeys: 2
+        m_NumAlphaKeys: 2
+    startSize:
+      serializedVersion: 2
+      minMaxState: 3
+      scalar: 0.6
+      minScalar: 0.3
+    startRotation:
+      serializedVersion: 2
+      minMaxState: 0
+      scalar: 0
+    maxNumParticles: 60
+    gravityModifier:
+      serializedVersion: 2
+      minMaxState: 0
+      scalar: 0
+  ShapeModule:
+    serializedVersion: 6
+    enabled: 1
+    type: 11
+    radiusThickness: 1
+    m_Position: {x: 0, y: 0.1, z: 0}
+    m_Rotation: {x: -90, y: 0, z: 0}
+    m_Scale: {x: 1, y: 1, z: 1}
+    randomDirectionAmount: 0
+    radius:
+      value: 1
+    arc:
+      value: 360
+  EmissionModule:
+    enabled: 1
+    serializedVersion: 4
+    rateOverTime:
+      serializedVersion: 2
+      minMaxState: 0
+      scalar: 20
+    rateOverDistance:
+      serializedVersion: 2
+      minMaxState: 0
+      scalar: 0
+    m_BurstCount: 0
+    m_Bursts: []
+  VelocityModule:
+    enabled: 1
+    x:
+      minMaxState: 0
+      scalar: 0
+    y:
+      minMaxState: 1
+      scalar: 1
+      maxCurve:
+        m_Curve:
+        - time: 0
+          value: 0.5
+          inSlope: 1
+          outSlope: 1
+        - time: 1
+          value: 1.5
+          inSlope: 1
+          outSlope: 1
+    z:
+      minMaxState: 0
+      scalar: 0
+    orbitalX:
+      minMaxState: 0
+      scalar: 0
+    orbitalY:
+      minMaxState: 0
+      scalar: 2
+    orbitalZ:
+      minMaxState: 0
+      scalar: 0
+    radial:
+      minMaxState: 0
+      scalar: 0
+    speedModifier:
+      minMaxState: 0
+      scalar: 1
+    inWorldSpace: 0
+  ClampVelocityModule:
+    enabled: 1
+    magnitude:
+      minMaxState: 0
+      scalar: 2
+    separateAxis: 0
+    dampen: 0.5
+    drag:
+      minMaxState: 0
+      scalar: 0
+  ColorModule:
+    enabled: 1
+    gradient:
+      minMaxState: 1
+      maxGradient:
+        key0: {r: 1, g: 1, b: 1, a: 0}
+        key1: {r: 1, g: 1, b: 1, a: 1}
+        key2: {r: 1, g: 1, b: 1, a: 0}
+        ctime0: 0
+        ctime1: 65535
+        atime0: 0
+        atime1: 16384
+        atime2: 65535
+        m_Mode: 0
+        m_NumColorKeys: 2
+        m_NumAlphaKeys: 3
+  ColorBySpeedModule:
+    enabled: 1
+    gradient:
+      minMaxState: 1
+      maxGradient:
+        key0: {r: 0.5, g: 0.6, b: 1, a: 1}
+        key1: {r: 1, g: 1, b: 1, a: 1}
+        ctime0: 0
+        ctime1: 65535
+        atime0: 0
+        atime1: 65535
+        m_Mode: 0
+        m_NumColorKeys: 2
+        m_NumAlphaKeys: 2
+    range: {x: 0, y: 2}
+  SizeBySpeedModule:
+    enabled: 1
+    curve:
+      minMaxState: 1
+      scalar: 1
+      maxCurve:
+        m_Curve:
+        - time: 0
+          value: 1
+          inSlope: 0
+          outSlope: 0
+        - time: 1
+          value: 0.5
+          inSlope: 0
+          outSlope: 0
+    range: {x: 0, y: 2}
+  RotationModule:
+    enabled: 1
+    curve:
+      minMaxState: 0
+      scalar: 1.5
+  UVModule:
+    serializedVersion: 2
+    enabled: 1
+    mode: 0
+    timeMode: 2
+    fps: 12
+    startFrame:
+      minMaxState: 3
+      scalar: 3
+      minScalar: 0
+    tilesX: 2
+    tilesY: 2
+    animationType: 0
+    cycles: 1
+  InheritVelocityModule:
+    enabled: 1
+  SubModule:
+    enabled: 0
+  TrailModule:
+    enabled: 0
+  LightsModule:
+    enabled: 0
+  CollisionModule:
+    enabled: 0
+  NoiseModule:
+    enabled: 0
+--- !u!199 &199100000000000001
+ParticleSystemRenderer:
+  m_GameObject: {fileID: 2000000000000001}
+  m_Enabled: 1
+  m_Materials:
+  - {fileID: 2100000, guid: b2c2d2e2f2a24b2c8d2e2f2a2b2c0005, type: 2}
+  m_RenderMode: 3
+  m_SortMode: 0
+  m_RenderAlignment: 0
+  m_Pivot: {x: 0, y: 0, z: 0}
+--- !u!114 &114100000000000001
+MonoBehaviour:
+  m_GameObject: {fileID: 2000000000000001}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: d4e4f4a4b4c44d4e8f4a4b4c4d4e0002, type: 3}
+  speed: 90
+--- !u!1 &2000000000000002
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4100000000000002}
+  - component: {fileID: 198100000000000002}
+  - component: {fileID: 199100000000000002}
+  m_Name: Motes
+  m_IsActive: 1
+--- !u!4 &4100000000000002
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 2000000000000002}
+  m_LocalRotation: {x: -0.70710677, y: 0, z: 0, w: 0.70710677}
+  m_LocalPosition: {x: 0, y: 0.5, z: 0}
+  m_LocalScale: {x: 2, y: 2, z: 2}
+  m_Children: []
+  m_Father: {fileID: 4100000000000001}
+--- !u!198 &198100000000000002
+ParticleSystem:
+  m_GameObject: {fileID: 2000000000000002}
+  serializedVersion: 8
+  lengthInSec: 3
+  simulationSpeed: 1
+  looping: 1
+  startDelay:
+    minMaxState: 0
+    scalar: 0
+  moveWithTransform: 1
+  scalingMode: 0
+  InitialModule:
+    enabled: 1
+    startLifetime:
+      minMaxState: 3
+      scalar: 2
+      minScalar: 1
+    startSpeed:
+      minMaxState: 3
+      scalar: 0.4
+      minScalar: 0.1
+    startColor:
+      minMaxState: 0
+      maxColor: {r: 1, g: 1, b: 1, a: 1}
+    startSize:
+      minMaxState: 3
+      scalar: 0.08
+      minScalar: 0.04
+    maxNumParticles: 1000
+    gravityModifier:
+      minMaxState: 0
+      scalar: -0.05
+  ShapeModule:
+    enabled: 1
+    type: 2
+    radiusThickness: 1
+    m_Position: {x: 0, y: 0, z: 0}
+    m_Rotation: {x: 0, y: 0, z: 0}
+    m_Scale: {x: 1, y: 1, z: 1}
+    radius:
+      value: 0.6
+    arc:
+      value: 360
+  EmissionModule:
+    enabled: 1
+    rateOverTime:
+      minMaxState: 0
+      scalar: 8
+    rateOverDistance:
+      minMaxState: 0
+      scalar: 5
+    m_Bursts: []
+  NoiseModule:
+    enabled: 1
+    strength:
+      minMaxState: 0
+      scalar: 0.3
+    separateAxes: 0
+    frequency: 1.5
+    octaves: 1
+    scrollSpeed:
+      minMaxState: 0
+      scalar: 0.5
+  ColorModule:
+    enabled: 1
+    gradient:
+      minMaxState: 1
+      maxGradient:
+        key0: {r: 1, g: 1, b: 1, a: 0}
+        key1: {r: 1, g: 1, b: 1, a: 1}
+        key2: {r: 1, g: 1, b: 1, a: 0}
+        ctime0: 0
+        ctime1: 65535
+        atime0: 0
+        atime1: 13107
+        atime2: 65535
+        m_Mode: 1
+        m_NumColorKeys: 2
+        m_NumAlphaKeys: 3
+--- !u!199 &199100000000000002
+ParticleSystemRenderer:
+  m_GameObject: {fileID: 2000000000000002}
+  m_Enabled: 1
+  m_Materials:
+  - {fileID: 2100000, guid: b2c2d2e2f2a24b2c8d2e2f2a2b2c0006, type: 2}
+  m_RenderMode: 4
+  m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}

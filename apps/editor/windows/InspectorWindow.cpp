@@ -70,9 +70,11 @@ public:
             case Selection::Faction: rulesItem(ed, "factions." + s.key, false); break;
             case Selection::MapProps: mapProps(ed); break;
             default:
-                ImGui::TextWrapped("Выберите объект в Scene или Hierarchy, элемент правил в Project.");
-                ImGui::Spacing();
-                if (ImGui::Button("Свойства карты")) ed.select({Selection::MapProps, -1, {}});
+                ui::emptyStateHere(ICON_INSPECTOR, "Ничего не выбрано", "Выберите объект в Scene или Hierarchy, элемент правил в Project.",
+                                   ImGui::GetFontSize() * 9);
+                const float bw = ImGui::CalcTextSize(ICON_REGIONS "  Свойства карты").x + ImGui::GetStyle().FramePadding.x * 2;
+                ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), (ImGui::GetWindowWidth() - bw) * 0.5f));
+                if (ui::button(ICON_REGIONS, "Свойства карты")) ed.select({Selection::MapProps, -1, {}});
         }
     }
 

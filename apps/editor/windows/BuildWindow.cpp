@@ -75,7 +75,7 @@ public:
 
     void draw(Editor& ed) override {
         auto& ws = ed.ws();
-        if (ws.project.dir.empty()) { ImGui::TextDisabled("Откройте игру (Игра -> Открыть)"); return; }
+        if (ws.project.dir.empty()) { ui::emptyStateHere(ICON_BUILD, "Игра не открыта", "Игра → Открыть"); return; }
         if (lastProject_ != ws.project.dir) { lastProject_ = ws.project.dir; reports_.clear(); }
         header(ed);
         ImGui::Separator();
@@ -108,14 +108,14 @@ private:
         ImGui::RadioButton("Release", &release_, 1); ImGui::SameLine(); ImGui::RadioButton("Debug", &release_, 0);
         ImGui::SameLine(0, 20);
         ImGui::BeginDisabled(ws.building());
-        if (ImGui::Button("Оценить размер")) estimate(ed);
+        if (ui::button(ICON_HARD_DRIVE, "Оценить размер")) estimate(ed);
         ImGui::SameLine();
-        if (ImGui::Button(("Собрать: " + std::string(kTargets[target_].name)).c_str())) {
+        if (ui::button(ICON_BUILD, ("Собрать: " + std::string(kTargets[target_].name)).c_str(), true)) {
             ws.startBuild(kTargets[target_].id, release_ ? "Release" : "Debug", buildFlags());
             if (auto* c = ed.window("console")) c->open = true;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Все платформы")) {
+        if (ui::button(ICON_LAYOUT, "Все платформы")) {
             ws.startBuild("all", release_ ? "Release" : "Debug", buildFlags());
             if (auto* c = ed.window("console")) c->open = true;
         }
@@ -123,7 +123,7 @@ private:
         ImGui::SameLine();
         ImGui::Checkbox("Пересчитывать сразу", &autoEstimate_);
         ui::help("После каждого изменения настроек размер оценивается заново (собирается только пак контента, без приложения — секунды).");
-        if (ws.building()) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), estimating_ ? "оценка…" : "идёт сборка…"); }
+        if (ws.building()) { ImGui::SameLine(); ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "%s %s", ICON_REFRESH, estimating_ ? "оценка…" : "идёт сборка…"); }
     }
 
     std::string buildFlags() const {
@@ -196,6 +196,9 @@ private:
     // ------------------------------------------------------------ left column
     void settings(Editor& ed) {
         Json& m = manifest(ed);
+        ImGui::SeparatorText("Иконки и заставка");
+        if (ImGui::Button("Открыть: иконки и заставка")) if (auto* w = ed.window("branding")) w->open = true;
+        ui::help("Иконки всех размеров для каждой платформы и экран загрузки (game.json \"icons\", \"splash\") — окно «Иконки и заставка».");
         ImGui::SeparatorText("Сжатие пака");
         int level = int(m["packaging"]["level"].integer(19));
         ImGui::SetNextItemWidth(180);
