@@ -13,12 +13,25 @@
 #include <iterator>
 #include "modules/rts/RtsTiles.h"
 #include "modules/rts/view/RtsCamera.h"
+#include <sstream>
 
 namespace fs = std::filesystem;
 
 namespace rts::editor {
 
 using namespace render;
+
+namespace {
+// Models / textures of the open game (view blocks reference them relative to the game folder).
+FileReader projectReader(const std::string& dir) {
+    return [dir](const std::string& p, std::string& out) {
+        std::ifstream f(dir + "/" + p, std::ios::binary);
+        if (!f) return platform::readContentFile(p, out);
+        std::stringstream ss; ss << f.rdbuf(); out = ss.str();
+        return true;
+    };
+}
+} // namespace
 
 // ============================ viewport ============================
 
@@ -85,7 +98,8 @@ void Editor::init(gfx::Device& dev) {
         if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
     } else showPicker_ = true;
     view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
-    view_.init(dev, rules());
+    view_.init(dev, rules(), projectReader(ws_.project.dir));
+    for (auto& w : view_.warnings()) ws_.log("view", w, true);
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
     else if (doc().data.cells.empty()) newMap(48, 32);
     ws_.changes.clear();
@@ -130,7 +144,8 @@ void Editor::openGame(const std::string& idOrDir) {
 void Editor::reloadRules() {
     view_.shutdown(*dev_);
     view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
-    view_.init(*dev_, rules());
+    view_.init(*dev_, rules(), projectReader(ws_.project.dir));
+    for (auto& w : view_.warnings()) ws_.log("view", w, true);
     gridRevision_ = ~0ull;
     placeType = std::clamp(placeType, 0, std::max(0, int(rules().types.size()) - 1));
 }

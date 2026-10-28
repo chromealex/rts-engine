@@ -1,6 +1,7 @@
 #include "RtsView.h"
 #include "../RtsModule.h"
 #include "imgui.h"
+#include "../../../engine/platform/Platform.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -30,89 +31,17 @@ float4 RtsView::playerColor(int p) {
     return colors[p >= 0 && p < 9 ? p : 0];
 }
 
-Mesh& RtsView::mesh(gfx::Device& dev, const std::string& key, const MeshBuilder& b) {
-    auto it = meshes_.find(key);
-    if (it != meshes_.end()) return it->second;
-    return meshes_[key] = b.upload(dev);
-}
-
-void RtsView::buildShapes(gfx::Device& dev) {
-    const uint32_t wood = rgba(122, 86, 52), stone = rgba(150, 146, 140), darkStone = rgba(105, 102, 98), skin = rgba(233, 196, 160),
-                   metal = rgba(170, 176, 186), leaf = rgba(52, 120, 48), leaf2 = rgba(70, 140, 60), gold = rgba(240, 196, 60),
-                   roofTile = rgba(255, 255, 255), cream = rgba(236, 226, 200), dark = rgba(60, 60, 64);
-    auto add = [&](const std::string& shape, const std::string& part, bool team, auto&& build) {
-        MeshBuilder b;
-        b.color(team ? 0xffffffffu : wood);
-        build(b);
-        shapes_[shape].parts.push_back({&mesh(dev, shape + "/" + part, b), mat4{}, {1, 1, 1, 1}, team});
-    };
-    // ---- units (≈1 unit tall, facing +X)
-    add("worker", "body", true, [&](MeshBuilder& b) { b.cylinder({0, 0.0f, 0}, 0.22f, 0.5f, 12, true, 0.17f); });
-    add("worker", "head", false, [&](MeshBuilder& b) { b.color(skin).sphere({0, 0.66f, 0}, 0.15f, 6, 10); b.color(wood).box({0.18f, 0.35f, 0.12f}, {0.06f, 0.5f, 0.06f}); b.color(metal).box({0.18f, 0.6f, 0.12f}, {0.22f, 0.07f, 0.07f}); });
-    add("soldier", "body", true, [&](MeshBuilder& b) { b.box({0, 0.32f, 0}, {0.36f, 0.5f, 0.42f}); });
-    add("soldier", "rest", false, [&](MeshBuilder& b) {
-        b.color(metal).sphere({0, 0.7f, 0}, 0.16f, 6, 10); b.color(dark).box({0, 0.04f, 0.1f}, {0.14f, 0.12f, 0.12f}).box({0, 0.04f, -0.1f}, {0.14f, 0.12f, 0.12f});
-        b.color(metal).box({0.08f, 0.38f, -0.27f}, {0.38f, 0.42f, 0.05f}); b.color(metal).box({0.3f, 0.5f, 0.24f}, {0.55f, 0.05f, 0.05f}); });
-    add("ranged", "body", true, [&](MeshBuilder& b) { b.cylinder({0, 0, 0}, 0.2f, 0.55f, 10, true, 0.14f); b.cone({0, 0.8f, 0}, 0.18f, 0.25f, 10); });
-    add("ranged", "rest", false, [&](MeshBuilder& b) { b.color(skin).sphere({0, 0.68f, 0}, 0.13f, 6, 10); b.color(wood).cylinder({0.18f, 0.15f, 0.1f}, 0.025f, 0.7f, 6); });
-    add("vehicle", "base", false, [&](MeshBuilder& b) {
-        b.color(wood).box({0, 0.32f, 0}, {1.0f, 0.22f, 0.7f});
-        for (float x : {-0.32f, 0.32f}) for (float z : {-0.38f, 0.38f}) b.color(dark).box({x, 0.14f, z}, {0.3f, 0.28f, 0.1f});
-        b.color(wood).box({-0.1f, 0.65f, 0}, {0.12f, 0.55f, 0.12f}); });
-    add("vehicle", "team", true, [&](MeshBuilder& b) { b.box({-0.35f, 0.5f, 0}, {0.3f, 0.12f, 0.72f}); });
-    add("tank", "base", false, [&](MeshBuilder& b) { b.color(dark).box({0, 0.15f, 0.3f}, {1.1f, 0.3f, 0.25f}).box({0, 0.15f, -0.3f}, {1.1f, 0.3f, 0.25f}); b.color(metal).box({0.55f, 0.55f, 0}, {0.7f, 0.08f, 0.08f}); });
-    add("tank", "team", true, [&](MeshBuilder& b) { b.box({0, 0.36f, 0}, {1.0f, 0.25f, 0.62f}); b.cylinder({0, 0.48f, 0}, 0.26f, 0.18f, 12); });
-    add("flyer", "body", true, [&](MeshBuilder& b) { b.transform(mat4::scale({1.4f, 0.7f, 0.8f})).sphere({0, 0, 0}, 0.3f, 6, 12); b.transform(mat4{}); b.box({0, 0.05f, 0}, {0.3f, 0.04f, 1.5f}); });
-    add("flyer", "rest", false, [&](MeshBuilder& b) { b.color(cream).sphere({0.45f, 0.08f, 0}, 0.14f, 5, 8); b.color(gold).cone({0.62f, 0.05f, 0}, 0.06f, 0.12f, 6); });
-    add("mushroom", "stem", false, [&](MeshBuilder& b) { b.color(cream).cylinder({0, 0, 0}, 0.14f, 0.35f, 8, true, 0.11f); });
-    add("mushroom", "cap", true, [&](MeshBuilder& b) { b.transform(mat4::translate({0, 0.36f, 0}) * mat4::scale({1, 0.6f, 1})).sphere({0, 0, 0}, 0.24f, 5, 10); });
-    add("generic", "body", true, [&](MeshBuilder& b) { b.cylinder({0, 0, 0}, 0.3f, 0.7f, 10); });
-
-    // ---- structures (sized to a 1x1 footprint; scaled by the footprint at draw time)
-    add("hall", "base", false, [&](MeshBuilder& b) { b.color(stone).box({0, 0.35f, 0}, {0.9f, 0.7f, 0.9f}); b.color(wood).box({0.46f, 0.18f, 0}, {0.04f, 0.35f, 0.2f}); });
-    add("hall", "roof", true, [&](MeshBuilder& b) { b.cone({0, 0.7f, 0}, 0.66f, 0.45f, 4); b.cylinder({0.25f, 0.7f, 0.25f}, 0.08f, 0.5f, 8); });
-    add("house", "base", false, [&](MeshBuilder& b) { b.color(cream).box({0, 0.3f, 0}, {0.8f, 0.6f, 0.8f}); b.color(wood).box({0.41f, 0.15f, 0}, {0.04f, 0.3f, 0.18f}); });
-    add("house", "roof", true, [&](MeshBuilder& b) { b.cone({0, 0.6f, 0}, 0.62f, 0.45f, 4); });
-    add("barracks", "base", false, [&](MeshBuilder& b) { b.color(darkStone).box({0, 0.3f, 0}, {0.9f, 0.6f, 0.9f}); b.color(wood).box({0.46f, 0.2f, 0}, {0.04f, 0.4f, 0.3f}); });
-    add("barracks", "roof", true, [&](MeshBuilder& b) { b.box({0, 0.64f, 0}, {0.95f, 0.08f, 0.95f}); b.cylinder({-0.3f, 0.6f, -0.3f}, 0.03f, 0.6f, 6); b.box({-0.2f, 1.08f, -0.3f}, {0.2f, 0.14f, 0.02f}); });
-    add("workshop", "base", false, [&](MeshBuilder& b) { b.color(wood).box({0, 0.28f, 0}, {0.9f, 0.56f, 0.8f}); b.color(darkStone).cylinder({0.25f, 0.5f, -0.2f}, 0.09f, 0.55f, 8); });
-    add("workshop", "roof", true, [&](MeshBuilder& b) { b.transform(mat4::rotateY(0.785f)).cone({0, 0.56f, 0}, 0.62f, 0.3f, 4); });
-    add("factory", "base", false, [&](MeshBuilder& b) { b.color(metal).box({0, 0.3f, 0}, {0.92f, 0.6f, 0.92f}); b.color(dark).cylinder({0.3f, 0.6f, 0.3f}, 0.08f, 0.6f, 8).cylinder({0.1f, 0.6f, 0.3f}, 0.08f, 0.5f, 8); });
-    add("factory", "roof", true, [&](MeshBuilder& b) { b.box({0, 0.62f, -0.2f}, {0.9f, 0.06f, 0.45f}); });
-    add("tower", "base", false, [&](MeshBuilder& b) { b.color(stone).cylinder({0, 0, 0}, 0.3f, 1.1f, 12, true, 0.24f); b.color(darkStone).box({0, 1.12f, 0}, {0.62f, 0.1f, 0.62f}); });
-    add("tower", "roof", true, [&](MeshBuilder& b) { b.cone({0, 1.17f, 0}, 0.4f, 0.5f, 12); });
-    add("mine", "base", false, [&](MeshBuilder& b) {
-        b.color(darkStone).transform(mat4::scale({1, 0.55f, 1})).sphere({0, 0.3f, 0}, 0.48f, 6, 10); b.transform(mat4{});
-        b.color(dark).box({0.38f, 0.18f, 0}, {0.1f, 0.3f, 0.28f});
-        b.color(gold).box({0.1f, 0.42f, 0.2f}, {0.12f, 0.1f, 0.12f}).box({-0.15f, 0.4f, -0.1f}, {0.1f, 0.12f, 0.1f}).box({0.2f, 0.35f, -0.2f}, {0.12f, 0.08f, 0.1f}); });
-    add("tree", "base", false, [&](MeshBuilder& b) { b.color(wood).cylinder({0, 0, 0}, 0.07f, 0.45f, 6); b.color(leaf).cone({0, 0.3f, 0}, 0.42f, 0.7f, 8); b.color(leaf2).cone({0, 0.65f, 0}, 0.3f, 0.6f, 8); });
-    add("rock", "base", false, [&](MeshBuilder& b) { b.color(darkStone).transform(mat4::scale({1, 0.6f, 0.9f})).sphere({0, 0.2f, 0}, 0.45f, 5, 7); });
-    add("mushroomhouse", "stem", false, [&](MeshBuilder& b) { b.color(cream).cylinder({0, 0, 0}, 0.2f, 0.55f, 14, true, 0.17f); b.color(wood).box({0.19f, 0.15f, 0}, {0.03f, 0.25f, 0.12f}); });
-    add("mushroomhouse", "cap", true, [&](MeshBuilder& b) { b.transform(mat4::translate({0, 0.55f, 0}) * mat4::scale({1, 0.5f, 1})).sphere({0, 0, 0}, 0.45f, 7, 16); });
-    add("structure", "base", false, [&](MeshBuilder& b) { b.color(stone).box({0, 0.3f, 0}, {0.9f, 0.6f, 0.9f}); });
-    add("structure", "roof", true, [&](MeshBuilder& b) { b.box({0, 0.63f, 0}, {0.95f, 0.06f, 0.95f}); });
-    (void)roofTile;
-    MeshBuilder pb; pb.color(rgba(255, 240, 200)).sphere({0, 0, 0}, 0.08f, 4, 6);
-    projectile_ = pb.upload(dev);
-}
-
-bool RtsView::init(gfx::Device& dev, const Rules& rules) {
+bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     rules_ = &rules;
-    if (shapes_.empty()) buildShapes(dev);
+    read_ = reader ? std::move(reader) : FileReader([](const std::string& p, std::string& out) { return platform::readContentFile(p, out); });
+    if (!models_.count("shape:generic")) buildShapes(dev);
     looks_.clear();
+    warnings_.clear();
+    anims_.clear();
     for (auto& t : rules.types) {
         TypeLook l;
-        std::string shape = t.view.getStr("shape", t.structure ? (t.resourceNode >= 0 ? "mine" : "structure") : "generic");
-        if (!shapes_.count(shape)) shape = t.structure ? "structure" : "generic";
-        l.shape = &shapes_[shape];
-        l.scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());
-        const Json& c = t.view["color"];
-        l.tint = c.size() >= 3 ? float4{float(c[0].fx().toDouble()), float(c[1].fx().toDouble()), float(c[2].fx().toDouble()), 1} : float4{1, 1, 1, 1};
-        l.air = t.layer & kLayerAir;
-        l.sx = t.structure ? float(t.footprintW) : float(t.radius.toDouble()) * 2.6f;
-        l.sz = t.structure ? float(t.footprintH) : l.sx;
-        if (!t.structure) l.sx = l.sz = 1.0f;
-        looks_.push_back(l);
+        buildLook(dev, t, l);
+        looks_.push_back(std::move(l));
     }
     twoD_ = std::make_unique<Rts2DView>();
     if (!twoD_->init(dev, rules, contentBase_)) twoD_.reset();
@@ -120,9 +49,10 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules) {
 }
 
 void RtsView::shutdown(gfx::Device& dev) {
-    for (auto& [k, m] : meshes_) { dev.destroyBuffer(m.vb); dev.destroyBuffer(m.ib); }
-    meshes_.clear(); shapes_.clear();
-    for (Mesh* m : {&terrain_, &water_, &projectile_}) { dev.destroyBuffer(m->vb); dev.destroyBuffer(m->ib); }
+    for (auto& [k, m] : models_) if (m) releaseModel(dev, *m);
+    models_.clear(); looks_.clear(); anims_.clear();
+    for (Mesh* m : {&terrain_, &water_, &projectile_}) { dev.destroyBuffer(m->vb); dev.destroyBuffer(m->ib); *m = Mesh{}; }
+    hasTerrain_ = false;
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
 }
@@ -152,48 +82,63 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
     }
     for (auto& [a, b] : s.roads) r.quadXZ(a, b, 0.5f, rgba(196, 164, 112, 235), 0.04f);
 
-    for (size_t oi = 0; oi < s.objects.size(); ++oi) {
-        const auto& o = s.objects[oi];
-        if (twoD_ && !o.isProjectile && twoD_->hasSprite(o.type)) {
+    const float dt = lastTime_ < 0 ? 0.0f : float(std::clamp(time - lastTime_, 0.0, 0.1));
+    lastTime_ = time;
+    ++frame_;
+    handleEvents(s);
+    for (size_t i = 0; i < s.objects.size(); ++i) {
+        const SceneObject& o = s.objects[i];
+        if (o.isProjectile) {
+            if (o.visible) r.drawMesh(projectile_, mat4::translate(o.pos), {1, 0.95f, 0.8f, 1}, kDrawUnlit);
+            continue;
+        }
+        if (twoD_ && twoD_->hasSprite(o.type)) { // 2D games: sprites instead of models
             float g = heightAt(grid, o.pos.x, o.pos.z);
             twoD_->addObject(o, g);
-            bars_[oi] = twoD_->barPoint(o, g);
+            bars_[i] = twoD_->barPoint(o, g);
             if (o.visible && (o.selected || o.hovered)) {
                 uint32_t col = o.selected ? (o.owner == 0 ? rgba(255, 255, 160, 230) : rgba(120, 255, 120, 230)) : rgba(255, 255, 255, 130);
                 r.circleXZ({o.pos.x, 0, o.pos.z}, selectionRadius(o.type), col, 32, g + 0.05f);
             }
             continue;
         }
+        if (o.type >= looks_.size()) continue;
+        // editor placements have no entity: key them by position in the list
+        const uint64_t key = o.entity.valid() ? o.entity.packed() : (1ull << 63) | uint64_t(i);
+        EntityAnim& st = stateFor(key, o);
+        st.last = o;
         if (!o.visible) continue;
-        if (o.isProjectile) { r.drawMesh(projectile_, mat4::translate(o.pos), {1, 0.95f, 0.8f, 1}, kDrawUnlit); continue; }
-        const UnitType& t = rules_->types[o.type];
         const TypeLook& L = looks_[o.type];
-        float4 team = playerColor(o.owner);
-        float ground = heightAt(grid, o.pos.x, o.pos.z);
-        float3 p{o.pos.x, ground + (L.air ? 2.4f + 0.12f * float(std::sin(time * 3 + o.pos.x)) : 0.0f), o.pos.z};
-        float yaw = std::atan2(-o.facing.z, o.facing.x);
-        float k = L.scale;
-        mat4 m;
-        if (t.structure) {
-            float grow = std::clamp(o.build, 0.15f, 1.0f);
-            m = mat4::translate(p) * mat4::scale({L.sx * k, k * std::max(L.sx, L.sz) * 0.75f * grow, L.sz * k});
-        } else {
-            m = mat4::translate(p) * mat4::rotateY(yaw) * mat4::scale({k, k, k});
-        }
-        bool building = o.build < 1.0f;
-        for (const auto& part : L.shape->parts) {
-            float4 c = part.team ? float4{team.x * L.tint.x, team.y * L.tint.y, team.z * L.tint.z, 1} : L.tint;
-            if (building) c = {c.x * 0.75f + 0.2f, c.y * 0.75f + 0.18f, c.z * 0.75f + 0.12f, 1};
-            r.drawMesh(*part.mesh, m * part.xf, c, 0, part.team ? 0.35f : 0.15f);
-        }
+        const float ground = heightAt(grid, o.pos.x, o.pos.z);
+        animate(st, o, dt);
+        drawObject(r, st, o, ground, 1.0f);
         if (L.air) { // ground shadow blob helps reading the height
-            r.circleXZ({p.x, ground, p.z}, 0.35f, rgba(0, 0, 0, 90), 16, ground + 0.03f);
+            r.circleXZ({o.pos.x, ground, o.pos.z}, 0.35f, rgba(0, 0, 0, 90), 16, ground + 0.03f);
         }
         if (o.selected || o.hovered) {
             float rad = selectionRadius(o.type);
             uint32_t col = o.selected ? (o.owner == 0 ? rgba(255, 255, 160, 230) : rgba(120, 255, 120, 230)) : rgba(255, 255, 255, 130);
-            r.circleXZ({p.x, 0, p.z}, rad, col, 32, ground + 0.05f);
+            r.circleXZ({o.pos.x, 0, o.pos.z}, rad, col, 32, ground + 0.05f);
         }
+    }
+    // corpses (entity already removed) play their death and fade; stale states are dropped
+    for (auto it = anims_.begin(); it != anims_.end();) {
+        EntityAnim& st = it->second;
+        if (st.seen == frame_ && !st.dead) { ++it; continue; }
+        if (!st.dead || !st.initialized) {
+            it = st.seen + 2 < frame_ ? anims_.erase(it) : std::next(it);
+            continue;
+        }
+        st.deathAge += dt;
+        if (st.type >= looks_.size() || st.deathAge > looks_[st.type].corpse) { it = anims_.erase(it); continue; }
+        const TypeLook& L = looks_[st.type];
+        if (st.seen != frame_ && st.last.visible) {
+            SceneObject o = st.last;
+            o.selected = o.hovered = false;
+            animate(st, o, dt);
+            drawObject(r, st, o, heightAt(grid, o.pos.x, o.pos.z), std::clamp((L.corpse - st.deathAge) / 0.6f, 0.0f, 1.0f));
+        }
+        ++it;
     }
     for (auto& mk : s.moveMarkers) r.circleXZ(mk, 0.35f, rgba(120, 255, 120, 200), 16, 0.06f);
     if (twoD_) {
@@ -278,6 +223,8 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     GameState& gs = m->state(sim);
     out.objects.clear();
     out.roads.clear();
+    out.events = sim.events();
+    out.tick = sim.tick();
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         SceneObject so;
         so.entity = e; so.type = u.type; so.owner = o.player;
@@ -289,10 +236,16 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
         if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
         if (auto* c = w.tryGet<Cargo>(e)) so.carry = float(c->amount.toDouble());
-        if (auto* mb = w.tryGet<Mobile>(e); mb && mb->moving) so.action = kActMove;
-        else if (auto* cb = w.tryGet<Combat>(e); cb && cb->target.valid()) so.action = kActAttack;
-        else if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) {
-            OrderType ot = od->queue.front().type;
+        if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) so.order = uint8_t(od->queue.front().type) + 1;
+        if (auto* mb = w.tryGet<Mobile>(e)) so.moving = mb->moving;
+        if (auto* pr = w.tryGet<Production>(e)) so.producing = !pr->queue.empty();
+        if (auto* cb = w.tryGet<Combat>(e); cb && cb->target.valid() && w.alive(cb->target)) {
+            if (auto* tt = w.tryGet<Transform>(cb->target)) { so.hasTarget = true; so.target = lerp(toF(tt->prevPos), toF(tt->pos), alpha); }
+        }
+        if (so.moving) so.action = kActMove;
+        else if (so.hasTarget) so.action = kActAttack;
+        else if (so.order) {
+            OrderType ot = OrderType(so.order - 1);
             if (ot == OrderType::Gather || ot == OrderType::Build || ot == OrderType::Repair) so.action = kActWork;
         }
         if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {

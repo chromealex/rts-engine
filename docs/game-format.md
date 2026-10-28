@@ -145,7 +145,7 @@ any tag in `deficitDisables`).
 | `key` | losing all key objects loses the game in `keyUnits`/`score` modes (commander, HQ) |
 | `countsForVictory` | override |
 | `score` | points to the killer's team (score victory) |
-| `view` | presentation only (shape, colour, model; see README "Models & materials") |
+| `view` | presentation only: shape or model, materials, clips, procedural animation (docs/models.md) |
 | `sprite` | presentation only: draw the type from a sprite sheet (2D games, see below) |
 
 Stats usable in modifiers: `maxHp`, `armor`, `damage` (multiplier), `range` (added), `speed`, `sight`,
