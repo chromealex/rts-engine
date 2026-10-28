@@ -4,6 +4,7 @@ static Command mechCmd(uint8_t player, uint16_t type, std::vector<Entity> units,
     Command c; c.player = player; c.type = type; c.units = std::move(units); c.target = target; c.point = point; c.param = param;
     return c;
 }
+static bool near(Fixed a, Fixed b) { return (a - b).raw < 64 && (b - a).raw < 64; }   // within 0.001
 static Vec3 at(int x, int z) { return {Fixed::fromInt(x), Fixed{}, Fixed::fromInt(z)}; }
 static Fixed hpOf(Simulation& sim, Entity e) { return sim.world().alive(e) ? sim.world().get<game::Unit>(e).hp : Fixed{}; }
 static Vec3 posOf(Simulation& sim, Entity e) { return sim.world().get<Transform>(e).pos; }
@@ -279,4 +280,222 @@ TEST(mech_shields_upkeep_workers) {
     CHECK(stockOf(*sim, 1, "gold").raw > 0);
     CHECK(mod(*sim).gatherMultFor(*sim, 1, mod(*sim).rules().findResource("wood")) == Fixed::fromInt(1));
     CHECK(mod(*sim).gatherMultFor(*sim, 1, mod(*sim).rules().findResource("gold")) == Fixed::fromRatio(1, 2));
+}
+
+// ================================================================ stage 2
+static const char* kVic = R"("victory": {"mode": "score", "seconds": 10000, "keyLoses": false})";
+static std::string mapRows(int w, int h, const std::vector<std::string>& rows, const std::string& extra, const std::string& players = R"([{"name":"A","team":1},{"name":"B","team":2}])") {
+    std::string rs;
+    for (int y = 0; y < h; ++y) rs += std::string(y ? "," : "") + "\"" + (size_t(y) < rows.size() ? rows[size_t(y)] : std::string(size_t(w), '.')) + "\"";
+    return "{\"size\":[" + std::to_string(w) + "," + std::to_string(h) + "],\"players\":" + players + ",\"terrain\":{\"rows\":[" + rs + "]}" + extra + "}";
+}
+
+TEST(mech_formation) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "types": {
+        "foot": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 100}},
+        "slow": {"move": {"speed": 1.5, "radius": 0.4}, "health": {"max": 100}}}})";
+    auto sim = makeSimJson(rules, flatMap(40, 20, R"(,"entities":[{"type":"foot","owner":1,"pos":[3,5]},{"type":"foot","owner":1,"pos":[4,5]},{"type":"foot","owner":1,"pos":[3,6]},{"type":"slow","owner":1,"pos":[4,6]}])"));
+    World& w = sim->world();
+    std::vector<Entity> us;
+    w.each<game::Unit>([&](Entity e, game::Unit&) { us.push_back(e); });
+    sim->submit(mechCmd(1, game::kCmdFormation, us, kNullEntity, {}, 1));   // box
+    run(*sim, 0.2);
+    CHECK(w.has<game::Formation>(us[0]) && w.get<game::Formation>(us[0]).group == w.get<game::Formation>(us[3]).group);
+    sim->submit(mechCmd(1, game::kCmdMove, us, kNullEntity, at(30, 5)));
+    run(*sim, 5);
+    // marching at the pace of the slow one: the fast ones did not run ahead
+    Fixed spread{};
+    for (Entity a : us) for (Entity b : us) spread = fxMax(spread, (posOf(*sim, a) - posOf(*sim, b)).xz().length());
+    CHECK(spread < Fixed::fromInt(3));
+    run(*sim, 20);
+    // a 2 x 2 box around the target, facing +x: two ranks along x, two files along z
+    for (Entity a : us) CHECK(dist2DTest(posOf(*sim, a), at(30, 5)) < Fixed::fromRatio(5, 2));
+}
+
+TEST(mech_walls_gates_bridges) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 1000}}, )") + kVic + R"(, "types": {
+        "wall": {"structure": {"footprint": [1, 1]}, "wall": true, "health": {"max": 300}, "cost": {"gold": 5, "time": 1}},
+        "gate": {"structure": {"footprint": [1, 2]}, "gate": "own", "health": {"max": 600}},
+        "bridge": {"structure": {"footprint": [2, 1], "terrain": "any"}, "bridge": true, "health": {"max": 400}},
+        "peon": {"move": {"speed": 3}, "health": {"max": 50}, "builds": ["wall"]},
+        "grunt": {"move": {"speed": 3}, "sight": 6, "health": {"max": 500}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}]}}})";
+    // wall line: a builder builds 5 segments from (5,2) to (9,2)
+    auto sim = makeSimJson(rules, flatMap(30, 12, R"(,"entities":[{"type":"peon","owner":1,"pos":[7,5]}])"));
+    Entity peon = findType(*sim, "peon", 1);
+    int64_t p = mod(*sim).rules().findType("wall") | (int64_t(9) << 16) | (int64_t(2) << 32);
+    sim->submit(mechCmd(1, game::kCmdBuildLine, {peon}, kNullEntity, at(5, 2), p));
+    run(*sim, 20);
+    CHECK(countType(*sim, "wall", 1) == 5);
+    // gate: a wall across the map with a gate; the owner walks through, the enemy is stopped at it
+    std::vector<std::string> rows(12, std::string(30, '.'));
+    for (int y = 0; y < 12; ++y) if (y != 5 && y != 6) rows[size_t(y)][15] = '#';
+    auto g = makeSimJson(rules, mapRows(30, 12, rows, R"(,"entities":[{"type":"gate","owner":1,"pos":[15.5,6]},{"type":"grunt","owner":1,"pos":[10,3]},{"type":"grunt","owner":2,"pos":[20,9]}])"));
+    Entity mine = findType(*g, "grunt", 1), foe = findType(*g, "grunt", 2), gate = findType(*g, "gate", 1);
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(25, 3)));
+    g->submit(mechCmd(2, game::kCmdMove, {foe}, kNullEntity, at(3, 9)));
+    run(*g, 12);
+    CHECK(posOf(*g, mine).x > Fixed::fromInt(20));   // through its own gate
+    CHECK(posOf(*g, foe).x > Fixed::fromInt(14));    // the enemy did not pass...
+    CHECK(hpOf(*g, gate) < Fixed::fromInt(600));      // ...and attacks the gate
+    // bridge over a river: walk across; when it is destroyed, whoever stands on it drowns
+    std::vector<std::string> river(10, std::string(30, '.'));
+    for (int y = 0; y < 10; ++y) { river[size_t(y)][14] = '~'; river[size_t(y)][15] = '~'; }
+    auto b = makeSimJson(rules, mapRows(30, 10, river, R"(,"entities":[{"type":"bridge","owner":0,"pos":[15,5.5]},{"type":"peon","owner":1,"pos":[5,5]}])"));
+    Entity walker = findType(*b, "peon", 1), br = findType(*b, "bridge", 0);
+    b->submit(mechCmd(1, game::kCmdMove, {walker}, kNullEntity, at(25, 5)));
+    run(*b, 10);
+    CHECK(posOf(*b, walker).x > Fixed::fromInt(22));
+    b->submit(mechCmd(1, game::kCmdMove, {walker}, kNullEntity, at(14.5 > 0 ? 15 : 15, 5)));
+    run(*b, 4);
+    b->world().get<game::Unit>(br).hp = Fixed{};
+    run(*b, 0.5);
+    CHECK(!b->world().alive(walker) || hpOf(*b, walker).raw <= 0);
+}
+
+TEST(mech_market_trade_tribute_diplomacy) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 500}, "wood": {"start": 500}}, )") + kVic + R"(,
+      "market": {"currency": "gold", "prices": {"wood": 100}, "fee": 0.3, "step": 5, "lot": 100}, "tribute": {"fee": 0.2}, "diplomacy": true,
+      "types": {
+        "market": {"structure": {"footprint": [3, 3]}, "market": true, "health": {"max": 1000}},
+        "cart": {"move": {"speed": 4}, "health": {"max": 50}, "trader": {"rate": 1}}}})";
+    auto sim = makeSimJson(rules, flatMap(60, 12, R"(,"entities":[{"type":"market","owner":1,"pos":[5,5]},{"type":"market","owner":1,"pos":[45,5]},{"type":"cart","owner":1,"pos":[8,5]},{"type":"market","owner":2,"pos":[25,10]},{"type":"market","owner":3,"pos":[35,10]}])",
+        R"([{"name":"A","team":1},{"name":"B","team":2},{"name":"C","team":3}])"));
+    Entity m1 = unitNear(*sim, 5, 5), m2 = unitNear(*sim, 45, 5), cart = findType(*sim, "cart", 1);
+    const int wood = mod(*sim).rules().findResource("wood");
+    sim->submit(mechCmd(1, game::kCmdTrade, {m1}, kNullEntity, {}, wood | 256));   // sell 100 wood
+    run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "wood") == Fixed::fromInt(400) && near(stockOf(*sim, 1, "gold"), Fixed::fromInt(570)));
+    CHECK(mod(*sim).marketPrice(*sim, wood) == Fixed::fromInt(95));
+    sim->submit(mechCmd(1, game::kCmdTrade, {m1}, kNullEntity, {}, wood));         // buy 100 wood for 95 * 1.3
+    run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "wood") == Fixed::fromInt(500));
+    CHECK(mod(*sim).marketPrice(*sim, wood) == Fixed::fromInt(100));
+    // trade cart between the two markets: ~40 cells per round trip leg -> about 40 gold per trip
+    Fixed g0 = stockOf(*sim, 1, "gold");
+    sim->submit(mechCmd(1, game::kCmdTradeRoute, {cart}, m2));
+    run(*sim, 30);
+    CHECK(stockOf(*sim, 1, "gold") >= g0 + Fixed::fromInt(39));
+    // tribute 100 gold to player 2 with a 20% fee
+    Fixed a0 = stockOf(*sim, 1, "gold"), b0 = stockOf(*sim, 2, "gold");
+    sim->submit(mechCmd(1, game::kCmdTribute, {}, kNullEntity, {}, mod(*sim).rules().findResource("gold") | (2 << 8) | (int64_t(100) << 16)));
+    run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "gold") == a0 - Fixed::fromInt(100) && near(stockOf(*sim, 2, "gold"), b0 + Fixed::fromInt(80)));
+    // alliance needs both sides; war splits again
+    sim->submit(mechCmd(1, game::kCmdDiplomacy, {}, kNullEntity, {}, 3 | 256));
+    run(*sim, 0.2);
+    CHECK(!sim->allied(1, 3));
+    sim->submit(mechCmd(3, game::kCmdDiplomacy, {}, kNullEntity, {}, 1 | 256));
+    run(*sim, 0.2);
+    CHECK(sim->allied(1, 3));
+    sim->submit(mechCmd(1, game::kCmdDiplomacy, {}, kNullEntity, {}, 3));
+    run(*sim, 0.2);
+    CHECK(!sim->allied(1, 3));
+}
+
+TEST(mech_items_cycles_hazards) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 500}, "ore": {"field": true}}, )") + kVic + R"(,
+      "statuses": {"night": {"mods": [{"stat": "sight", "mul": 0.5}]}, "haste": {"mods": [{"stat": "speed", "mul": 2}]}},
+      "cycles": [{"id": "day", "length": 20, "phases": [{"id": "day", "until": 0.5}, {"id": "night", "until": 1, "status": "night"}]}],
+      "hazards": [{"field": "ore", "damage": 10, "tags": ["bio"]}],
+      "items": {"potion": {"cost": {"gold": 50}, "use": {"heal": 200}, "charges": 1},
+                "boots": {"cost": {"gold": 100}, "mods": [{"stat": "speed", "add": 1}], "charges": 0, "consumable": false},
+                "gem": {"mods": [{"stat": "armor", "add": 2}]}},
+      "types": {
+        "hero": {"tags": ["bio"], "move": {"speed": 3}, "sight": 10, "health": {"max": 500}, "inventory": {"slots": 3}},
+        "shop": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "shop": {"sells": ["potion", "boots"], "radius": 3}},
+        "kobold": {"move": {"speed": 2}, "health": {"max": 10}, "drops": [{"item": "gem", "chance": 1}]}}})";
+    auto sim = makeSimJson(rules, flatMap(40, 12, R"(,"fields":[{"resource":"ore","center":[30,8],"radius":2,"amount":50}],"entities":[{"type":"hero","owner":1,"pos":[5,5]},{"type":"shop","owner":0,"pos":[8,5]},{"type":"kobold","owner":2,"pos":[20,5]}])"));
+    World& w = sim->world();
+    Entity hero = findType(*sim, "hero", 1), shop = findType(*sim, "shop", 0), kob = findType(*sim, "kobold", 2);
+    run(*sim, 0.2);
+    CHECK(w.has<game::ItemBag>(hero));
+    Fixed speed0 = mod(*sim).stat(*sim, hero, game::Stat::Speed);
+    sim->submit(mechCmd(1, game::kCmdBuyItem, {hero}, shop, {}, mod(*sim).rules().mech.findItem("boots")));
+    sim->submit(mechCmd(1, game::kCmdBuyItem, {hero}, shop, {}, mod(*sim).rules().mech.findItem("potion")));
+    run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(350));
+    CHECK(mod(*sim).stat(*sim, hero, game::Stat::Speed) == speed0 + Fixed::fromInt(1));
+    w.get<game::Unit>(hero).hp = Fixed::fromInt(100);
+    sim->submit(mechCmd(1, game::kCmdUseItem, {hero}, kNullEntity, {}, 1));
+    run(*sim, 0.2);
+    CHECK(hpOf(*sim, hero) == Fixed::fromInt(300) && w.get<game::ItemBag>(hero).items[1] == -1);
+    // a kobold drops a gem; the hero picks it up
+    w.get<game::Unit>(kob).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(mod(*sim).state(*sim).mech.groundItems.size() == 1);
+    sim->submit(mechCmd(1, game::kCmdPickItem, {hero}, kNullEntity, at(20, 5)));
+    run(*sim, 6);
+    CHECK(mod(*sim).state(*sim).mech.groundItems.empty() && mod(*sim).stat(*sim, hero, game::Stat::Armor) == Fixed::fromInt(2));
+    // night halves sight (second half of the 20 s cycle)
+    run(*sim, 12 - 6.6);
+    CHECK(mod(*sim).stat(*sim, hero, game::Stat::Sight) == Fixed::fromInt(5));
+    CHECK(mod(*sim).state(*sim).trig.vars["cycle.day"] == Fixed::fromInt(1));
+    // standing on the ore field hurts bio units
+    sim->submit(mechCmd(1, game::kCmdMove, {hero}, kNullEntity, at(30, 8)));
+    Fixed h0 = hpOf(*sim, hero);
+    run(*sim, 8);
+    CHECK(hpOf(*sim, hero) < h0);
+}
+
+TEST(mech_ammo_merge_deck_tunnel_amphibious) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 500}, "elixir": {"start": 10}}, )") + kVic + R"(,
+      "deck": {"hand": 2, "deployNear": 8},
+      "playerAbilities": [{"id": "a", "cost": {"elixir": 1}, "target": "point", "effects": [{"type": "spawn", "unit": "templar", "count": 1}]},
+                          {"id": "b", "cost": {"elixir": 1}, "target": "point", "effects": [{"type": "spawn", "unit": "templar", "count": 1}]},
+                          {"id": "c", "cost": {"elixir": 1}, "target": "point", "effects": [{"type": "spawn", "unit": "templar", "count": 1}]}],
+      "types": {
+        "airfield": {"structure": {"footprint": [3, 3]}, "health": {"max": 1000}, "dock": {"slots": 2, "rearmTime": 0.5}},
+        "harrier": {"move": {"speed": 6, "layer": "air"}, "sight": 10, "health": {"max": 150}, "weapons": [{"range": 6, "damage": 30, "cooldown": 0.5, "targets": ["ground"], "ammo": 2}]},
+        "target": {"structure": {"footprint": [1, 1]}, "health": {"max": 5000}},
+        "templar": {"move": {"speed": 2}, "health": {"max": 40}, "mergeInto": {"with": "templar", "result": "archon"}},
+        "archon": {"move": {"speed": 2}, "health": {"max": 360}, "splitInto": {"type": "templar", "count": 2}},
+        "nydus": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "transport": {"slots": 10}, "tunnel": "nydus"},
+        "ling": {"move": {"speed": 3}, "health": {"max": 35}},
+        "hover": {"move": {"speed": 3, "layer": "amphibious"}, "health": {"max": 100}}}})";
+    std::vector<std::string> rows(16, std::string(50, '.'));
+    for (int y = 0; y < 16; ++y) for (int x = 30; x < 34; ++x) rows[size_t(y)][size_t(x)] = '~';
+    auto sim = makeSimJson(rules, mapRows(50, 16, rows, R"(,"entities":[{"type":"airfield","owner":1,"pos":[4,4]},{"type":"harrier","owner":1,"pos":[5,8]},{"type":"target","owner":2,"pos":[12,8]},
+        {"type":"templar","owner":1,"pos":[5,13]},{"type":"templar","owner":1,"pos":[7,13]},
+        {"type":"nydus","owner":1,"pos":[18,3]},{"type":"nydus","owner":1,"pos":[45,12]},{"type":"ling","owner":1,"pos":[17,6]},{"type":"hover","owner":1,"pos":[25,8]}])"));
+    World& w = sim->world();
+    Entity harrier = findType(*sim, "harrier", 1), tgt = findType(*sim, "target", 2);
+    bool rearmed = false;
+    for (int i = 0; i < 20 * 3; ++i) {
+        sim->step();
+        auto& od = w.get<game::Orders>(harrier);
+        if (!od.queue.empty() && od.queue.front().type == game::OrderType::Rearm) { rearmed = true; break; }
+    }
+    CHECK(rearmed && hpOf(*sim, tgt) == Fixed::fromInt(5000 - 60));   // two shots, then it flies to the airfield
+    run(*sim, 10);
+    CHECK(hpOf(*sim, tgt) < Fixed::fromInt(4940));                    // back in action after rearming
+    // two templars merge into an archon, which splits again
+    std::vector<Entity> tp;
+    w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && mod(*sim).rules().types[u.type].id == "templar") tp.push_back(e); });
+    sim->submit(mechCmd(1, game::kCmdMerge, tp));
+    run(*sim, 3);
+    CHECK(countType(*sim, "archon", 1) == 1 && countType(*sim, "templar", 1) == 0);
+    sim->submit(mechCmd(1, game::kCmdSplit, {findType(*sim, "archon", 1)}));
+    run(*sim, 0.3);
+    CHECK(countType(*sim, "templar", 1) == 2);
+    // deck: hand of 2 -> card c can't be cast until a or b is played; deploy only near own structures
+    CHECK(mod(*sim).canUsePlayerAbility(*sim, 1, 0) && !mod(*sim).canUsePlayerAbility(*sim, 1, 2));
+    sim->submit(mechCmd(1, game::kCmdPlayerAbility, {}, kNullEntity, at(25, 14), 0));   // far from own structures: refused
+    run(*sim, 0.2);
+    CHECK(countType(*sim, "templar", 1) == 2);
+    sim->submit(mechCmd(1, game::kCmdPlayerAbility, {}, kNullEntity, at(6, 7), 0));
+    run(*sim, 0.2);
+    CHECK(countType(*sim, "templar", 1) == 3);
+    CHECK(mod(*sim).canUsePlayerAbility(*sim, 1, 2) && !mod(*sim).canUsePlayerAbility(*sim, 1, 0));   // a went to the back
+    // tunnels: in at one nydus, out at the other
+    Entity ling = findType(*sim, "ling", 1), n1 = unitNear(*sim, 18, 3), n2 = unitNear(*sim, 45, 12);
+    sim->submit(mechCmd(1, game::kCmdLoad, {ling}, n1));
+    run(*sim, 3);
+    sim->submit(mechCmd(1, game::kCmdUnload, {n2}));
+    run(*sim, 1);
+    CHECK(dist2DTest(posOf(*sim, ling), at(45, 12)) < Fixed::fromInt(4));
+    // hovercraft crosses the water strip
+    Entity hover = findType(*sim, "hover", 1);
+    sim->submit(mechCmd(1, game::kCmdMove, {hover}, kNullEntity, at(40, 8)));
+    run(*sim, 8);
+    CHECK(dist2DTest(posOf(*sim, hover), at(40, 8)) < Fixed::fromInt(2));
 }

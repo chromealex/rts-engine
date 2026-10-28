@@ -22,4 +22,24 @@ struct RallyPath { std::vector<Vec3> points; };
 // StarCraft shields: absorb damage first, regenerate after `delay` seconds without being hit.
 struct Shield { Fixed hp{}; uint32_t lastHit = 0; };
 
+// ---- stage 2
+struct Formation { uint32_t group = 0; uint8_t shape = 0; Vec3 offset{}; };       // offset in formation space (x right, z back)
+struct BridgeLaid { bool laid = false; std::vector<int32_t> cells; };   // gates and bridges: footprint opened; bridge: cells made ground
+struct Ammo { int left[4] = {0, 0, 0, 0}; bool init = false; };
+struct Merging { Entity partner = kNullEntity; };
+struct Trader { Entity home = kNullEntity, dest = kNullEntity; bool loaded = false; };
+struct ItemBag { std::vector<int16_t> items, charges; };                        // per slot (-1 empty)
+struct GroundItem { Vec3 pos{}; uint16_t item = 0; int charges = 0; };
+
+// Global mech state (inside GameState; hashed when used).
+struct MechState {
+    std::vector<Fixed> prices;                     // market price per resource (in the currency), shared
+    std::vector<GroundItem> groundItems;
+    std::vector<std::vector<int>> decks;           // per player slot: player ability indices, hand = first N
+    std::vector<std::vector<uint8_t>> allyRequest; // [a][b]: a asked b for an alliance
+    std::vector<int> cyclePhase;                   // per cycle: current phase (-1 before the first tick)
+    uint32_t nextGroup = 1;                        // formation groups
+    std::vector<std::pair<uint32_t, Fixed>> groupSpeed;   // derived each tick (not hashed)
+};
+
 } // namespace rts::game

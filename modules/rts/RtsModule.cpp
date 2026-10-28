@@ -28,6 +28,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     const Json& mapIn = generated_.isObject() ? generated_ : map;
     setupMap(sim, mapIn);
     loadTriggers(rules_, rulesJson, mapIn, triggers_);
+    mechSetup(sim, mapIn);   // agent-mech
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
@@ -821,7 +822,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
-    if (cmd.type >= kCmdStance || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue || mechOn(sim))) || (rules_.mech.transports && cmd.type == kCmdSmart)) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
+    if (cmd.type >= kCmdStance || mechOn(sim) || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue))) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
     if (cmd.type == kCmdBuildRoad || cmd.type == kCmdConnectRoad) { applySettlersCommand(sim, cmd); return; }
 
@@ -1259,6 +1260,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
         if (auto* cp = w.tryGet<Capture>(e)) { h.fx(cp->progress); h.u32(cp->team); }
         if (mechOn(sim)) hashMech(sim, h, e);
     });
+    if (mechOn(sim)) hashMechGlobal(sim, h);
     h.u32(uint32_t(w.count<Projectile>()));
     w.each<Projectile, Transform>([&](Entity e, Projectile&, Transform& t) { h.u64(e.packed()); h.v3(t.pos); });
 }

@@ -94,6 +94,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
     case kCmdUnload: {
         for (Entity c : cmd.units) {
             if (!own(sim, c, cmd.player)) continue;
+            if (rules_.mech.tunnels && rules_.types[w.get<Unit>(c).type].mech.tunnel >= 0) mechTunnelGather(sim, c);
             auto* tp = w.tryGet<Transport>(c);
             if (!tp || tp->cargo.empty()) continue;
             if (cmd.param == 1 && w.has<Mobile>(c)) {
@@ -119,7 +120,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         c.type = kCmdLoad;
         return applyMechCommand(sim, c);
     }
-    default: return applyMechCommand2(sim, cmd);   // RtsMechUnits.cpp
+    default: return applyMechCommand2(sim, cmd) || applyMechCommand3(sim, cmd);   // RtsMechUnits.cpp, stage 2
     }
 }
 
@@ -231,6 +232,8 @@ bool RtsModule::runUnload(Simulation& sim, Entity e, Order& o) {
 void RtsModule::mechOnDeath(Simulation& sim, Entity e) {
     World& w = sim.world();
     mechVeteranKill(sim, e);
+    if (rules_.mech.hasItems) mechDropItems(sim, e);
+    if (rules_.mech.bridges && rules_.types[w.get<Unit>(e).type].mech.bridge) mechBridgeDied(sim, e);
     if (auto* b = w.tryGet<Boarded>(e)) {   // a passenger died inside
         if (auto* tp = w.alive(b->carrier) ? w.tryGet<Transport>(b->carrier) : nullptr) {
             auto it = std::find(tp->cargo.begin(), tp->cargo.end(), e);
@@ -302,6 +305,17 @@ void RtsModule::mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed
             if (per.raw > 0) mul = mul * (kOne + per * int64_t(tp->cargo.size()));
         }
     }
+    if (auto* inv = w.tryGet<ItemBag>(e))   // items carried
+        for (int16_t it : inv->items) {
+            if (it < 0) continue;
+            for (auto& pl : rules_.mech.items[size_t(it)].mods) if (pl.stat == s) { add += pl.add; mul = mul * pl.mul; }
+        }
+    if (s == Stat::Speed) if (auto* fm = w.tryGet<Formation>(e)) {   // a marching formation keeps the pace of its slowest member
+        auto* ord = w.tryGet<Orders>(e);
+        const Fixed own = rules_.types[w.get<Unit>(e).type].speed;
+        if (ord && !ord->queue.empty() && (ord->queue.front().type == OrderType::Move || ord->queue.front().type == OrderType::AttackMove) && own.raw > 0)
+            for (auto& [g, sp] : w.resource<GameState>()->mech.groupSpeed) if (g == fm->group && sp < own) mul = mul * (sp / own);
+    }
     if (auto* v = w.tryGet<Veteran>(e); v && v->level > 1) {
         const MechType& mt = rules_.types[w.get<Unit>(e).type].mech;
         const VeterancyTable& tab = mt.veterancy == 1 ? mt.vetTable : rules_.mech.vet;
@@ -319,6 +333,9 @@ Fixed RtsModule::mechDamageTaken(Simulation& sim, Entity e) const {
 void RtsModule::sysMech(Simulation& sim) {
     World& w = sim.world();
     mechTick(sim);   // RtsMechUnits.cpp: veterans, toggles, ...
+    mechTickWorld(sim);
+    mechTickEconomy(sim);
+    mechTickGroups(sim);
     std::vector<Entity> addStance, dropRetreat;
     w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& tr) {
         if (u.hp.raw <= 0) return;
@@ -386,6 +403,11 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* v = w.tryGet<Veteran>(e)) { h.u32(0x7E7E); h.i32(v->level); h.fx(v->xp); }
     if (auto* rp = w.tryGet<RallyPath>(e)) { h.u32(0x9A11); h.u32(uint32_t(rp->points.size())); }
     if (auto* sh = w.tryGet<Shield>(e)) { h.u32(0x5E1D); h.fx(sh->hp); }
+    if (auto* fm = w.tryGet<Formation>(e)) { h.u32(0xF0A3); h.u32(fm->group); h.v3(fm->offset); }
+    if (auto* am = w.tryGet<Ammo>(e)) { h.u32(0xA330); for (int k = 0; k < 4; ++k) h.i32(am->left[k]); }
+    if (auto* tr = w.tryGet<Trader>(e)) { h.u32(0x7DE4); h.u64(tr->dest.packed()); h.u32(tr->loaded); }
+    if (auto* inv = w.tryGet<ItemBag>(e)) { h.u32(0x1A7E); for (size_t k = 0; k < inv->items.size(); ++k) { h.i32(inv->items[k]); h.i32(inv->charges[k]); } }
+    if (auto* mg = w.tryGet<Merging>(e)) { h.u32(0x3E26); h.u64(mg->partner.packed()); }
 }
 
 } // namespace rts::game

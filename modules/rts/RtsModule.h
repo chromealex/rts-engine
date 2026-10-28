@@ -60,6 +60,18 @@ enum CommandType : uint16_t {
     kCmdUnload,       // units = transports; point: move there first (param 1), else unload where they stand
     kCmdGuard,        // units follow `target` and fight what attacks near it
     kCmdFollow,       // units follow `target`
+    kCmdFormation,    // units; param = shape (0 line, 1 box, 2 wedge, 3 loose, -1 break up)
+    kCmdBuildLine,    // builders; point = start, param = type | end x << 16 | end z << 32 (cells): walls in a line
+    kCmdMerge,        // units: pair up into their mergeInto result (archons)
+    kCmdSplit,        // units with splitInto
+    kCmdTrade,        // units[0] = own market; param = resource | (1 << 8 when selling)
+    kCmdTradeRoute,   // traders; target = destination market (own or allied), home = nearest own market
+    kCmdTribute,      // param = resource | to player << 8 | amount << 16
+    kCmdDiplomacy,    // param = other player | 1 << 8 ally (0: enemy)
+    kCmdBuyItem,      // units[0] = buyer (inventory), target = shop, param = item index
+    kCmdUseItem,      // units[0]; param = slot; target / point for the effect (self by default)
+    kCmdDropItem,     // units[0]; param = slot
+    kCmdPickItem,     // units[0]; point = where the ground item lies
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -109,6 +121,11 @@ enum GameEvent : uint16_t {
     kEvTriggerFired,    // tools/debug: value = trigger index (Rules triggers first, then map), player = triggering slot, a = unit
     kEvLoaded,          // agent-mech: a = passenger, b = transport, value = passengers aboard
     kEvUnloaded,        // a = passenger, b = transport, value = passengers left
+    kEvCyclePhase,      // agent-mech: value = cycle index << 8 | phase index (day/night, seasons)
+    kEvTraded,          // player, value = resource | 1 << 8 when sold (market); trader income: a = trader
+    kEvDiplomacy,       // player = who, value = other | 1 << 8 when allied
+    kEvItem,            // a = unit, value = item index; b: shop (bought) / null (used, picked, dropped)
+    kEvMerged,          // a = result
 };
 
 // ---------------------------------------------------------------- components
@@ -133,7 +150,11 @@ enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Retur
                                  Haul,       // carrier job, see Carrier
                                  Board,      // agent-mech: walk to the transport `target` and get in
                                  Unload,     // agent-mech (transports): go to `point` (state 0) then unload
-                                 Follow };   // agent-mech: stay near `target`; param 1 = guard it
+                                 Follow,     // agent-mech: stay near `target`; param 1 = guard it
+                                 Rearm,      // go to the dock `target` and reload ammo
+                                 Trade,      // trader loop between its markets (Trader component)
+                                 PickItem,   // walk to `point` and pick up the ground item there
+                                 Merge };    // walk to `target` and merge with it
 
 struct Order {
     OrderType type = OrderType::Move;
@@ -341,6 +362,7 @@ struct EffectCtx {
 };
 
 struct GameState {
+    MechState mech;                           // agent-mech global state (RtsMech.h)
     bool mechActive = false;                  // agent-mech: a mech component exists (stance given in any game); derived
     std::vector<PlayerEconomy> players;   // index = slot (0 = neutral)
     MapGrid grid;
@@ -511,6 +533,26 @@ public:
     Fixed gatherMultFor(Simulation& sim, uint8_t owner, int res) const;                         // upkeep per resource
     bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
     void mechTickCombat(Simulation& sim);                                                       // shields
+    // stage 2 (RtsMechWorld.cpp, RtsMechEconomy.cpp, RtsMechGroups.cpp)
+    bool applyMechCommand3(Simulation& sim, const Command& cmd);
+    void mechTickWorld(Simulation& sim);          // gates, bridges, hazards, cycles, docks
+    void mechTickEconomy(Simulation& sim);        // traders, prices, deck setup
+    void mechTickGroups(Simulation& sim);         // formation speeds, merges
+    bool mechUseAmmo(Simulation& sim, Entity e, size_t weapon);
+    bool runRearm(Simulation& sim, Entity e, Order& o);
+    bool runTrade(Simulation& sim, Entity e, Order& o);
+    bool runPickItem(Simulation& sim, Entity e, Order& o);
+    bool runMerge(Simulation& sim, Entity e, Order& o);
+    bool mechDeckAllows(Simulation& sim, uint8_t player, int ability, Vec3 point) const;
+    bool mechInHand(Simulation& sim, uint8_t player, int ability) const;
+    void mechDeckPlayed(Simulation& sim, uint8_t player, int ability);
+    void mechDropItems(Simulation& sim, Entity victim);
+    void mechBridgeDied(Simulation& sim, Entity e);
+    void hashMechGlobal(Simulation& sim, Hasher& h);
+    Fixed marketPrice(Simulation& sim, int res) const;
+    void mechSetup(Simulation& sim, const Json& map);   // decks, prices, alliances (after setupMap)
+    void mechTunnelGather(Simulation& sim, Entity tunnel);   // pull the network's passengers into this exit
+    bool applyMechEconomyCommand(Simulation& sim, const Command& cmd);   // market, trade, tribute, diplomacy, items
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

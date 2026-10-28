@@ -22,10 +22,10 @@ const char* const kEventNames[] = {
     "roadBuilt", "lanesChanged",
     "statusStart", "statusEnd", "areaStart", "areaTrigger", "areaEnd", "projectileLaunch", "impact",
     "chainJump", "castStart", "channelStart", "channelEnd", "alert", "garrisonChanged",
-    "triggerFired", "loaded", "unloaded",
+    "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
-static_assert(kEventCount == size_t(kEvUnloaded) + 1, "kEventNames must list every GameEvent");
+static_assert(kEventCount == size_t(kEvMerged) + 1, "kEventNames must list every GameEvent");
 
 struct CmdName { const char* name; uint16_t type; };
 const CmdName kCommands[] = {
@@ -38,7 +38,9 @@ const CmdName kCommands[] = {
     {"possess", kCmdPossess}, {"direct", kCmdDirect}, {"player_ability", kCmdPlayerAbility},
     {"build_road", kCmdBuildRoad}, {"connect_road", kCmdConnectRoad},
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
-    {"guard", kCmdGuard}, {"follow", kCmdFollow},
+    {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
+    {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
+    {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem},
 };
 
 Vec3 readPoint(const Json& p) {
@@ -73,7 +75,7 @@ std::string simEventNames() {
 }
 const char* orderName(OrderType t) {
     static const char* const n[] = {"move", "attackMove", "attack", "patrol", "gather", "return", "build", "repair",
-                                    "enter", "cast", "dig", "claimCell", "need", "haul", "board", "unload", "follow"};
+                                    "enter", "cast", "dig", "claimCell", "need", "haul", "board", "unload", "follow", "rearm", "trade", "pickItem", "merge"};
     size_t i = size_t(t);
     return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
 }
