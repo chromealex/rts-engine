@@ -291,4 +291,62 @@ bool PlanetSurface::raycast(float3 o, float3 d, float3& hit, float seaLevel) con
     return false;
 }
 
+// ------------------------------------------------------------------ seam-aware field blur
+
+void PlanetFieldBlur::operator()(std::vector<uint8_t>& f, int r) {
+    const Surface* S = S_.get();
+    if (!S || r <= 0 || f.size() != size_t(S->W) * size_t(S->H)) return;
+    if (r != radius_ || pad_.size() != S->bodies.size()) { // padding table: grid cell of every padded pixel
+        radius_ = r;
+        pad_.assign(S->bodies.size(), {});
+        for (size_t bi = 0; bi < S->bodies.size(); ++bi) {
+            const BodyDef& b = S->bodies[bi];
+            if (!b.hasSurface()) continue;
+            const int N = b.faceSize, P = N + 2 * r;
+            auto& t = pad_[bi];
+            t.assign(size_t(6) * size_t(P) * size_t(P), -1);
+            for (int fc = 0; fc < 6; ++fc)
+                for (int y = -r; y < N + r; ++y)
+                    for (int x = -r; x < N + r; ++x) {
+                        const int xc = std::clamp(x, 0, N - 1), yc = std::clamp(y, 0, N - 1);
+                        const int base = S->gridCell(int(bi), fc, xc, yc);
+                        int c = (x == xc && y == yc) ? base : S->offset(base, x - xc, y - yc);
+                        if (c < 0) c = S->offset(base, x - xc, 0);            // past a cube corner: step one axis only
+                        if (c < 0) c = S->offset(base, 0, y - yc);
+                        if (c < 0) c = base;
+                        t[(size_t(fc) * size_t(P) + size_t(y + r)) * size_t(P) + size_t(x + r)] = c;
+                    }
+        }
+    }
+    src_ = f;
+    const int n = 2 * r + 1, nn = n * n;
+    for (size_t bi = 0; bi < S->bodies.size(); ++bi) {
+        const BodyDef& b = S->bodies[bi];
+        if (!b.hasSurface() || pad_[bi].empty()) continue;
+        const int N = b.faceSize, P = N + 2 * r;
+        const int32_t* t = pad_[bi].data();
+        row_.assign(size_t(P) * size_t(N), 0);   // horizontal sums: P rows x N columns
+        for (int fc = 0; fc < 6; ++fc) {
+            const int32_t* tf = t + size_t(fc) * size_t(P) * size_t(P);
+            for (int y = 0; y < P; ++y) {
+                const int32_t* tr = tf + size_t(y) * size_t(P);
+                int sum = 0;
+                for (int x = 0; x < n; ++x) sum += src_[size_t(tr[x])];
+                for (int x = 0; x < N; ++x) {
+                    row_[size_t(y) * size_t(N) + size_t(x)] = uint16_t(sum);
+                    if (x + 1 < N) sum += src_[size_t(tr[x + n])] - src_[size_t(tr[x])];
+                }
+            }
+            for (int x = 0; x < N; ++x) {
+                int sum = 0;
+                for (int y = 0; y < n; ++y) sum += row_[size_t(y) * size_t(N) + size_t(x)];
+                for (int y = 0; y < N; ++y) {
+                    f[size_t(S->gridCell(int(bi), fc, x, y))] = uint8_t((sum + nn / 2) / nn);
+                    if (y + 1 < N) sum += row_[size_t(y + n) * size_t(N) + size_t(x)] - row_[size_t(y) * size_t(N) + size_t(x)];
+                }
+            }
+        }
+    }
+}
+
 } // namespace rts::game

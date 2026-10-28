@@ -9829,3 +9829,63 @@ TEST(planet_territory_claims_and_dig_cross_seams) {
     const uint64_t a = run(true), b = run(false);
     CHECK(a == b);
 }
+
+// ---- planet fog blur (agent-planet-render): seam-aware separable blur, timing on faceSize 256
+TEST(planet_fog_blur_seams_and_speed) {
+    using namespace rts::game;
+    auto S = std::make_shared<Surface>();
+    BodyDef b; b.id = "p"; b.radius = Fixed::fromInt(400); b.faceSize = 256;
+    S->bodies.push_back(b);
+    S->build();
+    const size_t n = size_t(S->W) * size_t(S->H);
+    PlanetFieldBlur blur(S);
+    // a uniform field stays uniform (padding never reads void / foreign cells)
+    std::vector<uint8_t> f(n, 200);
+    blur(f, 2);
+    CHECK(std::all_of(f.begin(), f.end(), [](uint8_t v) { return v == 200; }));
+    // a bright block on the edge of face 4 spreads onto the neighbouring face across the seam
+    std::fill(f.begin(), f.end(), uint8_t(0));
+    for (int y = 100; y < 110; ++y)
+        for (int x = 252; x < 256; ++x) f[size_t(S->gridCell(0, 4, x, y))] = 255;
+    const int edge = S->gridCell(0, 4, 255, 104), across = S->offset(edge, 1, 0);
+    CHECK(across >= 0 && S->offset(across, -1, 0) == edge);
+    blur(f, 2);
+    CHECK(f[size_t(across)] > 60);    // light leaks over the seam like inside a face
+    int b2, f2, x2, y2;
+    S->cellFace(across, b2, f2, x2, y2);
+    CHECK(f2 != 4);
+    // never into the stacked next row of the grid (face 4 row 255 vs face 5 row 0 are not neighbours)
+    std::fill(f.begin(), f.end(), uint8_t(0));
+    for (int x = 0; x < 256; ++x) f[size_t(S->gridCell(0, 4, x, 255))] = 255;
+    blur(f, 2);
+    int b3, f3, x3, y3;
+    S->cellFace(S->offset(S->gridCell(0, 4, 128, 255), 0, 1), b3, f3, x3, y3);
+    CHECK(f[size_t(S->gridCell(0, 5, 128, 0))] == 0 || f3 == 5);
+    // timing: the old per-pass 3x3 mean over the neighbour table vs the separable blur
+    std::vector<uint8_t> g(n);
+    for (size_t i = 0; i < n; ++i) g[i] = uint8_t((i * 2654435761u) >> 24) & 0x80 ? 255 : 0;
+    auto old = [&](std::vector<uint8_t>& v, int radius) {
+        std::vector<uint16_t> tmp(n);
+        for (int pass = 0; pass < radius; ++pass) {
+            for (int c = 0; c < int(n); ++c) {
+                int bb, fc, x, y;
+                if (!S->cellFace(c, bb, fc, x, y)) { tmp[size_t(c)] = v[size_t(c)]; continue; }
+                int sum = v[size_t(c)], cnt = 1;
+                for (int k = 0; k < 8; ++k) { const int o = S->neighbor(c, k); if (o >= 0) { sum += v[size_t(o)]; ++cnt; } }
+                tmp[size_t(c)] = uint16_t(sum / cnt);
+            }
+            for (size_t c = 0; c < n; ++c) v[c] = uint8_t(tmp[c]);
+        }
+    };
+    auto ms = [&](auto&& fn) {
+        std::vector<uint8_t> v = g;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 0; k < 5; ++k) { v = g; fn(v); }
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 5.0;
+    };
+    blur(g, 2);   // padding table built outside the timing
+    for (size_t i = 0; i < n; ++i) g[i] = uint8_t((i * 2654435761u) >> 24) & 0x80 ? 255 : 0;
+    const double tOld = ms([&](std::vector<uint8_t>& v) { old(v, 2); }), tNew = ms([&](std::vector<uint8_t>& v) { blur(v, 2); });
+    std::printf("  fog blur faceSize 256 (%zu cells), radius 2: old %.2f ms, new %.2f ms per update\n", n, tOld, tNew);
+    CHECK(tNew < tOld);
+}
