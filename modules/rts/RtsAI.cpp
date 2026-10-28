@@ -1,6 +1,8 @@
 #include "RtsAI.h"
 #include <algorithm>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 namespace rts::game {
 
@@ -44,6 +46,8 @@ void RtsAI::update(Simulation& sim) {
         if (sim.world().has<Garrison>(e) && t.spawnUnit != kNoType) hasGarrisons = true;
         else hasOther = true;
     });
+    if (m->rules().originals) originals(sim, *m);
+    if (m->rules().fidelity && hasOther) fidelity(sim, *m);
     if (hasGarrisons) garrisonPlay(sim, *m);
     if (hasOther) {
         special(sim, *m);
@@ -206,8 +210,13 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
                 if (!m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DebuffedOwn, p2, t2) &&
                     !m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DensestEnemy, p2, t2)) return false;
             }
-            if (!m.smartTarget(sim, player_, a.payload, a.target, a.smart, pt, tg)) return false;
-            Command c; c.type = kCmdPlayerAbility; c.param = ai; c.point = pt; c.target = tg;
+            int64_t pair = 0;
+            if (a.target == TargetKind::PointPair) {   // from where to where (Chronosphere)
+                Vec3 to;
+                if (!m.pairTarget(sim, player_, a.payload, pt, to)) return false;
+                pair = RtsModule::packPoint2(to);
+            } else if (!m.smartTarget(sim, player_, a.payload, a.target, a.smart, pt, tg)) return false;
+            Command c; c.type = kCmdPlayerAbility; c.param = ai | pair; c.point = pt; c.target = tg;
             send(sim, c);
             lastSkillTick_ = sim.tick();
             return true;
@@ -268,6 +277,11 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             for (uint16_t k : R.types[u.type].researches) {
                 if (int(eco.researched[k]) >= R.techs[k].levels || eco.researching[k] || !m.requirementsMet(sim, player_, R.techs[k].requires_) ||
                     !m.canAfford(sim, player_, m.techCost(sim, player_, k))) continue;
+                if (R.techs[k].requiresAnyCount > 0) {
+                    int have = 0;
+                    for (uint16_t ty : R.techs[k].requiresAny) if (eco.typeCount[ty] > 0) ++have;
+                    if (have < R.techs[k].requiresAnyCount) continue;
+                }
                 Command c; c.type = kCmdResearch; c.units = {e}; c.param = k; send(sim, c);
                 lastTechTick_ = sim.tick();
                 break;

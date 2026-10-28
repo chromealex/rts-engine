@@ -13,6 +13,7 @@ namespace rts::editor { void registerStrategicOps(Workspace& ws); }   // Strateg
 #include "PlanetOps.h"
 #include "OverlayOps.h"
 #include "FxOps.h"
+#include "MaterialOps.h"
 #include "BrandingOps.h"
 #include "Projects.h"
 #include <algorithm>
@@ -23,6 +24,7 @@ namespace rts::editor { void registerStrategicOps(Workspace& ws); }   // Strateg
 #include <fstream>
 #include <memory>
 #include <sstream>
+#include "engine/pack/FileCopy.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
@@ -170,7 +172,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerStrategicOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerMaterialOps(*this); registerStrategicOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -222,7 +224,7 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
         }
         lf.close();
         std::error_code ec;
-        if (!estimate) fs::copy_file(logFile, logFile.parent_path() / "build-last.log", fs::copy_options::overwrite_existing, ec);
+        if (!estimate) rts::pack::copyFileReplace(logFile, logFile.parent_path() / "build-last.log", ec);
         building_ = false;
     });
 }
@@ -1242,7 +1244,8 @@ void Workspace::registerCoreOps() {
             fs::path canon = fs::weakly_canonical(dst);
             if (canon.string().rfind(fs::weakly_canonical(project.dir).string(), 0) != 0) throw std::runtime_error("dest must stay inside the game folder");
             fs::create_directories(dst.parent_path());
-            fs::copy_file(ps(p, "source"), dst, fs::copy_options::overwrite_existing);
+            std::error_code ec;   // re-import over an existing file: MinGW-safe copy (FileCopy.h)
+            if (!rts::pack::copyFileReplace(ps(p, "source"), dst, ec)) throw std::runtime_error("copy " + ps(p, "source") + ": " + ec.message());
             Json r = ok();
             r.set("summary", str("Импортирован " + ps(p, "dest")));
             return r;

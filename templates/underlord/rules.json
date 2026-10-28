@@ -1,53 +1,74 @@
-// "Underlord" — Dungeon Keeper-like: imps dig marked rock (gold veins pay out), claim the floor and the
-// neutral portal; painted rooms attract creatures through the portal (lairs give capacity, the hatchery
-// feeds them, the library and training room give research and experience); creatures want food, sleep
-// and wages and leave when unhappy. The hand picks up, drops and slaps; one creature can be possessed.
-// Lose your dungeon heart and you lose.
+// "Underlord" — Dungeon Keeper: imps dig marked rock (gold veins pay out) and claim the floor; claimed tiles give mana,
+// new imps cost mana and each one costs more. Gold is kept in the heart and treasuries (their size caps it). Painted
+// rooms attract creatures through a claimed portal (lair for all, a library for warlocks, a workshop for trolls, a big
+// hatchery for bile demons, training for dark mistresses, a graveyard for vampires); creatures eat at the hatchery,
+// sleep in the lair, want wages on payday and leave when unhappy, and level up by training and fighting. The library
+// researches the keeper spells (sight of evil, lightning, heal) and dark arts. The hand picks up, drops and slaps;
+// one creature can be possessed. Heroes from the surface invade now and then. Lose the heart and you lose.
+// Not yet here (engine plan): traps and doors, prison / torture / temple, the computer keeper sending creatures to dig.
 {
   "victory": "keyUnits",
-  "supplyCap": 40,
+  "supplyCap": 60,
   "resources": {
-    "gold": {"name": "Золото", "start": 3000},
-    "food": {"name": "Куры", "start": 10},
+    "gold": {"name": "Золото", "start": 3000, "capped": true},
+    "food": {"name": "Куры", "start": 20},
     "research": {"name": "Исследования", "start": 0},
-    "mana": {"name": "Мана", "kind": "flow", "start": 200, "storage": 500}
+    "mana": {"name": "Мана", "kind": "flow", "start": 1000, "storage": 50000}
   },
   "diggable": {"D": {"hardness": 4}, "G": {"hardness": 6, "yields": {"gold": 300}}, "J": {"hardness": 10, "yields": {"gold": 60}, "infinite": true}},
-  "territory": {"claimBy": "workers", "startRadius": 3, "buildOnlyOwned": true},
+  "territory": {"claimBy": "workers", "startRadius": 3, "buildOnlyOwned": true, "incomePerCell": {"mana": 0.02}},
   "hand": {"max": 8, "slapDamage": 5, "slapDuration": 8},
   "possession": {"cost": {"mana": 100}, "drain": {"mana": 3}},
   "rooms": {
-    "lair": {"name": "Логово", "cost": {"gold": 15}, "supply": 1},
-    "hatchery": {"name": "Курятник", "cost": {"gold": 15}, "income": {"food": 0.04}},
-    "library": {"name": "Библиотека", "cost": {"gold": 25}, "income": {"research": 0.01}, "work": {"yields": {"research": 1}}},
-    "training": {"name": "Тренировочный зал", "cost": {"gold": 25}, "work": {"xp": 4, "cost": {"gold": 0.1}}}
+    "lair": {"name": "Логово", "cost": {"gold": 30}, "supply": 1},
+    "hatchery": {"name": "Курятник", "cost": {"gold": 30}, "income": {"food": 0.04}},
+    "treasury": {"name": "Сокровищница", "cost": {"gold": 25}, "storage": {"gold": 1000}},
+    "library": {"name": "Библиотека", "cost": {"gold": 40}, "income": {"research": 0.01}, "work": {"yields": {"research": 1}}},
+    "training": {"name": "Тренировочный зал", "cost": {"gold": 40}, "work": {"xp": 4, "cost": {"gold": 0.3}}},
+    "workshop": {"name": "Мастерская", "cost": {"gold": 50}, "work": {"yields": {"research": 0.3}}},
+    "graveyard": {"name": "Кладбище", "cost": {"gold": 45}}
   },
   "techs": {
-    "dark_arts": {"name": "Тёмные искусства", "cost": {"research": 60, "time": 20}, "levels": 3, "costGrowth": 1,
-                  "effects": [{"tags": ["creature"], "stat": "damage", "mul": 1.15}]}
+    "sight_of_evil": {"name": "Око зла", "cost": {"research": 20, "time": 10}},
+    "lightning": {"name": "Удар молнии", "cost": {"research": 60, "time": 20}},
+    "heal_spell": {"name": "Исцеление", "cost": {"research": 90, "time": 25}},
+    "dark_arts": {"name": "Тёмные искусства", "cost": {"research": 120, "time": 30}, "levels": 3, "costGrowth": 1, "effects": [{"tags": ["creature"], "stat": "damage", "mul": 1.15}]},
+    "gas_traps": {"name": "Ловушки с газом", "cost": {"research": 40, "time": 15}},
+    "lightning_traps": {"name": "Ловушки-молнии", "cost": {"research": 80, "time": 20}, "requires": ["gas_traps"]},
+    "word_of_power": {"name": "Слово силы", "cost": {"research": 140, "time": 30}, "requires": ["lightning_traps"]}
   },
+  "playerAbilities": [
+    {"id": "sight_of_evil", "name": "Око зла", "cost": {"mana": 150}, "cooldown": 15, "target": "point", "requires": ["sight_of_evil"], "effects": [{"type": "reveal", "radius": 6, "duration": 20}]},
+    {"id": "lightning", "name": "Удар молнии", "cost": {"mana": 350}, "cooldown": 4, "target": "point", "requires": ["lightning"], "effects": [{"type": "damage", "amount": 150, "radius": 1.2, "damageType": "magic", "affects": "enemies"}]},
+    {"id": "heal", "name": "Исцеление", "cost": {"mana": 500}, "cooldown": 6, "target": "point", "requires": ["heal_spell"], "effects": [{"type": "heal", "amount": 300, "radius": 2, "affects": "own"}]}
+  ],
   "types": {
-    "dungeon_heart": {"name": "Сердце подземелья", "key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 4000, "armor": 2}, "sight": 10,
-                      "income": {"mana": 5, "gold": 6}, "produces": ["imp"], "researches": ["dark_arts"], "supply": 4,
-                      "weapons": [{"range": 4, "damage": 15, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "heart"}},
-    "imp": {"name": "Бес", "worker": true, "health": {"max": 80}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 6, "cost": {"gold": 100, "time": 8},
-            "digs": {"rate": 3}, "claimer": {"time": 0.6}, "weapons": [{"range": 0.4, "damage": 2, "cooldown": 1}], "view": {"shape": "imp"}},
+    "dungeon_heart": {"name": "Сердце подземелья", "key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 6000, "armor": 2}, "sight": 10, "income": {"mana": 3}, "storage": {"gold": 3000}, "produces": ["imp", "gas_trap", "lightning_trap", "power_trap"], "researches": ["sight_of_evil", "lightning", "heal_spell", "dark_arts", "gas_traps", "lightning_traps", "word_of_power"], "supply": 4, "weapons": [{"range": 4, "damage": 15, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "heart"}},
+    "imp": {"name": "Бес", "worker": true, "health": {"max": 80}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 6, "cost": {"mana": 150, "time": 4, "growth": 0.5}, "digs": {"rate": 3}, "claimer": {"time": 0.6}, "weapons": [{"range": 0.4, "damage": 2, "cooldown": 1}], "view": {"shape": "imp"}},
+    // traps (placed on own claimed floor, hidden from heroes until they go off)
+    "gas_trap": {"name": "Ловушка с ядовитым газом", "tags": ["trap"], "structure": {"footprint": [1, 1]}, "health": {"max": 200, "armor": 2},
+                 "cost": {"gold": 200, "time": 8}, "requires": ["gas_traps"], "countsForVictory": false,
+                 "trap": {"radius": 0.8, "charges": 5, "rearm": 8, "revealFor": 4,
+                          "effects": [{"type": "area", "radius": 2, "lifetime": 5, "trigger": "periodic", "interval": 1, "effects": [{"type": "damage", "amount": 18, "radius": 2, "damageType": "magic"}]}]},
+                 "view": {"shape": "rock", "scale": 0.4}},
+    "lightning_trap": {"name": "Ловушка-молния", "tags": ["trap"], "structure": {"footprint": [1, 1]}, "health": {"max": 250, "armor": 3},
+                       "cost": {"gold": 350, "time": 10}, "requires": ["lightning_traps"], "countsForVictory": false,
+                       "trap": {"radius": 1.5, "rearm": 6, "revealFor": 3, "effects": [{"type": "damage", "amount": 120, "damageType": "magic"}]},
+                       "view": {"shape": "rock", "scale": 0.4}},
+    "power_trap": {"name": "Ловушка «Слово силы»", "tags": ["trap"], "structure": {"footprint": [1, 1]}, "health": {"max": 300, "armor": 3},
+                   "cost": {"gold": 600, "time": 14}, "requires": ["word_of_power"], "countsForVictory": false,
+                   "trap": {"radius": 1.2, "charges": 3, "rearm": 12, "revealFor": 3, "effects": [{"type": "damage", "amount": 150, "radius": 3, "falloff": 0.5, "damageType": "magic"}]},
+                   "view": {"shape": "rock", "scale": 0.5}},
     "portal": {"name": "Портал", "structure": {"footprint": [2, 2]}, "invulnerable": true, "claimedByTerritory": true, "portal": {"interval": 15}, "view": {"shape": "portal"}},
-    "goblin": {"name": "Гоблин", "tags": ["creature"], "health": {"max": 220, "armor": 1}, "move": {"speed": 2.8, "radius": 0.4}, "sight": 7,
-               "weapons": [{"range": 0.5, "damage": 14, "cooldown": 1}], "cost": {"supply": 1},
-               "hero": {"levels": [60, 160, 320], "perLevel": [{"stat": "maxHp", "add": 40}, {"stat": "damage", "add": 0.1}]}, "unique": false,
-               "attractedBy": {"rooms": {"lair": 1}, "weight": 3},
-               "needs": {"hunger": {"interval": 90, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6},
-                         "pay": {"interval": 120, "amount": {"gold": 20}}, "works": ["training"]}, "view": {"shape": "goblin"}},
-    "warlock": {"name": "Чернокнижник", "tags": ["creature"], "health": {"max": 160}, "move": {"speed": 2.5, "radius": 0.4}, "sight": 9,
-                "weapons": [{"range": 5, "damage": 16, "cooldown": 1.6, "projectileSpeed": 12, "damageType": "magic"}], "cost": {"supply": 1},
-                "attractedBy": {"rooms": {"lair": 1, "library": 4}, "weight": 2},
-                "needs": {"hunger": {"interval": 100, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6},
-                          "pay": {"interval": 120, "amount": {"gold": 30}}, "works": ["library"]}, "view": {"shape": "mage"}},
-    "troll": {"name": "Тролль", "tags": ["creature"], "health": {"max": 450, "armor": 2}, "move": {"speed": 2.2, "radius": 0.5}, "sight": 7,
-              "weapons": [{"range": 0.6, "damage": 22, "cooldown": 1.4}], "cost": {"supply": 2},
-              "attractedBy": {"rooms": {"lair": 1, "training": 4}, "resources": {"gold": 500}, "weight": 1},
-              "needs": {"hunger": {"interval": 80, "room": "hatchery", "time": 3, "cost": {"food": 2}}, "sleep": {"interval": 160, "room": "lair", "time": 6},
-                        "pay": {"interval": 120, "amount": {"gold": 40}}, "works": ["training"]}, "view": {"shape": "troll"}}
+    "goblin": {"name": "Гоблин", "tags": ["creature"], "health": {"max": 220, "armor": 1}, "move": {"speed": 2.8, "radius": 0.4}, "sight": 7, "weapons": [{"range": 0.5, "damage": 14, "cooldown": 1}], "cost": {"supply": 1}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 22}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1}, "weight": 3}, "needs": {"hunger": {"interval": 90, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 20}}, "works": ["training"]}, "view": {"shape": "goblin"}},
+    "fly": {"name": "Муха", "tags": ["creature"], "health": {"max": 80, "armor": 0}, "move": {"speed": 4.0, "radius": 0.3, "layer": "air"}, "sight": 10, "weapons": [{"range": 0.5, "damage": 5, "cooldown": 0.8}], "cost": {"supply": 1}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 8}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1}, "weight": 2}, "needs": {"hunger": {"interval": 120, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 5}}, "works": ["training"]}, "view": {"shape": "flyer", "scale": 0.5}},
+    "warlock": {"name": "Чернокнижник", "tags": ["creature"], "health": {"max": 160, "armor": 0}, "move": {"speed": 2.5, "radius": 0.4}, "sight": 9, "weapons": [{"range": 5, "damage": 16, "cooldown": 1.6, "projectileSpeed": 12, "damageType": "magic"}], "cost": {"supply": 1}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 16}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1, "library": 9}, "weight": 2}, "needs": {"hunger": {"interval": 100, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 30}}, "works": ["library"]}, "view": {"shape": "mage"}},
+    "troll": {"name": "Тролль", "tags": ["creature"], "health": {"max": 450, "armor": 2}, "move": {"speed": 2.2, "radius": 0.4}, "sight": 7, "weapons": [{"range": 0.6, "damage": 22, "cooldown": 1.4}], "cost": {"supply": 2}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 45}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1, "workshop": 9}, "weight": 1}, "needs": {"hunger": {"interval": 80, "room": "hatchery", "time": 3, "cost": {"food": 2}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 40}}, "works": ["workshop", "training"]}, "view": {"shape": "troll"}},
+    "bile_demon": {"name": "Демон желчи", "tags": ["creature"], "health": {"max": 900, "armor": 3}, "move": {"speed": 1.6, "radius": 0.4}, "sight": 6, "weapons": [{"range": 0.8, "damage": 35, "cooldown": 2, "splash": 1}], "cost": {"supply": 3}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 90}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1, "hatchery": 25}, "weight": 1}, "needs": {"hunger": {"interval": 60, "room": "hatchery", "time": 3, "cost": {"food": 3}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 70}}, "works": ["training"]}, "view": {"shape": "troll", "scale": 1.4}},
+    "dark_mistress": {"name": "Тёмная госпожа", "tags": ["creature"], "health": {"max": 380, "armor": 2}, "move": {"speed": 3.0, "radius": 0.4}, "sight": 8, "weapons": [{"range": 0.7, "damage": 28, "cooldown": 1.1}], "cost": {"supply": 2}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 38}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1, "training": 16}, "weight": 1}, "needs": {"hunger": {"interval": 90, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 60}}, "works": ["training"]}, "view": {"shape": "mage", "scale": 1.1}},
+    "vampire": {"name": "Вампир", "tags": ["creature"], "health": {"max": 500, "armor": 3}, "move": {"speed": 2.8, "radius": 0.4}, "sight": 9, "weapons": [{"range": 0.7, "damage": 30, "cooldown": 1.2}], "cost": {"supply": 2}, "hero": {"levels": [60, 160, 320, 600, 1000, 1500, 2200, 3000, 4000], "perLevel": [{"stat": "maxHp", "add": 50}, {"stat": "damage", "add": 0.1}]}, "unique": false, "attractedBy": {"rooms": {"lair": 1, "graveyard": 9}, "weight": 1}, "needs": {"hunger": {"interval": 200, "room": "hatchery", "time": 3, "cost": {"food": 0}}, "sleep": {"interval": 150, "room": "lair", "time": 6}, "pay": {"interval": 150, "amount": {"gold": 100}}, "works": ["library", "training"]}, "view": {"shape": "mage", "scale": 1.2}},
+    "knight": {"name": "Рыцарь", "health": {"max": 600, "armor": 4}, "move": {"speed": 2.4, "radius": 0.45}, "sight": 8, "weapons": [{"range": 0.7, "damage": 30, "cooldown": 1.3}], "bounty": {"gold": 150}, "xp": 200, "view": {"shape": "soldier"}},
+    "wizard": {"name": "Волшебник", "health": {"max": 250}, "move": {"speed": 2.4, "radius": 0.35}, "sight": 9, "weapons": [{"range": 5, "damage": 25, "cooldown": 1.6, "projectileSpeed": 12, "damageType": "magic"}], "bounty": {"gold": 100}, "xp": 120, "view": {"shape": "mage"}},
+    "dwarf": {"name": "Гном", "health": {"max": 300, "armor": 2}, "move": {"speed": 2.2, "radius": 0.35}, "sight": 7, "weapons": [{"range": 0.6, "damage": 18, "cooldown": 1.2}], "bounty": {"gold": 80}, "xp": 80, "view": {"shape": "soldier", "scale": 0.8}}
   }
 }

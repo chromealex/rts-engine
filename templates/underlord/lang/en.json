@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Dungeon Keeper: dig a dungeon, build rooms, grab creatures with the hand and possess them.",
-  "howto.goal": "Destroy the enemy Dungeon Heart and keep yours.",
-  "howto.tip": "First dig to a gold vein and build a lair and a hatchery — creatures will not come without them.",
-  "howto.step1": "Press Dig on the bottom bar and drag over rock: imps tunnel through. Gold veins fill the treasury.",
-  "howto.step2": "Rooms are buttons next to it, dragged over your own floor: a lair houses creatures, a hatchery breeds chickens (food), a library makes research, a training room gives experience.",
-  "howto.step3": "A portal in your territory attracts goblins, warlocks and trolls if there is a lair and food for them.",
-  "howto.step4": "Hand: To hand on the card picks up the selection, Drop on the bottom bar drops them where you click (Shift: all at once). Slap speeds up idlers but hurts.",
-  "howto.step5": "Possess to control a creature yourself: WASD or the right button walks, the left button attacks; Esc or Leave body returns. Possession and every second in the body cost mana."
+  "howto.like": "Dungeon Keeper: imps, rooms, creatures and the keeper's hand.",
+  "howto.goal": "Keep your dungeon heart and destroy the other one.",
+  "howto.tip": "Every claimed tile gives mana — keep the imps claiming.",
+  "howto.step1": "Mark rock and the imps dig it; gold veins pay gold, kept in the heart and treasuries.",
+  "howto.step2": "Rooms attract creatures through the portal: a lair for all, a library for warlocks, a hatchery for bile demons.",
+  "howto.step3": "Creatures eat, sleep and want wages; unhappy ones leave.",
+  "howto.step4": "Research from the library and the workshop unlocks spells (sight of evil, lightning, heal) and traps (gas, lightning, word of power). Heroes don't see a trap until it goes off."
 }

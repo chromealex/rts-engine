@@ -1,6 +1,7 @@
 #include "Unpacker.h"
 
 #include "Chunks.h"
+#include "FileCopy.h"
 
 #include <algorithm>
 #include <cctype>
@@ -486,7 +487,7 @@ bool scaffoldUnpacker(const std::string& dir, const std::string& name, const std
     if (!m || !s) return fail(error, "cannot write plugin files in " + d.string());
     // Bundle the helper so the plugin works from any folder (game repo, $RTS_UNPACKERS, shared).
     fs::path lib = fs::path(engineDir) / "tools" / "unpackers" / "lib" / "rtsunpack.py";
-    if (!engineDir.empty() && fs::exists(lib, ec)) fs::copy_file(lib, d / "rtsunpack.py", fs::copy_options::overwrite_existing, ec);
+    if (!engineDir.empty() && fs::exists(lib, ec)) copyFileReplace(lib, d / "rtsunpack.py", ec);
     return true;
 }
 

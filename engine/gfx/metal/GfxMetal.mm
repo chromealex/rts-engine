@@ -229,7 +229,22 @@ public:
         pd.colorAttachments[0].pixelFormat = d.depthOnly ? MTLPixelFormatInvalid : layer_.pixelFormat;
         pd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
         auto* ca = pd.colorAttachments[0];
-        if (d.blend != BlendMode::Opaque) {
+        if (d.blend == BlendMode::Multiply) {          // dst * src colour, dst alpha kept
+            ca.blendingEnabled = YES;
+            ca.rgbBlendOperation = ca.alphaBlendOperation = MTLBlendOperationAdd;
+            ca.sourceRGBBlendFactor = MTLBlendFactorDestinationColor;
+            ca.destinationRGBBlendFactor = MTLBlendFactorZero;
+            ca.sourceAlphaBlendFactor = MTLBlendFactorZero;
+            ca.destinationAlphaBlendFactor = MTLBlendFactorOne;
+        } else if (d.blend == BlendMode::Subtract) {   // dst - src * srcAlpha
+            ca.blendingEnabled = YES;
+            ca.rgbBlendOperation = MTLBlendOperationReverseSubtract;
+            ca.alphaBlendOperation = MTLBlendOperationAdd;
+            ca.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+            ca.destinationRGBBlendFactor = MTLBlendFactorOne;
+            ca.sourceAlphaBlendFactor = MTLBlendFactorZero;
+            ca.destinationAlphaBlendFactor = MTLBlendFactorOne;
+        } else if (d.blend != BlendMode::Opaque) {
             ca.blendingEnabled = YES;
             ca.rgbBlendOperation = ca.alphaBlendOperation = MTLBlendOperationAdd;
             ca.sourceRGBBlendFactor = d.blend == BlendMode::Premultiplied ? MTLBlendFactorOne : MTLBlendFactorSourceAlpha;

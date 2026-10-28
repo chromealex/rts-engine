@@ -131,7 +131,7 @@
    "type": "mineral",
    "owner": 0,
    "pos": [
-    5.5,
+    4,
     5.5
    ]
   },
@@ -139,39 +139,23 @@
    "type": "mineral",
    "owner": 0,
    "pos": [
-    58.5,
+    60,
     42.5
    ]
   },
   {
-   "type": "mineral",
+   "type": "mineral_small",
    "owner": 0,
    "pos": [
-    6.5,
-    4.5
-   ]
-  },
-  {
-   "type": "mineral",
-   "owner": 0,
-   "pos": [
-    57.5,
-    43.5
-   ]
-  },
-  {
-   "type": "mineral",
-   "owner": 0,
-   "pos": [
-    4.5,
+    4,
     7.5
    ]
   },
   {
-   "type": "mineral",
+   "type": "mineral_small",
    "owner": 0,
    "pos": [
-    59.5,
+    60,
     40.5
    ]
   },
@@ -179,23 +163,7 @@
    "type": "mineral",
    "owner": 0,
    "pos": [
-    8.5,
-    4.5
-   ]
-  },
-  {
-   "type": "mineral",
-   "owner": 0,
-   "pos": [
-    55.5,
-    43.5
-   ]
-  },
-  {
-   "type": "mineral",
-   "owner": 0,
-   "pos": [
-    4.5,
+    4,
     9.5
    ]
   },
@@ -203,31 +171,159 @@
    "type": "mineral",
    "owner": 0,
    "pos": [
-    59.5,
+    60,
     38.5
    ]
   },
   {
-   "type": "geyser",
+   "type": "mineral_small",
    "owner": 0,
    "pos": [
-    15,
-    4
+    4,
+    11.5
    ]
   },
   {
-   "type": "geyser",
+   "type": "mineral_small",
    "owner": 0,
    "pos": [
-    49,
-    44
+    60,
+    36.5
    ]
   },
   {
    "type": "mineral",
    "owner": 0,
    "pos": [
-    30.5,
+    6,
+    3.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    58,
+    44.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    8,
+    3.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    56,
+    44.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    10,
+    3.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    54,
+    44.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    6,
+    13.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    58,
+    34.5
+   ]
+  },
+  {
+   "type": "geyser",
+   "owner": 0,
+   "pos": [
+    15.5,
+    4.5
+   ]
+  },
+  {
+   "type": "geyser",
+   "owner": 0,
+   "pos": [
+    48.5,
+    43.5
+   ]
+  },
+  {
+   "type": "geyser",
+   "owner": 0,
+   "pos": [
+    5.5,
+    17.5
+   ]
+  },
+  {
+   "type": "geyser",
+   "owner": 0,
+   "pos": [
+    58.5,
+    30.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    26,
+    36.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    38,
+    11.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    26,
+    38.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    38,
+    9.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    26,
     40.5
    ]
   },
@@ -235,24 +331,56 @@
    "type": "mineral",
    "owner": 0,
    "pos": [
-    33.5,
+    38,
     7.5
    ]
   },
   {
-   "type": "mineral",
+   "type": "mineral_small",
    "owner": 0,
    "pos": [
-    31.5,
-    41.5
+    28,
+    42.5
+   ]
+  },
+  {
+   "type": "mineral_small",
+   "owner": 0,
+   "pos": [
+    36,
+    5.5
    ]
   },
   {
    "type": "mineral",
    "owner": 0,
    "pos": [
-    32.5,
-    6.5
+    30,
+    42.5
+   ]
+  },
+  {
+   "type": "mineral",
+   "owner": 0,
+   "pos": [
+    34,
+    5.5
+   ]
+  },
+  {
+   "type": "geyser",
+   "owner": 0,
+   "pos": [
+    33.5,
+    43.5
+   ]
+  },
+  {
+   "type": "geyser",
+   "owner": 0,
+   "pos": [
+    30.5,
+    4.5
    ]
   }
  ]

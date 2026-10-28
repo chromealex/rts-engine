@@ -89,7 +89,16 @@
                      "projectileSpeed": 9, "damageType": "siege" } ],
       "cost": { "gold": 200, "wood": 60, "time": 25, "supply": 3 },
       "view": {
-        "model": "models/tank.glb", "height": 0.9, "variant": "desert",
+        "model": [ "models/tank.glb",
+                   { "file": "models/voxel_tank.vox", "variant": "", "materials": {},
+                     "muzzle": { "node": "Barrel", "offset": [0, 0, 6] },
+                     "fx": [ { "effect": "exhaust", "node": "Hull", "offset": [0, 4, -8], "when": "moving" } ],
+                     "procedural": [ { "type": "align" }, { "type": "aim", "node": "Turret" },
+                                     { "type": "recoil", "node": "Barrel", "axis": [0, 0, -1], "amp": 1.5 },
+                                     { "type": "bob", "amp": 0.02, "freq": 3, "wave": "sine" },
+                                     { "type": "pop" }, { "type": "fall", "amp": 25 }, { "type": "sink" } ] } ],
+        "height": 0.9, "variant": "desert",
+        "assign": { "Turret": "steel_plates" },   // library material (materials.json), made with texture_generate
         "materials": { "Hull": { "teamMask": "models/tank_team.png" }, "HullDesert": { "teamMask": "models/tank_team.png" } },
         "muzzle": { "node": "Barrel", "offset": [0, 0, 0.7] },
         "fx": [ { "effect": "exhaust", "node": "Hull", "offset": [0, 0.5, -0.7], "when": "moving" } ],

@@ -130,8 +130,8 @@ void Minimap::updatePlanet(gfx::Device& dev, const RtsView& view, const RtsScene
                 pixelShade_[size_t(y * w_ + x)] = 0.25f + 0.75f * std::clamp(dot(d, sun) * 1.5f + 0.35f, 0.0f, 1.0f);
             }
     }
-    const std::vector<uint8_t>& vis = view.planetVision();
-    const bool useFog = fog && vis.size() == size_t(6 * N * N) && body == view.planets().world().start;
+    const std::vector<uint8_t>& vis = view.planetVision(body);
+    const bool useFog = fog && vis.size() == size_t(6 * N * N);
     for (size_t i = 0; i < pixelCell_.size(); ++i) {
         const int c = pixelCell_[i];
         if (c < 0) continue;

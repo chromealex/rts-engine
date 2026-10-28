@@ -66,6 +66,7 @@ void RtsModule::sysEconomy(Simulation& sim) {
         if (!off) for (auto& a : t.income) p.income[a.res] += mechOn(sim) ? a.value * mechIncomeMult(sim, e) : a.value;
     });
     if (rules_.dungeon) roomEconomy(sim); // painted rooms add supply, storage, capacity and income per cell
+    if (rules_.originals) economyOriginals(sim); // power fields, upkeep per resource / on income, territory income
     for (size_t pi = 1; pi < gs.players.size(); ++pi) {
         auto& p = gs.players[pi];
         p.supplyCap = fxMin(p.supplyCap, rules_.supplyCap);
@@ -180,13 +181,14 @@ void RtsModule::sysProduction(Simulation& sim) {
         if (p.queue.empty() || (u.flags & kUnitDisabled) || o.player == 0 || o.player >= gs.players.size()) return;
         auto& eco = gs.players[o.player];
         const bool parallel = t.chargesMax > 0;
-        const size_t n = parallel ? p.queue.size() : 1;
+        const size_t n = parallel ? p.queue.size() : std::min(p.queue.size(), size_t(t.queueSlots));
         for (size_t k = 0; k < n; ++k) {
             ProdItem& it = p.queue[k];
             const bool isTech = it.item < 0;
             if (!isTech && !it.upgrade && rules_.types[size_t(it.item)].structure && p.ready != kNoType) continue; // place first
             Fixed time = isTech ? rules_.techs[size_t(~it.item)].time : rules_.types[size_t(it.item)].buildTime;
             if (it.upgrade && rules_.advancedEffects) time = time * stat(sim, e, Stat::UpgradeCost);
+            time = time * it.timeMult;   // hero revive
             const std::vector<Amount> cost = isTech ? techCost(sim, o.player, uint16_t(~it.item)) : rules_.types[size_t(it.item)].cost;
             Fixed step = dt * eco.productionMult * stat(sim, e, Stat::ProductionSpeed) / fxMax(time, Fixed::fromRatio(1, 10));
             if (rules_.costModel == CostModel::Progressive) {
@@ -232,6 +234,7 @@ void RtsModule::sysProduction(Simulation& sim) {
             u.hp = nt.maxHp * frac;
             ensureTypeComponents(w, d.producer, nt);
             sim.emit({kEvUpgraded, d.owner, d.producer, kNullEntity, type, w.get<Transform>(d.producer).pos});
+            if (rules_.originals) gainOn(sim, d.owner, &ResourceDef::gainUpgrade, kOne);
             continue;
         }
         if (nt.structure) {
@@ -321,6 +324,7 @@ void RtsModule::sysConstruction(Simulation& sim) {
             else w.remove<Inventory>(e);
         }
         sim.emit({kEvBuildDone, w.get<Owner>(e).player, e, kNullEntity, u.type, w.get<Transform>(e).pos});
+        if (rules_.fidelity) builtFidelity(sim, e);   // slabs pave, the foundation caps hp (RtsFidelity.cpp)
     }
 }
 

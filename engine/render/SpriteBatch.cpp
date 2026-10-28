@@ -17,7 +17,7 @@ bool SpriteBatch::init(gfx::Device& dev) {
     dev_ = &dev;
     gfx::ShaderDesc sd;
     sd.glslVertex = shaders::kSpriteVS; sd.glslFragment = shaders::kSpriteFS; sd.msl = shaders::kSpriteMSL;
-    sd.textureSlots = 1; sd.uniformSlots = 1; sd.label = "sprite";
+    sd.textureSlots = 2; sd.uniformSlots = 3; sd.label = "sprite";   // U2 + tex1: lights (LightShaders.h)
     shader_ = dev.createShader(sd);
     if (!shader_.valid()) return false;
     gfx::PipelineDesc pd;

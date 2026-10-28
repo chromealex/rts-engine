@@ -154,6 +154,7 @@ private:
     void fitPlanetCamera();
     bool planetCameraEvent(const platform::Event& e, bool uiWants);
     bool objectScreen(const SceneObject& o, float lift, float2& sp) const;   // flat maps: worldToScreen({x, lift, z})
+    static Vec3 simPoint(float3 g);   // planets: picked sim-space point -> command point (1/256 units)
     RtsModule& mod() { return *static_cast<RtsModule*>(&sim_->module()); }
     bool groundAt(float sx, float sy, float3& out) const;
     Entity pick(float sx, float sy) const;
@@ -278,6 +279,8 @@ private:
     Mode mode_ = Mode::Normal;
     Entity placeProducer_;   // sidebar placement: structure comes from this producer
     int abilityIndex_ = -1;
+    bool pairFirst_ = false;      // pointPair player ability: the first point is chosen
+    float pairX_ = 0, pairZ_ = 0;
     int placeType_ = -1;
     int roomIndex_ = -1;          // Mode::Room: rules.rooms index, -1 = erase
     bool rectDrag_ = false;       // rect tools: dragging from (rectX_, rectY_)

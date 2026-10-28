@@ -3,11 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "They Are Billions: the last colony against growing waves of the infected.",
-  "howto.goal": "Survive 12 minutes — the timer is at the top. Waves come more often and bigger.",
-  "howto.tip": "Wall off every way into the colony but one, and put the ballistas there.",
-  "howto.step1": "Colonists chop wood and quarry stone; tents and the market give gold every second.",
-  "howto.step2": "You can only build near the colony. Walls block passages, ballistas shoot into crowds.",
-  "howto.step3": "Barracks train rangers (ranged) and soldiers (melee).",
-  "howto.step4": "The first wave comes at 1:30, from 4:00 fast runners join it."
+  "howto.like": "They Are Billions: the last colony against a horde of the infected.",
+  "howto.goal": "Hold out for 20 minutes — the last wave is huge.",
+  "howto.tip": "One infected inside a tent turns its people into more infected — keep the walls whole.",
+  "howto.step1": "Buildings run the colony: tents and houses give workers and gold, hunters and farms food, sawmills and quarries gather everything around them.",
+  "howto.step2": "Workers, food and energy are capacities: a shortage stops industry.",
+  "howto.step3": "You may build only near the command centre and the tesla towers. Stake and blade traps hurt every infected that walks over them.",
+  "howto.step4": "A colonist killed by the infected becomes one of them."
 }

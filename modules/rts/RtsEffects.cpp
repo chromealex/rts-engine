@@ -29,7 +29,7 @@ const AbilityDef& RtsModule::abilityFor(Simulation& sim, Entity e, int index) co
     World& w = sim.world();
     const AbilityDef& base = rules_.types[w.get<Unit>(e).type].abilities[size_t(index)];
     int level = 1;
-    if (auto* h = w.tryGet<Hero>(e)) level = h->level;
+    if (auto* h = w.tryGet<Hero>(e)) level = rules_.heroes.skills ? std::max<int>(1, h->skill[index & 7]) : h->level;   // learned skill level (WC3)
     if (level >= 2 && !base.levels.empty()) return base.levels[size_t(std::min<int>(level - 2, int(base.levels.size()) - 1))];
     return base;
 }
@@ -650,6 +650,9 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
         break;
     case EffectKind::Resource: case EffectKind::PlayerStatus: case EffectKind::EqualizeResource: case EffectKind::StealSkill: case EffectKind::Cooldown:
         effectPlayer(sim, e, ctx);
+        break;
+    case EffectKind::AddCharges: case EffectKind::TeleportGroup:
+        effectFidelity(sim, e, ctx);   // RtsFidelity.cpp
         break;
     }
     if (list >= 0 && (e.kind == EffectKind::Damage || e.kind == EffectKind::Heal || e.kind == EffectKind::Status))

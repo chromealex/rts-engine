@@ -22,6 +22,22 @@ std::string fmtQ16(int64_t raw) {
     return (neg && (ip || fr)) ? "-" + s : s;
 }
 
+Kind classify(const Ctx& c, int ti) {
+    const game::UnitType& t = c.R.types[size_t(ti)];
+    const Json& tj = c.rulesJson["types"][t.id];
+    bool isSpot = false;
+    for (auto& o : c.R.types) if (o.placeOn == ti) isSpot = true;
+    if (t.structure && t.resourceNode >= 0) {
+        if (t.footprintW == 1 && t.footprintH == 1 && t.resourceAmount.raw > 0 && t.resourceAmount <= Fixed::fromInt(600)) return Kind::Tree;
+        return Kind::Mine;
+    }
+    if (isSpot) return Kind::Spot;
+    if (t.fieldSpawnRes >= 0) return Kind::Spawner;
+    if (!t.structure && tj["neutral"].isObject()) return t.wanders ? Kind::Wanderer : Kind::Creep;
+    if (t.structure && (t.captureTime.raw > 0 || t.garrisonMax > 0 || t.capturable || t.claimedByTerritory || t.portalInterval.raw > 0)) return Kind::NeutralStruct;
+    return Kind::Other;
+}
+
 namespace {
 
 constexpr int32_t Q(int num, int den) { return int32_t(int64_t(num) * kOne / den); }
@@ -44,8 +60,6 @@ struct Rng {
     int64_t q16() { return int64_t(next() >> 16); }
 };
 
-enum class Kind : uint8_t { Mine, Tree, Spot, Spawner, Creep, Wanderer, NeutralStruct, Other };
-
 struct ObjSpec {
     int type = -1;
     Kind kind = Kind::Other;
@@ -57,21 +71,6 @@ struct ObjSpec {
 
 struct KitItem { int type = -1; P2 off; int count = 1; Json extra = Json::object(); };
 
-Kind classify(const Ctx& c, int ti) {
-    const game::UnitType& t = c.R.types[size_t(ti)];
-    const Json& tj = c.rulesJson["types"][t.id];
-    bool isSpot = false;
-    for (auto& o : c.R.types) if (o.placeOn == ti) isSpot = true;
-    if (t.structure && t.resourceNode >= 0) {
-        if (t.footprintW == 1 && t.footprintH == 1 && t.resourceAmount.raw > 0 && t.resourceAmount <= Fixed::fromInt(600)) return Kind::Tree;
-        return Kind::Mine;
-    }
-    if (isSpot) return Kind::Spot;
-    if (t.fieldSpawnRes >= 0) return Kind::Spawner;
-    if (!t.structure && tj["neutral"].isObject()) return t.wanders ? Kind::Wanderer : Kind::Creep;
-    if (t.structure && (t.captureTime.raw > 0 || t.garrisonMax > 0 || t.capturable || t.claimedByTerritory || t.portalInterval.raw > 0)) return Kind::NeutralStruct;
-    return Kind::Other;
-}
 
 
 // ---------------------------------------------------------------- placement

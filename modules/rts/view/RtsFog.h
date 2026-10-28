@@ -49,6 +49,9 @@ public:
     // Returns true when the field changed this frame.
     bool update(const std::vector<uint8_t>& vision, int w, int h, double time);
     const std::vector<uint8_t>& field() const { return field_; }
+    // Optional blur replacing the box blur over the grid rectangle (planets: stacked face rows need a
+    // seam-aware neighbourhood). Called with the faded field and the blur radius in cells; null = box blur.
+    void setBlur(std::function<void(std::vector<uint8_t>& field, int radius)> fn) { blur_ = std::move(fn); dirty_ = true; }
     gfx::TextureHandle texture() const { return tex_; }
     // Draws the sheet (Renderer3D custom draw after the scene). `cells`: weak tier forces Cells.
     void draw(render::Renderer3D& r, double time, bool lowTier);
@@ -67,6 +70,7 @@ private:
     std::vector<uint16_t> tmp_;
     double lastTime_ = -1;
     bool dirty_ = true, fading_ = false;
+    std::function<void(std::vector<uint8_t>&, int)> blur_;
 };
 
 } // namespace rts::game

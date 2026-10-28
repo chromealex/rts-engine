@@ -207,6 +207,7 @@ void GameClient::startMatch(size_t idx) {
         if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         SimConfig cfg;
         cfg.seed = uint64_t(std::time(nullptr));
+        if (const char* sd = std::getenv("RTS_SEED")) cfg.seed = uint64_t(std::strtoull(sd, nullptr, 10));   // testing: reproducible matches
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
@@ -228,10 +229,19 @@ void GameClient::startMatch(size_t idx) {
     view_.setTiles(map["tiles"]);
     {   // generated maps (map / world body "generate"): the view reads the map the simulation was built from
         const Json& vm = mod().generatedMap() ? *mod().generatedMap() : map;
-        view_.setWorld(vm);   // planets: map "world" block (no block: flat view, unchanged)
+        // planets: bodies / heights / cells from the simulation's Surface (visual keys from the map); flat: unchanged
+        if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, vm);
+        else view_.setWorld(vm);
         view_.setTerrainMaterial(vm["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
     }
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
+    if (const char* ff = std::getenv("RTS_FAST_FORWARD")) { // testing (screenshots): bots play N game seconds first
+        const uint32_t ticks = uint32_t(std::max(0.0, std::atof(ff)) * sim_->tickRate());
+        std::vector<RtsAI> ffBots = bots_;   // the human slot is played by a bot too while fast-forwarding
+        if (!spectator_) ffBots.emplace_back(human_, sim_->config().seed, AIConfig{});
+        for (uint32_t i = 0; i < ticks && sim_->result() == 0; ++i) { for (auto& b : ffBots) b.update(*sim_); sim_->step(); }
+        bots_.assign(ffBots.begin(), ffBots.begin() + long(bots_.size()));
+    }
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();
     if (planet()) minimap_.buildPlanet(*dev_, view_); else minimap_.build(*dev_, mod().state(*sim_), rules_);
@@ -261,9 +271,11 @@ void GameClient::fitCamera() {
 // ------------------------------------------------------------------ picking / selection
 
 bool GameClient::groundAt(float sx, float sy, float3& out) const {
-    if (planet()) { // planet picking -> flat sim coordinates (until the sim has bodies)
+    if (planet()) { // planet picking -> sim-space point (anchor(body) + body-local, RtsSurface.h)
         int body; float3 local;
-        return view_.pickPlanet(cam_, sx, sy, platform::windowWidth(), platform::windowHeight(), body, local) && view_.bodyToFlat(body, local, out);
+        if (!view_.pickPlanet(cam_, sx, sy, platform::windowWidth(), platform::windowHeight(), body, local)) return false;
+        out = RtsView::bodyToSim(body, local);
+        return true;
     }
     return cam_.screenToGround(sx, sy, platform::windowWidth(), platform::windowHeight(), out);
 }
@@ -289,6 +301,11 @@ Entity GameClient::pick(float sx, float sy) const {
         }
         float r = view_.selectionRadius(o.type) + (t.structure ? 0.2f : 0.35f);
         float d = std::hypot(g.x - o.pos.x, g.z - o.pos.z);
+        if (planet()) { // same body, 3D distance between the picked ground point and the object's (body-local)
+            int gb; float3 gl;
+            if (o.body < 0 || !RtsView::simToBody(g, gb, gl) || gb != o.body) continue;
+            d = length(gl - o.pos);
+        }
         if (d < r && d < bestD) { best = o.entity; bestD = d; }
     }
     return best;
@@ -343,6 +360,7 @@ void GameClient::command(uint16_t type, float sx, float sy, bool queue) {
     c.units = selection_;
     float3 g;
     if (groundAt(sx, sy, g)) c.point = {Fixed::fromInt(int64_t(std::lround(g.x * 256))) / 256, Fixed{}, Fixed::fromInt(int64_t(std::lround(g.z * 256))) / 256};
+    if (planet() && groundAt(sx, sy, g)) c.point = simPoint(g);   // planets: all three coordinates
     Entity t = pick(sx, sy);
     if (type != kCmdMove && type != kCmdPatrol) c.target = t;
     if (type == kCmdSmart && selectionHasGarrison()) {
@@ -360,6 +378,7 @@ Vec3 GameClient::placeCentre(float sx, float sy, bool& ok) {
     ok = false;
     float3 g;
     if (placeType_ < 0 || !groundAt(sx, sy, g)) return {};
+    if (planet()) { ok = true; return simPoint(g); }   // the sim snaps footprints on faces (snapToFootprint)
     const UnitType& t = rules_.types[size_t(placeType_)];
     float cx = std::floor(g.x) + (t.footprintW % 2 ? 0.5f : 0.0f), cz = std::floor(g.z) + (t.footprintH % 2 ? 0.5f : 0.0f);
     ok = true;
@@ -419,6 +438,7 @@ void GameClient::event(const Event& e) {
                     Command c;
                     c.type = mode_ == Mode::Claim ? kCmdClaim : kCmdAbility;
                     c.point = {Fixed::fromRatio(int64_t(g.x * 256), 256), Fixed{}, Fixed::fromRatio(int64_t(g.z * 256), 256)};
+                    if (planet()) c.point = simPoint(g);
                     if (mode_ == Mode::Ability) {
                         c.param = abilityIndex_;
                         c.target = pick(e.x, e.y);
@@ -714,11 +734,10 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             view_.setOverlayContext(oc);
         }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
-        if (!planet()) { // particles are placed in flat map coordinates: not on planets yet
-            fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
-                       screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-            fx_.addLights(r3d_.lights);   // particle lights ("light" module)
-        }
+        fx_.setPlanetView(planet() ? &view_ : nullptr);   // planets: effects in the camera body's space
+        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
+        fx_.addLights(r3d_.lights);   // particle lights ("light" module)
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
@@ -729,7 +748,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         }
         drawToolPreview();
         r3d_.render(pass);
-        if (!planet()) fx_.render(r3d_.lighting);
+        fx_.render(r3d_.lighting);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;

@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Dune II and Dune 2000: spice in the sands, harvesters, windtrap power and sandworms.",
+  "howto.like": "Dune II: three Houses, spice in the sands, harvesters, windtraps and sandworms.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "A second refinery pays off faster than any tank.",
-  "howto.step1": "Deploy the MCV (Deploy on its card) into a construction yard. Buildings are built in the yard and placed with Place near the base.",
-  "howto.step2": "A refinery comes with a free harvester that collects spice from the field and turns it into credits.",
-  "howto.step3": "Power plants give power: with a deficit production slows (the Power counter turns red). Silos raise the credit limit.",
-  "howto.step4": "Barracks: troopers and bazookas; war factory: light and heavy tanks, a new MCV.",
-  "howto.step5": "The sandworm roams the desert and eats vehicles — keep harvesters off open sand."
+  "howto.tip": "Never leave a harvester alone on open sand: a worm swallows vehicles whole.",
+  "howto.step1": "Deploy the MCV into a construction yard. Structures are built in the yard and placed next to the base, on rock only. Lay concrete slabs first: a building without concrete starts half-ruined and weathers away.",
+  "howto.step2": "A refinery comes with a harvester. Credits are capped by the yard, refineries and silos — the rest is lost.",
+  "howto.step3": "Spice does not grow back: new spice comes from blooms — drive over one and it bursts into a fresh field.",
+  "howto.step4": "Vehicles crush infantry. Every House has its own units: sonic tank, devastator, deviator; the palace gives the Death Hand, Fremen or a saboteur."
 }
