@@ -1,6 +1,7 @@
 // Orders and movement: move/attack-move/patrol, gathering from nodes and fields (with harvesters,
 // reclaim, upkeep), construction in walk/warp/morph modes, repair, entering garrisons, casting.
 #include "RtsInternal.h"
+#include "RtsCrowd.h"
 #include <algorithm>
 
 namespace rts::game {
@@ -726,23 +727,32 @@ void RtsModule::sysMovement(Simulation& sim) {
         anchored[e.index] = anchor;
     });
     const Fixed deadZone = Fixed::fromRatio(3, 100);
-    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
+    // candidates: every mobile unit on the map, in a sorted cell grid (same set as the spatial hash gives after its
+    // filters; the push is a sum of exact Fixed terms, so the candidate order does not change it)
+    struct SepAgent { Entity e; Vec3 pos; Fixed radius; uint8_t layer; };
+    std::vector<SepAgent> sa;
+    Fixed rMax{};
+    w.each<Mobile, Unit, Transform>([&](Entity e, Mobile&, Unit& u, Transform& tr) {
         if (u.flags & kUnitOffMap) return;
-        if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];
+        sa.push_back({e, tr.pos, t.radius, t.layer});
+        rMax = fxMax(rMax, t.radius);
+    });
+    CrowdGrid cg;
+    cg.build(g.w, g.h, sa.size(), [&](size_t i) { return sa[i].pos.xz(); });
+    for (const SepAgent& me : sa) {
+        const Entity e = me.e;
+        if (rules_.lanes.enabled && w.has<LaneWalker>(e)) continue; // lane walkers keep strictly to their lane
         Vec3 acc{};
         bool any = false;
-        (void)m;
-        gs.hash.query(tr.pos, t.radius * 2 + kOne, [&](Entity o) {
+        cg.query(me.pos.xz(), me.radius + rMax, [&](int32_t oi) {
+            const SepAgent& ob = sa[size_t(oi)];
+            const Entity o = ob.e;
             if (o == e) return;
-            auto* ou = w.tryGet<Unit>(o);
-            if (!ou || !w.has<Mobile>(o)) return;
-            const UnitType& ot = rules_.types[ou->type];
-            if (!(ot.layer & t.layer) && !((ot.layer | t.layer) == (kLayerGround | kLayerSandOnly))) return;
-            Vec3 d = flat(tr.pos - w.get<Transform>(o).pos);
+            if (!(ob.layer & me.layer) && !((ob.layer | me.layer) == (kLayerGround | kLayerSandOnly))) return;
+            Vec3 d = flat(me.pos - ob.pos);
             Fixed len = d.length();
-            if (w.get<Unit>(o).flags & kUnitOffMap) return;
-            Fixed overlap = t.radius + ot.radius - len - deadZone;
+            Fixed overlap = me.radius + ob.radius - len - deadZone;
             if (overlap.raw <= 0) return;
             if (len.raw == 0) { // exact overlap: deterministic direction from entity indices
                 d = (e.index < o.index) ? Vec3{kOne, Fixed{}, Fixed{}} : Vec3{-kOne, Fixed{}, Fixed{}};
@@ -754,12 +764,13 @@ void RtsModule::sysMovement(Simulation& sim) {
             any = true;
         });
         if (any) {
+            const UnitType& t = rules_.types[w.get<Unit>(e).type];
             Fixed len = acc.length();
             Fixed maxPush = anchored[e.index] ? Fixed::fromRatio(1, 100) : t.speed * dt / 2 + Fixed::fromRatio(1, 50);
             if (len > maxPush) acc = acc * (maxPush / len);
             pushes.push_back({e, acc});
         }
-    });
+    }
     for (auto& p : pushes) {
         Transform& tr = w.get<Transform>(p.e);
         const UnitType& t = rules_.types[w.get<Unit>(p.e).type];

@@ -6,6 +6,7 @@
 // entity index) become half-plane constraints on its velocity; the 2D linear program (RVO2's
 // linearProgram1/2/3) picks the velocity closest to the preferred one. Cost is O(agents * K^2).
 #include "RtsInternal.h"
+#include "RtsCrowd.h"
 #include <algorithm>
 
 namespace rts::game {
@@ -159,6 +160,10 @@ void RtsModule::moveAgents(Simulation& sim) {
         agents.push_back(a);
     });
 
+    // neighbour candidates: the agents themselves in a sorted cell grid (the same set the spatial hash gives
+    // after the agent filter; neighbours are sorted by distance and index below, so the result is identical)
+    CrowdGrid crowd;
+    crowd.build(g.w, g.h, agents.size(), [&](size_t i) { return agents[i].p; });
     struct YieldReq { Entity who, mover; Vec2 moverPos, dir; Fixed clear; };
     std::vector<YieldReq> yields;
     std::vector<Line> lines;
@@ -169,9 +174,10 @@ void RtsModule::moveAgents(Simulation& sim) {
         const bool air = a.layer & kLayerAir;
         Fixed reach = a.speed * rules_.movement.timeHorizon + a.r + Fixed::fromRatio(3, 2);
         nb.clear();
-        gs.hash.query({a.p.x, Fixed{}, a.p.y}, reach, [&](Entity o) {
-            if (o == a.e || o.index >= byIndex.size() || byIndex[o.index] < 0) return;
-            const Agent& b = agents[size_t(byIndex[o.index])];
+        crowd.query(a.p, reach, [&](int32_t bi) {
+            const Agent& b = agents[size_t(bi)];
+            if (b.e == a.e) return;
+            const Entity o = b.e;
             if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) return;
             Fixed d2 = (b.p - a.p).lengthSq();
             if (d2 > reach * reach) return;
