@@ -102,6 +102,8 @@ void io(Archive& a, WaveDef& x) { a(x.tick, x.player, x.spawn, x.at, x.spread, x
 void io(Archive& a, RoomZone& x) { a(x.type, x.owner, x.cells, x.center); }
 void io(Archive& a, PlayerAbilityState& x) { a(x.readyAt, x.charges, x.rearm, x.owned, x.level, x.stolenUntil, x.pendingAt, x.pendingPoint, x.pendingTarget, x.nextAuto); }
 void io(Archive& a, VictoryRules& x) { a(x.mode, x.tickets, x.ticketDrain, x.surviveSeconds, x.keyLoses, x.share); }
+void io(Archive& a, ScriptStore::Timer& x) { a(x.tick, x.seq, x.fn, x.arg); }   // scripting (RtsScript.h)
+void io(Archive& a, ScriptStore& x) { a(x.state, x.started, x.disabled, x.disabledFns, x.inside, x.timers, x.timerSeq); }
 void io(Archive& a, TriggerState& x) { a(x.enabled, x.fired, x.inside, x.edge, x.vars, x.messages, x.started); }
 void io(Archive& a, RoadGraph& x) { a(x.nodes, x.adj); }
 void io(Archive& a, SpatialHash& x) { a(x.cell, x.w, x.h, x.buckets, x.used); }
@@ -205,6 +207,11 @@ bool RtsModule::serializeState(Simulation& sim, Archive& a) {
     if (!a.writing() && pools != kPools::count) { a.fail(); return false; }
     kPools::run(a, w);
     ioState(a, gs);
+    // Lua state of games with their own scripts (the standard library keeps its state in GameState)
+    if (auto* ss = w.resource<ScriptStore>(); ss && ss->userScripts) {
+        io(a, *ss);
+        if (!a.writing()) ss->serial = 0;   // never a VM write stamp: the VM restores `state` from it
+    }
     if (!a.writing()) {
         gs.grid.invalidatePathing();   // derived caches (clearance, HPA*) rebuild from the loaded cells
         gs.grid.clearSoft();

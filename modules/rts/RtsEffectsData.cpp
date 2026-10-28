@@ -213,7 +213,7 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
         {"sendBack", EffectKind::SendBack}, {"clone", EffectKind::Clone}, {"formation", EffectKind::Formation}, {"convert", EffectKind::Convert},
         {"playerStatus", EffectKind::PlayerStatus}, {"equalizeResource", EffectKind::EqualizeResource}, {"sacrifice", EffectKind::Sacrifice},
         {"stealSkill", EffectKind::StealSkill}, {"cooldown", EffectKind::Cooldown},
-        {"addCharges", EffectKind::AddCharges}, {"teleportGroup", EffectKind::TeleportGroup}};
+        {"addCharges", EffectKind::AddCharges}, {"teleportGroup", EffectKind::TeleportGroup}, {"script", EffectKind::Script}};
     std::string k = ej.getStr("type", "damage");
     bool known = false;
     for (auto& [n, kk] : kinds) if (k == n) { e.kind = kk; known = true; }
@@ -224,6 +224,11 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
         if (e.amountMax < e.amount) fail(w, "amount range must be [min, max]");
     }
     else e.amount = ej.getFx("amount");
+    if (e.kind == EffectKind::Script) {
+        e.scriptFn = ej.getStr("fn");
+        if (e.scriptFn.empty()) fail(w, "needs 'fn' (a function of the game's scripts)");
+        e.scriptArgs = ej;
+    }
     e.percent = ej.getFx("percent");
     e.radius = ej.getFx("radius");
     e.duration = ej.getFx("duration");
