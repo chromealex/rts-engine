@@ -88,6 +88,11 @@ public:
     bool drawsDig() const { return dig_.on && rules_ && !rules_->diggables.empty(); }
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision,
               const MapGrid& grid, const RtsView& view);
+    // Looks as configured (planet overlays reuse them: RtsPlanetGroundFx).
+    const TerritoryLook& territoryLook() const { return terr_; }
+    const RoadLook& roadLook() const { return road_; }
+    bool showsTerritory() const { return useT_ && terr_.on; }
+    bool territoryOn() const { return terr_.on; }
 
 private:
     struct Chunk {
