@@ -41,6 +41,17 @@ const char* kKindNames[] = {"grass", "sand", "ramp", "rock", "blocked", "lakebed
 
 const char* cellKindName(int k) { return k >= 0 && k < 8 ? kKindNames[k] : "?"; }
 
+std::vector<uint8_t> parseMaterialRows(const Json& rows, int w, int h) {
+    if (!rows.isArray() || w <= 0 || h <= 0) return {};
+    std::vector<uint8_t> out(size_t(w * h), 255);
+    for (size_t y = 0; y < rows.size() && int(y) < h; ++y) {
+        std::string r = rows[y].str();
+        for (size_t x = 0; x < r.size() && int(x) < w; ++x)
+            if (r[x] >= '0' && r[x] <= '3') out[y * size_t(w) + x] = uint8_t(r[x] - '0');
+    }
+    return out;
+}
+
 // ------------------------------------------------------------------ setup
 
 void TerrainRenderer::init(gfx::Device& dev, const Rules& rules, const FileReader& read, const std::string& contentBase) {

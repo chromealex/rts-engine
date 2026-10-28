@@ -46,6 +46,8 @@ struct TerrainLook {
 // Cell kinds, in the classic colour order.
 enum CellKind : uint8_t { kKindGrass, kKindSand, kKindRamp, kKindRock, kKindBlocked, kKindLakebed, kKindShallows, kKindDug };
 const char* cellKindName(int k);
+// Map key "terrainMaterial" (rows of '0'..'3', other chars = by cell kind) -> per cell layer (255 = by kind).
+std::vector<uint8_t> parseMaterialRows(const Json& rows, int w, int h);
 
 class TerrainRenderer {
 public:

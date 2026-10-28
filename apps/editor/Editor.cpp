@@ -304,6 +304,7 @@ void Editor::syncGrid() {
         grid_.fieldAmt[size_t(i)] = Fixed::fromInt(d.fieldAmt[size_t(i)]);
     }
     view_.setTiles(d.extra["tiles"]);
+    view_.setTerrainMaterial(d.extra["terrainMaterial"], d.w, d.h);
     view_.buildTerrain(*dev_, grid_);
     gridRevision_ = doc().revision;
 }
