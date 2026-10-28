@@ -15,15 +15,6 @@ def tint_keys(keys, tint):
     return [(t, tuple(min(1.0, max(0.0, a * b)) for a, b in zip(c, tint))) for t, c in keys]
 
 
-def _symmetric(v):
-    """Flip rotation: a range made symmetric around 0 (Unity flips a share of the particles)."""
-    if isinstance(v, dict):
-        return v
-    lo, hi = (v if isinstance(v, list) else [v, v])
-    m = max(abs(lo), abs(hi))
-    return [-m, m] if m else 0
-
-
 # ------------------------------------------------------------------------------------------ over lifetime
 
 def map_over_life(s, em, tint):
@@ -55,15 +46,11 @@ def map_over_life(s, em, tint):
     rot_m = s.module('RotationModule')
     if rot_m is not None:
         spin = val(log, 'spin', rot_m.get('curve'), s.zsign * RAD * sim)
-        if s.flip > 0:
-            spin = _symmetric(spin)
         if nonzero(spin):
             em['spin'] = spin
         if int(num(rot_m.get('separateAxes'), 0)):
             em['spin3D'] = {'x': val(log, 'spin', rot_m.get('x'), -RAD * sim), 'y': val(log, 'spin', rot_m.get('y'), -RAD * sim)}
         log.ok('rotationOverLifetime', 'spin (curve over the lifetime)')
-    if s.flip > 0 and 'rotation' in em:
-        em['rotation'] = _symmetric(em['rotation'])
     cbs = s.module('ColorBySpeedModule')
     if cbs is not None:
         rg = uy.vec3(cbs.get('range'), (0, 1, 0))
@@ -231,6 +218,33 @@ def map_texture_sheet(s, em, blend):
 
 # ------------------------------------------------------------------------------------------ renderer
 
+def _map_range(v, fn):
+    """fn applied to every value of a range JSON (number, [min, max] or {curve, curveMin})."""
+    if isinstance(v, dict):
+        return {k: [[t, rv(fn(x))] for t, x in keys] for k, keys in v.items()}
+    if isinstance(v, list):
+        a, b = sorted((rv(fn(v[0])), rv(fn(v[1]))))
+        return [a, b]
+    return rv(fn(v))
+
+
+def model_file_turn(s, em):
+    """Unity mirrors X when it imports a model file; with the z mirror to the engine that is a turn of 180 degrees
+    around the model's Y: R Ry(180) = Ry(y + 180) Rx(-x) Rz(-z) (rotation and spin about x and z change sign)."""
+    if not getattr(s, 'model_file_meshes', False):
+        return
+    r3 = em.setdefault('rotation3D', {'x': 0, 'y': 0})
+    r3['y'] = _map_range(r3.get('y', 0), lambda x: x + 180)
+    r3['x'] = _map_range(r3.get('x', 0), lambda x: -x)
+    for key in ('rotation', 'spin'):
+        if key in em:
+            em[key] = _map_range(em[key], lambda x: -x)
+    if 'spin3D' in em:
+        em['spin3D']['x'] = _map_range(em['spin3D']['x'], lambda x: -x)
+    if 'spinBySpeed' in em:
+        em['spinBySpeed']['spin'] = [[t, rv(-x)] for t, x in em['spinBySpeed']['spin']]
+
+
 SORT = {0: 'none', 1: 'distance', 2: 'oldest', 3: 'youngest', 4: 'distance'}
 
 
@@ -277,6 +291,10 @@ def map_renderer(s, em):
                 log.drop('renderer', 'particle mesh: %s' % why)
             if meshes:
                 em['meshes'] = meshes[:4]
+                if any(not m.startswith('builtin:') for m in em['meshes']):
+                    s.model_file_meshes = True   # turned after the rotations are mapped (model_file_turn)
+                    if any(m.startswith('builtin:') for m in em['meshes']):
+                        log.approx('renderer', 'built-in and model-file meshes in one emitter: the built-ins get the model-file turn too')
                 log.ok('renderer', 'mesh particles: %s' % ', '.join(meshes))
             else:
                 log.approx('renderer', 'mesh particles without a usable mesh -> camera billboards')

@@ -3,6 +3,7 @@
 Test material: tests/data/unity_vfx (synthetic prefabs, materials, .meta and generated textures)."""
 import io
 import json
+import math
 import os
 import shutil
 import sys
@@ -198,6 +199,7 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(smoke['noise']['frequency'], 0.8)
         self.assertEqual(smoke['force'], {'y': 0.8, 'space': 'local'})  # local force +Z under the rotated root
         self.assertEqual(smoke['delay'], 0.1)
+        self.assertEqual((smoke['flipRotation'], smoke['rotation']), (1, [-360, 0]))   # Unity flip rotation: its own key
 
     def test_renderer_modes_trails_lights_collision_subemitters(self):
         sp = by_comment(self.fx['explosion'], '/Sparks')
@@ -223,7 +225,9 @@ class ImportTests(unittest.TestCase):
         self.assertIn('sizeBySpeed', aura)
         self.assertEqual(aura['velocityOverLife'], {'y': {'curve': [[0, 0.5], [1, 1.5]]}, 'orbitalY': -114.59})
         self.assertTrue(aura['prewarm'])
+        self.assertEqual((aura['shape'], aura['radial']), ('ring', 1))   # edge circle: outward in its plane
         self.assertNotIn('direction', aura)                  # circle rotated -90 X: its normal is up
+        self.assertNotIn('shapeRotation', aura)
         motes = by_comment(self.fx['magicaura'], '/Motes')
         self.assertEqual(motes['size'], [0.08, 0.16])        # hierarchy scaling mode: x2
         self.assertEqual(motes['perMeter'], 5)
@@ -442,18 +446,28 @@ class ModuleTests(unittest.TestCase):
     def test_shapes(self):
         e = self.storm
         self.assertEqual((e['shape'], e['emitFrom'], e['length'], e['spread'], e['thickness']), ('cone', 'volume', 2, 20, 0.5))
-        self.assertNotIn('direction', e)                             # cone rotated -90 X: up
+        self.assertNotIn('direction', e)
         self.assertEqual((e['arc'], e['arcMode'], e['arcSpeed'], e['arcSpread']), (270, 'loop', 2, 0.25))
+        # arc < 360: the whole shape turns; the engine arc (from +X towards +Z around +Y) covers Unity's sector
+        R = cv.mat_zxy(e['shapeRotation'])
+        M = cv.mm(cv.P, cv.q_mat(us.q_euler((-90, 0, 0))))
+        rnd = lambda v: [round(x, 4) + 0.0 for x in v]  # noqa: E731
+        self.assertEqual(rnd(cv.mv(R, (0, 1, 0))), rnd(cv.mv(M, (0, 0, 1))))   # axis
+        for k in range(0, 271, 30):
+            a = math.radians(k)
+            eng = cv.mv(R, (math.cos(a), 0, math.sin(a)))
+            u = math.radians(270 - k)
+            self.assertEqual(rnd(eng), rnd(cv.mv(M, (math.cos(u), math.sin(u), 0))))
         self.assertEqual((e['randomDirection'], e['sphericalDirection'], e['randomPosition'], e['alignToDirection']), (0.25, 0.5, 0.1, True))
         ring = self.em('/Ring')
         self.assertEqual((ring['shape'], ring['radius'], ring['donutRadius'], ring['shapeRotation']), ('donut', 1, 0.1, [0, 0, 135]))
         shards = self.em('/Shards')
         self.assertEqual((shards['shape'], shards['mesh'], shards['emitFrom']), ('mesh', 'builtin:cube', 'triangle'))
-        self.assertIn('shapeRotation', shards)
+        self.assertEqual(shards['shapeRotation'], [0, 30, 0])        # built-in mesh: only the shape's own rotation
         hull = self.em('/Hull')
         self.assertEqual((hull['mesh'], hull['emitFrom']), ('models/shard.obj', 'edge'))
         self.assertEqual(hull['box'], [2, 2, 3])                     # the mesh shape's scale (model axes)
-        self.assertNotIn('shapeRotation', hull)                      # unrotated mesh: identity
+        self.assertEqual(hull['shapeRotation'], [0, 180, 0])         # model file: Unity's import mirror = a half turn
         self.assertTrue(os.path.exists(os.path.join(self.tmp, 'models', 'shard.obj')))
         self.assertTrue(os.path.exists(os.path.join(self.tmp, 'models', 'rock.fbx')))
         panel = self.em('/Panel')
@@ -504,9 +518,16 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual((n['position'], n['rotation'], n['size']), (0.8, -45, 0.2))
         self.assertEqual((n['remap'][0], n['remap'][-1]), ([0, -1], [1, 1]))
         shards = self.em('/Shards')
-        self.assertEqual(shards['rotation'], 45)                   # mesh particles: engine world Euler, z kept
-        self.assertEqual(shards['rotation3D'], {'x': [-180, 0], 'y': 0})
-        self.assertEqual(shards['spin3D'], {'x': -57.296, 'y': [-28.648, 28.648]})
+        # mesh particles from model files: engine world Euler (-x, -y, z) then the import half turn R Ry(180) =
+        # Ry(y + 180) Rx(-x) Rz(-z)
+        self.assertEqual(shards['rotation'], -45)
+        self.assertEqual(shards['rotation3D'], {'x': [0, 180], 'y': 180})
+        self.assertEqual(shards['spin'], -114.59)
+        self.assertEqual(shards['spin3D'], {'x': 57.296, 'y': [-28.648, 28.648]})
+        for x, y, z in ((30, 0, 45), (100, 20, -60)):   # the identity behind it
+            a = cv.mm(cv.mat_zxy((x, y, z)), cv.Y180)
+            b = cv.mat_zxy((-x, y + 180, -z))
+            self.assertTrue(all(abs(a[i][j] - b[i][j]) < 1e-9 for i in range(3) for j in range(3)))
 
     def test_texture_sheet(self):
         e = self.storm
