@@ -183,6 +183,7 @@ bool GameClient::toolMouseDown(const Event& e) {
         if (groundAt(e.x, e.y, g)) {
             Command c; c.type = kCmdPlayerAbility; c.param = abilityIndex_;
             c.point = {fx(g.x), Fixed{}, fx(g.z)};
+            if (planet()) c.point = simPoint(g);
             c.target = pick(e.x, e.y);
             issue(c);
         }
@@ -193,6 +194,7 @@ bool GameClient::toolMouseDown(const Event& e) {
         float3 g;
         if (groundAt(e.x, e.y, g)) {
             Command c; c.type = kCmdDrop; c.point = {fx(g.x), Fixed{}, fx(g.z)};
+            if (planet()) c.point = simPoint(g);
             c.param = (e.mods & platform::kModShift) ? rules_.hand.max : 1;   // shift: the whole hand
             issue(c);
         }

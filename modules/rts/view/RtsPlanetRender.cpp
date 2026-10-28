@@ -567,7 +567,7 @@ void PlanetRenderer::draw(Renderer3D& r, const PlanetViewFrame& fr, double secon
         const float3 L = star >= 0 && bd.body != star ? normalize(centers[size_t(star)] - bd.center) : sunDirFocus;
         put(u.sun, L, shadows && bd.body == lightBody ? 1.0f : 0.0f);
         // haze: atmosphere colour, thickness relative to the radius (none on airless moons)
-        put(u.atmo, pb.atmosphere ? pb.atmoColor : float3{0, 0, 0}, 0.12f);
+        put(u.atmo, pb.atmosphere ? pb.atmoColor : float3{0, 0, 0}, 0.45f);   // w: ambient on the night side (gameplay stays readable)
         u.opts[3] = pb.atmosphere ? 0.6f / std::max(pb.radius * 6.0f, 1.0f) : 0.0f;
         if (bd.fog) {
             const FogLook& fl = b.fogLook;

@@ -102,6 +102,10 @@ public:
     bool planetMap() const { return view_.planetMode(); }
     bool planetAt(const Viewport& vp, float sx, float sy, int& body, render::float3& local) const;
     std::string planetBodyId(int body) const;
+    // Planet maps: screen point -> map position {"body", "face", "x", "y"} (cells); null when nothing is hit.
+    Json planetPosAt(const Viewport& vp, float sx, float sy) const;
+    // Body-local point of a map position (entity "at", player "start"); false when invalid.
+    bool planetLocal(const Json& at, int& body, render::float3& local) const;
     void fitScene();
 
     // play-test (Game window)
