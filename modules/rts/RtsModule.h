@@ -382,6 +382,9 @@ public:
 
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
+    // The map the simulation was set up from when the map had a "generate" block (nullptr otherwise):
+    // presentation reads terrainMaterial / heights / regions from it (agent-terrain-gen).
+    const Json* generatedMap() const { return generated_.isObject() ? &generated_ : nullptr; }
     GameState& state(Simulation& sim) { return *sim.world().resource<GameState>(); }
 
     // ---- queries shared with AI, client and editor
@@ -458,6 +461,7 @@ public:
     std::vector<int> lanesBetween(Simulation& sim, Entity a, Entity b) const;
 
 private:
+    Json generated_;                 // generated map (see generatedMap())
     void setupMap(Simulation& sim, const Json& map);
     // systems
     void sysEconomy(Simulation& sim);
