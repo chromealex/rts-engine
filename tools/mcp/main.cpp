@@ -184,6 +184,8 @@ const char* kInstructions =
     "Phones: device_list {filter} (iPhone, iPad, Pixel, Galaxy, Redmi, desktops: sizes, safe areas, cut-outs) -> "
     "device_set {device, orientation, safeArea: true} -> view_screenshot {window: game}. "
     "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
+    "Mechanics the data blocks can't express: Lua scripts - script_api (reference) -> script_write {path: scripts/x.lua, register: true} "
+    "-> script_check (compile + short bot match, errors with file:line); simulation scripts use integers and fx() numbers, no floats. "
     "Visual effects: fx_templates (explosion, fire, smoke, magic, weather, ...) or fx_import_unity {source: a Unity .prefab / folder} "
     "to make the same effect as a Unity one, tune with fx_get / fx_set, look with fx_preview {effect, advance, freeze} + view_screenshot, "
     "attach to events with fx_bind (died, hit, attack, ability, spawned per type / weapon / ability). "
@@ -194,6 +196,9 @@ const char* kInstructions =
     "lighting: lighting_set (sun, sky, day/night, presets), light_add / light_update (point lights on the map); "
     "fog of war: rules_merge {path: \"fogOfWar\"} (mode, colour, style, softness, grid, lineOfSight for 3D visibility by heights, "
     "vision.blocks on wall types, delivery.blocksVision on smoke skills); "
+    "post effects (bloom, colour grading, LUT, vignette, tilt-shift, ...): postfx_catalog -> postfx_preset / postfx_add; their answers carry "
+    "'warnings' with ms per frame for heavy effects (bloom, fxaa, sunShafts) - pass them on to the user; view_postfx {quality: low} + view_screenshot "
+    "shows what weak phones get; "
     "game UI: ui_contract (documents, data bindings, events) -> game_file_write ui/hud.rml, ui/skin.rcss ... (the game's ui/ overrides the engine's). "
     "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";

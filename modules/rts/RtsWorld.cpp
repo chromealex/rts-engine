@@ -1,16 +1,10 @@
 // World rules: vision with cliff levels, creep, control points / flags / regions, tickets,
-// neutral creeps and wanderers, scripted waves and lane waves, victory conditions.
+// neutral creeps and wanderers, (waves and victory conditions: lua/waves.lua, lua/victory.lua).
 #include "RtsInternal.h"
 #include <algorithm>
 
 namespace rts::game {
 using namespace detail;
-
-namespace {
-bool isWavePlayer(const GameState& gs, uint8_t slot) {
-    return std::find(gs.wavePlayers.begin(), gs.wavePlayers.end(), slot) != gs.wavePlayers.end();
-}
-} // namespace
 
 // ================================================================= vision
 
@@ -278,164 +272,7 @@ void RtsModule::sysNeutrals(Simulation& sim) {
     for (auto& [e, p] : moves) moveTo(sim, e, p, Fixed::fromRatio(1, 2));
 }
 
-// ================================================================= waves
-
-namespace {
-// Nearest hostile key structure (else any structure, else any unit) for a wave unit to march at.
-Vec3 waveObjective(RtsModule& m, Simulation& sim, uint8_t player, Vec3 from, bool& found) {
-    World& w = sim.world();
-    const Rules& rules = m.rules();
-    Vec3 best = from;
-    Fixed bestD{};
-    int bestRank = 9;
-    found = false;
-    w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& t) {
-        if (!m.hostile(sim, player, o.player) || o.player == kHostileNeutral || u.hp.raw <= 0) return;
-        const UnitType& ut = rules.types[u.type];
-        if (!ut.countsForVictory) return;
-        int rank = ut.key ? 0 : ut.structure ? 1 : 2;
-        Fixed d = dist2D(t.pos, from);
-        if (!found || rank < bestRank || (rank == bestRank && d < bestD)) { best = t.pos; bestD = d; bestRank = rank; found = true; }
-    });
-    return best;
-}
-} // namespace
-
-void RtsModule::sysWaves(Simulation& sim) {
-    World& w = sim.world();
-    GameState& gs = state(sim);
-    const uint32_t tick = sim.tick();
-    std::vector<Entity> spawned;
-    std::vector<std::pair<Entity, size_t>> routed;   // agent-mech: wave units with a route (index into gs.waves)
-    // scripted waves (They Are Billions, tower defense, survival maps)
-    for (auto& wd : gs.waves) {
-        if (wd.repeats >= 0 && wd.done > wd.repeats) continue;
-        uint32_t due = wd.tick + uint32_t(wd.done) * wd.every;
-        if (tick != due || (wd.done > 0 && wd.every == 0)) continue;
-        Fixed scale = kOne;
-        for (int k = 0; k < wd.done; ++k) scale = scale * wd.growth;
-        for (auto& [type, count] : wd.spawn) {
-            int n = int((scale * count).toInt());
-            for (int k = 0; k < n; ++k) {
-                Vec3 p = wd.at + Vec3{(sim.rng().unit() * 2 - kOne) * wd.spread, Fixed{}, (sim.rng().unit() * 2 - kOne) * wd.spread};
-                int cx, cy; gs.grid.cellXY(p, cx, cy);
-                if (!gs.grid.nearestPassable(cx, cy, rules_.types[type].pathLayer, 6)) continue;
-                spawned.push_back(spawn(sim, type, wd.player, gs.grid.cellCenter(cx, cy)));
-                if (!wd.route.empty()) routed.push_back({spawned.back(), size_t(&wd - gs.waves.data())});
-            }
-        }
-        sim.emit({kEvWave, wd.player, kNullEntity, kNullEntity, wd.done, wd.at});
-        ++wd.done;
-        if (wd.every == 0) wd.done = wd.repeats + 1;
-    }
-    // lane waves: every structure with a wave spawner releases its squad on the shared clock
-    if (rules_.waveClock.raw > 0 && tick >= gs.nextWaveTick && gs.nextWaveTick > 0) {
-        struct Rel { Entity from; uint16_t type; int count; uint8_t owner; };
-        std::vector<Rel> rel;
-        w.each<Unit, Owner>([&](Entity e, Unit& u, Owner& o) {
-            const UnitType& t = rules_.types[u.type];
-            if (t.waveUnit == kNoType || (u.flags & (kUnitUnderConstruction | kUnitDisabled)) || o.player == 0) return;
-            auto* pi = sim.player(o.player);
-            if (pi && !pi->alive) return;
-            rel.push_back({e, t.waveUnit, t.waveCount, o.player});
-        });
-        for (auto& r : rel)
-            for (int k = 0; k < r.count; ++k) {
-                Vec3 p = freeSpotNear(sim, r.from, rules_.types[r.type].pathLayer);
-                Entity n = spawn(sim, r.type, r.owner, p);
-                spawned.push_back(n);
-                sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, p});
-            }
-        gs.nextWaveTick = tick + uint32_t((rules_.waveClock * int64_t(sim.tickRate())).toInt());
-        sim.emit({kEvWave, 0, kNullEntity, kNullEntity, int64_t(rel.size()), {}});
-    }
-    // everything spawned by a wave marches on the enemy
-    for (Entity n : spawned) {
-        if (!w.alive(n) || !w.has<Orders>(n)) continue;
-        uint8_t owner = w.get<Owner>(n).player;
-        bool found = false;
-        Vec3 goal = waveObjective(*this, sim, owner, w.get<Transform>(n).pos, found);
-        if (!found) continue;
-        Order o;
-        o.type = OrderType::AttackMove;
-        o.point = flat(goal);
-        o.param = 4;
-        o.flow = rules_.movement.flow.waves;   // hordes share flow fields (goal area sized for the whole wave)
-        if (o.flow) o.param = int32_t(std::min<size_t>(spawned.size(), 400));
-        issue(sim, n, o, false);
-    }
-    for (auto& [n, wi] : routed) if (w.alive(n)) mechWaveRoute(sim, n, gs.waves[wi].route);
-}
-
-// ================================================================= victory
-
-void RtsModule::sysVictory(Simulation& sim) {
-    if (sim.tick() % 10 != 0) return;
-    World& w = sim.world();
-    GameState& gs = state(sim);
-    if (gs.winnerTeam >= 0) return;
-    const VictoryRules& v = gs.victory;
-    bool anyKeyType = false;
-    for (auto& t : rules_.types) if (t.key) anyKeyType = true;
-
-    for (auto& p : sim.players()) {
-        if (!p.alive || isWavePlayer(gs, p.slot)) continue;
-        bool has = false;
-        w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) {
-            if (has || o.player != p.slot || u.hp.raw <= 0) return;
-            const UnitType& t = rules_.types[u.type];
-            if (!t.countsForVictory) return;
-            const bool building = u.flags & kUnitUnderConstruction;
-            switch (v.mode) {
-            case VictoryMode::NoStructures: has = (t.structure && !building) || t.deploysTo != kNoType; break; // an MCV is a base
-            case VictoryMode::NoUnits: has = !t.structure; break;
-            case VictoryMode::KeyUnits: has = anyKeyType ? t.key : (t.structure && !building); break;
-            case VictoryMode::Score: has = v.keyLoses ? (anyKeyType ? t.key : t.structure) : true; break;
-            case VictoryMode::Territory: has = true; break;
-            default: has = true; break; // NoEntities, Tickets, Survive
-            }
-        });
-        if (v.mode == VictoryMode::Tickets && p.team < gs.tickets.size() && gs.tickets[p.team].raw <= 0) has = false;
-        if (v.mode == VictoryMode::Territory && rules_.territory.enabled) has = territoryOf(sim, p.slot) > 0; // out when no ground is left
-        if (!has) {
-            p.alive = false;
-            sim.emit({kEvPlayerDefeated, p.slot, kNullEntity, kNullEntity, 0, {}});
-        }
-    }
-
-    const uint32_t limit = uint32_t((v.surviveSeconds * int64_t(sim.tickRate())).toInt());
-    auto aliveTeams = [&]() {
-        std::vector<uint8_t> teams;
-        for (auto& p : sim.players())
-            if (p.alive && !isWavePlayer(gs, p.slot) && std::find(teams.begin(), teams.end(), p.team) == teams.end()) teams.push_back(p.team);
-        return teams;
-    };
-    if (v.mode == VictoryMode::Survive) {
-        auto teams = aliveTeams();
-        if (teams.empty()) {
-            // defenders fell: the wave side wins (or a draw if waves have no team of their own)
-            gs.winnerTeam = gs.wavePlayers.empty() ? 0 : teamOf(sim, gs.wavePlayers.front());
-        } else if (sim.tick() >= limit) {
-            gs.winnerTeam = teams.size() == 1 ? teams[0] : 0;
-        }
-    } else if (v.mode == VictoryMode::Territory && gs.territoryTotal > 0) {
-        // a team holding the required share of all claimable cells wins
-        std::vector<int> cells(256, 0);
-        for (auto& p : sim.players()) if (p.alive && !isWavePlayer(gs, p.slot)) cells[p.team] += territoryOf(sim, p.slot);
-        for (uint8_t t : aliveTeams())
-            if (Fixed::fromInt(cells[t]) >= v.share * gs.territoryTotal) { gs.winnerTeam = t; break; }
-    } else if (v.mode == VictoryMode::Score && sim.tick() >= limit) {
-        auto teams = aliveTeams();
-        int best = -1;
-        Fixed bestScore{};
-        bool tie = false;
-        for (uint8_t t : teams) {
-            Fixed s = t < gs.score.size() ? gs.score[t] : Fixed{};
-            if (best < 0 || s > bestScore) { best = t; bestScore = s; tie = false; }
-            else if (s == bestScore) tie = true;
-        }
-        gs.winnerTeam = best < 0 || tie ? 0 : best;
-    }
-}
+// waves: modules/rts/lua/waves.lua (standard Lua library, std.waves)
+// victory: modules/rts/lua/victory.lua (standard Lua library, std.victory)
 
 } // namespace rts::game

@@ -7,6 +7,7 @@
 //   RtsWorld.cpp     vision (with heights), creep, control points, regions, waves, neutrals, victory
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../../engine/sim/CommonComponents.h"
@@ -14,6 +15,7 @@
 #include "RtsData.h"
 #include "RtsMap.h"
 #include "RtsTriggers.h"
+#include "RtsScript.h"
 #include "RtsMech.h"
 #include <memory>
 
@@ -76,6 +78,9 @@ enum CommandType : uint16_t {
     kCmdPickItem,     // units[0]; point = where the ground item lies
     kCmdLearn,        // heroes (rules heroes.skills): param = ability index to learn / raise with a skill point
     kCmdBounty,       // point or target; param = resource | reward << 8 (autonomous heroes go for it)
+    kCmdRotate,       // conveyor pieces: param 1..4 = east, south, west, north; 0 = turn clockwise
+    kCmdLock,         // gates / doors: param 1 lock (closed for everyone), 2 unlock, 0 toggle
+    kCmdEndTurn,      // turn-based mode: the active player ends the turn
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -145,6 +150,7 @@ enum GameEvent : uint16_t {
     kEvGroupTeleport, // a = unit moved, b = caster (may be null), pos = arrival, value = 1 when it is a return trip
     kEvPaved,         // a = slab (removed), value = cells paved, pos = slab centre
     kEvMorale,          // a = unit, value = 0 steady / 1 wavering / 2 routing (stage 4)
+    kEvTurn,            // turn-based mode: player = whose turn starts, value = turn number
 };
 
 // ---------------------------------------------------------------- components
@@ -467,6 +473,8 @@ struct GameState {
 // ---------------------------------------------------------------- module
 class RtsModule final : public GameModule {
 public:
+    RtsModule();
+    ~RtsModule() override;
     std::string name() const override { return "rts"; }
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
@@ -476,6 +484,7 @@ public:
 
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
+    ScriptEngine* scripts() const { return script_.get(); }   // the Lua VM (standard library + game scripts)
     // The map the simulation was set up from when the map had a "generate" block (nullptr otherwise):
     // presentation reads terrainMaterial / heights / regions from it (agent-terrain-gen).
     const Json* generatedMap() const { return generated_.isObject() ? &generated_ : nullptr; }
@@ -653,6 +662,28 @@ public:
     void mechBattleStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
     bool mechRouting(Simulation& sim, Entity e) const;
     Fixed moraleMaxOf(uint16_t type) const;
+    // logistics (RtsMechLogistics.cpp): belts, producers, crafters
+    void mechTickLogistics(Simulation& sim);
+    bool applyMechLogisticsCommand(Simulation& sim, const Command& cmd);
+    void mechLogisticsSetup(Simulation& sim, const Json& map);
+    void hashLogistics(Simulation& sim, Hasher& h);
+    // turn-based mode (RtsMechTurns.cpp)
+    void mechTickTurns(Simulation& sim);
+    bool mechTurnCommand(Simulation& sim, const Command& cmd);   // true: swallowed (not your turn) or handled (end turn)
+    bool mechTurnFire(Simulation& sim, Entity e);
+    void mechTurnStat(Simulation& sim, Entity e, Stat s, Fixed& mul) const;
+    uint8_t turnPlayer(Simulation& sim) const;
+    // free 3D flight (RtsMechSpace.cpp)
+    void mechAltitudeCommand(Simulation& sim, const Command& cmd);
+    void mechTickAltitude(Simulation& sim);
+    Fixed mechContact3D(Simulation& sim, Entity a, Entity b);
+    bool genericSeparation = false;   // tests: compare the BA separation against the generic loop
+    // BA: separation of overlapping units with a per-cell grid and flat arrays (exactly the pushes of sysMovement)
+    void mechSeparation(Simulation& sim, const std::vector<Fixed>& weight, const std::vector<uint8_t>& anchored, Fixed deadZone, size_t,
+                        const std::function<void(Entity, Vec3)>& push);
+    // BA: a big attack-move group forms a block of rows facing the goal instead of one wide arc (RtsMechBattle.cpp)
+    void mechArmyBlock(Simulation& sim, const std::vector<Entity>& sortedByLateral, Vec3 target, Vec3 dir, Vec3 perp, Fixed spacing,
+                       std::vector<std::pair<Entity, Vec3>>& out);
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:
@@ -683,9 +714,6 @@ private:
     void sysCapture(Simulation& sim);
     void sysCreep(Simulation& sim);
     void sysVision(Simulation& sim);
-    void sysWaves(Simulation& sim);
-    void sysVictory(Simulation& sim);
-    void sysTriggers(Simulation& sim);
     void sysDungeon(Simulation& sim);     // RtsDungeon.cpp: jobs, needs, portals, territory, possession
     void setupDungeon(Simulation& sim, const Json& map);
     void applyDungeonCommand(Simulation& sim, const Command& cmd);
@@ -727,8 +755,6 @@ private:
     bool runLaneWalk(Simulation& sim, Entity e, Order& o);
     bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
     void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
-    void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
-    bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
     // fidelity mechanics hooks (RtsOriginals.cpp)
     void sysOriginals(Simulation& sim);
@@ -760,6 +786,7 @@ private:
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
+    std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
     // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
     void sysFidelity(Simulation& sim);
     void hashFidelity(Simulation& sim, Hasher& h);

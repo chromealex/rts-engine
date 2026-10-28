@@ -51,9 +51,9 @@ face seams and cube corners (7 neighbours) are ordinary steps.
 - **Pass-through.** Followers of the same field add no velocity obstacles for each other (they move the same way;
   separation keeps bodies apart) and are dropped from the ORCA candidate list before sorting; settled units are static
   obstacles for followers still arriving and never take yield requests (others go around or settle against them).
-- **Cheaper avoidance for everyone (bit-identical):** separation and ORCA neighbour candidates come from a per-tick
-  sorted cell grid of the agents (`RtsCrowd.h`) instead of the spatial hash with per-candidate component lookups; the
-  candidate set and the (sorted / exactly summed) results are the same, so every template keeps its checksum.
+- **Cheaper avoidance:** separation and ORCA neighbour candidates come from a one-cell grid over the agents with a
+  partial sort (agent-mech, bit-identical to the spatial hash); flow followers additionally drop their own crowd from
+  the candidates before sorting.
 - **Blocked goals** (`movement.blockedGoals: "nearest"`, rules or map; off by default because it picks different cells
   than the classic search): a path to a goal inside a structure / obstacle aims at the free cell around it nearest to
   the start, instead of A* exploring the whole reachable area for the closest cell (chasing a building).

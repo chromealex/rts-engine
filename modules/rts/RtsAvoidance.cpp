@@ -6,7 +6,6 @@
 // entity index) become half-plane constraints on its velocity; the 2D linear program (RVO2's
 // linearProgram1/2/3) picks the velocity closest to the preferred one. Cost is O(agents * K^2).
 #include "RtsInternal.h"
-#include "RtsCrowd.h"
 #include <algorithm>
 
 namespace rts::game {
@@ -162,36 +161,72 @@ void RtsModule::moveAgents(Simulation& sim) {
         agents.push_back(a);
     });
 
-    // neighbour candidates: the agents themselves in a sorted cell grid (the same set the spatial hash gives
-    // after the agent filter; neighbours are sorted by distance and index below, so the result is identical)
-    CrowdGrid crowd;
-    crowd.build(g.w, g.h, agents.size(), [&](size_t i) { return agents[i].p; });
     struct YieldReq { Entity who, mover; Vec2 moverPos, dir; Fixed clear; };
     std::vector<YieldReq> yields;
     std::vector<Line> lines;
     std::vector<std::pair<Fixed, int32_t>> nb;
+    // Neighbour lookup: a one-cell grid over the agents (exactly the spatial-hash candidates within `reach`: the
+    // hash query covers at least `reach` around the agent), and the distance order is sorted only as far as it
+    // is read (the order is total: ties by entity index).
+    const bool cellGrid = !genericSeparation;
+    std::vector<int32_t> cellHead, cellNext;
+    const int gw = std::max(1, g.w), gh = std::max(1, g.h);
+    if (cellGrid) {
+        cellHead.assign(size_t(gw) * size_t(gh), -1);
+        cellNext.assign(agents.size(), -1);
+        for (size_t i = agents.size(); i-- > 0;) {
+            const int cx = std::clamp(int(agents[i].p.x.floorInt()), 0, gw - 1), cy = std::clamp(int(agents[i].p.y.floorInt()), 0, gh - 1);
+            cellNext[i] = cellHead[size_t(cy) * size_t(gw) + size_t(cx)];
+            cellHead[size_t(cy) * size_t(gw) + size_t(cx)] = int32_t(i);
+        }
+    }
+    auto nearer = [&](const std::pair<Fixed, int32_t>& x, const std::pair<Fixed, int32_t>& y) {
+        return x.first != y.first ? x.first < y.first : agents[size_t(x.second)].e.index < agents[size_t(y.second)].e.index;
+    };
     for (auto& a : agents) {
         a.nv = a.pref;
         if (!a.moving) continue;
         const bool air = a.layer & kLayerAir;
         Fixed reach = a.speed * rules_.movement.timeHorizon + a.r + Fixed::fromRatio(3, 2);
         nb.clear();
-        crowd.query(a.p, reach, [&](int32_t bi) {
-            const Agent& b = agents[size_t(bi)];
-            if (b.e == a.e) return;
-            const Entity o = b.e;
-            if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) return;
-            if (a.goal >= 0 && b.goal == a.goal && b.owner == a.owner) return;   // same flow crowd: skipped below anyway
-            Fixed d2 = (b.p - a.p).lengthSq();
-            if (d2 > reach * reach) return;
-            nb.push_back({d2, byIndex[o.index]});
-        });
-        std::sort(nb.begin(), nb.end(), [&](auto& x, auto& y) { return x.first != y.first ? x.first < y.first : agents[size_t(x.second)].e.index < agents[size_t(y.second)].e.index; });
+        size_t sorted = 0;
+        if (cellGrid) {
+            const Fixed reachSq = reach * reach;
+            const int x0 = std::clamp(int((a.p.x - reach).floorInt()), 0, gw - 1), x1 = std::clamp(int((a.p.x + reach).floorInt()), 0, gw - 1);
+            const int y0 = std::clamp(int((a.p.y - reach).floorInt()), 0, gh - 1), y1 = std::clamp(int((a.p.y + reach).floorInt()), 0, gh - 1);
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x)
+                    for (int32_t j = cellHead[size_t(y) * size_t(gw) + size_t(x)]; j >= 0; j = cellNext[size_t(j)]) {
+                        const Agent& b = agents[size_t(j)];
+                        if (b.e == a.e) continue;
+                        if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) continue;
+                        if (a.goal >= 0 && b.goal == a.goal && b.owner == a.owner) continue;   // same flow crowd: skipped below anyway
+                        Fixed d2 = (b.p - a.p).lengthSq();
+                        if (d2 > reachSq) continue;
+                        nb.push_back({d2, j});
+                    }
+            sorted = std::min(nb.size(), size_t(2 * K + 8));
+            std::partial_sort(nb.begin(), nb.begin() + std::ptrdiff_t(sorted), nb.end(), nearer);
+        } else {
+            gs.hash.query({a.p.x, Fixed{}, a.p.y}, reach, [&](Entity o) {
+                if (o == a.e || o.index >= byIndex.size() || byIndex[o.index] < 0) return;
+                const Agent& b = agents[size_t(byIndex[o.index])];
+                if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) return;
+                if (a.goal >= 0 && b.goal == a.goal && b.owner == a.owner) return;
+                Fixed d2 = (b.p - a.p).lengthSq();
+                if (d2 > reach * reach) return;
+                nb.push_back({d2, byIndex[o.index]});
+            });
+            std::sort(nb.begin(), nb.end(), nearer);
+            sorted = nb.size();
+        }
         lines.clear();
         Vec2 dir = normalize(a.pref);
         int used = 0;
-        for (auto& [d2, bi] : nb) {
+        for (size_t ni = 0; ni < nb.size(); ++ni) {
             if (used >= K) break;
+            if (ni == sorted) { std::sort(nb.begin() + std::ptrdiff_t(sorted), nb.end(), nearer); sorted = nb.size(); }
+            const int32_t bi = nb[ni].second;
             const Agent& b = agents[size_t(bi)];
             const bool ally = b.owner == a.owner || (b.owner != 0 && a.owner != 0 && b.owner != kHostileNeutral && a.owner != kHostileNeutral && sim.allied(a.owner, b.owner));
             // same flow-field goal: no velocity obstacle between followers (they move the same way; separation keeps
