@@ -93,6 +93,7 @@ std::vector<Amount> RtsModule::techCost(Simulation& sim, uint8_t player, uint16_
 bool RtsModule::canUsePlayerAbility(Simulation& sim, uint8_t player, int index) const {
     auto* gs = sim.world().resource<GameState>();
     if (index < 0 || size_t(index) >= rules_.playerAbilities.size() || player == 0 || player >= gs->playerAbilities.size()) return false;
+    if (rules_.mech.deck && !mechInHand(sim, player, index)) return false;   // agent-mech: card deck
     const PlayerAbilityState& st = gs->playerAbilities[player][size_t(index)];
     const PlayerAbilityDef& a = rules_.advancedEffects ? playerAbilityFor(sim, player, index) : rules_.playerAbilities[size_t(index)];
     if (rules_.advancedEffects) {
@@ -536,8 +537,10 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
         int idx = int(cmd.param);
         if (rules_.advancedEffects) { castPlayerAbility(sim, pl, idx, cmd.point, cmd.target); return; }
         if (!canUsePlayerAbility(sim, pl, idx)) return;
+        if (rules_.mech.deck && !mechDeckAllows(sim, pl, idx, cmd.point)) return;   // agent-mech: deploy zone
         const PlayerAbilityDef& a = rules_.playerAbilities[size_t(idx)];
         if (!pay(sim, pl, a.cost, {})) return;
+        if (rules_.mech.deck) mechDeckPlayed(sim, pl, idx);
         PlayerAbilityState& st = gs.playerAbilities[pl][size_t(idx)];
         if (a.chargesMax > 0) --st.charges;
         st.readyAt = sim.tick() + uint32_t((a.cooldown * int64_t(sim.tickRate())).toInt());
@@ -964,6 +967,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
             Vec3 spot = freeSpotNear(sim, r.from, ut.pathLayer);
             Entity n = spawn(sim, r.type, r.owner, spot);
             sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, spot});
+            if (!rules_.types[w.get<Unit>(r.from).type].autoTrainAdvance) continue;   // births stay home
             w.add<Advancer>(n);
             Vec3 goal;
             auto* prod = w.tryGet<Production>(r.from);

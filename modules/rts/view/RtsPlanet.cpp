@@ -27,6 +27,10 @@ int PlanetWorld::find(const std::string& id) const {
 }
 
 float3 PlanetWorld::center(int body, double seconds) const {
+    if (sim && body >= 0 && size_t(body) < sim->bodies.size()) { // the simulation's orbit maths (Fixed), as worldPosition
+        const Vec3 v = sim->bodyPosition(body, Fixed::fromRaw(int64_t(std::llround(seconds * double(Fixed::kOne)))));
+        return toF(v);
+    }
     float3 c;
     for (int guard = 0; body >= 0 && body < int(bodies.size()) && guard < 16; ++guard) {
         const PlanetBody& b = bodies[size_t(body)];
@@ -99,6 +103,47 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings)
     }
     w.start = std::max(0, w.find(wj.getStr("start")));
     if (wj.getStr("start").empty()) for (size_t i = 0; i < w.bodies.size(); ++i) if (w.bodies[i].surface()) { w.start = int(i); break; }
+    return w;
+}
+
+PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::vector<uint8_t>& gridFlags, const PlanetWorld& visual) {
+    PlanetWorld w;
+    if (!surf || surf->bodies.empty()) return w;
+    w.sim = surf;
+    w.start = surf->startBody;
+    for (size_t i = 0; i < surf->bodies.size(); ++i) {
+        const BodyDef& d = surf->bodies[i];
+        PlanetBody b;
+        const int vi = visual.find(d.id);
+        if (vi >= 0) b = visual.bodies[size_t(vi)];   // visual keys (atmosphere, colour, sea present)
+        b.id = d.id;
+        b.kind = d.kind == BodyKind::Star ? PlanetBody::Kind::Star : d.kind == BodyKind::Moon ? PlanetBody::Kind::Moon : d.kind == BodyKind::Plane ? PlanetBody::Kind::Plane : PlanetBody::Kind::Planet;
+        if (vi < 0) { // no JSON: defaults per kind
+            b.atmosphere = b.kind == PlanetBody::Kind::Planet;
+            if (b.kind == PlanetBody::Kind::Star) b.color = {1.0f, 0.86f, 0.63f};
+        }
+        b.radius = float(d.radius.toDouble());
+        b.faceSize = d.faceSize;
+        // an ocean only where the map asked for one (seaLevel key); the sim defaults the level to 0 everywhere
+        b.seaLevel = vi >= 0 && visual.bodies[size_t(vi)].seaLevel > -1e8f ? float(d.seaLevel.toDouble()) : -1e9f;
+        b.orbitAltitude = float(d.orbitAltitude.toDouble());
+        b.parent = d.parent;
+        b.orbitRadius = float(d.orbitRadius.toDouble()); b.period = float(d.orbitPeriod.toDouble()); b.phase = float(d.orbitPhase.toDouble());
+        b.pos = toF(d.pos);
+        if (d.hasSurface()) {
+            const int N = d.faceSize;
+            const size_t n = size_t(6 * (N + 1) * (N + 1));
+            b.corners.assign(surf->corners.begin() + long(d.cornerBase), surf->corners.begin() + long(d.cornerBase + n));
+            b.flags.assign(size_t(6 * N * N), kCellGround);
+            for (int f = 0; f < 6; ++f)
+                for (int y = 0; y < N; ++y)
+                    for (int x = 0; x < N; ++x) {
+                        const size_t c = size_t(surf->gridCell(int(i), f, x, y));
+                        if (c < gridFlags.size()) b.flags[(size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x)] = gridFlags[c];
+                    }
+        } else { b.corners.clear(); b.flags.clear(); }
+        w.bodies.push_back(std::move(b));
+    }
     return w;
 }
 

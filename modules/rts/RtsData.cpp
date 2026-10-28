@@ -38,6 +38,7 @@ Stat parseStat(const std::string& s, bool* ok) {
         {"productionSpeed", Stat::ProductionSpeed}, {"workRate", Stat::GatherRate}, {"energyRegen", Stat::EnergyRegen},
         {"defense", Stat::Defense}, {"garrisonCap", Stat::GarrisonCap}, {"cooldownRate", Stat::CooldownRate}, {"upgradeCost", Stat::UpgradeCost},
         {"lifesteal", Stat::Lifesteal}, {"damageTaken", Stat::DamageTaken}, {"scale", Stat::Scale},
+        {"armor2", Stat::Armor2}, {"pierceArmor", Stat::Armor2},
     };
     for (auto& e : t) if (s == e.n) { if (ok) *ok = true; return e.s; }
     if (ok) *ok = false;
@@ -113,6 +114,7 @@ VictoryRules loadVictory(const Json& j, const VictoryRules& def) {
 }
 
 Rules loadRules(const Json& j) {
+    if (j.has("designs")) return loadRules(expandDesigns(j));   // agent-mech UD
     Rules r;
     r.supplyCap = j.getFx("supplyCap", r.supplyCap);
     r.maxQueue = int(j.getInt("maxQueue", r.maxQueue));
@@ -339,7 +341,7 @@ Rules loadRules(const Json& j) {
         t.tags = tagsOf(tj["tags"]);
         if (const Json& h = tj["health"]; h.isObject()) {
             t.maxHp = h.getFx("max", t.maxHp);
-            t.armor = h.getFx("armor");
+            t.armor = h["armor"].isObject() ? Fixed{} : h.getFx("armor");   // object form: RtsOriginalsData.cpp
             t.regen = h.getFx("regen");
             t.armorType = armorIdx(h.getStr("armorType", "none"));
         }
@@ -418,7 +420,7 @@ Rules loadRules(const Json& j) {
         t.unique = tj.getBool("unique", t.unique);
         Fixed costSum{};
         if (const Json& c = tj["cost"]; c.isObject()) {
-            amounts(where + " cost", c, t.cost, {"time", "supply"});
+            amounts(where + " cost", c, t.cost, {"time", "supply", "garrison", "growth"});
             t.buildTime = c.getFx("time", t.buildTime);
             t.supplyUsed = c.getFx("supply");
             for (auto& a : t.cost) costSum += a.value;
@@ -717,6 +719,7 @@ Rules loadRules(const Json& j) {
         // claimers / portals imply a territory layer
         for (auto& t : r.types) if (t.claimerTime.raw > 0 || t.claimRate.raw > 0 || t.claimedByTerritory) r.territory.enabled = true;
     }
+    loadOriginals(r, j, ep);   // fidelity mechanics (RtsOriginalsData.cpp)
     // built-in statuses (internal ids start with '_')
     r.userStatuses = r.statuses.size();
     auto builtin = [&](const char* id, uint32_t flags) {
@@ -731,6 +734,7 @@ Rules loadRules(const Json& j) {
     if (r.statuses.size() > 60000) fail("statuses", "too many statuses");
     // anything beyond the original instant effects switches the effect engine on (old games stay bit-identical)
     bool adv = r.userStatuses > 0 || r.loadoutSlots > 0;
+    for (auto& t : r.types) if (t.onDeath >= 0) adv = true;
     for (auto& pl : r.payloads) for (auto& e : pl) if (e.kind > EffectKind::Blink || e.chance < Fixed::fromInt(1) || e.randomAmount || e.limit > 0 || e.filter.explicitShape) adv = true;
     for (auto& rs : r.resources) if (rs.regen.raw != 0) adv = true;
     for (auto& t : r.types) {
@@ -746,6 +750,7 @@ Rules loadRules(const Json& j) {
     r.advancedEffects = adv;
     r.dungeon = anyDungeonType || r.territory.enabled || !r.diggables.empty() || !r.rooms.empty() || r.hand.max > 0 ||
                 r.possession.enabled || !r.playerAbilities.empty();
+    loadMechRules(r, j);
     return r;
 }
 

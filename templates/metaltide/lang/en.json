@@ -3,11 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Total Annihilation and Supreme Commander: metal and energy flow, a commander and robots, terrain matters.",
-  "howto.goal": "Destroy the enemy commander. Lose yours and you lose.",
-  "howto.tip": "Do not lead with your commander — he is your life, and your best builder.",
-  "howto.step1": "Resources flow rather than pile up: extractors on metal spots and solar collectors give income per second.",
-  "howto.step2": "Building spends resources as it goes: more income means faster building; a deficit slows everything.",
-  "howto.step3": "The commander and constructors build; the kbot lab makes constructors, Peewees and Hammers. Wrecks and boulders can be reclaimed for metal.",
-  "howto.step4": "High ground gives range and damage; shooting uphill misses, walking uphill is slow."
+  "howto.like": "Total Annihilation: Arm vs Core, metal and energy flow.",
+  "howto.goal": "Destroy the enemy commander.",
+  "howto.tip": "The commander explodes when it dies — keep it away from your own base in a fight.",
+  "howto.step1": "Everything is paid while it is being built: when metal or energy runs dry, everything slows down.",
+  "howto.step2": "Extractors go on metal spots, solar and wind plants make energy, metal makers turn energy into metal.",
+  "howto.step3": "Constructors and the commander reclaim wrecks and rocks for metal. The commander fires the D-gun for 500 energy.",
+  "howto.step4": "Light kbots and constructors climb the steep ridge; heavy units and vehicles go through the passes."
 }

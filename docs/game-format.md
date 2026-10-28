@@ -820,6 +820,241 @@ Garrison structures, groups and lanes come from `garrison`, `kCmdSend` and `lane
 Still needs code: **flying towers moving between points** (garrisons are fixed structures; a mobile
 garrison would need garrisons on units).
 
+## Army control (agent-mech): stances, retreat, transports
+
+Optional blocks; a game without them plays exactly as before (stances and retreat commands work in any game).
+
+```json
+"stances": {"defendRadius": 6},                          // defensive stance: chase at most this far from where it stood
+"retreat": {"speed": 1.25, "damageTaken": 0.75},          // the Retreat command (Company of Heroes / Dawn of War II)
+"types": {
+  "hq":     {"retreatPoint": true, ...},                  // retreating units run to the nearest own one (else key / producer)
+  "archer": {"stance": "defensive", ...},                 // default stance of the type: aggressive | defensive | hold | passive
+  "apc":    {"transport": {"slots": 8, "accepts": ["infantry"], "layers": ["ground"], "unloadInterval": 0.5, "killOnDeath": 1}},
+  "bunker": {"transport": {"slots": 4, "fireFrom": 4, "heal": 2}},                 // passengers shoot from inside
+  "town_center": {"transport": {"slots": 15, "damagePerCargo": 0.2, "accepts": ["villager"]}},   // AoE: more arrows per garrisoned unit
+  "ifv":    {"transport": {"slots": 1, "weaponFromCargo": true}},                  // the passenger's weapon fires (RA2 IFV)
+  "tank":   {"cargoSize": 4, ...}                                                  // slots a passenger takes (default 1)
+}
+```
+
+- **Stances** (command `kCmdStance`, param 0 aggressive, 1 defensive, 2 hold, 3 passive): aggressive = default behaviour;
+  defensive = fights enemies within `stances.defendRadius` of its spot and walks back; hold = never moves on its own
+  (persistent `kCmdHold`); passive = never attacks on its own (explicit attack orders still work).
+- **Retreat** (`kCmdRetreat`, needs a `retreat` block): the units run to the nearest own `retreatPoint` (else a `key`
+  structure, else a producer) with `speed` x speed and `damageTaken` x damage, without fighting; any new order ends it.
+  The AI retreats fighters below 30% hp that see an enemy.
+- **Transports** (`transport` on units or structures): `kCmdLoad` (units = passengers, target = transport; a right click
+  on an own transport does the same), `kCmdUnload` (units = transports; param 1 + point: drive there first). Passengers
+  are off the map (`kUnitInCargo`): not targetable, not drawn, not pushing; they ride with the carrier. `accepts`
+  (type tags) and `layers` filter passengers, `fireFrom` passengers with weapons shoot from inside at the carrier's
+  position, `damagePerCargo` raises the carrier's own damage per passenger, `heal` hp/s inside. When the carrier
+  dies, `killOnDeath` of the passengers die with it (default 1 for units, 0 for structures) and the rest get out.
+  Events `kEvLoaded` / `kEvUnloaded` (a = passenger, b = transport). The AI mans shooting structures (`fireFrom`:
+  fighters; `damagePerCargo`: workers) when enemies are within 10 cells and lets workers out when it is safe.
+
+### Detection, toggles, veterancy, guard / follow, waypoints (agent-mech)
+
+```json
+"veterancy": {"xp": [100, 300, 700], "perLevel": [{"stat": "damage", "add": 0.1}, {"stat": "armor", "add": 1}], "healOnLevel": true, "fromCost": 1},
+"statuses": {"cloak": {"flags": ["invisible"]}, "burrowed": {"flags": ["invisible", "root", "disarm"]}},
+"types": {
+  "observer": {"detects": 9, ...},                                   // reveals invisible enemies within 9 cells (allies share it)
+  "ghost":    {"abilities": [{"id": "cloak", "target": "none", "toggle": {"status": "cloak", "drain": 1}}], ...},
+  "lurker":   {"abilities": [{"id": "burrow", "target": "none", "toggle": {"status": "burrowed"}}], ...},
+  "wall":     {"veterancy": false},                                   // or its own {"xp": [...], "perLevel": [...]}
+  "tank":     {"xp": 50, ...}                                         // xp its killer gets (default: its cost x fromCost)
+}
+```
+
+- **Detection**: invisible objects (status flag `invisible`) can be targeted by a side only when `revealed` or within
+  `detects` of one of its (or an ally's) detectors. `RtsModule::canSee(sim, e, viewer)` is the query for the view/UI.
+- **Toggle abilities**: casting switches the status on (until toggled off) and off; `drain` energy per second turns
+  it off when energy runs out. Cloak, burrow, submerge, siege mode (a status with mods / flags) are data.
+- **Veterancy** (ordinary units; heroes keep `hero`): the unit that dealt the last hit gets the victim's `xp`;
+  ranks apply `perLevel` per rank above 1 and heal on rank-up; event `kEvLevelUp` (value = rank).
+- **Guard / follow** (`kCmdGuard`, `kCmdFollow`, target = unit): follow within ~3 cells; guard also fights enemies
+  within 6 cells of the guarded unit.
+- **Rally waypoints**: `kCmdRally` with the queue flag (Shift) adds waypoints after the rally point; new units walk
+  them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
+- **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
+
+### Combat and economy models (agent-mech)
+
+```json
+"armorModel": "percent",                                               // Warcraft III: armor a cuts a*0.06/(1+a*0.06); "factor" changes 0.06
+"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // default (StarCraft): damage - armor, at least 20%
+"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // Age of Empires II
+"upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
+"types": {
+  "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
+  "knight":   {"armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
+  "zealot":   {"shields": {"max": 50, "regen": 2, "delay": 10, "armor": 0}},   // StarCraft shields
+  "goldmine": {"resourceNode": {"resource": "gold", "amount": 12500, "maxWorkers": 5}}
+}
+```
+
+- **classes**: damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that class)); `base`
+  classes always count (a missing armor is 0, armor upgrades raise them), other classes only against types that list
+  them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first base class
+  with its `damage`. The damage table is not used in this model.
+- **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
+  regenerate `regen`/s after `delay` seconds without hits.
+- **maxWorkers**: further workers wait next to the node until a place is free.
+
+### Genre mechanics (agent-mech stage 2)
+
+```json
+"market": {"currency": "gold", "prices": {"wood": 100, "food": 100, "stone": 130}, "fee": 0.3, "step": 3, "lot": 100},
+"tribute": {"fee": 0.3}, "diplomacy": true,
+"items": {"potion": {"cost": {"gold": 50}, "use": {"heal": 200}, "charges": 1},
+          "boots":  {"cost": {"gold": 100}, "mods": [{"stat": "speed", "add": 1}], "charges": 0, "consumable": false}},
+"cycles": [{"id": "day", "length": 480, "phases": [{"id": "day", "until": 0.6}, {"id": "night", "until": 1, "status": "night"}]},
+           {"id": "season", "length": 1200, "phases": [{"id": "summer", "until": 0.75}, {"id": "winter", "until": 1, "status": "winter"}]}],
+"hazards": [{"field": "tiberium", "damage": 6, "tags": ["infantry"]}, {"area": "lava", "status": "burning"}],
+"deck": {"hand": 4, "deployNear": 8, "ownHalf": true},
+"types": {
+  "wall":     {"wall": true, ...},                       // built in a line (kCmdBuildLine)
+  "gate":     {"gate": "own" | "allies", ...},           // the owner walks through; enemies are stopped and attack it
+  "bridge":   {"bridge": true, ...},                     // walkable ground over water while it stands (map-placed)
+  "nydus":    {"transport": {"slots": 20}, "tunnel": "nydus"},   // load at one, unload at any tunnel of the network
+  "hovercraft": {"move": {"layer": "amphibious", ...}},  // ground and water
+  "harrier":  {"weapons": [{"ammo": 2, ...}]},           // empty: flies to the nearest own dock and rearms
+  "airfield": {"dock": {"slots": 4, "rearmTime": 1}},
+  "templar":  {"mergeInto": {"with": "templar", "result": "archon"}},   "archon": {"splitInto": {"type": "templar", "count": 2}},
+  "market":   {"market": true}, "cart": {"trader": {"rate": 0.5}},     // currency per cell between the two markets per round trip
+  "hero":     {"inventory": {"slots": 6}}, "shop": {"shop": {"sells": ["potion", "boots"], "radius": 4}},
+  "kobold":   {"drops": [{"item": "potion", "chance": 0.3}]}
+}
+```
+Map players may have `"deck": ["card ids..."]` (default: every player ability). Commands: `kCmdFormation` (param 0 line, 1 box,
+2 wedge, 3 loose, -1 break; a formation ordered to a point keeps its shape and the pace of its slowest member),
+`kCmdBuildLine`, `kCmdMerge`, `kCmdSplit`, `kCmdTrade` (sell / buy one lot; prices move by `step` and are shared by all),
+`kCmdTradeRoute`, `kCmdTribute`, `kCmdDiplomacy` (alliances need both sides; war moves the player to a new team),
+`kCmdBuyItem` / `kCmdUseItem` / `kCmdDropItem` / `kCmdPickItem`. Cycles apply their phase `status` to every player and set
+trigger variable `cycle.<id>` = phase index (event `kEvCyclePhase`). Jumps over cliffs, jetpacks and blinks are abilities
+with the `blink` effect; teleport networks are `area` effects with `teleportTo`. The AI sells surplus / buys shortages,
+sends idle carts to the farthest market, buys and drinks potions with heroes and merges idle pairs.
+Through MCP (`scenario_run` / `play_command`), `trade`, `tribute` and `bounty` take readable fields instead of the packed
+param: `{"cmd": "trade", "units": [market], "resource": "wood", "sell": true}`,
+`{"cmd": "tribute", "resource": "gold", "amount": 100, "to": 2}`, `{"cmd": "bounty", "target": id, "resource": "gold", "amount": 50}`.
+
+## Tactics and society (agent-mech stage 3)
+
+Optional blocks; a game without them loads, plays and hashes as before. Tested in `tests/tests_mech.inc`
+(`mech_tactics`, `mech_society`, `mech_rounds`, `mech_ai_staffing`, `mech_designs`).
+
+### Cover, suppression, armor arcs (Company of Heroes, Men of War)
+
+```json
+"cover": {"levels": {"1": 0.75, "2": 0.5}, "tags": ["infantry"]},
+"suppression": {"decay": 5, "suppressed": 30, "pinned": 80, "suppressedSpeed": 0.5, "suppressedAttack": 0.5, "tags": ["infantry"]}
+```
+
+- `cover.levels`: damage multiplier per cover level 1..9. A unit (with one of `tags`, all if omitted) takes the level of its
+  cell — map `"cover": {"rows": ["0012..", ...]}` (digit per cell) — or of a structure with `"givesCover": N` within
+  half its footprint + 1.5 cells, whichever is higher.
+- Weapon `"suppress": 10` adds suppression (0..100) per hit; it decays by `decay` per second. Above `suppressed` the unit is
+  slower and attacks slower; above `pinned` it cannot move.
+- Type `"armorArcs": {"side": 0.75, "rear": 0.5}`: damage multiplier for hits from the side / rear by the unit's facing.
+- Weapon `"turret": {"turnRate": 90}` (degrees per second): the weapon only fires once its turret faces the target.
+- Weapon `"crater": 1` (or `{"radius": 1}`): the ground around the hit becomes cover level 1.
+
+### Crews, crushing, ruins, infection (Z, Men of War, C&C, They Are Billions)
+
+- Weapon `"killsCrew": 1` (chance per hit) against a type with `"crew": {"accepts": ["infantry"]}`: the vehicle is left
+  empty and neutral (`Abandoned`). A unit with an accepted tag right-clicks it (smart / `load`) and becomes its crew:
+  the vehicle changes owner, the soldier is removed.
+- `"crush": {"damage": 500, "tags": ["infantry"]}`: a moving unit damages hostile mobile units with those tags it touches.
+- `"ruins": "rubble"`: a type spawned (neutral) where this one died.
+- Weapon `"infect": "zombie"`: a unit it kills rises as that type for the killer's owner. A structure with
+  `"infectable": {"spawns": "zombie", "count": 2}` destroyed by such a weapon spawns `count` of `spawns`.
+
+### Staff, growth, power fields (Settlers, Stronghold, StarCraft, Anno)
+
+- `"staff": {"count": 2, "accepts": ["worker"]}`: income and production scale with the share of places taken (workers
+  enter with `load` / smart click; a transport block with `count` slots is created). The AI sends idle workers.
+- `"grows": {"unit": "villager", "interval": 30, "cost": {"food": 20}}`: the structure produces the unit every
+  `interval` seconds while it can pay and has supply.
+- `"powerField": 6` (radius) and `"needsPower": true`: a structure that needs power works and can be placed only inside
+  a finished field of its owner.
+
+### Bounties and autonomous heroes (Majesty)
+
+`"autonomous": true` units are not commanded; they pick fights by themselves and prefer targets with a bounty.
+Command `bounty` (target, `param` = resource index | amount << 8) pays the amount, held until the target dies, to the
+owner of the unit that killed it. MCP: `{"cmd": "bounty", "target": id, "resource": "gold", "amount": 100}`.
+
+### Rounds (auto-battlers, Mushroom-style duels)
+
+```json
+"rounds": {"prepare": 20, "fight": 40, "rounds": 10, "reset": true, "lives": "lives", "damagePerUnit": 1, "income": {"gold": 5}}
+```
+
+The game alternates a prepare phase (nobody acquires targets) and a fight phase. At the end of a fight each side loses
+`damagePerUnit` of `lives` per surviving enemy unit; with `reset` the armies are restored to the snapshot taken at the
+start of the fight. Everyone gets `income` per round. After `rounds` rounds (or when a side runs out of lives) the game
+ends: the side with most lives wins.
+
+### Upgrades paid with garrison (Mushroom Wars 2)
+
+`"upgradeGarrison": 10` on the target type of an `upgrades` entry: the upgrade costs that many units of the building's
+garrison instead of resources (refused when the garrison is smaller).
+
+## Unit designs (agent-mech, UD)
+
+Types can be assembled from a chassis and parts (Master of Orion, Galactic Civilizations, Supreme Commander kits).
+`loadRules` expands them into plain type blocks before parsing (`expandDesigns`), so every other key works as usual;
+`rules_lint` lints the expanded copy.
+
+```json
+"designs": {
+  "chassis": {"light": {"move": {"speed": 4}, "health": {"max": 100}, "cost": {"gold": 50}, "slots": {"weapon": 2, "system": 1}}},
+  "parts": {
+    "laser":   {"slot": "weapon", "weapons": [{"range": 5, "damage": 10, "cooldown": 1}], "cost": {"gold": 20}},
+    "plating": {"slot": "system", "add": {"health.max": 60, "move.speed": -1}, "cost": {"gold": 30}, "health": {"armor": 2}}
+  }
+},
+"types": {"scout": {"design": {"chassis": "light", "parts": ["laser", "laser", "plating"]}, "sight": 8}}
+```
+
+- The chassis is copied; parts apply in order: `add` adds numbers at dotted paths, `cost` / `upkeep` add per resource,
+  `weapons`, `tags`, `abilities`, `upgrades` are appended, other keys are merged (objects) or replaced.
+- `slots`: a count, or a count per part `slot` kind; too many parts is a load error.
+- The type's own keys (besides `design`) are applied last.
+
+## Save states (agent-mech)
+
+`Simulation::serialize()` returns the whole dynamic state as bytes (versioned, little-endian, identical on every
+platform: `engine/core/Archive.h`); `deserialize(bytes)` loads it into a simulation set up from the same rules, map and
+seed and checks the state checksum stored in the file. Saved: tick, RNG, players and teams, pending and executed
+commands (replays continue), the entity allocator, every component pool in dense order and the dynamic part of
+`GameState` (per-cell layers run-length encoded). Not saved: rules, triggers, the planet surface (from setup) and derived
+caches (clearance, HPA*, rebuilt on demand). The computer players keep their own memory, so bots resume from the loaded
+state with fresh plans. Module side: `RtsModule::serializeState` (`modules/rts/RtsSave.cpp`); a component type missing from
+its list makes saving fail. `rts_headless --save F --save-at S` / `--load F`; MCP `match_run` with `saveCheck` (seconds).
+A skirmish match at 90 s is ~150 KB.
+
+## Campaigns (agent-mech)
+
+`campaign.json` in the game folder chains missions; see `modules/rts/RtsCampaign.h`:
+
+```json
+{"start": "m1", "missions": [
+  {"id": "m1", "name": "Raid", "map": "maps/m1.json", "briefing": "campaign.m1.briefing", "next": "m2",
+   "carry": {"resources": ["gold"], "tags": ["hero"], "types": ["knight"], "max": 12}},
+  {"id": "m2", "name": "Siege", "map": "maps/m2.json"}]}
+```
+
+Trigger actions for missions: `{"type": "objective", "id": "raze", "text": "...", "op": "add" | "done" | "fail", "primary": true}`,
+`{"type": "dialog", "speaker": "Captain", "portrait": "ui/captain.png", "voice": "vo/c1.ogg", "text": "...", "duration": 4}`,
+`{"type": "camera", "at": [x, z] | "area": "a", "zoom": 1, "duration": 2, "lock": false}`,
+`{"type": "endMission", "result": "victory" | "defeat", "next": "m2"}`. State in `GameState::mech` (`objectives`,
+`dialogs`, `nextMission`, `missionResult`, saved with the match); events `kEvObjective`, `kEvDialog`, `kEvCamera`,
+`kEvMissionEnd` for the HUD (objective list, dialog box, camera moves). Between missions `collectCarry` (survivors with
+hp, rank, hero level; resources) -> `applyCarry` (into the next map, players[0] = campaign player) -> `restoreCarry`
+after setup. MCP: `campaign_get`, `campaign_set` (validated), `campaign_run` (bots, mission chain, outcomes, carry).
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
@@ -827,7 +1062,8 @@ Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player i
 room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
 optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
-`kCmdConnectRoad` (units = own structures), `kCmdTransit` (planets: orbit units, `param` = target body). `kCmdPlayerAbility` with a `structure` / `group` / `player`
+`kCmdConnectRoad` (units = own structures), `kCmdTransit` (planets: orbit units, `param` = target body), `kCmdStance` (param = stance),
+`kCmdRetreat`, `kCmdLoad` (target = transport), `kCmdUnload` (param 1 = drive to point first), `kCmdGuard` / `kCmdFollow` (target = unit). `kCmdPlayerAbility` with a `structure` / `group` / `player`
 ability takes the clicked object in `target` (or the nearest one to `point`).
 
 ## Triggers
@@ -862,6 +1098,14 @@ matching the filter to `at` / `area`), `setTickets` (`amount`).
 
 Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"enemies"`, `"allies"`,
 `"creeps"`, `"neutral"`, or a slot number. `"target": "triggeringUnit"` acts on the event's unit.
+
+### Testing data through MCP
+
+`scenario_run` runs a scripted check on a copy of the open map: named `spawn`s, timed `commands` (keys of
+`play_command`), optional `bots`, `checks` (pass/fail) and `watch` / `events` / trigger logs. Every fired trigger
+is also a simulation event `kEvTriggerFired` (value = trigger index: rules triggers first, then map triggers;
+player = triggering slot) — presentation/tools only, not hashed. `rules_lint` lists keys the loader never reads;
+`rules_schema` with `part: "keys"` lists every key the loader reads per block, taken from the loader itself.
 
 ## Texture atlases (game.json `atlas`, optional)
 
@@ -1267,7 +1511,27 @@ into a static map.
 | `caves` | caves | Dungeon Keeper (`diggable`) | `size` [48,32], `gold` 0.03 / `gems` 0.004 (share of rock that is a vein / infinite seam), `bedrock` 0.06, `caverns` 0.06 |
 | `lanes` | lanes | lane battlers / MOBA | `size` [32,64], `lanes` 3, `laneWidth` 4, `bend` 0.35 (rock everywhere else) |
 | `field` | lanes, `open` | Mushroom Wars 2 (garrisons + roads) | `size` [44,28], `obstacles` 0.12, `roads` from the template |
-| `rocky` / `ocean` / `moon` | planet | cube-sphere bodies | `faceSize`, `water` 0.25 / 0.7 / 0, `relief`, `ice` (polar caps), `craters` (moon) |
+| `rocky` / `ocean` / `moon` | planet | whole planet maps, or one body's terrain | `faceSize`, `water` 0.25 / 0.7 / 0, `relief`, `ice` (polar caps), `craters` (moon), `layout`, `moonResources`, `baseRadius` (moon 11) |
+
+**Planet maps.** A planet preset as the map's `generate` builds the whole `world` block: the bodies (and their orbits,
+visuals) come from the template map's `world` (e.g. `templates/planets`), else a sun + planet + moon. Every surface body
+gets per-face `rows`, `corners`, `material`; players get `start: {body, face, x, y}`; objects are written with `at`.
+- `layout: "shared"` (default): all players on the start body, rotational symmetry about the polar axis: exact for 2 and 4
+  players (half / quarter turns map the cube-sphere onto itself, heights are symmetrized corner by corner), averaged over the
+  rotations for 3, 5+ (`generated.symmetry`: `polar-exact` / `polar`). Starts near the equator in the middle of each longitude
+  sector, away from face seams and rough ground; base areas flattened; graded causeways where the ground doesn't connect.
+- `layout: "separate"`: every player on an identical planet of its own (same terrain, same objects), orbiting the star at
+  equal phases; players meet through orbit-layer units (warning when the rules have none).
+- Objects: the template's player-1 objects (offsets measured on its body, across face seams) are the kit; neutral objects
+  near the template bases / far / on moons are counted and reproduced (`objects[].moon`, `objects[].pole`); moons get
+  `moonResources` (default 2) x their share. `generated.nearResources` lists the resource objects within `nearRadius` of
+  each start (equal by construction; a warning otherwise).
+- Fairness: the generated map is loaded into a simulation and the engine's `MapGrid::findPath` measures the ground path
+  between every pair of starts (`generated.paths`, `connected`, `pathSpread` = spread of each player's distance to the nearest
+  rival, per mille).
+- One body only: `world.bodies[].generate` (terrain + reported start sites, no objects), as before.
+
+`rts_headless --project templates/planets --generate rocky --seed N --players 3 [--gen-params '{"layout": "separate"}']`.
 
 All params (any preset): `shape`, `size` [w, h] (16..1024; the map's own size wins unless `params.size` is given), `water`
 (share of corners below sea level), `rivers` (0..1: flow accumulation carved into rivers), `lakes` (pit depth that stays a lake),
@@ -1287,21 +1551,59 @@ Games add presets in rules.json: `"mapgen": {"presets": {"my_valley": {"title": 
 Editor: window **Генерация** (preset, seed, players, symmetry, params; *Сгенерировать* bakes, *При старте матча* writes
 `"seed": "match"`). MCP: `gen_presets`, `map_generate {preset, seed, players, symmetry, params, mode: bake | match | fixed,
 useTemplate, keepSize}`.
+## Fidelity mechanics (play like the original)
+
+Optional blocks that make the sample games play like their originals (`modules/rts/RtsOriginals*.cpp`). A game that
+uses none of them keeps its exact checksums.
+
+| block | where | meaning |
+|---|---|---|
+| `armor` | rules | `{"model": "subtract" \| "percent", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2}` — `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `subtract`: StarCraft / AoE with a floor |
+| `health.armor` object | type | `{"melee": 1, "pierce": 2}` (or `health.pierceArmor`): two armors; weapons pick one with `"armorClass": "pierce"`; stat `pierceArmor` / `armor2` for techs |
+| weapon `bonus` | type | `{"cavalry": 15, "armored": 10}` extra damage vs types with the tag, added before armor (AoE / SC2 bonuses) |
+| `health.shields` | type | shields soak damage first (`shieldArmor`), recharge `shieldRegen` per second after `shieldDelay` seconds without hits (StarCraft) |
+| `heroes` | rules | `{"skills": true, "max": 3, "freeFirst": true, "tiers": ["hall", "keep", "castle"], "revive": {"costShare": 0.4, "perLevel": 0.1, "timeShare": 0.6, "maxTime": 110, "maxCost": {"gold": 700}}}` — skill points (one at start, one per level; command `kCmdLearn`), ability `"learnAt": [1, 3, 5]` (default) / `[6]` (ultimate); hero n needs a structure from `tiers[n-1..]`; a dead hero is trained again as a revive (its level and skills, cheaper) |
+| `upkeep[].resources`, `incomeMult` | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower) |
+| `resourceNode.maxGatherers` | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
+| `powerField` / `structure.needsField` | type | `{"id": 0, "radius": 6.5}` on pylons; structures with `needsField` are placed and work only inside an own field |
+| `queueSlots` | type | items produced at once (reactor) |
+| `cost.garrison` | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |
+| `garrison.onCapture`, `garrison.keep` | type | type it drops to when captured (loses a level); units that always stay home when sending (State.io) |
+| `clash` | type | units in transit fight hostile units they meet |
+| `playerMods` | type | `{"max": 4, "mods": [{"tags": [...], "stat": "damage", "mul": 1.08}]}` — every completed one modifies the owner's types (forges) |
+| resource `gain`, `perUnit`, `min` | rules | `"gain": {"kill": 1, "capture": 0.3, "captured": -0.4, "upgrade": 0.2, "lost": 0.45, "defended": 0.01}`; `"perUnit": [{"tags": [...], "stat": "damage", "mul": 1.06}]` per whole unit held (morale suns) |
+| `crew` / `crews` / weapon `killsCrew` | type | vehicles and guns need a driver of that type; `killsCrew` (chance) empties them (owner 0); units with `crews` man any empty one (Z) |
+| `infect` | type | `{"by": ["infected"], "spawn": "walker", "count": 3}` — killed by a unit with the tag: rises as the spawn type for the killer (They Are Billions) |
+| `neutral.eats`, `neutral.resurface` | type | an eater submerges after that many kills and comes back somewhere on its layer later (Dune sandworm) |
+| `crush` | type | `{"tags": ["infantry"]}` — moving over such units kills them (tanks over infantry, units over spice blooms) |
+| `deathField` | type | `{"resource": "spice", "radius": 4, "amount": 120}` — dying spreads a resource field (spice bloom) |
+| `onDeath` | type | payload where it dies (commander explosion) |
+| `factions` | type | only these factions may train / build it (Dune houses, RA sides) |
+| `requiresRegions` | type | trainable only with this many own regions (Z factory levels) |
+| `ownsRegion` | type | its region (and the territory cells) take its owner's colour (State.io) |
+| `autoTrain.advance` | type | `false`: auto-trained units stay home (Northgard births) |
+| `cost.growth` | type | cost × (1 + growth × owned) (Dungeon Keeper imps) |
+| tech `requiresAny` | rules | `{"count": 2, "of": [types]}` — that many different buildings (AoE ages) |
+| `regions.requireExplored`, `clearFirst`, `supplyLines` | rules | claim only scouted / creep-free regions (Northgard); points pay only in sectors linked to an own key structure (CoH) |
+| `territory.incomePerCell` | rules | income per owned cell (Dungeon Keeper mana) |
+
+Recipes of `storage: "player"` games (no goods in buildings) take their inputs from the player stock and credit the
+outputs to it: buildings that gather around them (They Are Billions sawmills, Northgard lodges).
 
 ## Sample games (data only, `<project>/`; maps from `templates/_tools/mapgen.py`)
 
 | id | like | recipe |
 |---|---|---|
-| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, chain lightning (`chain` delivery, `levels`), rejuvenation (HoT status, `charges`, `smart`), bloodlust; hunters with frost-arrow `onHit`, demolisher artillery strike (delayed `area`), creep camps (`neutral.leash`, `bounty`), siege demolisher |
-| `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
-| `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
-| `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
-| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim, `terrain.model: heightfield` (ridge that blocks sight, too steep for the commander and hammers - `maxSlope` 0.8 - but climbable by constructors and peewees with `move.maxSlope` 1.6; two gentle saddles), height bonuses via `heights` |
-| `fourages` | Age of Empires II | four stocks, camps as dropoffs, farms (infinite `ownerOnly` nodes), ages as techs, blacksmith tech effects, rams vs buildings |
-| `holdtheline` | Company of Heroes | `squad` infantry with reinforcement, `victoryPoint` capture points + `victory: tickets`, fuel/munition points with `income` |
-| `lastcolony` | They Are Billions | `victory: survive`, map `waves` from a `waves` player with growth, `buildRadius`, towers and walls |
-| `clanlands` | Northgard | 3x3 map `regions`, `regions.claimCost` + growth, `buildOnlyOwned` |
-| `flagsectors` | Z | sector `regions`, flags with `capture.region`, `capturable` factories, `productionPerRegion` |
+| `frostcrown` | Warcraft III (Orcs) | percent armor, upkeep on gold, hall tiers, 3 heroes with learned skills / free first / revive, 5 peons per mine, creeps |
+| `starfall` | StarCraft II | Protoss warp + shields + pylon fields, Zerg morph + larva + creep, Terran add-ons (tech lab / reactor), attribute bonuses, 1 worker per patch |
+| `ironfront` | Red Alert | Allies / Soviets, sidebar, ore + gems, silos, power, engineers, Tanya, superweapons, crush |
+| `ambersands` | Dune II | houses, bases on rock (no concrete yet), spice without regrowth, blooms, sandworms that eat and resurface, crush, palaces |
+| `metaltide` | Total Annihilation | Arm / Core, flows, progressive cost, D-gun, commander explosion, metal makers, heightfield |
+| `fourages` | Age of Empires II | four ages (requiresAny), melee / pierce armor and bonuses, AoE II gather rates, finite farms, techs |
+| `holdtheline` | Company of Heroes | US / Wehrmacht, sectors with supply lines, tickets, squads, manpower upkeep |
+| `lastcolony` | They Are Billions | buildings gather, workers / food / energy, tesla grid, infection, final wave |
+| `clanlands` | Northgard | scouted and cleared regions, births, production in buildings, warband from villagers, happiness |
+| `flagsectors` | Z | flags, free factories with levels, drivers and empty vehicles / guns, fort |
 | `laneclash` | lane battler | `autoBuild` pool, `waveClock` + `waveSpawn`, `upgrades`, `victory: score` with `keyLoses` |
 | `underlord` | Dungeon Keeper | `diggable` rock/gold/gem, imps with `digs` + `claimer`, `rooms`, neutral `portal` + `claimedByTerritory`, creatures with `attractedBy`, `needs` and hero levels from training, `hand`, `possession`, leveled tech paid in research |
 | `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
@@ -1309,6 +1611,7 @@ useTemplate, keepSize}`.
 | `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |
 | `planets` | Total Annihilation on planets | metaltide rules on a planet + moon (`world` block, `at` positions), `orbital_yard` → `gunship` (`move.layer: orbit`, `transitSpeed`), defender weapons with `targets: orbit`; map from `templates/_tools/planetgen.py` |
 | `spellbunkers` | Bunker Wars / Mushroom Wars 2 skills | sporelanes + mana/morale `regen`, named `statuses`, 26 player skills (structure / group / player targets, areas moving along lanes, chains over structures), per-player `loadout` of 16, an `autoEvery` map skill and a `passive` |
+| `shroomwars` | Mushroom Wars 2 | levels and conversions paid with units, forges, clashes, morale, energy, hero skill sets |
 
 ## 2D games
 
@@ -1348,7 +1651,7 @@ The editor uses the projection and angle for its Scene and Game views.
 | key | meaning |
 |---|---|
 | `sheet` | image (PNG/JPEG/TGA), required. **Rows = facings** (row 0 faces east/+X, then clockwise on screen: SE, S, SW, W, ...), **columns = animation frames** |
-| `frame` | frame size in pixels (default: whole sheet width, square) |
+| `frame` | frame size in pixels (default: whole sheet width, square — give it for single images that are not square, otherwise the frame reaches past or stops short of the image) |
 | `facings` | 1, 4, 8, 16, 32... rows; `mirror: true` stores only north → east → south (`facings/2 + 1` rows) and flips them for the west side |
 | `actions` | column ranges `[start, count, fps]` or `{"start", "count", "fps", "loop"}`. `idle`, `move`, `attack`, `work` (gathering/building workers), `build` (structure under construction; non-looping = frame follows the progress), `die` (played where the object disappeared, then the last frame stays `corpseTime` s). Missing actions fall back to `idle` (`work` → `attack` → `idle`) |
 | `mode` | `billboard` (faces the camera; default), `upright` (vertical quad), `ground` (lies on the terrain; top-down games) |
@@ -1393,8 +1696,11 @@ and other lit sprites with the sun direction, softness and PCF tiers of the 3D g
 
 Where shadows fall is the sun's direction: `"lighting": {"sunDir": [x, y, z]}` (game.json or the
 map, towards the sun at noon; the day cycle swings around it). Flat drawings hide shadows that
-fall behind them, so sprite games usually want the sun behind the scene (km2d: `[-0.7, 1.1, -0.5]`,
-shadows towards the viewer and to the right).
+fall straight behind them, and a sun behind the scene leaves camera-facing cliff walls unlit, so
+sprite games usually want it from the side and a little in front (km2d: `[-1.0, 1.2, 0.45]`,
+shadows to the right). `"shadowSoftness"` (world units, default 0.22) is the penumbra radius;
+pixel-art games look cleaner with a tight one (km2d 0.07): kernels of a few shadow-map texels are
+filtered without the per-pixel noise rotation, so they stay smooth on every tier.
 
 **Blobs and ground sprites are projected**: a blob (and any `"mode": "ground"` sprite) is cut from
 the ground triangles under it — the exact triangles of the terrain mesh or the tile map — and drawn

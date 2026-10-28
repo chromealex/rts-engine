@@ -1,4 +1,5 @@
 #include "McpInstall.h"
+#include "engine/pack/FileCopy.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -112,7 +113,7 @@ bool readText(const fs::path& p, std::string& out) {
 bool writeText(const fs::path& p, const std::string& text, std::string* error) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
-    if (fs::exists(p, ec)) fs::copy_file(p, fs::path(p.string() + ".bak"), fs::copy_options::overwrite_existing, ec);
+    if (fs::exists(p, ec)) rts::pack::copyFileReplace(p, fs::path(p.string() + ".bak"), ec);
     const fs::path tmp = p.string() + ".tmp";
     {
         std::ofstream f(tmp, std::ios::binary);

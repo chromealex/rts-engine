@@ -87,7 +87,7 @@
       "health": { "max": 400, "armor": 1, "armorType": "fortified" },
       "cost": { "gold": 80, "wood": 20, "time": 20 },
       "supply": 6,
-      "view": { "shape": "house", "light": { "color": [1.0, 0.72, 0.4], "radius": 3.2, "intensity": 1.1, "height": 0.8 } }
+      "view": { "shape": "house", "light": { "color": [1.0, 0.72, 0.4], "radius": 3.2, "intensity": 1.1, "height": 0.8, "nightOnly": true } }
     },
     "barracks": {
       "name": "Barracks",

@@ -71,7 +71,7 @@ void RtsModule::sysFlowFields(Simulation& sim) {
     g.flowResetRefs();
     const uint32_t tick = sim.tick();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (!m.flow || !m.moving || (u.flags & (kUnitInHand | kUnitPossessed))) return;
+        if (!m.flow || !m.moving || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
         const UnitType& t = rules_.types[u.type];
         const int fi = g.flowFind(g.cellOf(m.goal), m.flowRadius, t.pathLayer, g.flowHierFor(g.cellOf(m.goal)) ? 0 : MapGrid::clearanceFor(t.radius));
         if (fi < 0) { m.flow = false; return; }   // evicted: plain path from here
@@ -251,7 +251,38 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) { stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10)); }
+        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10) && rules_.mech.workerCaps && !mechNodeHasRoom(sim, o.target, e)) { stopMoving(sim, e); return false; }   // agent-mech: waits for a free place
+        const Fixed cd = contactDistance(sim, e, o.target);
+        // limited nodes (one worker per patch): a worker that can't get to the patch because others stand there
+        // waits close by instead of asking for a new path every tick
+        const bool queued = nt.maxGatherers > 0 && cd <= Fixed::fromInt(2) && m && !m->moving;
+        if (cd <= Fixed::fromRatio(6, 10) || queued) {
+            const bool full = nt.maxGatherers > 0 && gatherersAt(sim, o.target) >= nt.maxGatherers;
+            if (!full && cd > Fixed::fromRatio(6, 10)) {             // free but out of reach: walk up again now and then
+                if ((sim.tick() + e.index) % 20 == 0) o.state = 0;
+                return false;
+            }
+            if (full) {
+                if ((sim.tick() + e.index) % 8 != 0) return false;   // wait; look for another node a few times a second
+                // node full (WC3 mine: 5 inside, SC patch: one at a time): try a free node close by, else wait
+                Vec3 at = w.get<Transform>(e).pos;
+                Entity alt;
+                Fixed bd = Fixed::fromInt(7);
+                const int16_t nres = w.get<ResourceStock>(o.target).res;
+                w.each<ResourceStock, Unit, Transform>([&](Entity n, ResourceStock& rs, Unit& nu, Transform& ntr) {
+                    if (n == o.target || rs.res != nres || nu.hp.raw <= 0) return;
+                    const UnitType& at2 = rules_.types[nu.type];
+                    if (at2.ownerOnly && w.get<Owner>(n).player != owner) return;
+                    if (at2.maxGatherers > 0 && gatherersAt(sim, n) >= at2.maxGatherers) return;
+                    Fixed d = dist2D(ntr.pos, at);
+                    if (d < bd) { bd = d; alt = n; }
+                });
+                if (alt.valid()) { o.target = alt; o.state = 0; }
+                return false;
+            }
+            stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
+            if (nt.maxGatherers > 0) { gatherersAt(sim, o.target); if (gatherCount_.size() <= o.target.index) gatherCount_.resize(o.target.index + 1, 0); gatherCount_[o.target.index]++; }
+        }
         else if (m && !m->moving) o.state = 0;
         return false;
     }
@@ -270,7 +301,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         }
         if (rules_.resources[size_t(res)].kind == ResourceKind::Flow || nt.dropoffMask & (1u << res)) {
             // reclaim (TA) or gather-in-place (farm that is its own dropoff): credit directly
-            addResource(sim, owner, uint16_t(res), take * gs.players[owner].gatherMult);
+            addResource(sim, owner, uint16_t(res), take * gatherMultFor(sim, owner, res));
             sim.emit({kEvGathered, owner, e, o.target, res, nodePos});
             o.state = 2;
             o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
@@ -403,6 +434,13 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         return false;
     case OrderType::Gather:
         return runGather(sim, e, o);
+    case OrderType::Board: return runBoard(sim, e, o);     // agent-mech
+    case OrderType::Unload: return runUnload(sim, e, o);
+    case OrderType::Follow: return runFollow(sim, e, o);
+    case OrderType::Rearm: return runRearm(sim, e, o);
+    case OrderType::Trade: return runTrade(sim, e, o);
+    case OrderType::PickItem: return runPickItem(sim, e, o);
+    case OrderType::Merge: return runMerge(sim, e, o);
     case OrderType::Return: {
         auto* cargo = w.tryGet<Cargo>(e);
         if (!cargo || cargo->res < 0 || cargo->amount.raw <= 0) return true;
@@ -414,12 +452,15 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (!o.target.valid()) return true;
         }
         if (o.state == 0) {
-            moveTo(sim, e, w.get<Transform>(o.target).pos, rules_.types[w.get<Unit>(o.target).type].radius + t.radius + Fixed::fromRatio(4, 10));
+            // goal radius from the short side: a 3x2 refinery must not count as reached 1.5 cells away from its long side
+            const UnitType& dt = rules_.types[w.get<Unit>(o.target).type];
+            Fixed near = dt.structure ? Fixed::fromInt(std::min(dt.footprintW, dt.footprintH)) / 2 : dt.radius;
+            moveTo(sim, e, w.get<Transform>(o.target).pos, near + t.radius + Fixed::fromRatio(4, 10));
             o.state = 1;
         }
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
             stopMoving(sim, e);
-            addResource(sim, owner, uint16_t(cargo->res), cargo->amount * state(sim).players[owner].gatherMult);
+            addResource(sim, owner, uint16_t(cargo->res), cargo->amount * gatherMultFor(sim, owner, cargo->res));
             sim.emit({kEvGathered, owner, e, o.target, cargo->res, w.get<Transform>(e).pos});
             cargo->amount = Fixed{};
             Order g;
@@ -522,14 +563,18 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         if (o.state == 0 && m) {
             Vec3 tp = w.get<Transform>(o.target).pos;
             m->goal = tp; m->goalRadius = Fixed{}; m->path = {tp}; m->pathPos = 0; m->moving = true;
-            if (!state(sim).roadsOnly) moveTo(sim, e, tp, Fixed{});
+            // close to the target (a crowd at the door) walk straight in instead of asking for a path every tick
+            const bool near = rules_.originals && dist2D(tr.pos, tp) < Fixed::fromInt(4);
+            if (!state(sim).roadsOnly && !near) moveTo(sim, e, tp, Fixed{});
             o.state = 1;
         }
-        if (contactDistance(sim, e, o.target) > Fixed::fromRatio(2, 10)) {
+        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target);
+        if (contactDistance(sim, e, o.target) > (crewing ? Fixed::fromRatio(6, 10) : Fixed::fromRatio(2, 10))) {
             if (m && !m->moving) o.state = 0;
             return false;
         }
-        // arrived: reinforce, assault or capture
+        // arrived: man an empty vehicle (Z), reinforce, assault or capture
+        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
         if (rules_.advancedEffects) { enterGarrison(sim, e, o.target); return true; }
         auto* g = w.tryGet<Garrison>(o.target);
         const uint8_t me = w.get<Owner>(e).player;
@@ -539,14 +584,17 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (to.player == me || (to.player != 0 && to.player != kHostileNeutral && sim.allied(to.player, me))) {
                 ++g->count;
             } else if (g->count > 0) {
-                g->damageAcc += kOne / fxMax(tt.garrisonDefense, Fixed::fromRatio(1, 10));
+                Fixed atk = rules_.originals ? stat(sim, e, Stat::Damage) / fxMax(stat(sim, o.target, Stat::Defense), Fixed::fromRatio(1, 10)) : kOne;
+                g->damageAcc += atk / fxMax(tt.garrisonDefense, Fixed::fromRatio(1, 10));
                 while (g->damageAcc >= kOne && g->count > 0) { --g->count; g->damageAcc -= kOne; }
+                if (rules_.originals) assaultOriginals(sim, e, o.target);
             } else if (tt.capturable) {
                 uint8_t old = to.player;
                 to.player = me;
                 g->count = 1; g->damageAcc = Fixed{}; g->growth = Fixed{}; g->pendingOut = 0;
                 if (auto* p = w.tryGet<Production>(o.target)) p->queue.clear();
                 sim.emit({kEvCaptured, me, o.target, e, old, w.get<Transform>(o.target).pos});
+                if (rules_.originals) captureOriginals(sim, o.target, old, me);
             }
         }
         Unit& uu = w.get<Unit>(e);
@@ -562,14 +610,14 @@ void RtsModule::sysOrders(Simulation& sim) {
     World& w = sim.world();
     std::vector<Entity> ents;
     w.each<Orders, Unit>([&](Entity e, Orders& ord, Unit& u) {
-        if (!ord.queue.empty() && u.hp.raw > 0 && !(u.flags & (kUnitInHand | kUnitPossessed))) ents.push_back(e);
+        if (!ord.queue.empty() && u.hp.raw > 0 && !(u.flags & (kUnitOffMap | kUnitPossessed))) ents.push_back(e);
     });
     // soft obstacles (standing ground units) and the melee slot claims of this tick
     MapGrid& g = state(sim).grid;
     g.clearSoft();
     slotClaims_.clear();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (m.moving || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & kLayerGround)) return;
+        if (m.moving || (u.flags & kUnitOffMap) || !(rules_.types[u.type].layer & kLayerGround)) return;
         int x, y; g.cellXY(tr.pos, x, y);
         if (g.inside(x, y)) g.markSoft(x, y);
         (void)e;
@@ -610,7 +658,7 @@ void RtsModule::sysMovement(Simulation& sim) {
     const Fixed dt = sim.dt();
 
     gs.hash.reset(g.w, g.h, 4);
-    w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitInHand)) gs.hash.insert(e, t.pos); });
+    w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitOffMap)) gs.hash.insert(e, t.pos); });
     sysFlowFields(sim);
 
     if (gs.surface) { moveSphere(sim); return; }   // planets (RtsPlanets.cpp)
@@ -618,7 +666,7 @@ void RtsModule::sysMovement(Simulation& sim) {
     // 1) desired movement along paths
     if (rules_.movement.rvo) moveAgents(sim);
     else w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (!m.moving || (u.flags & (kUnitInHand | kUnitPossessed))) return;
+        if (!m.moving || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
         auto* b = w.tryGet<Buffs>(e);
         if (b && b->stunUntil > sim.tick()) return;
         if (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStRoot))) return;
@@ -681,7 +729,7 @@ void RtsModule::sysMovement(Simulation& sim) {
     });
     const Fixed deadZone = Fixed::fromRatio(3, 100);
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (u.flags & kUnitInHand) return;
+        if (u.flags & kUnitOffMap) return;
         if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];
         Vec3 acc{};
@@ -695,7 +743,7 @@ void RtsModule::sysMovement(Simulation& sim) {
             if (!(ot.layer & t.layer) && !((ot.layer | t.layer) == (kLayerGround | kLayerSandOnly))) return;
             Vec3 d = flat(tr.pos - w.get<Transform>(o).pos);
             Fixed len = d.length();
-            if (w.get<Unit>(o).flags & kUnitInHand) return;
+            if (w.get<Unit>(o).flags & kUnitOffMap) return;
             Fixed overlap = t.radius + ot.radius - len - deadZone;
             if (overlap.raw <= 0) return;
             if (len.raw == 0) { // exact overlap: deterministic direction from entity indices
