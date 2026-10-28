@@ -1823,6 +1823,25 @@ TEST(mech_rvo_corridor_pass_through_idle_units) {
     CHECK(a == b);
 }
 
+// ------------------------------------------------------------------ sample games: short bot matches are deterministic
+
+TEST(sample_games_bot_matches_deterministic) {
+    const char* games[][2] = {
+        {"frostcrown", "maps/frozen_pass.json"}, {"starfall", "maps/twin_plateaus.json"}, {"ironfront", "maps/ore_valley.json"},
+        {"ambersands", "maps/spice_basin.json"}, {"metaltide", "maps/twin_craters.json"}, {"fourages", "maps/highland.json"},
+        {"holdtheline", "maps/crossroads.json"}, {"lastcolony", "maps/last_valley.json"}, {"clanlands", "maps/fjords.json"},
+        {"flagsectors", "maps/sector_strip.json"}, {"laneclash", "maps/long_lane.json"}, {"underlord", "maps/two_keeps.json"},
+        {"borderrush", "maps/five_lands.json"}, {"hearthhaul", "maps/green_dale.json"}, {"sporelanes", "maps/spore_field.json"}};
+    for (auto& g : games) {
+        std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g[0];
+        std::vector<Command> cmds;
+        uint64_t a = botMatch(dir, g[1], 3, 20 * 60, &cmds), b = botMatch(dir, g[1], 3, 20 * 60);
+        bool ok = a == b && !cmds.empty();
+        if (!ok) std::printf("    %s: not deterministic or idle bots\n", g[0]);
+        CHECK(ok);
+    }
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

@@ -44,7 +44,13 @@ void RtsAI::update(Simulation& sim) {
         else hasOther = true;
     });
     if (hasGarrisons) garrisonPlay(sim, *m);
-    if (hasOther) { special(sim, *m); economy(sim, *m); military(sim, *m); }
+    if (hasOther) {
+        special(sim, *m);
+        if (!m->rules().diggables.empty() || !m->rules().rooms.empty()) dungeon(sim, *m);
+        if (m->rules().settlers) settlers(sim, *m);
+        economy(sim, *m);
+        military(sim, *m);
+    }
 }
 
 bool RtsAI::train(Simulation& sim, RtsModule& m, uint16_t type) {
@@ -384,7 +390,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         for (size_t ti = 0; ti < R.types.size(); ++ti) {
             const UnitType& t = R.types[ti];
             if (!t.worker || t.structure || t.deploysTo != kNoType || !m.canTrain(sim, player_, uint16_t(ti))) continue;
-            if (t.gathers.empty() && t.carrierCapacity.raw <= 0 && count[ti] >= 2) continue;
+            if (t.gathers.empty() && t.carrierCapacity.raw <= 0 && t.digRate.raw <= 0 && t.claimerTime.raw <= 0 && count[ti] >= 2) continue;
             bool producible = false;
             for (size_t pi = 0; pi < R.types.size(); ++pi)
                 if (count[pi] && std::find(R.types[pi].produces.begin(), R.types[pi].produces.end(), uint16_t(ti)) != R.types[pi].produces.end()) producible = true;
@@ -461,8 +467,8 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
             if (!opts.empty()) { Command c; c.type = kCmdTrain; c.units = {e}; c.param = opts[rng_.below(uint32_t(opts.size()))]; send(sim, c); }
         }
     });
-    // tickets: grab victory points first
-    if (gs.victory.mode == VictoryMode::Tickets && !idleArmy.empty()) {
+    // capture points / flags not ours: send a small squad to the nearest one (tickets, Z flags, resource points)
+    if (!idleArmy.empty() && (gs.victory.mode == VictoryMode::Tickets || sim.tick() % 60 < cfg_.thinkTicks + 1)) {
         Entity best; Fixed bestD{};
         Vec3 from = w.get<Transform>(idleArmy[0]).pos;
         w.each<Capture, Unit, Owner, Transform>([&](Entity e, Capture&, Unit&, Owner& o, Transform& t) {
@@ -498,6 +504,166 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
     cmd.point = w.get<Transform>(best).pos; // attack-move
     send(sim, cmd);
     if (!defend) ++wave_;
+}
+
+void RtsAI::dungeon(Simulation& sim, RtsModule& m) {
+    World& w = sim.world();
+    const Rules& R = m.rules();
+    GameState& gs = m.state(sim);
+    MapGrid& g = gs.grid;
+    if (sim.tick() < lastDungeonTick_ + 60) return;
+    lastDungeonTick_ = sim.tick();
+    // anchor: own key structure (dungeon heart)
+    Vec3 home{};
+    bool hasHome = false, diggers = false;
+    w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+        if (o.player != player_) return;
+        const UnitType& t = R.types[u.type];
+        if (t.structure && (!hasHome || t.key)) { home = tr.pos; hasHome = true; }
+        if (t.digRate.raw > 0) diggers = true;
+    });
+    if (!hasHome) return;
+    // 1) digging: keep a few marks open, tunnelling toward the nearest portal we don't own, then the enemy
+    if (diggers && !R.diggables.empty() && player_ >= 1 && player_ <= 8) {
+        const uint8_t bit = uint8_t(1u << (player_ - 1));
+        int marked = 0;
+        for (auto mk : g.digMark) if (mk & bit) ++marked;
+        if (marked < 4) {
+            Vec3 goal = home;
+            bool found = false;
+            Fixed best{};
+            w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+                const UnitType& t = R.types[u.type];
+                bool want = (t.claimedByTerritory && o.player != player_) || (m.hostile(sim, player_, o.player) && o.player != kHostileNeutral && t.structure);
+                if (!want) return;
+                Fixed d = dist(tr.pos, home) - (t.claimedByTerritory ? Fixed::fromInt(1000) : Fixed{});
+                if (!found || d < best) { found = true; best = d; goal = tr.pos; }
+            });
+            // cells reachable from home
+            std::vector<uint8_t> reach(g.flags.size(), 0);
+            std::vector<int> q;
+            int hx = g.cellX(home.x), hy = g.cellY(home.z);
+            g.nearestPassable(hx, hy, kLayerGround, 4);
+            if (g.inside(hx, hy)) { q.push_back(g.index(hx, hy)); reach[size_t(q[0])] = 1; }
+            static const int dx4[4] = {1, -1, 0, 0}, dy4[4] = {0, 0, 1, -1};
+            for (size_t qi = 0; qi < q.size(); ++qi) {
+                int x = q[qi] % g.w, y = q[qi] / g.w;
+                for (int k = 0; k < 4; ++k) {
+                    int nx = x + dx4[k], ny = y + dy4[k];
+                    if (!g.inside(nx, ny) || reach[size_t(g.index(nx, ny))] || !g.canStep(x, y, nx, ny, kLayerGround)) continue;
+                    reach[size_t(g.index(nx, ny))] = 1;
+                    q.push_back(g.index(nx, ny));
+                }
+            }
+            std::vector<std::pair<Fixed, int>> cands;
+            for (int c : q) {
+                int x = c % g.w, y = c / g.w;
+                for (int k = 0; k < 4; ++k) {
+                    int nx = x + dx4[k], ny = y + dy4[k];
+                    if (!g.inside(nx, ny)) continue;
+                    size_t n = size_t(g.index(nx, ny));
+                    if (!g.dig[n] || (g.digMark[n] & bit)) continue;
+                    Fixed score = dist(g.cellCenter(nx, ny), goal);
+                    if (!R.diggables[g.dig[n] - 1u].yields.empty()) score -= Fixed::fromInt(6); // veins first
+                    cands.push_back({score, int(n)});
+                }
+            }
+            std::sort(cands.begin(), cands.end());
+            cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
+            for (size_t k = 0; k < cands.size() && k < 3; ++k) {
+                Command c; c.type = kCmdDig;
+                c.point = g.cellCenter(cands[k].second % g.w, cands[k].second / g.w);
+                c.param = rectParam(1, 1, 0);
+                send(sim, c);
+            }
+        }
+    }
+    // 2) rooms: a few cells of every room type, more of the ones creatures need
+    if (!R.rooms.empty()) {
+        std::vector<int> want(R.rooms.size(), 4);
+        for (auto& t : R.types) {
+            for (auto& [room, cells] : t.attract.rooms) want[room] = std::max(want[room], cells + 2);
+            if (t.needs.sleep.room >= 0) want[size_t(t.needs.sleep.room)] = std::max(want[size_t(t.needs.sleep.room)], 9);
+        }
+        auto& eco = gs.players[player_];
+        for (size_t r = 0; r < R.rooms.size(); ++r) {
+            // capacity rooms grow with the population
+            if (R.rooms[r].supply.raw > 0 && eco.supplyUsed + Fixed::fromInt(2) >= eco.supplyCap && eco.supplyCap < R.supplyCap)
+                want[r] = std::max(want[r], m.roomCellsOf(sim, player_, int(r)) + 6);
+            if (m.roomCellsOf(sim, player_, int(r)) >= want[r]) continue;
+            // a free 3x2 rect of own territory, nearest to home
+            int bestCell = -1;
+            Fixed bestD{};
+            for (int y = 1; y + 2 < g.h; ++y)
+                for (int x = 1; x + 3 < g.w; ++x) {
+                    bool ok = true;
+                    for (int yy = y; yy < y + 2 && ok; ++yy)
+                        for (int xx = x; xx < x + 3 && ok; ++xx) {
+                            size_t i = size_t(g.index(xx, yy));
+                            if (g.territory[i] != player_ || g.room[i] >= 0 || g.blocked[i] || !(g.flags[i] & kCellGround)) ok = false;
+                        }
+                    if (!ok) continue;
+                    Fixed d = dist(g.cellCenter(x, y), home);
+                    if (bestCell < 0 || d < bestD) { bestCell = g.index(x, y); bestD = d; }
+                }
+            if (bestCell < 0) break;
+            std::vector<Amount> cost = R.rooms[r].cost;
+            for (auto& c : cost) c.value = c.value * 6;
+            if (!m.canAfford(sim, player_, cost)) break;
+            Command c; c.type = kCmdPaintRoom;
+            c.point = g.cellCenter(bestCell % g.w, bestCell / g.w);
+            c.param = rectParam(3, 2, int(r));
+            send(sim, c);
+            break; // one room per think
+        }
+    }
+}
+
+void RtsAI::settlers(Simulation& sim, RtsModule& m) {
+    World& w = sim.world();
+    const Rules& R = m.rules();
+    if (sim.tick() < lastSettlersTick_ + 40) return;
+    lastSettlersTick_ = sim.tick();
+    std::vector<int> count(R.types.size(), 0);
+    Entity store;
+    std::vector<Entity> structures;
+    w.each<Unit, Owner>([&](Entity e, Unit& u, Owner& o) {
+        if (o.player != player_) return;
+        count[u.type]++;
+        const UnitType& t = R.types[u.type];
+        if (t.storeCapacity.raw > 0 && !(u.flags & kUnitUnderConstruction) && !store.valid()) store = e;
+        if (t.structure && (w.has<Inventory>(e) || !t.produces.empty())) structures.push_back(e);
+    });
+    // 1) every building that trades goods must be on the road network
+    if (R.roadNetwork.enabled && store.valid()) {
+        std::vector<Entity> off;
+        for (Entity e : structures) if (e != store && !m.roadConnected(sim, e, store)) off.push_back(e);
+        if (!off.empty()) { Command c; c.type = kCmdConnectRoad; c.units = {off[0]}; send(sim, c); }
+    }
+    // 2) production chain: raw producers first, then workplaces whose inputs we produce
+    if (sim.tick() > lastBuildTick_ + 60) {
+        uint32_t produced = 0;
+        for (size_t ti = 0; ti < R.types.size(); ++ti)
+            if (count[ti] && R.types[ti].recipe.enabled) for (auto& a : R.types[ti].recipe.out) produced |= 1u << a.res;
+        for (int pass = 0; pass < 2; ++pass)
+            for (size_t ti = 0; ti < R.types.size(); ++ti) {
+                const UnitType& t = R.types[ti];
+                if (!t.recipe.enabled || count[ti] >= (t.recipe.in.empty() ? 2 : 1)) continue;
+                bool ready = true;
+                for (auto& a : t.recipe.in) if (!(produced & (1u << a.res))) ready = false;
+                if ((pass == 0) != t.recipe.in.empty() || !ready) continue;
+                if (build(sim, m, uint16_t(ti))) return;
+            }
+    }
+    // 3) recruits for producers that need them
+    for (size_t ti = 0; ti < R.types.size(); ++ti) {
+        const UnitType& t = R.types[ti];
+        if (t.trainFrom == kNoType || count[t.trainFrom] >= 2) continue;
+        bool canMake = false;
+        for (size_t pi = 0; pi < R.types.size(); ++pi)
+            if (count[pi] && std::find(R.types[pi].produces.begin(), R.types[pi].produces.end(), uint16_t(ti)) != R.types[pi].produces.end()) canMake = true;
+        if (canMake && train(sim, m, t.trainFrom)) break;
+    }
 }
 
 void RtsAI::garrisonPlay(Simulation& sim, RtsModule& m) {

@@ -341,18 +341,18 @@ def underlord():
 
 
 def borderrush():
-    m = Map("Five Lands", 24, 40, duel())
+    m = Map("Five Lands", 24, 42, duel())
     m.border()
     names = {}
-    # regions stacked vertically (portrait): A home, B C D middle, E enemy home
+    # regions stacked vertically (portrait): A enemy home, B C D middle, E own home
     for i, l in enumerate("ABCDE"):
         m.region_rect(1, 1 + i * 8, 22, 8, l)
-        names[l] = ["Родина", "Холмы", "Перевал", "Равнина", "Чужбина"][i]
+        names[l] = ["Чужбина", "Равнина", "Перевал", "Холмы", "Родина"][i]
     m.region_names = names
-    m.rect(4, 19, 5, 2, '#'); m.rect(15, 19, 5, 2, '#', sym=False)
-    m.ent("capital", 1, [12, 36])
-    m.ent("town", 0, [6, 28]); m.ent("town", 0, [18, 22], sym=False)
-    m.ent("town", 0, [5, 21], sym=False)
+    m.rect(4, 20, 5, 2, '#')
+    m.ent("capital", 1, [12, 37])
+    m.ent("town", 0, [6, 29])
+    m.ent("town", 0, [17, 24])
     write("borderrush", m, "five_lands")
 
 

@@ -1,0 +1,53 @@
+// "Underlord" — Dungeon Keeper-like: imps dig marked rock (gold veins pay out), claim the floor and the
+// neutral portal; painted rooms attract creatures through the portal (lairs give capacity, the hatchery
+// feeds them, the library and training room give research and experience); creatures want food, sleep
+// and wages and leave when unhappy. The hand picks up, drops and slaps; one creature can be possessed.
+// Lose your dungeon heart and you lose.
+{
+  "victory": "keyUnits",
+  "supplyCap": 40,
+  "resources": {
+    "gold": {"name": "Золото", "start": 3000},
+    "food": {"name": "Куры", "start": 10},
+    "research": {"name": "Исследования", "start": 0},
+    "mana": {"name": "Мана", "kind": "flow", "start": 200, "storage": 500}
+  },
+  "diggable": {"D": {"hardness": 4}, "G": {"hardness": 6, "yields": {"gold": 300}}, "J": {"hardness": 10, "yields": {"gold": 60}, "infinite": true}},
+  "territory": {"claimBy": "workers", "startRadius": 3, "buildOnlyOwned": true},
+  "hand": {"max": 8, "slapDamage": 5, "slapDuration": 8},
+  "possession": {"cost": {"mana": 100}, "drain": {"mana": 3}},
+  "rooms": {
+    "lair": {"name": "Логово", "cost": {"gold": 15}, "supply": 1},
+    "hatchery": {"name": "Курятник", "cost": {"gold": 15}, "income": {"food": 0.04}},
+    "library": {"name": "Библиотека", "cost": {"gold": 25}, "income": {"research": 0.01}, "work": {"yields": {"research": 1}}},
+    "training": {"name": "Тренировочный зал", "cost": {"gold": 25}, "work": {"xp": 4, "cost": {"gold": 0.1}}}
+  },
+  "techs": {
+    "dark_arts": {"name": "Тёмные искусства", "cost": {"research": 60, "time": 20}, "levels": 3, "costGrowth": 1,
+                  "effects": [{"tags": ["creature"], "stat": "damage", "mul": 1.15}]}
+  },
+  "types": {
+    "dungeon_heart": {"name": "Сердце подземелья", "key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 4000, "armor": 2}, "sight": 10,
+                      "income": {"mana": 5, "gold": 6}, "produces": ["imp"], "researches": ["dark_arts"], "supply": 4,
+                      "weapons": [{"range": 4, "damage": 15, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "heart"}},
+    "imp": {"name": "Бес", "worker": true, "health": {"max": 80}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 6, "cost": {"gold": 100, "time": 8},
+            "digs": {"rate": 3}, "claimer": {"time": 0.6}, "weapons": [{"range": 0.4, "damage": 2, "cooldown": 1}], "view": {"shape": "imp"}},
+    "portal": {"name": "Портал", "structure": {"footprint": [2, 2]}, "invulnerable": true, "claimedByTerritory": true, "portal": {"interval": 15}, "view": {"shape": "portal"}},
+    "goblin": {"name": "Гоблин", "tags": ["creature"], "health": {"max": 220, "armor": 1}, "move": {"speed": 2.8, "radius": 0.4}, "sight": 7,
+               "weapons": [{"range": 0.5, "damage": 14, "cooldown": 1}], "cost": {"supply": 1},
+               "hero": {"levels": [60, 160, 320], "perLevel": [{"stat": "maxHp", "add": 40}, {"stat": "damage", "add": 0.1}]}, "unique": false,
+               "attractedBy": {"rooms": {"lair": 1}, "weight": 3},
+               "needs": {"hunger": {"interval": 90, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6},
+                         "pay": {"interval": 120, "amount": {"gold": 20}}, "works": ["training"]}, "view": {"shape": "goblin"}},
+    "warlock": {"name": "Чернокнижник", "tags": ["creature"], "health": {"max": 160}, "move": {"speed": 2.5, "radius": 0.4}, "sight": 9,
+                "weapons": [{"range": 5, "damage": 16, "cooldown": 1.6, "projectileSpeed": 12, "damageType": "magic"}], "cost": {"supply": 1},
+                "attractedBy": {"rooms": {"lair": 1, "library": 4}, "weight": 2},
+                "needs": {"hunger": {"interval": 100, "room": "hatchery", "time": 3, "cost": {"food": 1}}, "sleep": {"interval": 150, "room": "lair", "time": 6},
+                          "pay": {"interval": 120, "amount": {"gold": 30}}, "works": ["library"]}, "view": {"shape": "mage"}},
+    "troll": {"name": "Тролль", "tags": ["creature"], "health": {"max": 450, "armor": 2}, "move": {"speed": 2.2, "radius": 0.5}, "sight": 7,
+              "weapons": [{"range": 0.6, "damage": 22, "cooldown": 1.4}], "cost": {"supply": 2},
+              "attractedBy": {"rooms": {"lair": 1, "training": 4}, "resources": {"gold": 500}, "weight": 1},
+              "needs": {"hunger": {"interval": 80, "room": "hatchery", "time": 3, "cost": {"food": 2}}, "sleep": {"interval": 160, "room": "lair", "time": 6},
+                        "pay": {"interval": 120, "amount": {"gold": 40}}, "works": ["training"]}, "view": {"shape": "troll"}}
+  }
+}
