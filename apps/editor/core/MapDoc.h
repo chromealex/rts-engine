@@ -45,6 +45,7 @@ struct MapData {
     std::vector<int8_t> levels;         // cliff level 0..9
     std::vector<int16_t> heights;       // fine height, 1/16 units
     std::vector<int16_t> corners;       // heightfield corner heights (w+1)*(h+1), 1/16 units; empty = none
+    std::string cornersFile;            // terrain.cornersFile as read (relative to the game folder); "" = inline / default name
     std::vector<std::string> fieldResources;  // resource ids used by fields
     std::vector<int8_t> fieldRes;       // index into fieldResources, -1 none
     std::vector<uint8_t> fieldAmt;      // 0..9 (fraction of the resource's cellMax)
@@ -63,6 +64,10 @@ struct MapData {
 
 struct Issue { bool error = true; std::string text; int entity = -1; };
 
+// Maps whose corner grid is larger than this are saved with terrain.cornersFile (raw int16 LE next to the
+// map) instead of an inline "corners" array; smaller maps keep the inline array.
+constexpr size_t kInlineCornersMax = 257 * 257;
+
 class MapDoc {
 public:
     MapData data;
@@ -71,10 +76,15 @@ public:
     uint64_t revision = 0;   // bumps on every change (views rebuild when it moves)
 
     void reset(int w, int h);
+    // load/save resolve terrain.cornersFile against the game folder (parent of maps/), see cornersPath()
     bool load(const std::string& file, std::string* err);
     bool loadJson(const Json& j, std::string* err);
     bool save(const std::string& file, std::string* err);
+    // Big maps carry their corners as terrain.cornersFile + an in-memory terrain.cornersBlob (what the
+    // simulation loader reads); save() writes the blob to the .r16 file and never into the JSON.
     Json toJson() const;
+    std::string cornersFileName() const;                                          // relative, e.g. maps/big.r16
+    static std::string cornersPath(const std::string& mapFile, const std::string& rel); // absolute file
     std::string toJsonText() const { return toJson().dump(); }
 
     void beginEdit();        // snapshot for undo, marks dirty
@@ -85,6 +95,7 @@ public:
     bool toggleRoad(int a, int b);
     void removeRoad(size_t i);
     void resize(int w, int h);
+    void setCorners(bool on);  // add a flat heightfield (all 0) / remove it (undoable)
     // brushes (no snapshot: call beginEdit() once per stroke)
     void paint(int cx, int cy, int radius, char c);
     void paintRect(int x0, int y0, int x1, int y1, char c);
