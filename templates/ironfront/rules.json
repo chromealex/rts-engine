@@ -36,6 +36,7 @@
   "playerAbilities": [
     {"id": "nuke", "name": "Ядерный удар", "cooldown": 780, "initialCooldown": 780, "target": "point", "requires": ["missile_silo"], "effects": [{"type": "projectile", "speed": 8, "delivery": {"arc": true, "arcHeight": 12}, "effects": [{"type": "damage", "amount": 1000, "radius": 4, "falloff": 0.6, "damageType": "he", "affects": "any"}]}]},
     {"id": "iron_curtain", "name": "Железный занавес", "cooldown": 660, "initialCooldown": 660, "target": "point", "requires": ["iron_curtain"], "effects": [{"type": "status", "status": "curtain", "duration": 45, "radius": 1.5, "affects": "own", "kind": "unit"}]},
+    {"id": "chronoshift", "name": "Хроносдвиг", "cooldown": 180, "initialCooldown": 180, "target": "pointPair", "requires": ["chronosphere"], "effects": [{"type": "teleportGroup", "radius": 1, "maxTargets": 1, "sort": "nearest", "tags": ["vehicle"], "affects": "own", "duration": 180}]},
     {"id": "gps", "name": "Спутник GPS", "cooldown": 480, "initialCooldown": 480, "target": "none", "requires": ["tech_center_allies"], "effects": [{"type": "reveal", "shape": "map", "duration": 60}]}
   ],
   "triggers": [

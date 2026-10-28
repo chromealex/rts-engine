@@ -39,6 +39,8 @@ def scalar(s):
         return -math.inf
     if s in ('NaN', '.nan'):
         return 0.0
+    if len(s) == 32 and re.fullmatch(r'[0-9a-fA-F]{32}', s) and not s.isdigit():
+        return s  # a GUID such as 0000000000000000e000000000000000 is not a float
     try:
         if re.fullmatch(r'[-+]?\d+', s):
             return int(s)
@@ -321,17 +323,40 @@ def _finite(x):
 
 
 def curve_keys(curve):
+    """AnimationCurve keys: (time, value, inSlope, outSlope, weightedMode, inWeight, outWeight)."""
     keys = []
     for k in get(curve, 'm_Curve', default=[]) or []:
         if not isinstance(k, dict):
             continue
-        keys.append((num(k.get('time')), num(k.get('value')), num(k.get('inSlope')), num(k.get('outSlope'))))
+        keys.append((num(k.get('time')), num(k.get('value')), num(k.get('inSlope')), num(k.get('outSlope')),
+                     int(num(k.get('weightedMode'), 0)), num(k.get('inWeight'), 1 / 3.0), num(k.get('outWeight'), 1 / 3.0)))
     keys.sort(key=lambda k: k[0])
     return keys
 
 
+def _bezier_segment(a, b, t):
+    """Weighted tangents: a cubic Bezier in (time, value); solve time -> parameter by bisection."""
+    dt = b[0] - a[0]
+    wo = a[6] if (len(a) > 6 and a[4] & 2) else 1 / 3.0
+    wi = b[5] if (len(b) > 5 and b[4] & 1) else 1 / 3.0
+    wo, wi = min(1.0, max(0.0, wo)), min(1.0, max(0.0, wi))
+    x1, x2 = wo, 1 - wi
+    y0, y1, y2, y3 = a[1], a[1] + a[3] * wo * dt, b[1] - b[2] * wi * dt, b[1]
+    s = (t - a[0]) / dt
+    lo, hi = 0.0, 1.0
+    for _ in range(40):
+        u = (lo + hi) * 0.5
+        x = 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u
+        if x < s:
+            lo = u
+        else:
+            hi = u
+    u = (lo + hi) * 0.5
+    return (1 - u) ** 3 * y0 + 3 * (1 - u) ** 2 * u * y1 + 3 * (1 - u) * u * u * y2 + u ** 3 * y3
+
+
 def curve_eval(keys, t):
-    """Unity AnimationCurve (Hermite, non-weighted). Infinite tangents are steps."""
+    """Unity AnimationCurve (Hermite; weighted tangents as Bezier). Infinite tangents are steps."""
     if not keys:
         return 1.0
     if t <= keys[0][0]:
@@ -346,6 +371,8 @@ def curve_eval(keys, t):
             m0, m1 = _finite(a[3]), _finite(b[2])
             if m0 is None or m1 is None:
                 return a[1]
+            if (len(a) > 4 and a[4] & 2) or (len(b) > 4 and b[4] & 1):
+                return _bezier_segment(a, b, t)
             s = (t - a[0]) / dt
             s2, s3 = s * s, s * s * s
             return ((2 * s3 - 3 * s2 + 1) * a[1] + (s3 - 2 * s2 + s) * dt * m0 + (-2 * s3 + 3 * s2) * b[1] + (s3 - s2) * dt * m1)

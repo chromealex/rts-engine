@@ -72,6 +72,12 @@ public:
         bool cobbles = true;
         Tex tex;
     };
+    struct ConcreteLook {              // foundation cells (rules "foundation": Dune II concrete slabs)
+        bool on = true;
+        render::float3 color{0.56f, 0.55f, 0.52f}, seam{0.30f, 0.29f, 0.27f};
+        float alpha = 1.0f;
+        Tex tex;
+    };
 
     void init(gfx::Device& dev, const Rules& rules, const render::FileReader& read, const std::string& contentBase);
     void shutdown(gfx::Device& dev);
@@ -82,11 +88,16 @@ public:
     bool drawsDig() const { return dig_.on && rules_ && !rules_->diggables.empty(); }
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision,
               const MapGrid& grid, const RtsView& view);
+    // Looks as configured (planet overlays reuse them: RtsPlanetGroundFx).
+    const TerritoryLook& territoryLook() const { return terr_; }
+    const RoadLook& roadLook() const { return road_; }
+    bool showsTerritory() const { return useT_ && terr_.on; }
+    bool territoryOn() const { return terr_.on; }
 
 private:
     struct Chunk {
-        render::Mesh fill, border, rock, veins, gems, marks, road;
-        bool dT = true, dD = true, dM = true, dR = true;
+        render::Mesh fill, border, rock, veins, gems, marks, road, concrete;
+        bool dT = true, dD = true, dM = true, dR = true, dC = true;
         float yMin = 0, yMax = 2;
     };
     void parseLook(const Json& terrain);
@@ -97,6 +108,7 @@ private:
     void buildDig(Chunk& c, int cx, int cy, const MapGrid& g, const RtsView& v);
     void buildMarks(Chunk& c, int cx, int cy, const MapGrid& g, const RtsView& v);
     void buildRoads(Chunk& c, int cx, int cy, const MapGrid& g, const RtsView& v);
+    void buildConcrete(Chunk& c, int cx, int cy, const MapGrid& g, const RtsView& v);
     void buildLanes(const RtsScene& s, const MapGrid& g, const RtsView& v);
     void drawProgress(render::Renderer3D& r, const MapGrid& g, const RtsView& v, const std::vector<uint8_t>* vision);
     float digTop(const MapGrid& g, const RtsView& v, int cx, int cy) const;
@@ -116,13 +128,14 @@ private:
     DigLook dig_;
     LaneLook lane_;
     RoadLook road_;
-    bool useT_ = false, useD_ = false, useR_ = false;   // layers present in this game
+    ConcreteLook conc_;
+    bool useT_ = false, useD_ = false, useR_ = false, useC_ = false;   // layers present in this game
     bool hi_ = true, invalid_ = true, geomDirty_ = false;
     int gridW_ = 0, gridH_ = 0, chunksX_ = 0, chunksY_ = 0;
     double nextScan_ = -1;
     uint8_t viewer_ = 0;
     // what the viewer last saw, per cell (fog of war memory)
-    std::vector<uint8_t> memT_, memD_, memR_, memM_;
+    std::vector<uint8_t> memT_, memD_, memR_, memM_, memC_;
     std::vector<int16_t> memRoom_;
     std::vector<uint32_t> marked_;             // cells with a mark shown (progress bars)
     std::vector<Chunk> chunks_;

@@ -37,6 +37,26 @@ void RtsAI::mech(Simulation& sim, RtsModule& m) {
     }
 
     mechEconomy(sim, m);
+    // morale: an idle general walks to the shakiest group of own soldiers (faster recovery near him)
+    if (R.mech.morale && R.mech.generalTags) {
+        Entity worst = kNullEntity; Fixed wv{};
+        std::vector<Entity> generals;
+        w.each<Unit, Owner>([&](Entity e, Unit& u, Owner& o) {
+            if (o.player != player_ || u.hp.raw <= 0 || (u.flags & kUnitOffMap)) return;
+            if (R.types[u.type].tags & R.mech.generalTags) {
+                if (w.has<Mobile>(e) && (!w.has<Orders>(e) || w.get<Orders>(e).queue.empty())) generals.push_back(e);
+                return;
+            }
+            const auto* mo = w.tryGet<Morale>(e);
+            if (mo && mo->init && mo->state != uint8_t(MoraleMode::Steady) && (!worst.valid() || mo->value < wv)) { worst = e; wv = mo->value; }
+        });
+        if (worst.valid() && !generals.empty()) {
+            const Vec3 p = w.get<Transform>(worst).pos;
+            Entity g = generals[0];
+            for (Entity x : generals) if (dist2D(w.get<Transform>(x).pos, p) < dist2D(w.get<Transform>(g).pos, p)) g = x;
+            if (dist2D(w.get<Transform>(g).pos, p) > R.mech.generalRadius / 2) { Command c; c.player = player_; c.type = kCmdMove; c.units = {g}; c.point = p; send(sim, c); }
+        }
+    }
     // man shooting structures under threat, leave town centres when it is over
     if (!R.mech.transports) return;
     struct Spot { Entity s; int room; bool shoots; bool busy; Vec3 pos; };
