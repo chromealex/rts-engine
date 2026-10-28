@@ -53,6 +53,13 @@ public:
     using ImageSource = std::function<bool(const std::string& path, int& w, int& h, std::vector<unsigned char>& rgba)>;
     void setImageSource(ImageSource source);
 
+    // On-screen keyboard (UiKeyboard): opens when a text field gets focus. Auto = on touch devices
+    // only (or with RTS_OSK=1 in the environment, to try it on a desktop).
+    enum class OnScreenKeyboard { Auto, Always, Never };
+    void setOnScreenKeyboard(OnScreenKeyboard mode);
+    void setKeyboardLanguage(const std::string& tag);  // layout that opens first (UI language)
+    bool keyboardVisible() const;
+
     float dpRatio() const;              // framebuffer pixels per dp
     bool textInputFocused() const;
     void toggleDebugger();              // RmlUi visual debugger (F8 in the client)

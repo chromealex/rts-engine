@@ -1,0 +1,32 @@
+/* On-screen keyboard. Classes: .key, .key.fn (special), .key.wide, .key.space, .key.on (shift/caps),
+   .br (row break). #kb.top: docked at the top of the screen. */
+.kb-body { focus: none; pointer-events: none; }
+#kb {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    pointer-events: auto;
+    padding: 6dp 4dp 8dp 4dp;
+    background-color: #0d1117f0;
+    border-top: 1dp #ffffff22;
+}
+#kb.top { top: 0; bottom: auto; border-top: 0; border-bottom: 1dp #ffffff22; }
+.kb-keys { text-align: center; }
+.br { display: block; height: 0; }
+.key {
+    display: inline-block;
+    min-width: 30dp;
+    height: 24dp;
+    line-height: 24dp;
+    padding: 9dp 6dp;
+    margin: 3dp 2dp;
+    border-radius: 5dp;
+    decorator: vertical-gradient(#3a4656ff #2b3541ff);
+    border: 1dp #ffffff1c;
+    color: #eef2f6;
+    font-size: 17dp;
+    text-align: center;
+}
+.key:active { decorator: vertical-gradient(#55657aff #3e4b5cff); border-color: #e8c26a; }
+.key.fn { min-width: 46dp; font-size: 14dp; color: #c9d2dc; decorator: vertical-gradient(#2a323dff #222a33ff); }
+.key.wide { min-width: 60dp; }
+.key.space { min-width: 220dp; }
+.key.on { border-color: #e8c26a; color: #ffe6a6; }

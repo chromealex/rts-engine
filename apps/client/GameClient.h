@@ -24,9 +24,11 @@
 #include "engine/sim/Simulation.h"
 #include "engine/ui/UiLayer.h"
 #include "modules/rts/RtsAI.h"
+#include "modules/rts/RtsLocalize.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
+#include "ClientFx.h"
 
 namespace Rml { class ElementDocument; class Element; }
 
@@ -65,6 +67,7 @@ struct UiState {
     std::string gameName, error, platformInfo;
     std::vector<std::string> maps;
     std::vector<UiAction> languages;
+    std::string lang;                  // active language: argument of the `tr` transform in documents
     // lobby (Lobby.cpp)
     std::string lobby;             // connect | connecting | browse | room
     std::string netStatus, netError, roomTitle, roomInfo, spectators, waitHint;
@@ -165,6 +168,7 @@ private:
     void startNetMatch();
     void leaveNetMatch();
     void buildLobby(UiState& s);
+    std::string mapTitle(const std::string& file, const std::string& serverTitle) const;
     void describeNetMaps();
     void loadNetSettings();
     void saveNetSettings() const;
@@ -178,18 +182,19 @@ private:
     Rml::ElementDocument* menuDoc_ = nullptr;
     Rml::ElementDocument* hudDoc_ = nullptr;
     Rml::ElementDocument* lobbyDoc_ = nullptr;
-    bool reloadDocs_ = false;
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;
     std::vector<std::function<void()>> actions_, nextActions_;
     int shadowQuality_ = 0, boundShadowQuality_ = 0;
     int volume_ = 100, boundVolume_ = 100, musicVolume_ = 100, boundMusicVolume_ = 100;  // percent, pause menu
+    int fxQuality_ = 0, boundFxQuality_ = 0;   // pause menu: particles off/low/medium/high
     bool uiOwnsPointer_ = false;
     Minimap minimap_;
 
     Renderer3D r3d_;
     RtsView view_;
+    ClientFx fx_;                         // particle effects (ClientFx.cpp)
     audio::AudioEngine audio_;
     RtsAudio sound_;
     std::vector<Entity> heardSelection_;  // selection when the last select sound played
