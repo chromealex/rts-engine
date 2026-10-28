@@ -61,6 +61,7 @@ private:
 
 void GameClient::initUi() {
     if (!ui_.init(*dev_, "fonts/ui.ttf")) { error_ = "ui: init failed"; return; }
+    initLua();   // before any document: <script> and onclick="..." need the plugin
     ui_.setKeyboardLanguage(loc_.language());
     // UI images the build packed into texture atlases are no longer plain files.
     auto atlasImages = std::make_shared<atlas::ImageSource>([](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, atlas::decodeImageFile);
@@ -152,6 +153,7 @@ void GameClient::initUi() {
     ui_.setTranslator([this](const std::string& key) { return tr(key); });
     minimapListener_ = std::make_unique<MinimapListener>(*this);
     loadDocuments();
+    runGameScript();   // ui/main.lua
 }
 
 // Loads every document (once; also usable to pick up edited documents). The data model survives
@@ -183,6 +185,7 @@ void GameClient::shutdownUi() {
     minimapEl_ = nullptr;
     menuDoc_ = hudDoc_ = lobbyDoc_ = howtoDoc_ = nullptr;
     ui_.shutdown();
+    shutdownLua();
     minimapListener_.reset();
 }
 

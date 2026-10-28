@@ -32,6 +32,7 @@
 #include "ClientFx.h"
 
 namespace Rml { class ElementDocument; class Element; }
+typedef struct lua_State lua_State;
 
 namespace rts::client {
 
@@ -125,6 +126,7 @@ private:
 };
 
 class GameClient {
+    friend struct LuaApi;   // ClientScript.cpp: the `game` table for UI scripts
 public:
     void init(gfx::Device& dev);   // every init step at once
     // Startup in steps, one per frame, so the splash screen (ClientSplash.h) keeps animating.
@@ -188,6 +190,10 @@ private:
     void buildCommandCard(UiState& s);
     void buildOverlays(UiState& s);
     void loadDocuments();
+    // ClientScript.cpp: Lua for UI documents and the game's ui/*.lua
+    void initLua();
+    void runGameScript();
+    void shutdownLua();
     // ClientActions.cpp: player abilities, rect tools, hand, possession, "How to play"
     void buildTools(UiState& s);
     void buildToolCard(UiState& s);
@@ -225,6 +231,7 @@ private:
     Rml::ElementDocument* hudDoc_ = nullptr;
     Rml::ElementDocument* lobbyDoc_ = nullptr;
     Rml::ElementDocument* howtoDoc_ = nullptr;
+    lua_State* lua_ = nullptr;     // UI scripts (ClientScript.cpp); closed after the UI
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;

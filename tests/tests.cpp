@@ -1,4 +1,9 @@
 // Dependency-free unit tests. Run: ctest  (or ./rts_tests)
+#include "engine/ui/UiLua.h"
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+}
 #include <filesystem>
 #include <cstdio>
 #include <functional>
@@ -8871,6 +8876,39 @@ TEST(gen_planet_world_players) {
     };
     CHECK(runMatch(4) == runMatch(4));
     CHECK(runMatch(4) != runMatch(5));
+}
+
+
+// ---- UI Lua sandbox (engine/ui/UiLua.h): game UI scripts can't reach files, the OS or bytecode
+TEST(ui_lua_sandbox) {
+    std::map<std::string, std::string> files = {
+        {"ui/shop.lua", "local M = {n = 0} function M.buy() M.n = M.n + 1 return M.n end return M"},
+        {"ui/menu/tabs.lua", "return {count = 3}"},
+    };
+    auto read = [&](const std::string& p, std::string& out) { auto it = files.find(p); if (it == files.end()) return false; out = it->second; return true; };
+    lua_State* L = luaL_newstate();
+    ui::luaSandbox(L, read, {"ui/"});
+    std::string err;
+    auto truthy = [&](const char* expr) {
+        std::string code = std::string("assert(") + expr + ")";
+        bool ok = ui::luaRunString(L, code, "=test", &err);
+        if (!ok) std::printf("    lua: %s\n", err.c_str());
+        return ok;
+    };
+    CHECK(truthy("io == nil and package == nil and debug == nil"));
+    CHECK(truthy("dofile == nil and loadfile == nil and string.dump == nil"));
+    CHECK(truthy("os.execute == nil and os.remove == nil and os.getenv == nil and os.exit == nil"));
+    CHECK(truthy("type(os.time()) == 'number' and type(os.clock()) == 'number' and type(os.date('%Y')) == 'string'"));
+    CHECK(truthy("load('return 1 + 2')() == 3"));
+    CHECK(truthy("select(2, load(string.char(27) .. 'LuaT')):find('binary') ~= nil"));
+    CHECK(truthy("load('return x', 'c', 'bt', {x = 7})() == 7"));            // env kept, mode forced to text
+    CHECK(truthy("require('shop').buy() == 1 and require('shop').buy() == 2")); // loaded once, state kept
+    CHECK(truthy("require('menu.tabs').count == 3"));
+    CHECK(truthy("not pcall(require, 'missing') and not pcall(require, '../secret')"));
+    CHECK(!ui::luaRunString(L, "error('boom')", "=test", &err) && err.find("boom") != std::string::npos);
+    CHECK(!ui::luaRunString(L, std::string("\x1bLua"), "=bin", &err));
+    CHECK(ui::luaRunFile(L, read, "ui/shop.lua") && !ui::luaRunFile(L, read, "ui/none.lua", &err));
+    lua_close(L);
 }
 
 int main() {
