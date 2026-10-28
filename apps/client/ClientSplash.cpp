@@ -21,6 +21,8 @@ void ClientBoot::init(gfx::Device& dev, GameClient& client, Mode mode, std::func
     try {
         if (platform::readContentFile("game.json", text)) block = Json::parse(text)["splash"];
     } catch (const std::exception&) {}   // the client reports a broken game.json in its menu
+    if (block.isNull()) block = splash::defaultBlock();
+    else if (block.type() == Json::Type::Bool) block = Json();   // "splash": false: background colour only
     splash_.init(dev, block, [](const std::string& p, std::string& out) { return platform::readContentFile(p, out); });
     if (!splash_.error().empty()) std::fprintf(stderr, "splash: %s\n", splash_.error().c_str());
     contentWait_ = splash_.spec().waitForContent;

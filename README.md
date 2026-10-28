@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/logo.png" alt="RTSEngine" width="520"></p>
+
 # RTSEngine
 
 Движок для любых RTS на C++20: от Mushroom Wars до Warcraft, Red Alert и Total Annihilation.

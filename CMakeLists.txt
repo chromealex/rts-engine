@@ -549,10 +549,16 @@ if(RTS_BUILD_EDITOR)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_link_libraries(rts_editor PRIVATE rts_game_fx)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(WIN32)
+        target_sources(rts_editor PRIVATE apps/editor/branding/editor.rc)   # exe + window icon
+    endif()
     if(APPLE)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
             MACOSX_BUNDLE_BUNDLE_NAME "RTS Editor" MACOSX_BUNDLE_GUI_IDENTIFIER "com.rtsengine.editor"
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/Info.plist.in")
+        # application icon (CFBundleIconFile AppIcon; art: tools/branding/logo/make_logo.py)
+        target_sources(rts_editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/branding/AppIcon.icns")
+        set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/branding/AppIcon.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
         # engine assets (UI font) inside the bundle, so the editor works when moved elsewhere
         add_custom_command(TARGET rts_editor POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources/content/engine"
