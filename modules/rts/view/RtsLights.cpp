@@ -105,6 +105,7 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
     LightSystem& ls = r.lights;
     addContactShadows(r, s, grid, view);
     ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
+    ls.setWaterReflections(waterRefl_);
     {   // clouds drift with the wind in game time; a storm covers the sky
         const float clouds = preview_ ? previewClouds_ : clouds_, storm = preview_ ? previewStorm_ : storm_;
         const float cover = (cycle_ || preview_) ? std::max(clouds, storm * 0.85f) : 0.0f;
@@ -141,6 +142,7 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
             if (o.build < 1.0f && !g.whileBuilding) continue;
             PointLight l = glowLight(g, ground, yaw, scale, tt, ph);
             l.haloAlpha = haloK * std::min(l.intensity / std::max(g.intensity, 0.01f), 1.3f);
+            l.beam = g.spot ? g.beam * haloK : 0.0f;   // shafts show at dusk and night
             l.intensity *= glowK;
             ls.add(l);
         }
@@ -154,6 +156,7 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
         l.intensity *= glowK;
         l.priority = 0.3f;
         l.haloAlpha = haloK;
+        l.beam = m.spot ? m.beam * haloK : 0.0f;
         ls.add(l);
     }
     emitActive(ls, time);

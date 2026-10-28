@@ -23,7 +23,7 @@ Json& mapLightsMut(MapDoc& doc) {
 }
 
 void applyLightParams(Json& l, const Json& p) {
-    for (const char* k : {"x", "z", "height", "radius", "intensity", "flicker", "angle", "softness", "pitch", "yaw", "sweep", "sweepSpeed"})
+    for (const char* k : {"x", "z", "height", "radius", "intensity", "flicker", "angle", "softness", "pitch", "yaw", "sweep", "sweepSpeed", "beam"})
         if (p[k].isNumber()) l.set(k, n3(p[k].toDouble()));
     if (p["halo"].isNumber()) l.set("halo", n3(p["halo"].toDouble()));
     else if (p.has("halo")) l.set("halo", Json::fromBool(p["halo"].boolean(true)));

@@ -142,6 +142,8 @@ RtsLights::Glow RtsLights::parseGlow(const Json& j) {
     g.yaw = num(j, "yaw", 0);
     g.sweep = std::max(num(j, "sweep", 0), 0.0f);
     g.sweepSpeed = num(j, "sweepSpeed", g.sweepSpeed);
+    // a shaft shows from searchlights up high (dust, haze); low lamps and headlights don't get one
+    g.beam = std::clamp(num(j, "beam", g.height >= 1.5f ? g.beam : 0.0f), 0.0f, 1.0f);
     if (const Json& o = j["offset"]; o.size() >= 2) { g.forward = float(o[0].fx().toDouble()); g.side = float(o[1].fx().toDouble()); }
     return g;
 }
@@ -201,6 +203,7 @@ void RtsLights::configure(const Json& game, const Json& map, const Json& lights)
         return def;
     };
     cycle_ = game.isObject() || map.isObject();
+    waterRefl_ = map["waterReflections"].boolean(game["waterReflections"].boolean(true));
     startTime_ = pick("time", pr ? pr->time : -1, 0.5f);
     dayLength_ = std::max(pick("dayLength", pr ? pr->dayLength : -1, 0.0f), 0.0f);
     nightLevel_ = std::clamp(pick("nightLevel", pr ? pr->nightLevel : -1, 1.0f), 0.0f, 1.0f);
