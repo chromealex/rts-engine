@@ -1,0 +1,51 @@
+/* Spell Bunkers: UI skin (linked after engine/ui/theme.rcss). Arcane duel: midnight indigo, rune-cyan glow, gilt spell buttons.
+   Title font: fonts/title.ttf (Philosopher, SIL OFL, fonts/OFL.txt). */
+
+body { color: #e8ecff; }
+h1 { font-family: title; color: #7fe3ff; font-size: 32dp; font-weight: normal; }
+h2 { color: #9aa3d6; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #9aa3d6; }
+.error { color: #ff7a8a; }
+
+.panel {
+    background-color: #0d1030ec;
+    border: 2dp #5a6cff;
+    border-radius: 10dp;
+}
+
+button {
+    color: #eef1ff;
+    border: 1dp #2a3380;
+    border-radius: 8dp;
+    decorator: vertical-gradient(#2b3590ff #1a2060ff);
+}
+button:hover { decorator: vertical-gradient(#3a46b0ff #232a78ff); border-color: #7fe3ff; }
+button:active { decorator: vertical-gradient(#1a2060ff #2b3590ff); }
+button.active { border-color: #7fe3ff; color: #c8f6ff; }
+button.disabled:hover { decorator: vertical-gradient(#2b3590ff #1a2060ff); border-color: #2a3380; }
+button .cost { color: #ffd77a; }
+button .tip { color: #ff7a8a; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #7fe3ff; }
+
+#card .title { color: #7fe3ff; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff7a8a; }
+.notice { color: #c8f6ff; }
+#selbox { border-color: #7fe3ff; background-color: #7fe3ff22; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#181e5bff #07081aff); }
+input.text { background-color: #080a20; border-color: #2a3380; color: #e8ecff; }
+input.text:focus { border-color: #7fe3ff; }
+#lobby .slot.mine { border-color: #7fe3ff; }
+#lobby .roomtitle { color: #7fe3ff; font-family: title; }
+
+#kb { background-color: #0d1030ec; border-color: #5a6cff; }
+#kb .key { color: #eef1ff; border-color: #2a3380; border-radius: 8dp; decorator: vertical-gradient(#2b3590ff #1a2060ff); }
+#kb .key:active { border-color: #7fe3ff; }
+#kb .key.on { border-color: #7fe3ff; color: #c8f6ff; }
+
+#menu h1 { text-align: center; }
+#tools button { border-color: #ffd77a55; }
+#tools button .cost { color: #ffd77a; }

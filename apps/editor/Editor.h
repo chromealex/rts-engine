@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "EditorTheme.h"
 #include "EditorWindow.h"
 #include "core/Net.h"
 #include "core/Workspace.h"
@@ -154,6 +155,8 @@ public:
     const std::vector<std::unique_ptr<EditorWindow>>& windows() const { return windows_; }
     void resetLayout() { resetLayout_ = true; }
     void launchOnDevice(const std::string& device, bool landscape);
+    void focusWindow(const std::string& id);   // open + bring to front (by stable id)
+    EditorTheme& theme() { return theme_; }
 
     // statistics
     struct FrameStats { float frameMs = 0, simMs = 0; uint32_t drawCalls = 0; };
@@ -163,9 +166,12 @@ public:
 
 private:
     void drawMenuBar();
+    void drawTopBarControls();   // breadcrumb, play controls, MCP pill (inside the main menu bar)
+    void drawPlayControls();
     void drawDockspace();
     void drawGamePicker();
     void drawStatusBar();
+    float statusBarHeight() const { return ImGui::GetFontSize() + 12; }
     void drawActivityToasts();
     void handleShortcuts();
     void syncGrid();
@@ -187,6 +193,9 @@ private:
     game::RtsView view_;
     bool showPicker_ = false;
     bool resetLayout_ = false;
+    bool layoutChecked_ = false;
+    int lastPlaySlot_ = 0;       // what the top bar Play button starts (0 = bots)
+    EditorTheme theme_;
     int focusFirst_ = 0;
     std::vector<std::unique_ptr<EditorWindow>> windows_;
 
