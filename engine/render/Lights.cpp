@@ -205,18 +205,23 @@ void LightSystem::pickPixelLights() {
             float dx = l.pos.x - focus_.x, dz = l.pos.z - focus_.z;
             float lum = l.color.x * 0.3f + l.color.y * 0.55f + l.color.z * 0.15f;
             const float spotK = l.spot() ? 1.5f : 1.0f;   // beams show their cone best on the precise path
-            score.push_back({lum * l.intensity * l.radius * spotK * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
+            const float keep = l.key && std::binary_search(prevKeys_.begin(), prevKeys_.end(), l.key) ? 1.6f : 1.0f;
+            const float in = l.rank >= 0 ? l.rank : l.intensity;
+            score.push_back({lum * in * l.radius * spotK * keep * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
         }
         n = std::min<int>(kMaxPixelLights, int(score.size()));
         std::partial_sort(score.begin(), score.begin() + n, score.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
+        prevKeys_.clear();
         for (int k = 0; k < n; ++k) {
             const PointLight& l = lights_[score[size_t(k)].second];
+            if (l.key) prevKeys_.push_back(l.key);
             perPixel_[score[size_t(k)].second] = 1;
             u_.pos[k][0] = l.pos.x; u_.pos[k][1] = l.pos.y; u_.pos[k][2] = l.pos.z; u_.pos[k][3] = l.radius;
             u_.col[k][0] = l.color.x * l.intensity; u_.col[k][1] = l.color.y * l.intensity; u_.col[k][2] = l.color.z * l.intensity; u_.col[k][3] = l.cosInner;
             u_.spot[k][0] = l.dir.x; u_.spot[k][1] = l.dir.y; u_.spot[k][2] = l.dir.z; u_.spot[k][3] = l.spot() ? l.cosOuter : -2.0f;
         }
     }
+    std::sort(prevKeys_.begin(), prevKeys_.end());
     u_.info[0] = float(n);
 }
 
@@ -232,8 +237,7 @@ void LightSystem::renderMap() {
     verts_.clear();
     const float inv = 2.0f / extent_, k = 1.0f / kMapRange;
     for (size_t i = 0; i < lights_.size(); ++i) {
-        if (perPixel_[i]) continue;
-        const PointLight& l = lights_[i];
+        const PointLight& l = lights_[i];   // every light, per-pixel ones too (they only add detail)
         const float cx = (l.pos.x - originX_) * inv - 1.0f, cy = (l.pos.z - originZ_) * inv - 1.0f, r = l.radius * inv;
         if (cx + r < -1 || cx - r > 1 || cy + r < -1 || cy - r > 1) continue;
         const float cr = std::min(l.color.x * l.intensity * k, 1.0f), cg = std::min(l.color.y * l.intensity * k, 1.0f),

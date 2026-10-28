@@ -1,4 +1,6 @@
 #include "PlatformCommon.h"
+#include "PluginJson.h"
+#include "Plugins.h"
 
 #include <chrono>
 #include <cstdio>
@@ -86,7 +88,12 @@ void stopTextInput() {
     detail::showSoftKeyboard(false, S.textArea);
 }
 bool textInputActive() { return state().textInput; }
-Insets safeAreaInsets() { return state().safe; }
+Insets safeAreaInsets() {
+    Insets in = state().safe; // + an ad banner, so the UI never ends up under it
+    in.top += state().bannerTop;
+    in.bottom += state().bannerBottom;
+    return in;
+}
 void setFullscreen(bool on) { detail::applyFullscreen(on); }
 bool isFullscreen() {
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
@@ -108,6 +115,42 @@ void showSoftKeyboard(bool, const TextInputArea&) {} // desktop: the physical ke
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
 void applyFullscreen(bool) {} // apps are always fullscreen
 #endif
+
+// ------------------------------------------------------------------ native plugins glue
+namespace {
+// Runs at load time of the runtime (all platforms): plugins read their config from game.json, and
+// provider events "app.pause"/"app.resume" (an ad or a payment sheet covers the game) become
+// FocusLost/FocusGained, which the game already handles (pause, mute).
+struct PluginGlue {
+    PluginGlue() {
+        plugins::detail::setConfigLoader([] {
+            std::string text;
+            return readContentFile("game.json", text) ? text : std::string();
+        });
+        plugins::addListener("*", [](const std::string& ev, const std::string& data) {
+            if (ev == "app.log") { std::fprintf(stderr, "[plugin] %s\n", data.c_str()); return; }
+            if (ev == "app.banner") {
+                auto v = plugins::json::parseOr(data);
+                float h = float(v["height"].num());
+                auto& S = state();
+                (v["position"].str() == "top" ? S.bannerTop : S.bannerBottom) = h;
+                Event e; e.type = EventType::Resized; dispatch(e);
+                return;
+            }
+            if (ev != "app.pause" && ev != "app.resume") return;
+            Event e; e.type = ev == "app.pause" ? EventType::FocusLost : EventType::FocusGained;
+            dispatch(e);
+        });
+    }
+} g_pluginGlue;
+int g_pluginFrames = 0;
+} // namespace
+
+void pluginFrame() {
+    plugins::pump();
+    // a couple of frames in, the first screen is up and interactive (Yandex Games: LoadingAPI.ready)
+    if (++g_pluginFrames == 3) plugins::detail::broadcast("lifecycle", "{\"event\":\"ready\"}");
+}
 
 void setSafeArea(const Insets& in) {
     auto& S = state();
