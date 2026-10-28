@@ -452,6 +452,18 @@ UI (`UiLayer`) вызывает это сам при фокусе на `<input t
 - Буфер обмена работает везде; в браузере Ctrl/Cmd+V доходит до игры после того, как браузер отдал текст.
 - Web: `userDataDir()` хранится в IndexedDB — настройки и сохранения переживают перезагрузку страницы.
 
+### Нативные плагины: платежи и реклама
+
+Любой SDK платформы подключается плагином на её родном языке — Java (Android), Objective-C (iOS/macOS),
+JavaScript (web) или C++ — через один асинхронный мост `engine/platform/Plugins.h`. Игра пользуется
+общими API `rts::store` (покупки) и `rts::ads` (реклама) из `engine/services`, а провайдер выбирается
+по платформе в `game.json`. Готовые плагины в `plugins/`: **App Store**, **Google Play**, **RuStore**,
+**Яндекс Игры** (web: покупки и реклама), **Yandex Mobile Ads**, **AdMob**. На десктопе работают
+заглушки магазина и рекламы (`RTS_MOCK_STORE`, `RTS_MOCK_ADS`), так что весь сценарий покупки
+отлаживается без телефона. rtsbuild сам вписывает плагины в Gradle/манифест, Info.plist/Podfile и
+HTML; для Google Play и RuStore собирайте отдельно: `--plugins googleplay,admob` и
+`--plugins rustore,yandex-ads`. Подробно — `docs/plugins.md`.
+
 ### Релизы
 
 `.github/workflows/release.yml`: тег `v1.2.3` (или ручной запуск с выбором папки игры) собирает все
