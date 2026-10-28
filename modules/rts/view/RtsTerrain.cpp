@@ -51,6 +51,7 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
     if (terrain_.build(dev, g, flatDig) || !hasTerrain_) groundFx_.invalidate();
     hasTerrain_ = true;
     fogMeshDirty_ = true;   // the fog sheet follows the ground
+    fieldView_.invalidate();  // so do grid field overlays
     if (twoD_) twoD_->buildTiles(dev, g, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
 }
 

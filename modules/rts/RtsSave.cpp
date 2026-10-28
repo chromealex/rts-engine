@@ -214,6 +214,7 @@ bool RtsModule::serializeState(Simulation& sim, Archive& a) {
         io(a, *ss);
         if (!a.writing()) ss->serial = 0;   // never a VM write stamp: the VM restores `state` from it
     }
+    if (fields_ && fields_->active()) fields_->io(sim, a);   // grid fields (games with rules / map fields only)
     if (!a.writing()) {
         gs.grid.invalidatePathing();   // derived caches (clearance, HPA*) rebuild from the loaded cells
         gs.grid.clearSoft();

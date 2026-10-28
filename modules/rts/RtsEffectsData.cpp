@@ -213,7 +213,7 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
         {"sendBack", EffectKind::SendBack}, {"clone", EffectKind::Clone}, {"formation", EffectKind::Formation}, {"convert", EffectKind::Convert},
         {"playerStatus", EffectKind::PlayerStatus}, {"equalizeResource", EffectKind::EqualizeResource}, {"sacrifice", EffectKind::Sacrifice},
         {"stealSkill", EffectKind::StealSkill}, {"cooldown", EffectKind::Cooldown},
-        {"addCharges", EffectKind::AddCharges}, {"teleportGroup", EffectKind::TeleportGroup}, {"script", EffectKind::Script}};
+        {"addCharges", EffectKind::AddCharges}, {"teleportGroup", EffectKind::TeleportGroup}, {"script", EffectKind::Script}, {"field", EffectKind::Field}};
     std::string k = ej.getStr("type", "damage");
     bool known = false;
     for (auto& [n, kk] : kinds) if (k == n) { e.kind = kk; known = true; }
@@ -228,6 +228,14 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
         e.scriptFn = ej.getStr("fn");
         if (e.scriptFn.empty()) fail(w, "needs 'fn' (a function of the game's scripts)");
         e.scriptArgs = ej;
+    }
+    if (e.kind == EffectKind::Field) {   // resolved against rules "fields" by loadGridFieldRules
+        e.fieldName = ej.getStr("field");
+        if (e.fieldName.empty()) fail(w, "needs 'field' (a rules \"fields\" id)");
+        const int ops = int(ej.has("add")) + int(ej.has("set")) + int(ej.has("max"));
+        if (ops != 1) fail(w, "needs exactly one of 'add', 'set', 'max'");
+        e.fieldOp = ej.has("add") ? 0 : ej.has("set") ? 1 : 2;
+        e.fieldAmount = ej.getFx(ej.has("add") ? "add" : ej.has("set") ? "set" : "max");
     }
     e.percent = ej.getFx("percent");
     e.radius = ej.getFx("radius");

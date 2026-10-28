@@ -24,6 +24,7 @@
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
 #include "RtsFog.h"
+#include "RtsFieldView.h"
 #include "RtsPlanetGroundFx.h"
 #include "RtsPlanetRender.h"
 #include "RtsOverlays.h"
@@ -77,6 +78,9 @@ struct RtsScene {
     uint8_t viewer = 0;
     const std::vector<Lane>* lanes = nullptr;
     uint32_t laneSignature = 0;
+    // grid fields (RtsFieldView): definitions (with map overrides) and the layers to draw (read only, valid this frame)
+    const std::vector<GridFieldDef>* fieldDefs = nullptr;
+    std::vector<FieldSceneLayer> fields;
     // drag-to-send arrows (Mushroom-Wars input) and box selection are drawn by the client
 };
 
@@ -203,6 +207,7 @@ public:
     // The client / editor pass the local input state once per frame, before draw().
     void setOverlayContext(const OverlayContext& c) { overlays_.setContext(c); }
     RtsOverlays& overlays() { return overlays_; }
+    RtsFieldView& fieldView() { return fieldView_; }   // grid field overlays; takeEffects() = particles for the host
     const RtsOverlays& overlays() const { return overlays_; }
     // Screen point above an object where its bars / labels go (false: behind the camera).
     bool overlayTop(const render::RTSCamera& cam, const SceneObject& o, size_t index, float w, float h, render::float2& out) const;
@@ -352,6 +357,9 @@ private:
     RtsGroundFx groundFx_;   // territory, diggable rock, lanes, roads (RtsGroundFx.cpp)
     FogOfWar fog_;           // fog of war look + sheet (RtsFog.cpp)
     RtsOverlays overlays_;   // data-driven overlays (RtsOverlays.cpp)
+    RtsFieldView fieldView_; // grid field overlays (RtsFieldView.cpp)
+    const std::vector<GridFieldDef>* fieldDefsSeen_ = nullptr;
+    size_t fieldDefsCount_ = 0;
     bool fogMeshDirty_ = false;
     render::mat4 viewProj_;
     render::float3 camPos_;
