@@ -740,11 +740,10 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             view_.setOverlayContext(oc);
         }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
-        if (!planet()) { // particles are placed in flat map coordinates: not on planets yet
-            fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
-                       screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-            fx_.addLights(r3d_.lights);   // particle lights ("light" module)
-        }
+        fx_.setPlanetView(planet() ? &view_ : nullptr);   // planets: effects in the camera body's space
+        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
+        fx_.addLights(r3d_.lights);   // particle lights ("light" module)
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
@@ -755,7 +754,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         }
         drawToolPreview();
         r3d_.render(pass);
-        if (!planet()) fx_.render(r3d_.lighting);
+        fx_.render(r3d_.lighting);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;

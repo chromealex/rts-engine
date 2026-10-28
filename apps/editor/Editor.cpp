@@ -161,7 +161,11 @@ void Editor::focusWindow(const std::string& id) {
 void Editor::openGame(const std::string& idOrDir) {
     std::string err;
     if (playing()) stopPlay();
-    if (!ws_.openGame(idOrDir, &err)) { status = "Не удалось открыть игру: " + err; return; }
+    if (!ws_.openGame(idOrDir, &err)) {
+        status = "Не удалось открыть проект: " + err;
+        ws_.log("editor", status + " (" + idOrDir + ")", true);
+        return;
+    }
     ws_.changes.clear();
     reloadRules();
     selection = {};

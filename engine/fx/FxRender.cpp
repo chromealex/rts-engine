@@ -379,6 +379,18 @@ void ParticleSystem::render(const FxFog& fog) {
                 ax = side * h;
                 ay = axis * (hl + d.stretch * render::length(p.vtot) * 0.5f + std::fabs(d.cameraStretch) * render::length(I.camVel) * 0.5f);
             } else rotated(I.right, I.up, p.rot);
+        } else if (d.align == FxAlign::Ground && I.upFn) { // curved worlds: flat on the local ground
+            float3 t, b;
+            basisFrom(I.upFn(p.pos), t, b);
+            float cs = std::cos(p.rot), sn = std::sin(p.rot);
+            ax = (t * cs + b * sn) * h;
+            ay = (b * cs - t * sn) * hl;
+        } else if (d.align == FxAlign::Upright && I.upFn) {
+            const float3 u = I.upFn(p.pos);
+            float3 rx = I.right - u * render::dot(I.right, u);
+            rx = render::length(rx) > 1e-4f ? render::normalize(rx) : float3{1, 0, 0};
+            ax = rx * h;
+            ay = u * hl;
         } else if (d.align == FxAlign::Ground) {
             float cs = std::cos(p.rot), sn = std::sin(p.rot);
             ax = float3{cs, 0, sn} * h;
@@ -397,7 +409,7 @@ void ParticleSystem::render(const FxFog& fog) {
             if (p.flags & 16) a += std::atan2(render::dot(p.dir0, I.up), render::dot(p.dir0, I.right)) - kPi * 0.5f;   // up axis along the start direction
             rotated(I.right, I.up, a);
         }
-        float3 pos = d.align == FxAlign::Ground ? p.pos + float3{0, 0.03f, 0} : p.pos;
+        float3 pos = d.align == FxAlign::Ground ? p.pos + (I.upFn ? I.upFn(p.pos) * 0.03f : float3{0, 0.03f, 0}) : p.pos;
         if (d.pivot.x != 0 || d.pivot.y != 0 || d.pivot.z != 0)
             pos += ax * (2 * d.pivot.x) + ay * (2 * d.pivot.y) + render::normalize(I.eye - pos) * (d.pivot.z * r.size);
         quad(pos - ax - ay, pos + ax - ay, pos + ax + ay, pos - ax + ay, fr.u0, fr.v0, fr.u1, fr.v1, col, col);

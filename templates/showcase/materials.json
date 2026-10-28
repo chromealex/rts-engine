@@ -1,0 +1,13 @@
+{
+  "materials": {
+    "steel_plates": {
+      "description": "riveted steel plates (vehicles, turrets)",
+      "color": [1, 1, 1],
+      "metallic": 0.35,
+      "roughness": 0.5,
+      "texture": "textures/steel_plates.png",
+      "normalMap": "textures/steel_plates_normal.png",
+      "uvScale": [2, 2]
+    }
+  }
+}

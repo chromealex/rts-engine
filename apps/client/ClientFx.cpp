@@ -1,5 +1,6 @@
 #include "ClientFx.h"
 #include <cstdio>
+#include <cstdlib>
 #include "engine/fx/FxModelMesh.h"
 #include "engine/platform/Platform.h"
 
@@ -51,17 +52,37 @@ void ClientFx::stopMatch() {
     ps_.clear();
 }
 
+void ClientFx::setPlanetView(const game::RtsView* view) {
+    if (!view || !view->planetMode()) {
+        if (planet_) { ps_.setViewSpace(nullptr); ps_.setUpFunction({}); ps_.setAltitudeFunction({}); bridge_.setPlaceFn({}); }
+        planet_ = nullptr;
+        return;
+    }
+    if (!planet_) {
+        planet_ = view;
+        ps_.setUpFunction([](fx::float3 p) { return render::normalize(p); });
+        ps_.setAltitudeFunction([this](fx::float3 p) { return planet_->planetFxAltitude(p); });
+        bridge_.setPlaceFn([this](fx::float3 sim, float lift, fx::float3& out, fx::float3& up) { return planet_->planetFxPlace(sim, lift, out, up); });
+    }
+    if (view->planetFxBody() != planetBody_) { ps_.clear(); planetBody_ = view->planetFxBody(); }   // another body: its own space
+    space_ = view->planetFxSpace();
+    ps_.setViewSpace(&space_);
+}
+
 void ClientFx::update(Simulation& sim, const game::RtsScene& scene, const render::RTSCamera& cam, const render::mat4& viewProj,
                       int fbW, int fbH, float dt) {
     ps_.setView(cam, viewProj, fbW, fbH);
     if (attached_ && dt > 0) bridge_.update(sim, &scene.objects);
     ps_.update(dt);
+    static const bool dbg = std::getenv("RTS_FX_DEBUG") != nullptr;
+    static int frames = 0;
+    if (dbg && ++frames % 30 == 0) std::fprintf(stderr, "[fx] played %d rejected %d particles %d culled %d drawn %d\n", bridge_.played(), bridge_.rejected(), ps_.stats().particles, ps_.stats().culled, ps_.stats().drawn);
 }
 
 void ClientFx::addLights(render::LightSystem& lights) {
     lightBuf_.clear();
     ps_.collectLights(lightBuf_);
-    for (auto& l : lightBuf_) lights.add(l.pos, l.radius, l.color, l.intensity);
+    for (auto& l : lightBuf_) lights.add(planet_ ? space_.transformPoint(l.pos) : l.pos, l.radius, l.color, l.intensity);
 }
 
 void ClientFx::render(const render::Lighting& lighting) {
