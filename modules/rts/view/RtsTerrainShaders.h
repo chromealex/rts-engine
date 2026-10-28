@@ -310,10 +310,14 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
                         texture2d<float> tex14 [[texture(14)]], sampler s14 [[sampler(14)]],
                         texture2d<float> tex15 [[texture(15)]], sampler s15 [[sampler(15)]]
 #if TERRAIN_DETAIL
-                        , texture2d<float> tex16 [[texture(16)]], sampler s16 [[sampler(16)]]
-                        , texture2d<float> tex17 [[texture(17)]], sampler s17 [[sampler(17)]]
+                        , texture2d<float> tex16 [[texture(16)]], texture2d<float> tex17 [[texture(17)]]
 #endif
                         ) {
+#if TERRAIN_DETAIL
+    // Metal has sampler slots 0..15 per stage: the detail textures use constant samplers
+    constexpr sampler s16(filter::linear, mip_filter::linear, address::clamp_to_edge);
+    constexpr sampler s17(filter::linear, mip_filter::linear, address::clamp_to_edge);
+#endif
     float3 n = normalize(in.nrm);
     float3 albedoS = in.col;
     float3 geoN = n;
