@@ -46,6 +46,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     twoD_ = std::make_unique<Rts2DView>();
     if (!twoD_->init(dev, rules, contentBase_)) twoD_.reset();
     lights_.init(rules);
+    groundFx_.init(dev, rules, read_, contentBase_);
     return true;
 }
 
@@ -56,6 +57,7 @@ void RtsView::shutdown(gfx::Device& dev) {
     hasTerrain_ = false;
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
+    groundFx_.shutdown(dev);
 }
 
 bool RtsView::spriteHit(const RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const {
@@ -81,7 +83,9 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         for (auto f : grid.flags) if ((f & kCellWater) && !(f & kCellGround)) { anyWater = true; break; }
         if (anyWater) r.drawMesh(water_, mat4{}, {0.22f, 0.45f, 0.62f, 0.78f}, kDrawNoCastShadow, 0.9f);
     }
-    for (auto& [a, b] : s.roads) r.quadXZ(a, b, 0.5f, rgba(196, 164, 112, 235), 0.04f);
+    if (!tiles) groundFx_.draw(r, s, time, vision, grid, *this);
+    if (tiles || !groundFx_.drawsLinks())
+        for (auto& [a, b] : s.roads) r.quadXZ(a, b, 0.5f, rgba(196, 164, 112, 235), 0.04f);
 
     const float dt = lastTime_ < 0 ? 0.0f : float(std::clamp(time - lastTime_, 0.0, 0.1));
     lastTime_ = time;
@@ -227,6 +231,9 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.roads.clear();
     out.events = sim.events();
     out.tick = sim.tick();
+    out.viewer = viewer;
+    out.lanes = R.lanes.enabled ? &gs.lanes : nullptr;
+    out.laneSignature = gs.laneSignature;
     out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         SceneObject so;

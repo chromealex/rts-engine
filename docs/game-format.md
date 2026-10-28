@@ -513,6 +513,37 @@ cell) and adds `left` + `right` parallel lanes `spacing` cells apart (pulled bac
 would hit an obstacle). Sent units are spread over the lanes round-robin and follow their lane exactly. Lanes are
 rebuilt when garrison buildings or obstacles change (`GameState::lanes`, `lanesDirty`, event `kEvLanesChanged`).
 
+## Terrain overlays (visual `terrain` block)
+
+Presentation only (`modules/rts/view/RtsGroundFx.*`): the view reads the territory, dig, room and road layers and
+the lanes and never writes them. All keys are optional; put them under `terrain` in rules.json or game.json (game.json
+wins per block; sim keys like `model` live in the same block). Each block may be `false` to switch the overlay off.
+Colours are `[r, g, b]` (0..1) or `"#rrggbb"`. `texture` paths go through `TextureCache::resolve` (atlases work);
+the texture is mapped in world space every `textureScale` units and mixed by `textureStrength` (0..1).
+
+```json
+"terrain": {
+  "territory": {"fill": 0.28, "border": 0.26, "glow": 0.85, "pulse": true, "colors": [[0.2,0.45,0.95], "#e83a33"],
+                "rooms": {"lair": [0.62,0.32,0.22]}, "roomFill": 0.5, "texture": "terrain/floor.png", "textureScale": 2},
+  "dig":       {"height": 1.15, "mark": [1,0.8,0.22], "progress": true,
+                "kinds": {"D": {"rock": [0.4,0.35,0.3]}, "G": {"style": "vein", "vein": "#f9c238"}, "J": {"style": "gem", "vein": [0.35,0.85,0.95], "glow": 0.55}}},
+  "lanes":     {"color": [0.74,0.63,0.44], "edge": [0.5,0.4,0.27], "alpha": 0.75, "width": 0, "sideLanes": false, "all": false},
+  "roads":     {"color": [0.72,0.63,0.48], "edge": [0.4,0.33,0.24], "width": 0.7, "alpha": 0.96, "cobbles": true, "texture": ""}
+}
+```
+
+| Block | What is drawn | Keys |
+|---|---|---|
+| `territory` | owner colour on owned cells, a glowing (pulsing on high quality) border along edges between owners, painted rooms as a floor tint | `fill` alpha, `border` width (cells), `glow` emissive, `pulse`, `colors` per player slot from 1 (default: player colours), `rooms` tint per room id, `roomFill` alpha, `texture*` |
+| `dig` | diggable cells as raised rock blocks with walls (the terrain under them stays flat and shows when dug); `style` per diggable character: `plain`, `vein` (gold-tinted top, nuggets, streaks on walls), `gem` (glowing crystals). Default style: no `yields` = plain, `yields` = vein, `infinite` = gem. The local player's dig marks (framed highlight) and digging progress (cracks + bar) | `height` 0.2..1.25, `mark` colour, `progress`, `kinds.<char>`: `rock`, `vein`, `style`, `glow` |
+| `lanes` | lanes (`lanes` rules) as one soft path ribbon per pair of neighbouring buildings (a pair is skipped when a third building lies between them), map `roads` between buildings as ribbons | `color`, `edge`, `alpha`, `width` (0: covers every lane of the pair), `sideLanes` thin tracks per lane, `all` draw every pair |
+| `roads` | road cells (map `+`, `roadNetwork` building) as road surfaces with edges, joins, crossings, rounded corners and dead ends; cobbles on high quality | `color`, `edge`, `width` 0.2..1, `alpha`, `cobbles`, `texture*` |
+
+What the viewer sees follows fog of war: territory, rooms, rock and roads are updated only where the cell is visible
+(remembered elsewhere). Weak GPUs (`MaterialQuality::Low`; testing: `RTS_GROUNDFX=low`) get no border pulse, no
+vein/gem geometry (a tint instead), no rock bevels, no road edges, cobbles or lane tracks. 2D tile maps are not
+overlaid.
+
 ## Player abilities
 
 ```json

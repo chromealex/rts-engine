@@ -120,6 +120,9 @@ public:
     // Cleared by beginScene.
     using CustomDraw = std::function<void(gfx::Device&)>;
     void drawCustom(CustomDraw fn) { custom_.push_back(std::move(fn)); }
+    // Inside a custom draw: bind what the lit shaders share (U1 frame, U2 + tex1 point lights, tex0
+    // shadow map), so custom lit shaders built on RTS_*_SHADOW / RTS_*_LIGHTS get the same lighting.
+    void bindLitFrame();
     const RTSCamera& camera() const { return cam_; }
     int sceneWidth() const { return sceneW_; }
     int sceneHeight() const { return sceneH_; }

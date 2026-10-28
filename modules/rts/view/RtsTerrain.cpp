@@ -42,6 +42,8 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
         dev.destroyBuffer(terrain_.vb); dev.destroyBuffer(terrain_.ib);
         dev.destroyBuffer(water_.vb); dev.destroyBuffer(water_.ib);
     }
+    groundFx_.invalidate();
+    const bool flatDig = groundFx_.drawsDig() && g.dig.size() == g.flags.size(); // RtsGroundFx draws the rock blocks
     const int W = g.w, H = g.h;
     const float lh = rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f;
     auto inside = [&](int x, int y) { return x >= 0 && y >= 0 && x < W && y < H; };
@@ -52,7 +54,7 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
     auto fine = [&](int x, int y) {
         size_t i = idx(x, y);
         float h = float(g.height[i]) * kHeightUnit;
-        if (!(g.flags[i] & kCellGround)) h += (g.flags[i] & kCellWater) ? -0.45f : 0.9f;
+        if (!(g.flags[i] & kCellGround) && !(flatDig && g.dig[i])) h += (g.flags[i] & kCellWater) ? -0.45f : 0.9f;
         return h;
     };
     auto cellColor = [&](int x, int y) -> float3 {
@@ -61,6 +63,7 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
         uint8_t f = g.flags[i];
         float3 c;
         if (!(f & kCellGround) && (f & kCellWater)) c = {0.32f, 0.40f, 0.30f};                  // lake bed
+        else if (flatDig && g.dig[i]) c = {0.46f + n * 0.04f, 0.41f + n * 0.03f, 0.34f};       // under diggable rock: earthen floor once dug
         else if (!(f & kCellGround)) c = {0.47f + n * 0.05f, 0.45f + n * 0.05f, 0.42f};          // blocked rock
         else if (f & kCellRock) c = {0.56f + n * 0.04f, 0.50f + n * 0.04f, 0.44f};               // buildable rock plate
         else if (f & kCellRamp) c = {0.55f + n * 0.03f, 0.50f, 0.36f};                           // ramp: packed earth
