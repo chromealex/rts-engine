@@ -29,6 +29,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
         try { if (read_("game.json", text)) { game = Json::parse(text); rulesPath = game.getStr("rules", "rules.json"); } } catch (...) {}
         try { if (read_(rulesPath, text)) rj = Json::parse(text); } catch (...) {}
         fog_.setLook(parseFogLook(rj["fogOfWar"], game["fogOfWar"]));
+        spriteDefaults_ = parseSpriteDefaults(rj["sprites"], game["sprites"]);   // 2D: shadow mode, lit
         fogMeshDirty_ = true;
         // overlays: built-ins + rules "overlays" + game.json "overlays" (by id)
         overlays_.init(rules, rj["overlays"], game["overlays"], contentBase_);
@@ -45,7 +46,7 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
         looks_.push_back(std::move(l));
     }
     twoD_ = std::make_unique<Rts2DView>();
-    if (!twoD_->init(dev, rules, contentBase_)) twoD_.reset();
+    if (!twoD_->init(dev, rules, contentBase_, spriteDefaults_)) twoD_.reset();
     lights_.init(rules);
     groundFx_.init(dev, rules, read_, contentBase_);
     terrain_.init(dev, rules, read_, contentBase_);
@@ -83,7 +84,7 @@ float RtsView::selectionRadius(uint16_t type) const {
 void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid) {
     if (planets_.active()) { drawPlanets(r, s, time, vision, grid); return; }   // RtsPlanetView.cpp
     const bool tiles = twoD_ && twoD_->hasTiles();
-    if (twoD_) twoD_->beginFrame(r.camera(), time);
+    if (twoD_) twoD_->beginFrame(r.camera(), time, r, &grid, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
     bars_.assign(s.objects.size(), {});
     if (hasTerrain_ && !tiles) terrain_.draw(r, grid, vision, groundFx_.drawsDig());
     if (!tiles) groundFx_.draw(r, s, time, vision, grid, *this);

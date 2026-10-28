@@ -137,6 +137,8 @@ public:
     void setTiles(const Json& tiles) { if (twoD_) twoD_->setTiles(tiles); }
     bool hasTiles() const { return twoD_ && twoD_->hasTiles(); }
     // Screen-space hit test for sprite objects (they are drawn above their ground point).
+    // drawn as a 2D sprite (grounded by Rts2DView's own projected blobs / sun-shadow casters)
+    bool isSprite(uint16_t type) const { return twoD_ && twoD_->hasSprite(type); }
     bool spriteHit(const render::RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const;
     RtsLights& lights() { return lights_; }
     const FogLook& fogLook() const { return fog_.look(); }
@@ -306,6 +308,7 @@ private:
     std::vector<ViewEffect> effects_;
     bool outline_ = true, animLod_ = true;
     std::unique_ptr<Rts2DView> twoD_;
+    SpriteDefaults spriteDefaults_;
     std::string contentBase_;
     std::vector<render::float3> bars_;   // per scene object: health bar anchor of sprite objects
     double lastTime_ = -1;
