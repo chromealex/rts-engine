@@ -24,7 +24,6 @@
 #include "engine/sim/Simulation.h"
 #include "engine/ui/UiLayer.h"
 #include "modules/rts/RtsAI.h"
-#include "modules/rts/RtsLocalize.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
@@ -66,7 +65,6 @@ struct UiState {
     std::string gameName, error, platformInfo;
     std::vector<std::string> maps;
     std::vector<UiAction> languages;
-    std::string lang;                  // active language: argument of the `tr` transform in documents
     // lobby (Lobby.cpp)
     std::string lobby;             // connect | connecting | browse | room
     std::string netStatus, netError, roomTitle, roomInfo, spectators, waitHint;
@@ -167,11 +165,7 @@ private:
     void startNetMatch();
     void leaveNetMatch();
     void buildLobby(UiState& s);
-    // Map title in the player's language: the local translation of that map file, else the title the
-    // server sent (written in the room creator's language, or an "@key").
-    std::string mapTitle(const std::string& file, const std::string& sent) const {
-        return loc_.trOr("map." + mapStem(file) + ".title", loc_.text(sent));
-    }
+    std::string mapTitle(const std::string& file, const std::string& serverTitle) const;
     void describeNetMaps();
     void loadNetSettings();
     void saveNetSettings() const;
@@ -185,6 +179,7 @@ private:
     Rml::ElementDocument* menuDoc_ = nullptr;
     Rml::ElementDocument* hudDoc_ = nullptr;
     Rml::ElementDocument* lobbyDoc_ = nullptr;
+    bool reloadDocs_ = false;
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;
