@@ -97,6 +97,18 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
   plane; Fixed. Hashed (bodies, corners sample, transits) only when a world exists.
 - **Transit**: `kCmdTransit`; component `Transit {from, to, depart, arrive, fromWorld, toWorld, arrival}`; the unit is
   `kUnitInHand | kUnitInTransit` (off every surface) until `arrive`.
+- **Territory / dungeon on planets** (`RtsDungeon.cpp`, agent-planet-render): the per-cell `territory`, `dig`,
+  `digMark` and `room` layers work on the stacked grid like every other layer; the neighbourhood code branches on
+  `MapGrid::surf` (flat maps keep their exact x/y loops, checksums unchanged). `startRadius` squares around starting
+  structures and discs around `players[].start` (`{body, face, x, y}` via `mapPos`) are cell offsets across seams;
+  unit `claim` scans an offset square around the unit; the claimer / digger job search (`bfsCells`) and
+  `adjacentOwned` use the 4 surface neighbours with `canMoveCells`; structure capture (`claimedByTerritory`
+  ring, `capturable` centre) reads the footprint ring across seams; rooms flood-fill over surface neighbours (centre =
+  mean of the cell centres projected back onto the surface); dig / paint-room rects are offsets from the first cell;
+  `frontFrom` (auto-train fronts) is a BFS over the body. Territory victory / income only count cells and work as is.
+  The bot's dig planning uses the same neighbours. Test: `planet_territory_claims_and_dig_cross_seams`.
+- **Lanes** (`RtsLanes.cpp`): garrison pairs on the same body get a 3D Catmull-Rom spline through body-local control
+  points projected onto the surface; offset lanes shift along `tangent x up`; lane walkers keep the 3D points.
 
 ### API for the view / editor / generator
 
@@ -178,19 +190,24 @@ body-local space of the body the camera looks at, drawn through RtsView::planetF
 them). `RtsFx::setPlaceFn` maps event / scene positions (sim space) to that space with the effect height along the
 local up (events on other bodies are not shown). ClientFx::setPlanetView wires it up per frame.
 
-Ground overlays on planets (`RtsPlanetGroundFx`): territory fill + owner borders (neighbours across face seams) and
-road cells (`+`, road networks) on every body, body-local meshes from the planet surface, looks from the visual
-`terrain.territory` / `terrain.roads` blocks; fog-of-war memory as on flat maps. Not yet: diggable rock blocks, MW2
-lanes. The simulation does not claim territory on spheres yet (claim radius code is flat); `RTS_PLANET_TERRITORY_DEMO=1`
-fills cells around structures for testing the overlay.
+Ground overlays on planets (`RtsPlanetGroundFx`, looks from the visual `terrain.*` blocks as on flat maps): territory
+fill + owner borders (neighbours across face seams), diggable rock as raised blocks with walls towards open cells,
+gold nuggets / gem crystals per diggable kind, the viewer's dig marks with a digging progress bar, road cells (`+`,
+road networks), MW2 lanes (the sim's surface lanes) and map `roads` between buildings (great-circle ribbons). Meshes
+are body-local per 32x32 tile of a face; a tile rebuilds only when a layer changes in it or next to it (across seams).
+Fog-of-war memory as on flat maps (territory and rock learned by seeing them); a dug cell the viewer saw updates the
+planet terrain's cell flags. Real territory comes from the simulation (the former `RTS_PLANET_TERRITORY_DEMO` knob is
+gone).
 
-Fog blur on planets runs over the cube-sphere neighbourhood (`FogOfWar::setBlur`, 8 neighbours across seams,
-never into void cells or other bodies), so fog no longer bleeds between stacked face rows.
+Fog blur on planets (`PlanetFieldBlur`, installed through `FogOfWar::setBlur`): every face is box-blurred as an
+(N + 2r)^2 image padded from the neighbouring faces across the seams (cube corners: nearest edge cell), separable and
+integer, never across stacked face rows or into other bodies / void cells; the padding index table is cached per
+radius. faceSize 256 (393,216 cells), radius 2, Release: 0.7 ms per fog update (the previous per-pass 3x3 mean over the
+neighbour table: 3.8 ms); test `planet_fog_blur_seams_and_speed` prints both.
 
 Quality: Low material tier = vertex colours by cell kind, no atmosphere shell; Medium+ = triplanar splat of the
 visual `terrain.layers` by cell kind + slope cliff texture (no normal maps on spheres yet) + atmosphere. Shadows only
-at surface zoom (the shadow map fit follows the RTS camera). Particles (`ClientFx`) are skipped on planet maps for
-now (flat coordinates).
+at surface zoom (the shadow map fit follows the RTS camera).
 
 Test knobs: `RTS_PLANET_CAM="distance[,pitch degrees[,body id]]"` overrides the start view (with a body id: looks at
 the player's / an orbit unit there), `RTS_SEED=n` fixes the match seed, `RTS_FAST_FORWARD=seconds` lets bots play

@@ -60,6 +60,14 @@ def build():
         ents.append({"type": "metal_spot", "owner": 0, "at": at("terra", f, 12, 12)})
     for f in range(6):
         ents.append({"type": "wreck_rock", "owner": 0, "at": at("luna", f, 6.5, 6.5)})
+    # paved roads (map '+', faster with rules roadNetwork) from each base to its metal spots, mirrored on face 5
+    base = [["."] * N for _ in range(N)]
+    for x in range(8, 17): base[12][x] = "+"            # east-west through the base
+    for y in range(5, 20): base[y][12] = "+"            # north-south, towards the spots at y 4 and the far pair
+    for x in range(7, 18): base[15][x] = "+"            # between the spot pairs, clear of their footprints
+    for x in range(7, 18): base[10][x] = "+"
+    rows4 = ["".join(r) for r in base]
+    rows5 = ["".join(reversed(r)) for r in base]       # mirror(): x -> N - x
     return {
         "name": "Two Worlds",
         "players": [{"name": "Синие", "team": 1, "start": at("terra", 4, 12.5, 12.5)},
@@ -70,7 +78,8 @@ def build():
                 {"id": "sun", "kind": "star", "radius": 40, "visual": {"color": [255, 220, 160]}},
                 {"id": "terra", "kind": "planet", "radius": 16, "faceSize": N, "seaLevel": -2, "orbitAltitude": 4,
                  "orbit": {"around": "sun", "radius": 400, "period": 1200, "phase": 0.1},
-                 "terrain": {"corners": corners(N, terra_height)}},
+                 "terrain": {"corners": corners(N, terra_height),
+                             "faces": [{}, {}, {}, {}, {"rows": rows4}, {"rows": rows5}]}},
                 {"id": "luna", "kind": "moon", "radius": 8, "faceSize": M, "orbitAltitude": 3,
                  "orbit": {"around": "terra", "radius": 60, "period": 300},
                  "terrain": {"corners": corners(M, luna_height)}},

@@ -91,6 +91,8 @@ public:
     // Looks as configured (planet overlays reuse them: RtsPlanetGroundFx).
     const TerritoryLook& territoryLook() const { return terr_; }
     const RoadLook& roadLook() const { return road_; }
+    const DigLook& digLook() const { return dig_; }
+    const LaneLook& laneLook() const { return lane_; }
     bool showsTerritory() const { return useT_ && terr_.on; }
     bool territoryOn() const { return terr_.on; }
 

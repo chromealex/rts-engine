@@ -58,22 +58,8 @@ void RtsView::updateWorld(const Json& map) {
 
 void RtsView::setSimWorld(std::shared_ptr<const Surface> surf, const MapGrid& grid, const Json& map) {
     if (surf) { // fog blur over the cube-sphere neighbourhood (across face seams, never into other bodies / void cells)
-        std::shared_ptr<const Surface> S = surf;
-        fog_.setBlur([S, tmp = std::vector<uint16_t>()](std::vector<uint8_t>& f, int radius) mutable {
-            const int n = S->W * S->H;
-            if (int(f.size()) != n || radius <= 0) return;
-            tmp.resize(size_t(n));
-            for (int pass = 0; pass < radius; ++pass) { // repeated 3x3 means ~ a box of the radius
-                for (int c = 0; c < n; ++c) {
-                    int b, fc, x, y;
-                    if (!S->cellFace(c, b, fc, x, y)) { tmp[size_t(c)] = f[size_t(c)]; continue; }
-                    int sum = f[size_t(c)], cnt = 1;
-                    for (int k = 0; k < 8; ++k) { const int o = S->neighbor(c, k); if (o >= 0) { sum += f[size_t(o)]; ++cnt; } }
-                    tmp[size_t(c)] = uint16_t(sum / cnt);
-                }
-                for (int c = 0; c < n; ++c) f[size_t(c)] = uint8_t(tmp[size_t(c)]);
-            }
-        });
+        auto blur = std::make_shared<PlanetFieldBlur>(surf);
+        fog_.setBlur([blur](std::vector<uint8_t>& f, int radius) { (*blur)(f, radius); });
     } else fog_.setBlur({});
     PlanetWorld w = planetWorldFromSim(std::move(surf), grid.flags, loadPlanetWorld(map, &warnings_));
     planets_.setWorld(w);
@@ -240,25 +226,19 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
         std::fprintf(stderr, "[planet] t=%.0f transit %d orbit-units %d on-other-bodies %d\n", s.seconds, tr, orbit, moon);
     }
     planets_.draw(r, pframe_, s.seconds, planetCam_.body(), blend);
-    static const bool terrDemo = std::getenv("RTS_PLANET_TERRITORY_DEMO") != nullptr;
-    if (terrDemo && Wd.sim) { // testing: owner slots within 4 cells of each player's structures (the sim does not claim on spheres yet)
-        territoryDemo_.assign(grid.flags.size(), 0);
-        for (auto& o : s.objects) {
-            if (o.body < 0 || o.owner == 0 || o.isProjectile || o.type >= rules_->types.size() || !rules_->types[o.type].structure) continue;
-            const PlanetSurface* sf = planets_.surface(o.body);
-            if (!sf) continue;
-            int f; float a, b;
-            sf->faceFromDir(normalize(o.pos), f, a, b);
-            const int cx = int(a), cy = int(b);
-            for (int dy = -4; dy <= 4; ++dy)
-                for (int dx = -4; dx <= 4; ++dx) {
-                    if (dx * dx + dy * dy > 16) continue;
-                    const int c = Wd.sim->offset(Wd.sim->gridCell(o.body, f, std::clamp(cx, 0, sf->faceSize() - 1), std::clamp(cy, 0, sf->faceSize() - 1)), dx, dy);
-                    if (c >= 0 && (grid.flags[size_t(c)] & kCellGround) && !territoryDemo_[size_t(c)]) territoryDemo_[size_t(c)] = o.owner;
-                }
+    if (dev_ && rules_ && planetGroundFx_.draw(*dev_, r, planets_, pframe_, s, time, vision, grid, groundFx_, *rules_))
+        for (size_t bi = 0; bi < Wd.bodies.size(); ++bi) { // rock dug out (seen): the terrain under it becomes ground
+            if (!Wd.bodies[bi].surface()) continue;
+            const int N = Wd.bodies[bi].faceSize;
+            std::vector<uint8_t> fl(size_t(6 * N * N), kCellGround);
+            for (int f = 0; f < 6; ++f)
+                for (int y = 0; y < N; ++y)
+                    for (int x = 0; x < N; ++x) {
+                        const size_t c = size_t(Wd.sim->gridCell(int(bi), f, x, y));
+                        if (c < grid.flags.size()) fl[(size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x)] = grid.flags[c];
+                    }
+            planets_.updateFlags(int(bi), fl);
         }
-    }
-    if (dev_ && rules_) planetGroundFx_.draw(*dev_, r, planets_, pframe_, s.seconds, time, vision, grid, groundFx_, *rules_, terrDemo ? &territoryDemo_ : nullptr);
     handleEvents(s);
     const float3 eye = r.camera().eye();
     const PlanetWorld& W = planets_.world();
@@ -465,6 +445,13 @@ void sceneFromSphere(Simulation& sim, RtsModule& m, const Surface& S, RtsScene& 
         if (viewer != 0) so.visible = visibleAt(t.pos) == 2;
         out.objects.push_back(so);
     });
+    for (size_t i = 0; i < gs.roads.nodes.size(); ++i)   // map roads between buildings (sim positions; RtsPlanetGroundFx drapes them)
+        for (uint16_t j : gs.roads.adj[i]) {
+            if (j <= i) continue;
+            auto* ta = w.tryGet<Transform>(gs.roads.nodes[i]);
+            auto* tb = w.tryGet<Transform>(gs.roads.nodes[j]);
+            if (ta && tb) out.roads.push_back({toF(ta->pos), toF(tb->pos)});
+        }
 }
 
 } // namespace rts::game
