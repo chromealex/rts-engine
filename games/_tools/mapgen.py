@@ -473,18 +473,26 @@ def underlord():
 
 
 def borderrush():
+    # State.io: 3 x 6 states (portrait), a capital at each end, neutral states hold some soldiers
     m = Map("Five Lands", 24, 42, duel())
     m.border()
     names = {}
-    # regions stacked vertically (portrait): A enemy home, B C D middle, E own home
-    for i, l in enumerate("ABCDE"):
-        m.region_rect(1, 1 + i * 8, 22, 8, l)
-        names[l] = ["Чужбина", "Равнина", "Перевал", "Холмы", "Родина"][i]
+    k = 0
+    for gy in range(6):
+        for gx in range(3):
+            l = "ABCDEFGHIJKLMNOPQR"[k]
+            m.region_rect(1 + gx * 7, 1 + gy * 7, 8 if gx == 2 else 7, 7, l, None)
+            names[l] = "Штат " + str(k + 1)
+            k += 1
     m.region_names = names
-    m.rect(4, 20, 5, 2, '#')
-    m.ent("capital", 1, [12, 37])
-    m.ent("town", 0, [6, 29])
-    m.ent("town", 0, [17, 24])
+    m.ent("capital", 1, [12, 37], garrison=12)
+    garrisons = [[14, 18, 14], [10, 22, 10], [8, 16, 8]]
+    for gy in range(3, 6):
+        for gx in range(3):
+            pos = [4.5 + gx * 7.5, 4.5 + gy * 7]
+            if gy == 5 and gx == 1:
+                continue
+            m.ent("state", 0, pos, garrison=garrisons[gy - 3][gx])
     write("borderrush", m, "five_lands")
 
 

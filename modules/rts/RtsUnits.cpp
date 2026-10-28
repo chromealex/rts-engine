@@ -491,7 +491,9 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         if (o.state == 0 && m) {
             Vec3 tp = w.get<Transform>(o.target).pos;
             m->goal = tp; m->goalRadius = Fixed{}; m->path = {tp}; m->pathPos = 0; m->moving = true;
-            if (!state(sim).roadsOnly) moveTo(sim, e, tp, Fixed{});
+            // close to the target (a crowd at the door) walk straight in instead of asking for a path every tick
+            const bool near = rules_.originals && dist2D(tr.pos, tp) < Fixed::fromInt(4);
+            if (!state(sim).roadsOnly && !near) moveTo(sim, e, tp, Fixed{});
             o.state = 1;
         }
         const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target);
