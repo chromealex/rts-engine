@@ -258,10 +258,26 @@ void RtsModule::moveSphere(Simulation& sim) {
                 const Fixed f = climb.raw > 0 ? kOne - rules_.terrain.uphillSpeed * climb : kOne - rules_.terrain.downhillSpeed * climb;
                 step = step * fxClamp(f, Fixed::fromRatio(1, 4), Fixed::fromInt(2));
             }
-            const Vec3 next = len <= step || dl.raw == 0 ? place(t, wp) : place(t, tr.pos + d * (step / dl));
+            Vec3 next = len <= step || dl.raw == 0 ? place(t, wp) : place(t, tr.pos + d * (step / dl));
             if (!free) {
                 const int c0 = g.cellOf(tr.pos), c1 = g.cellOf(next);
-                if (c0 != c1 && c0 >= 0 && g.passable(c0 % g.w, c0 / g.w, t.pathLayer) && !g.canMoveCells(c0, c1, t.pathLayer)) { m.stuck += dt; break; }
+                if (c0 != c1 && c0 >= 0 && g.passable(c0 % g.w, c0 / g.w, t.pathLayer) && !g.canMoveCells(c0, c1, t.pathLayer)) {
+                    // flow-field followers slide along the wall (the move split on the face axes); others stop as before
+                    bool slid = false;
+                    if (m.flow && dl.raw > 0) {
+                        Vec3 east, south;
+                        S.frame(tr.pos, east, south);
+                        const Vec3 mv = d * (fxMin(step, len) / dl);
+                        for (const Vec3 axis : {east, south}) {
+                            const Vec3 np = place(t, tr.pos + axis * mv.dot(axis));
+                            const int cn = g.cellOf(np);
+                            if (cn == c0 || g.canMoveCells(c0, cn, t.pathLayer)) { tr.pos = np; slid = true; break; }
+                        }
+                    }
+                    m.stuck += dt;
+                    if (slid) m.stuck -= dt / 2;
+                    break;
+                }
             }
             if (dl.raw > 0) u.facing = d / dl;
             if (len <= step) { tr.pos = next; step -= len; ++m.pathPos; }
