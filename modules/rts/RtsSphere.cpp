@@ -1,0 +1,155 @@
+#include "RtsSphere.h"
+#include "engine/core/FixedMath.h"
+
+namespace rts::game {
+
+const SphereFace kSphereFaces[6] = {
+    {{+1, 0, 0}, {0, 0, -1}, {0, -1, 0}},
+    {{-1, 0, 0}, {0, 0, +1}, {0, -1, 0}},
+    {{0, +1, 0}, {+1, 0, 0}, {0, 0, +1}},
+    {{0, -1, 0}, {+1, 0, 0}, {0, 0, -1}},
+    {{0, 0, +1}, {+1, 0, 0}, {0, -1, 0}},
+    {{0, 0, -1}, {-1, 0, 0}, {0, -1, 0}},
+};
+
+namespace {
+Vec3 toVec(IVec3 v) { return {Fixed::fromInt(v.x), Fixed::fromInt(v.y), Fixed::fromInt(v.z)}; }
+Fixed dotI(Vec3 a, IVec3 b) { // exact: components of b are -1/0/+1
+    Fixed r{};
+    if (b.x) r += b.x > 0 ? a.x : -a.x;
+    if (b.y) r += b.y > 0 ? a.y : -a.y;
+    if (b.z) r += b.z > 0 ? a.z : -a.z;
+    return r;
+}
+IVec3 add3(IVec3 a, IVec3 b, IVec3 c) { return {a.x + b.x + c.x, a.y + b.y + c.y, a.z + b.z + c.z}; }
+IVec3 mul(IVec3 a, int k) { return {a.x * k, a.y * k, a.z * k}; }
+int faceOfNormal(IVec3 n) {
+    for (int f = 0; f < 6; ++f) if (kSphereFaces[f].n == n) return f;
+    return 0;
+}
+// tan(s / 8 turn) for s = (2a - N) / N, computed as one truncating division so that a and N - a give
+// exactly opposite values (seam vertices then match bit for bit on every face that shares them).
+Fixed warp(Fixed a, int n) {
+    const int64_t num = 2 * a.raw - int64_t(n) * Fixed::kOne;
+    return fxTanTurns(Fixed::fromRaw(num / (8 * int64_t(n))));
+}
+} // namespace
+
+Vec3 CubeSphere::dirFromFace(int face, Fixed a, Fixed b) const {
+    const SphereFace& f = kSphereFaces[face < 0 || face > 5 ? 0 : face];
+    const Fixed sw = warp(a, n_), tw = warp(b, n_);
+    return fxNormalize(toVec(f.n) + toVec(f.u) * sw + toVec(f.v) * tw);
+}
+
+Vec3 CubeSphere::cellCenterDir(int id) const {
+    const SphereCell c = cell(id);
+    return dirFromFace(c.face, Fixed::fromInt(c.x) + Fixed::fromRatio(1, 2), Fixed::fromInt(c.y) + Fixed::fromRatio(1, 2));
+}
+
+void CubeSphere::faceFromDir(Vec3 d, int& face, Fixed& a, Fixed& b) const {
+    const Fixed ax = fxAbs(d.x), ay = fxAbs(d.y), az = fxAbs(d.z);
+    if (ax.raw == 0 && ay.raw == 0 && az.raw == 0) { face = 0; a = b = Fixed::fromRatio(n_, 2); return; }
+    if (ax >= ay && ax >= az) face = d.x.raw >= 0 ? 0 : 1;
+    else if (ay >= az) face = d.y.raw >= 0 ? 2 : 3;
+    else face = d.z.raw >= 0 ? 4 : 5;
+    const SphereFace& f = kSphereFaces[face];
+    const Fixed dn = dotI(d, f.n);
+    auto unwarp = [&](Fixed du) {
+        const Fixed ang = fxAtan2Turns(du, dn); // in [-1/8, 1/8]
+        Fixed r = Fixed::fromRaw(((8 * ang.raw + Fixed::kOne) * n_) / 2);
+        return fxClamp(r, Fixed{}, Fixed::fromInt(n_));
+    };
+    a = unwarp(dotI(d, f.u));
+    b = unwarp(dotI(d, f.v));
+}
+
+int CubeSphere::cellFromDir(Vec3 dir) const {
+    int face; Fixed a, b;
+    faceFromDir(dir, face, a, b);
+    int x = int(a.floorInt()), y = int(b.floorInt());
+    if (x >= n_) x = n_ - 1;
+    if (y >= n_) y = n_ - 1;
+    return cellId(face, x, y);
+}
+
+int CubeSphere::neighbor(int id, int dx, int dy) const {
+    if (id < 0 || id >= cellCount()) return -1;
+    const SphereCell c = cell(id);
+    const int N = n_;
+    int p = 2 * c.x + 1 - N + 2 * dx, q = 2 * c.y + 1 - N + 2 * dy; // odd lattice offsets
+    const bool outP = p > N || p < -N, outQ = q > N || q < -N;
+    if (!outP && !outQ) return cellId(c.face, (p + N - 1) / 2, (q + N - 1) / 2);
+    if (outP && outQ) return -1; // diagonal through a cube corner
+    const SphereFace& f = kSphereFaces[c.face];
+    // Fold the overflow over the edge: the part beyond the edge goes down the adjacent face (along -n).
+    IVec3 P;
+    if (outP) {
+        const int sgn = p > 0 ? 1 : -1, over = p * sgn - N;
+        P = add3(mul(f.u, sgn * N), mul(f.n, N - over), mul(f.v, q));
+    } else {
+        const int sgn = q > 0 ? 1 : -1, over = q * sgn - N;
+        P = add3(mul(f.v, sgn * N), mul(f.n, N - over), mul(f.u, p));
+    }
+    IVec3 nn{};
+    if (P.x == N || P.x == -N) nn = {P.x / N, 0, 0};
+    else if (P.y == N || P.y == -N) nn = {0, P.y / N, 0};
+    else nn = {0, 0, P.z / N};
+    const int g = faceOfNormal(nn);
+    const SphereFace& h = kSphereFaces[g];
+    const int pp = P.dot(h.u), qq = P.dot(h.v);
+    return cellId(g, (pp + N - 1) / 2, (qq + N - 1) / 2);
+}
+
+int CubeSphere::neighbors8(int id, int out[8]) const {
+    static const int kD[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {1, 1}, {-1, 1}, {1, -1}, {-1, -1}};
+    int k = 0;
+    for (auto& d : kD) {
+        const int nb = neighbor(id, d[0], d[1]);
+        if (nb >= 0) out[k++] = nb;
+    }
+    return k;
+}
+
+int CubeSphere::cornerDuplicates(int face, int i, int j, int out[3]) const {
+    const int N = n_;
+    const SphereFace& f = kSphereFaces[face < 0 || face > 5 ? 0 : face];
+    const IVec3 P = add3(mul(f.n, N), mul(f.u, 2 * i - N), mul(f.v, 2 * j - N));
+    int k = 0;
+    for (int g = 0; g < 6; ++g) {
+        const SphereFace& h = kSphereFaces[g];
+        if (P.dot(h.n) != N) continue;
+        out[k++] = cornerId(g, (P.dot(h.u) + N) / 2, (P.dot(h.v) + N) / 2);
+    }
+    // ascending (faces are visited in order and ids grow with the face, so already sorted)
+    return k;
+}
+
+void CubeSphere::faceTangents(int face, Vec3 dir, Vec3& east, Vec3& south) {
+    const SphereFace& f = kSphereFaces[face < 0 || face > 5 ? 0 : face];
+    const Vec3 u = toVec(f.u), v = toVec(f.v);
+    east = fxNormalize(u - dir * dir.dot(u));
+    south = fxNormalize(v - dir * dir.dot(v));
+}
+
+Fixed sphereArcTurns(Vec3 a, Vec3 b) {
+    const Fixed s = fxCross(a, b).length(), c = a.dot(b);
+    return fxAtan2Turns(s, c);
+}
+
+Vec3 sphereTangentToward(Vec3 dir, Vec3 to) {
+    return fxNormalize(to - dir * dir.dot(to));
+}
+
+Vec3 sphereRotateToward(Vec3 from, Vec3 to, Fixed maxTurns, bool* reached) {
+    const Fixed arc = sphereArcTurns(from, to);
+    if (arc <= maxTurns) { if (reached) *reached = true; return fxNormalize(to); }
+    if (reached) *reached = false;
+    Vec3 t = sphereTangentToward(from, to);
+    if (t.lengthSq().raw == 0) { // antiparallel: any deterministic perpendicular
+        t = fxNormalize(fxCross(from, fxAbs(from.x) < Fixed::fromRatio(9, 10) ? Vec3{Fixed::fromInt(1), {}, {}}
+                                                                               : Vec3{{}, Fixed::fromInt(1), {}}));
+    }
+    return fxNormalize(from * fxCosTurns(maxTurns) + t * fxSinTurns(maxTurns));
+}
+
+} // namespace rts::game
