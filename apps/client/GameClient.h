@@ -30,6 +30,7 @@
 #include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
 #include "ClientFx.h"
+#include "modules/rts/view/RtsViewScript.h"
 
 namespace Rml { class ElementDocument; class Element; }
 
@@ -217,6 +218,8 @@ private:
     Renderer3D r3d_;
     RtsView view_;
     ClientFx fx_;                         // particle effects (ClientFx.cpp)
+    game::ViewScripts viewScripts_;       // rules "viewScripts" (docs/scripting.md): notices / effects / sounds
+    void runViewScripts(float dt);
     audio::AudioEngine audio_;
     RtsAudio sound_;
     std::vector<Entity> heardSelection_;  // selection when the last select sound played

@@ -4,6 +4,7 @@
   "victory": "noStructures",
   // Lua mechanics (docs/scripting.md): bounty, war chest, chain heal effect, a custom victory condition
   "scripts": ["scripts/rules.lua", "scripts/abilities.lua"],
+  "viewScripts": ["scripts/view/notices.lua"],
   "supplyCap": 100,
   "maxQueue": 5,
 

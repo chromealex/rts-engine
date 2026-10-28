@@ -768,6 +768,7 @@ bool embedScripts(Json& rules, const Json& map, const ScriptReader& read, std::s
     for (auto& v : scriptFiles(rules, map, true)) todo.push_back(v);
     if (todo.empty()) return true;
     const std::vector<std::string> listed = todo;
+    std::string missing;
     Json src = Json::object();
     for (size_t i = 0; i < todo.size(); ++i) {
         const std::string path = todo[i];
@@ -775,13 +776,14 @@ bool embedScripts(Json& rules, const Json& map, const ScriptReader& read, std::s
         std::string text;
         if (!read(path, text)) {
             // listed files must exist; a missing required file is reported by require() when it runs
-            if (std::find(listed.begin(), listed.end(), path) != listed.end()) { if (err) *err = "script not found: " + path; return false; }
+            if (std::find(listed.begin(), listed.end(), path) != listed.end() && missing.empty()) missing = path;
             continue;
         }
         for (auto& r : requiredFiles(text)) todo.push_back(r);
         src.set(path, Json::string(std::move(text)));
     }
     rules.set("$scriptSources", std::move(src));
+    if (!missing.empty()) { if (err) *err = "script not found: " + missing; return false; }
     return true;
 }
 

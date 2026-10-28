@@ -31,6 +31,9 @@ struct Project {
     bool saveManifest(std::string* err);
     std::string rulesPath() const;
     bool reloadRules();           // parse rulesJson -> rules; false keeps the previous rules
+    // rulesJson + the game's scripts embedded for a simulation of `map` (ScriptOps.cpp; missing files are
+    // left out and reported by the script engine)
+    Json simRules(const Json& map) const;
 };
 
 // What changed, so views can fly the camera there and flash it.

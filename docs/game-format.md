@@ -51,6 +51,7 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `techs` | see below |
 | `factions` | see below |
 | `triggers` | see "Triggers" (also allowed in maps) |
+| `scripts`, `viewScripts`, `scriptBudget` | Lua scripts of the game (also allowed in maps): `["scripts/rules.lua"]` run in the deterministic simulation (integers and `fx` numbers, no floats), `viewScripts` only on the local machine (notices, effects, sounds); `scriptBudget` = VM instructions per tick (default 1000000). Effects and trigger actions/conditions `{"type": "script", "fn": "name"}` call script functions. See docs/scripting.md |
 | `diggable`, `rooms`, `territory`, `hand`, `possession` | see "Dungeon management and territory" |
 | `playerAbilities` | see "Player abilities" |
 | `storage` | `"player"` (default: one stock per player) or `"buildings"`: goods live in building inventories, see "Settlers economy" |
