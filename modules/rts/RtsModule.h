@@ -75,6 +75,7 @@ enum CommandType : uint16_t {
     kCmdDropItem,     // units[0]; param = slot
     kCmdPickItem,     // units[0]; point = where the ground item lies
     kCmdLearn,        // heroes (rules heroes.skills): param = ability index to learn / raise with a skill point
+    kCmdBounty,       // point or target; param = resource | reward << 8 (autonomous heroes go for it)
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -565,7 +566,7 @@ public:
     void sysMech(Simulation& sim);                                 // stances, retreat, transports
     void hashMech(Simulation& sim, Hasher& h, Entity e);           // per object, only components that exist
     void mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed& mul) const;   // retreat speed, cargo arrows, veterancy
-    Fixed mechDamageTaken(Simulation& sim, Entity e) const;
+    Fixed mechDamageTaken(Simulation& sim, Entity e, Entity source) const;   // retreat, cover, armor arcs
     bool mechCanAcquire(Simulation& sim, Entity e) const;          // auto-targeting allowed (passive stance, cargo)
     bool mechMayChase(Simulation& sim, Entity e, Vec3 targetPos);  // defensive stance leash
     bool runBoard(Simulation& sim, Entity e, Order& o);
@@ -611,6 +612,18 @@ public:
     void mechTunnelGather(Simulation& sim, Entity tunnel);   // pull the network's passengers into this exit
     bool applyMechEconomyCommand(Simulation& sim, const Command& cmd);   // market, trade, tribute, diplomacy, items
     void campaignAction(Simulation& sim, const TrigAction& a, const std::vector<uint8_t>& players, Entity unit, Vec3 at);
+    // stage 3 (RtsMechTactics.cpp, RtsMechSociety.cpp)
+    bool mechOnFire(Simulation& sim, Entity e, size_t weapon, Entity target);   // turret aim, ammo, suppression, crews, craters
+    void mechTickTactics(Simulation& sim);     // suppression decay, turrets, crush
+    void mechTickSociety(Simulation& sim);     // growth, autonomy, rounds
+    void mechTacticsDeath(Simulation& sim, Entity e);   // ruins, infection
+    bool mechRecrew(Simulation& sim, const Command& cmd);
+    bool mechSwitchedOff(Simulation& sim, Entity e) const;   // unpowered / unstaffed structures
+    Fixed mechIncomeMult(Simulation& sim, Entity e) const;
+    bool mechPowered(Simulation& sim, uint8_t player, Vec3 at) const;
+    Fixed staffFraction(Simulation& sim, Entity e) const;
+    bool applyMechSocietyCommand(Simulation& sim, const Command& cmd);   // bounty, garrison-paid upgrades
+    bool inMechUpgrade_ = false;
     void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:

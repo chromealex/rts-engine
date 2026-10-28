@@ -28,6 +28,17 @@ void RtsModule::mechSetup(Simulation& sim, const Json& map) {
         }
     }
     if (!M.cycles.empty()) m.cyclePhase.assign(M.cycles.size(), -1);
+    if (!M.coverLevels.empty()) {   // map "cover": {"rows": ["0012..", ...]} digits = cover level per cell
+        const MapGrid& g = gs.grid;
+        m.cover.assign(size_t(g.w) * size_t(g.h), 0);
+        const Json& rows = map["cover"]["rows"];
+        for (size_t y = 0; y < rows.size() && int(y) < g.h; ++y) {
+            const std::string row = rows[y].str();
+            for (size_t x = 0; x < row.size() && int(x) < g.w; ++x)
+                if (row[x] >= '1' && row[x] <= '9') m.cover[y * size_t(g.w) + x] = uint8_t(row[x] - '0');
+        }
+    }
+    if (M.rounds) { m.roundPhase = 0; m.phaseEnd = uint32_t((M.prepareTime * int64_t(sim.tickRate())).floorInt()); }
 }
 
 Fixed RtsModule::marketPrice(Simulation& sim, int res) const {

@@ -57,13 +57,13 @@ void RtsModule::sysEconomy(Simulation& sim) {
         if (building) return;
         p.typeCount[u.type]++;
         // power deficits switch off tagged objects (defences, radar, factories)
-        const bool off = (t.tags & p.disabledTags) != 0;
+        const bool off = (t.tags & p.disabledTags) != 0 || (mechOn(sim) && mechSwitchedOff(sim, e));   // + agent-mech: unpowered / unstaffed
         if (off) u.flags |= kUnitDisabled; else u.flags &= uint8_t(~kUnitDisabled);
         p.supplyCap += t.supplyProvided;
         for (auto& a : t.storage) p.cap[a.res] += a.value;
         for (auto& a : t.provides) p.capProvided[a.res] += a.value;
         for (auto& a : t.consumes) p.capUsed[a.res] += a.value;
-        if (!off) for (auto& a : t.income) p.income[a.res] += a.value;
+        if (!off) for (auto& a : t.income) p.income[a.res] += mechOn(sim) ? a.value * mechIncomeMult(sim, e) : a.value;
     });
     if (rules_.dungeon) roomEconomy(sim); // painted rooms add supply, storage, capacity and income per cell
     if (rules_.originals) economyOriginals(sim); // power fields, upkeep per resource / on income, territory income

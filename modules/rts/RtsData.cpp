@@ -114,6 +114,7 @@ VictoryRules loadVictory(const Json& j, const VictoryRules& def) {
 }
 
 Rules loadRules(const Json& j) {
+    if (j.has("designs")) return loadRules(expandDesigns(j));   // agent-mech UD
     Rules r;
     r.supplyCap = j.getFx("supplyCap", r.supplyCap);
     r.maxQueue = int(j.getInt("maxQueue", r.maxQueue));
