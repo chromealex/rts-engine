@@ -246,7 +246,17 @@ add_library(rts_models STATIC
     engine/render/ModelGltf.cpp
     engine/render/ModelObj.cpp
     engine/render/Animation.cpp
-    engine/render/TextureCodec.cpp)
+    engine/render/TextureCodec.cpp
+    # more formats (docs/models.md): voxels, interchange, classic RTS formats, their textures
+    engine/render/ModelVox.cpp
+    engine/render/ModelPly.cpp
+    engine/render/Model3ds.cpp
+    engine/render/ModelDae.cpp
+    engine/render/ModelMdx.cpp
+    engine/render/Model3do.cpp
+    engine/render/ModelW3d.cpp
+    engine/render/ImageBlp.cpp
+    engine/render/ImageDds.cpp)
 # ufbx (MIT / public domain): FBX parser, compiled as its own C library without warnings.
 # RTS_FBX=OFF keeps it out of size-sensitive builds (FBX files then fail with a readable error).
 option(RTS_FBX "FBX import in the runtime (ufbx, ~0.5 MB of code)" ON)
