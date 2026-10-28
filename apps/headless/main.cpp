@@ -194,9 +194,15 @@ static int play(const Args& a) {
         const Json& gm = *rm->generatedMap();
         if (!a.quiet) {
             const Json& gi = gm["generated"];
-            std::printf("Generated: preset=%s seed=%lld players=%lld symmetry=%s size=%lldx%lld objects=%zu hash=%016llx\n", gi.getStr("preset").c_str(),
-                        (long long)gi.getInt("seed"), (long long)gi.getInt("players"), gi.getStr("symmetry").c_str(), (long long)gm["size"][size_t(0)].integer(),
-                        (long long)gm["size"][size_t(1)].integer(), gm["entities"].size(), (unsigned long long)gen::mapHash(gm));
+            std::string size = std::to_string(gm["size"][size_t(0)].integer()) + "x" + std::to_string(gm["size"][size_t(1)].integer());
+            if (gm["world"].isObject()) {   // planet maps: bodies and face sizes
+                size = gi.getStr("layout");
+                for (auto& b : gm["world"]["bodies"].items())
+                    if (b.has("faceSize")) size += " " + b.getStr("id") + ":" + std::to_string(b.getInt("faceSize"));
+            }
+            std::printf("Generated: preset=%s seed=%lld players=%lld symmetry=%s size=%s objects=%zu hash=%016llx\n", gi.getStr("preset").c_str(),
+                        (long long)gi.getInt("seed"), (long long)gi.getInt("players"), gi.getStr("symmetry").c_str(), size.c_str(),
+                        gm["entities"].size(), (unsigned long long)gen::mapHash(gm));
             if (gi.has("paths")) std::printf("  paths %s  connected=%d\n", gi["paths"].dump(-1).c_str(), int(gi.getBool("connected")));
             for (auto& w : gi["warnings"].items()) std::printf("  warning: %s\n", w.str().c_str());
         }

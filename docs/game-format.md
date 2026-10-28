@@ -1513,7 +1513,27 @@ into a static map.
 | `caves` | caves | Dungeon Keeper (`diggable`) | `size` [48,32], `gold` 0.03 / `gems` 0.004 (share of rock that is a vein / infinite seam), `bedrock` 0.06, `caverns` 0.06 |
 | `lanes` | lanes | lane battlers / MOBA | `size` [32,64], `lanes` 3, `laneWidth` 4, `bend` 0.35 (rock everywhere else) |
 | `field` | lanes, `open` | Mushroom Wars 2 (garrisons + roads) | `size` [44,28], `obstacles` 0.12, `roads` from the template |
-| `rocky` / `ocean` / `moon` | planet | cube-sphere bodies | `faceSize`, `water` 0.25 / 0.7 / 0, `relief`, `ice` (polar caps), `craters` (moon) |
+| `rocky` / `ocean` / `moon` | planet | whole planet maps, or one body's terrain | `faceSize`, `water` 0.25 / 0.7 / 0, `relief`, `ice` (polar caps), `craters` (moon), `layout`, `moonResources`, `baseRadius` (moon 11) |
+
+**Planet maps.** A planet preset as the map's `generate` builds the whole `world` block: the bodies (and their orbits,
+visuals) come from the template map's `world` (e.g. `templates/planets`), else a sun + planet + moon. Every surface body
+gets per-face `rows`, `corners`, `material`; players get `start: {body, face, x, y}`; objects are written with `at`.
+- `layout: "shared"` (default): all players on the start body, rotational symmetry about the polar axis: exact for 2 and 4
+  players (half / quarter turns map the cube-sphere onto itself, heights are symmetrized corner by corner), averaged over the
+  rotations for 3, 5+ (`generated.symmetry`: `polar-exact` / `polar`). Starts near the equator in the middle of each longitude
+  sector, away from face seams and rough ground; base areas flattened; graded causeways where the ground doesn't connect.
+- `layout: "separate"`: every player on an identical planet of its own (same terrain, same objects), orbiting the star at
+  equal phases; players meet through orbit-layer units (warning when the rules have none).
+- Objects: the template's player-1 objects (offsets measured on its body, across face seams) are the kit; neutral objects
+  near the template bases / far / on moons are counted and reproduced (`objects[].moon`, `objects[].pole`); moons get
+  `moonResources` (default 2) x their share. `generated.nearResources` lists the resource objects within `nearRadius` of
+  each start (equal by construction; a warning otherwise).
+- Fairness: the generated map is loaded into a simulation and the engine's `MapGrid::findPath` measures the ground path
+  between every pair of starts (`generated.paths`, `connected`, `pathSpread` = spread of each player's distance to the nearest
+  rival, per mille).
+- One body only: `world.bodies[].generate` (terrain + reported start sites, no objects), as before.
+
+`rts_headless --project templates/planets --generate rocky --seed N --players 3 [--gen-params '{"layout": "separate"}']`.
 
 All params (any preset): `shape`, `size` [w, h] (16..1024; the map's own size wins unless `params.size` is given), `water`
 (share of corners below sea level), `rivers` (0..1: flow accumulation carved into rivers), `lakes` (pit depth that stays a lake),
