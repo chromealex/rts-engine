@@ -5458,6 +5458,62 @@ TEST(sphere_great_circle_steps) {
     CHECK(fxAbs(e.length() - Fixed::fromInt(1)) < Fixed::fromRatio(1, 100));
 }
 
+// ---- planet view (agent-planet-render): float cube-sphere surface of RtsPlanet.h
+#include "modules/rts/view/RtsPlanet.h"
+TEST(planet_view_surface_seams_and_picking) {
+    using namespace rts::render;
+    rts::game::PlanetBody b;
+    b.radius = 40; b.faceSize = 16;
+    const int N = 16, S = (N + 1) * (N + 1);
+    b.corners.assign(size_t(6 * S), 0);
+    rts::game::CubeSphere cs(N);
+    // heights as a function of the corner direction: duplicates on seams get equal values
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                const Vec3 d = cs.cornerDir(f, i, j);
+                b.corners[size_t(cs.cornerId(f, i, j))] = int16_t((d.x.toDouble() * 3 + d.y.toDouble() * 2) * 16);
+            }
+    rts::game::PlanetSurface s;
+    s.init(b);
+    bool seamsShared = true;   // every duplicated corner has the same position on all its faces
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                int dup[3];
+                const int n = cs.cornerDuplicates(f, i, j, dup);
+                for (int k = 0; k < n; ++k) {
+                    const int g = dup[k] / S, jj = (dup[k] % S) / (N + 1), ii = dup[k] % (N + 1);
+                    const float3 a = s.cornerPos(f, i, j), c = s.cornerPos(g, ii, jj);
+                    if (a.x != c.x || a.y != c.y || a.z != c.z) seamsShared = false;
+                }
+            }
+    CHECK(seamsShared);
+    // float face mapping round-trips and agrees with the corner table
+    int f; float fa, fb;
+    s.faceFromDir(s.dirFromFace(4, 3.25f, 11.5f), f, fa, fb);
+    CHECK(f == 4 && std::fabs(fa - 3.25f) < 1e-3f && std::fabs(fb - 11.5f) < 1e-3f);
+    const float3 cd = s.cornerDir(2, 5, 7), fd = s.dirFromFace(2, 5, 7);
+    CHECK(length(cd - fd) < 1e-4f);   // Q16 vs float
+    // height at a corner direction = that corner's height; ray from outside hits the surface there
+    CHECK(std::fabs(s.heightAt(cd) - s.cornerHeight(2, 5, 7)) < 1e-3f);
+    float3 hit;
+    const float3 target = s.surfacePoint(cd);
+    CHECK(s.raycast(cd * 200.0f, cd * -1.0f, hit));
+    CHECK(length(hit - target) < 0.05f);
+    CHECK(!s.raycast(cd * 200.0f, cd, hit));   // pointing away: no hit
+    // map world block: bodies, orbit parents, start
+    Json map = Json::parse(R"({"world": {"bodies": [{"id": "sun", "kind": "star", "radius": 10},
+        {"id": "p", "kind": "planet", "radius": 20, "faceSize": 4, "orbit": {"around": "sun", "radius": 100, "period": 10, "phase": 0.25}}],
+        "start": "p"}})");
+    std::vector<std::string> warn;
+    rts::game::PlanetWorld w = rts::game::loadPlanetWorld(map, &warn);
+    CHECK(w.bodies.size() == 2 && w.start == 1 && w.bodies[1].parent == 0 && warn.empty()); // no corners: a smooth sphere
+    const float3 c0 = w.center(1, 0), c5 = w.center(1, 5);   // quarter turn, then half a period later
+    CHECK(std::fabs(c0.x) < 1e-3f && std::fabs(c0.z - 100) < 1e-3f && std::fabs(c5.z + 100) < 1e-2f);
+    CHECK(rts::game::loadPlanetWorld(Json::parse("{}")).empty());
+}
+
 // ---------------- Sound groups and steal modes ----------------
 
 TEST(audio_groups_share_a_limit) {

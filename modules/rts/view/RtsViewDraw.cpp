@@ -16,7 +16,7 @@ float3 RtsView::nodeWorldPos(const EntityAnim& st, const ModelChoice& ch, int no
     return st.drawn.transformPoint(local);
 }
 
-void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, float ground, float alpha, const float4* tintOverride) {
+void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, float ground, float alpha, const float4* tintOverride, const mat4* placement) {
     const UnitType& t = rules_->types[o.type];
     const TypeLook& L = looks_[o.type];
     const ModelChoice& ch = L.models[size_t(st.choice)];
@@ -30,7 +30,7 @@ void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, fl
     }
     const ModelChoice* lod = nullptr;
     if (!stage && st.choice == 0 && !L.lods.empty() && !tintOverride) {
-        const float camDist = length(camPos_ - o.pos);
+        const float camDist = length(camPos_ - (placement ? placement->transformPoint({0, 0, 0}) : o.pos));
         for (const auto& lc : L.lods) if (camDist >= lc.lodDistance) lod = &lc;
     }
     if (stage) show = &stage->choice;
@@ -38,7 +38,8 @@ void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, fl
 
     // ---- placement
     const float k = L.scale;
-    const float3 p{o.pos.x, ground + (L.air ? L.flyHeight : 0.0f), o.pos.z};
+    // planets: the object's frame (local up = +Y) replaces the flat translation
+    const float3 p = placement ? float3{0, L.air ? L.flyHeight : 0.0f, 0} : float3{o.pos.x, ground + (L.air ? L.flyHeight : 0.0f), o.pos.z};
     const float grow = L.construction == Construction::Grow ? std::clamp(o.build, 0.15f, 1.0f) : 1.0f;
     mat4 base;
     if (t.structure && L.shape && !stage) {
@@ -49,6 +50,7 @@ void RtsView::drawObject(Renderer3D& r, EntityAnim& st, const SceneObject& o, fl
     } else {
         base = mat4::translate(p) * mat4::rotateY(st.yaw) * mat4::scale({k, k, k});
     }
+    if (placement) base = *placement * base;   // flat maps: untouched (bit-identical)
     ModelDraw d;
     d.model = show->model;
     d.world = base * st.objXf * show->fix;
@@ -167,6 +169,11 @@ void RtsView::drawGhost(Renderer3D& r, uint16_t type, float3 pos, bool ok, const
     o.pos = pos;
     const float pulse = 0.4f + 0.08f * float(std::sin(time * 5.0));
     const float4 tint = ok ? float4{0.45f, 1.0f, 0.55f, pulse} : float4{1.0f, 0.35f, 0.3f, pulse};
+    if (planets_.active()) { // planets: on the sphere, oriented to the local up
+        mat4 place;
+        if (planetPlacement(o, place)) drawObject(r, ghost, o, 0, 1, &tint, &place);
+        return;
+    }
     drawObject(r, ghost, o, heightAt(grid, pos.x, pos.z), 1, &tint);
 }
 
