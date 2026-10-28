@@ -274,7 +274,7 @@ bool RtsModule::runDig(Simulation& sim, Entity e, Order& o) {
     g.digMark[di] = 0;
     g.digHp[di] = Fixed{};
     g.flags[di] = kCellGround;
-    g.clearanceDirty = true;
+    g.cellChanged(int(di) % g.w, int(di) / g.w);
     gs.territoryDirty = true;
     gs.fieldsDirty = true;
     sim.emit({kEvDug, owner, e, kNullEntity, int64_t(di), o.point2});

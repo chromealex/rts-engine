@@ -277,7 +277,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         m.yielded = true;
         m.yieldUntil = tick + 2 * sim.tickRate();
         moveTo(sim, y.who, g.cellCenter(best % g.w, best / g.w), Fixed::fromRatio(1, 5));
-        if (byIndex.size() > y.who.index && byIndex[y.who.index] >= 0) g.soft[size_t(best)] = 1;
+        if (byIndex.size() > y.who.index && byIndex[y.who.index] >= 0) g.markSoft(best % g.w, best / g.w);
     }
     // walk back to where they stood once the way is clear
     if (tick % 10 == 0)

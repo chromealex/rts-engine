@@ -71,6 +71,7 @@ void MapGrid::init(int width, int h_) {
     clearance.assign(n, 0);
     clearanceDirty = true;
     soft.assign(n, 0);
+    softCells.clear();
 }
 
 namespace {
@@ -203,7 +204,39 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
     for (int y = y0; y < y0 + fh; ++y)
         for (int x = x0; x < x0 + fw; ++x)
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
+    // clearance is capped at 3, so only cells within 3 of the footprint change: patch them (same values as a
+    // full recompute) instead of a whole-map pass on the next path query
+    if (!clearanceDirty && clearance.size() == flags.size()) updateClearanceRect(x0 - 3, y0 - 3, x0 + fw + 2, y0 + fh + 2);
+    else clearanceDirty = true;
+    for (auto& G : hpa_)
+        for (int cy = std::max(0, y0) / HpaGraph::kC; cy <= std::min(h - 1, y0 + fh - 1) / HpaGraph::kC && cy < G.ch; ++cy)
+            for (int cx = std::max(0, x0) / HpaGraph::kC; cx <= std::min(w - 1, x0 + fw - 1) / HpaGraph::kC && cx < G.cw; ++cx) {
+                G.dirty[size_t(cy * G.cw + cx)] = 1; G.anyDirty = true;
+            }
+}
+
+void MapGrid::cellChanged(int x, int y) {
     clearanceDirty = true;
+    for (auto& G : hpa_)
+        if (inside(x, y)) { G.dirty[size_t((y / HpaGraph::kC) * G.cw + x / HpaGraph::kC)] = 1; G.anyDirty = true; }
+}
+
+void MapGrid::updateClearanceRect(int x0, int y0, int x1, int y1) {
+    x0 = std::max(0, x0); y0 = std::max(0, y0); x1 = std::min(w - 1, x1); y1 = std::min(h - 1, y1);
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x) {
+            int v = 3; // multi-source Chebyshev distance: solid cells count 0, map-edge cells 1 (as updateClearance)
+            for (int dy = -3; dy <= 3; ++dy)
+                for (int dx = -3; dx <= 3; ++dx) {
+                    int nx = x + dx, ny = y + dy;
+                    if (!inside(nx, ny)) continue;
+                    size_t i = size_t(index(nx, ny));
+                    int d = std::max(std::abs(dx), std::abs(dy));
+                    if (!(flags[i] & kCellGround) || blocked[i] || (hf && slope[i] > slopeLimit[0])) v = std::min(v, d);
+                    else if (nx == 0 || ny == 0 || nx == w - 1 || ny == h - 1) v = std::min(v, d + 1);
+                }
+            clearance[size_t(index(x, y))] = uint8_t(v);
+        }
 }
 
 bool MapGrid::areaBuildable(int x0, int y0, int fw, int fh) const {
@@ -269,6 +302,36 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
     if (goalOk && lineWalkable(sx, sy, gx, gy, layer)) { out.push_back(to); return true; }
 
+    std::vector<int> cells;
+    bool found = false, routed = false;
+    // long trips on big maps: HPA* route refined with A* (plain A* would run out of nodes)
+    if (bigMap() && goalOk && std::max(std::abs(gx - sx), std::abs(gy - sy)) > 2 * HpaGraph::kC) {
+        routed = found = hpaPath(sx, sy, gx, gy, layer, cells);
+        ++hpaStats[routed ? 0 : 1];
+    }
+    if (!routed) { cells.clear(); found = astarCells(sx, sy, gx, gy, layer, maxNodes, cells); }
+    // string pulling: keep only cells needed for line of sight
+    std::vector<int> pts;
+    size_t i = 0;
+    const size_t window = bigMap() ? 48 : cells.size(); // bounded look-ahead keeps long paths O(n)
+    while (i + 1 < cells.size()) {
+        size_t j = std::min(cells.size() - 1, i + window);
+        int ax = cells[i] % w, ay = cells[i] / w;
+        while (j > i + 1 && !lineWalkable(ax, ay, cells[j] % w, cells[j] / w, layer)) --j;
+        pts.push_back(cells[j]);
+        i = j;
+    }
+    for (size_t k = 0; k < pts.size(); ++k) {
+        bool last = k + 1 == pts.size();
+        if (last && found && goalOk) out.push_back(to);
+        else out.push_back(cellCenter(pts[k] % w, pts[k] / w));
+    }
+    if (out.empty()) out.push_back(found && goalOk ? to : cellCenter(sx, sy));
+    return found;
+}
+
+bool MapGrid::astarCells(int sx, int sy, int gx, int gy, uint8_t layer, int maxNodes, std::vector<int>& cells) {
+    bool found = false;
     const size_t n = size_t(w * h);
     if (gCost_.size() != n) { gCost_.assign(n, 0); stamp_.assign(n, 0); parent_.assign(n, -1); }
     ++search_;
@@ -290,7 +353,6 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
     int expanded = 0;
     static const int dxs[8] = {1, -1, 0, 0, 1, 1, -1, -1};
     static const int dys[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-    bool found = false;
     while (!open.empty() && expanded < maxNodes) {
         Node cur = open.top(); open.pop();
         int cx = cur.idx % w, cy = cur.idx / w;
@@ -315,25 +377,8 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
         }
     }
     // rebuild cells
-    std::vector<int> cells;
     for (int c = best; c != -1; c = parent_[size_t(c)]) cells.push_back(c);
     std::reverse(cells.begin(), cells.end());
-    // string pulling: keep only cells needed for line of sight
-    std::vector<int> pts;
-    size_t i = 0;
-    while (i + 1 < cells.size()) {
-        size_t j = cells.size() - 1;
-        int ax = cells[i] % w, ay = cells[i] / w;
-        while (j > i + 1 && !lineWalkable(ax, ay, cells[j] % w, cells[j] / w, layer)) --j;
-        pts.push_back(cells[j]);
-        i = j;
-    }
-    for (size_t k = 0; k < pts.size(); ++k) {
-        bool last = k + 1 == pts.size();
-        if (last && found && goalOk) out.push_back(to);
-        else out.push_back(cellCenter(pts[k] % w, pts[k] / w));
-    }
-    if (out.empty()) out.push_back(found && goalOk ? to : cellCenter(sx, sy));
     return found;
 }
 
@@ -375,13 +420,16 @@ void SpatialHash::reset(int worldW, int worldH, int cellSize) {
     cell = cellSize;
     w = (worldW + cell - 1) / cell + 1;
     h = (worldH + cell - 1) / cell + 1;
-    if (buckets.size() != size_t(w * h)) buckets.assign(size_t(w * h), {});
-    for (auto& b : buckets) b.clear();
+    if (buckets.size() != size_t(w * h)) { buckets.assign(size_t(w * h), {}); used.clear(); }
+    for (int32_t i : used) buckets[size_t(i)].clear();
+    used.clear();
 }
 
 void SpatialHash::insert(Entity e, Vec3 p) {
     int x = std::clamp(int(p.x.floorInt()) / cell, 0, w - 1), y = std::clamp(int(p.z.floorInt()) / cell, 0, h - 1);
-    buckets[size_t(y * w + x)].push_back(e);
+    auto& b = buckets[size_t(y * w + x)];
+    if (b.empty()) used.push_back(y * w + x);
+    b.push_back(e);
 }
 
 } // namespace rts::game
