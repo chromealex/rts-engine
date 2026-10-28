@@ -105,6 +105,7 @@ any tag in `deficitDisables`).
 
   ```jsonc
   "movement": {"flowField": {"minGroup": 12,     // move / attack-move / patrol / right-click orders of >= 12 units (0 = never)
+                             "minCells": 0,      // ... only for units at least this many cells from the goal (0 = all)
                              "waves": true,      // units released by map waves and lane waves march on fields
                              "spread": 0.4,      // goal area radius = 0.3 + spread * sqrt(units) (they arrive spread out)
                              "maxFields": 64, "budgetMB": 32}}   // cache: LRU of unreferenced fields beyond these
@@ -1082,11 +1083,13 @@ and attack slower.
 
 ### Big armies (BA)
 
-`"flowFields": true` (or `{"minCells": 8, "cache": 16}`): ground paths of at least `minCells` follow a flow field of the
-goal cell (one reverse Dijkstra shared by every unit sent there; the path is a pure function of the grid, the cache only
-saves work), and attack-move groups of more than 24 form a block of rows instead of one wide arc. Separation and RVO
-neighbour lookups always use a one-cell grid (results identical to the spatial-hash version). Benchmark (ARM VM, -O3):
-3000 units fighting, about 13 ms per tick.
+`"flowFields": true` (or `{"minCells": 8, "cache": 16}`) is an alias of the one flow-field system
+(`movement.flowField`, see Movement): it means `{"minGroup": 1, "minCells": 8, "maxFields": 16}` — every ground move,
+attack-move, patrol or right-click order of a unit at least `minCells` cells from its goal follows the goal area's
+shared field (an explicit `movement.flowField` wins). In addition attack-move groups of more than 24 form a block of
+rows instead of one wide arc (each unit walks to its own row point with its own path). Separation and RVO neighbour
+lookups always use a one-cell grid (results identical to the spatial-hash version). Benchmark (ARM VM, -O3): 3000
+units fighting, about 13 ms per tick.
 
 ### Conveyors, producers, crafters (Mindustry, Factorio)
 

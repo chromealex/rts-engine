@@ -480,6 +480,7 @@ struct RoadNetworkRules {
 // rules movement.flowField: shared flow fields instead of one path search per unit (RtsFlowField.cpp)
 struct FlowFieldRules {
     int minGroup = 0;                 // move / attack-move / patrol orders of >= this many units use a field (0 = never)
+    int minCells = 0;                 // ... for units at least this many cells (Chebyshev) from the goal; nearer ones keep A*
     bool waves = false;               // scripted and lane waves march along fields
     Fixed spread = Fixed::fromRatio(4, 10);   // goal area radius = 0.3 + spread * sqrt(units) world units
     int maxFields = 64;

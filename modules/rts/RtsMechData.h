@@ -176,7 +176,7 @@ struct MechRules {
     uint64_t supplyTags = 0;
     Fixed supplyAttrition = Fixed::fromRatio(1, 100), supplySpeed = Fixed::fromRatio(4, 5), supplyAttack = Fixed::fromRatio(4, 5);
     bool battle() const { return morale || fatigue || charge || supply; }
-    bool flowFields = false; int flowMinCells = 8, flowCache = 16;
+    bool armyBlock = false;                // rules "flowFields": attack-move groups of more than 24 form a block of rows
     bool conveyors = false;
     // turn-based mode (TB): players act in turns on the same simulation (Heroes / XCOM style battles)
     bool altitude = false;   // some type flies in 3D (SP)

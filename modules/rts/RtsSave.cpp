@@ -13,9 +13,9 @@ inline void io(Archive& a, Owner& x) { a(x.player); }
 namespace rts::game {
 
 void io(Archive& a, Unit& x) { a(x.type, x.hp, x.flags, x.lastAttacker, x.facing, x.energy); }
-void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer); }
+void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer, x.flow); }
 void io(Archive& a, Orders& x) { a(x.queue); }
-void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded); }
+void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck); }
 void io(Archive& a, Combat& x) { a(x.cooldown, x.target, x.acquireTimer, x.autoTarget, x.chargeTarget, x.chargeStart, x.slotTarget, x.slot, x.slotTick, x.slotPos); }
 void io(Archive& a, Cargo& x) { a(x.res, x.amount, x.lastNode, x.lastPos, x.field); }
 void io(Archive& a, ProdItem& x) { a(x.item, x.progress, x.paid, x.upgrade); }
@@ -218,6 +218,13 @@ bool RtsModule::serializeState(Simulation& sim, Archive& a) {
         gs.grid.invalidatePathing();   // derived caches (clearance, HPA*) rebuild from the loaded cells
         gs.grid.clearSoft();
         gs.mech.groupSpeed.clear();
+        // flow fields are a cache (pure functions of the grid): re-acquire the ones moving units follow, in ECS order,
+        // so they keep following them instead of dropping to A* (sysFlowFields drops units whose field is gone)
+        w.each<Mobile, Unit>([&](Entity, Mobile& m, Unit& u) {
+            if (!m.flow) return;
+            const UnitType& t = rules_.types[u.type];
+            if (gs.grid.flowAcquire(m.goal, m.flowRadius, t.pathLayer, MapGrid::clearanceFor(t.radius), sim.tick()) < 0) m.flow = false;
+        });
         slotClaims_.clear();
     }
     return a.ok();

@@ -924,13 +924,17 @@ TEST(mech_flow_fields) {
         sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && !mod(*sim).rules().types[u.type].structure) army.push_back(e); });
         auto t0 = std::chrono::steady_clock::now();
         sim->submit(mechCmd(1, game::kCmdMove, army, kNullEntity, at(80, 20)));
+        sim->step();
+        int onField = 0;
+        for (Entity e : army) { auto& q = sim->world().get<game::Orders>(e).queue; if (!q.empty() && q.front().flow) ++onField; }
+        if (flow) CHECK(onField >= 300);   // hundreds of units on one shared field
         run(*sim, 40);
         ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         arrived = 0;
         for (Entity e : army) if (posOf(*sim, e).x > Fixed::fromInt(49)) ++arrived;
         if (flow) {
             auto& g = mod(*sim).state(*sim).grid;
-            CHECK(g.flowStats[0] >= 1 && g.flowStats[0] <= 3 && g.flowStats[1] >= 300);   // one field, hundreds of paths
+            CHECK(g.flowCount() >= 1 && g.flowCount() <= 3);   // one field (goal area) for the whole army
             CHECK(mechRoundTrip(*sim, rules, map, 60));
         }
     };

@@ -1,5 +1,6 @@
 // agent-mech stage 4 data: morale / rout / fatigue / charge (Total War), supply lines.
 #include "RtsData.h"
+#include <algorithm>
 #include <stdexcept>
 
 namespace rts::game {
@@ -67,11 +68,18 @@ void loadMechStage4(Rules& r, const Json& j) {
         m.turnTimeLimit = tb.getFx("timeLimit", m.turnTimeLimit);
         if (m.turnAttacks < 0) fail("turns.attacks", "must be >= 0");
     }
+    // "flowFields": true / {"minCells", "cache"}: alias of movement.flowField {"minGroup": 1, "minCells", "maxFields"}
+    // (every ground move of at least minCells cells follows a shared field); also big attack-move groups form a block
     if (const Json& ff = j["flowFields"]; ff.boolean() || ff.isObject()) {
-        m.flowFields = true;
-        m.flowMinCells = int(ff.getInt("minCells", m.flowMinCells));
-        m.flowCache = int(ff.getInt("cache", m.flowCache));
-        if (m.flowCache < 1 || m.flowCache > 256) fail("flowFields.cache", "1..256");
+        m.armyBlock = true;
+        const int cache = int(ff.getInt("cache", 16));
+        if (cache < 1 || cache > 256) fail("flowFields.cache", "1..256");
+        FlowFieldRules& fr = r.movement.flow;
+        if (!fr.enabled()) {   // an explicit movement.flowField wins
+            fr.minGroup = 1;
+            fr.minCells = int(std::clamp<int64_t>(ff.getInt("minCells", 8), 0, 100000));
+            fr.maxFields = cache;
+        }
     }
     size_t ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
