@@ -24,10 +24,10 @@ const char* const kEventNames[] = {
     "chainJump", "castStart", "channelStart", "channelEnd", "alert", "garrisonChanged",
     "transitStart", "transitEnd",
     "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
-    "objective", "dialog", "camera", "missionEnd",
+    "objective", "dialog", "camera", "missionEnd", "morale",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
-static_assert(kEventCount == size_t(kEvMissionEnd) + 1, "kEventNames must list every GameEvent");
+static_assert(kEventCount == size_t(kEvMorale) + 1, "kEventNames must list every GameEvent");
 
 struct CmdName { const char* name; uint16_t type; };
 const CmdName kCommands[] = {
@@ -293,6 +293,12 @@ Json entityJson(const SimRefs& refs, Entity e) {
     if (auto* v = w.tryGet<Veteran>(e); v && v->level > 1) j.set("rank", Json::number(int64_t(v->level)));
     if (auto* sh = w.tryGet<MechShield>(e)) j.set("shield", Json::number(sh->hp.toDouble(), 1));
     if (auto* sh = w.tryGet<Shield>(e)) j.set("shield", Json::number(sh->value.toDouble(), 1));
+    if (auto* mo = w.tryGet<Morale>(e); mo && mo->init) {
+        static const char* n[] = {"steady", "wavering", "routing"};
+        if (R.mech.morale) { j.set("morale", Json::number(mo->value.toDouble(), 1)); j.set("moraleState", Json::string(n[mo->state % 3])); }
+        if (R.mech.fatigue) j.set("fatigue", Json::number(mo->fatigue.toDouble(), 1));
+        if (R.mech.supply) j.set("supplied", Json::fromBool(!mo->outOfSupply));
+    }
     if (auto* tp = w.tryGet<Transport>(e); tp && !tp->cargo.empty()) {
         Json c = Json::array();
         for (Entity p : tp->cargo) c.push(refs.refJson(p));
