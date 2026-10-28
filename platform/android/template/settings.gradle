@@ -3,7 +3,10 @@ pluginManagement {
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories { google(); mavenCentral() }
+    repositories {
+        google(); mavenCentral()
+        // native plugins (rtsbuild)
+@PLUGIN_REPOSITORIES@    }
 }
 rootProject.name = "@PROJECT_NAME@"
 include ':app'

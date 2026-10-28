@@ -136,6 +136,10 @@ public:
     // Opaque custom renderers (terrain): run first in the main pass, before meshes and models, so
     // translucent meshes (water) blend over them. Same lifetime rules as drawCustom.
     void drawCustomOpaque(CustomDraw fn) { customOpaque_.push_back(std::move(fn)); }
+    // Extra shadow casters (sprites): run inside the sun shadow pass (only when shadows are on) with
+    // the target bound; draw depth with lightViewProj(). Same lifetime rules as drawCustom.
+    void drawCustomShadow(CustomDraw fn) { customShadow_.push_back(std::move(fn)); }
+    const mat4& lightViewProj() const { return lightViewProj_; }
     const RTSCamera& camera() const { return cam_; }
     int sceneWidth() const { return sceneW_; }
     int sceneHeight() const { return sceneH_; }
@@ -184,7 +188,7 @@ private:
     ShadowQuality quality_ = ShadowQuality::Medium;
     std::vector<DrawItem> items_;
     std::vector<ColorVertex> lines_, tris_;
-    std::vector<CustomDraw> custom_, customOpaque_;
+    std::vector<CustomDraw> custom_, customOpaque_, customShadow_;
     RTSCamera cam_;
     mat4 viewProj_, lightViewProj_;
     float3 camPos_;

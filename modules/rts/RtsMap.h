@@ -53,6 +53,33 @@ struct HpaGraph {
     std::vector<std::vector<uint32_t>> dist;                      // per cluster: k*k intra costs (UINT32_MAX: none)
 };
 
+// HPA* on cube-sphere bodies (RtsHpaSphere.cpp). Clusters are kC x kC tiles of each face (the last row/column of a
+// face may be partial); clusters touching through an orthogonal cell step - inside a face or across a face seam,
+// including the three faces meeting at a cube corner - share a border. Topology is static per map; graphs per
+// path layer are derived from the grid exactly like the flat HpaGraph (never hashed, rebuilt lazily when dirty).
+struct SphereHpaTopo {
+    static constexpr int kC = HpaGraph::kC;
+    struct Cluster { int body = 0, gx0 = 0, gy0 = 0, cw = 0, ch = 0; std::vector<int32_t> borders; };
+    struct Border {                          // clusters a < b; (cell in a, cell in b) ordered along a's sides
+        int32_t a = 0, b = 0;
+        std::vector<std::pair<int32_t, int32_t>> pairs;
+        std::vector<int32_t> keys;           // side * kC + position along the side (runs = consecutive keys)
+    };
+    std::vector<int32_t> clusterOfCell;      // per grid cell, -1 void
+    std::vector<Cluster> clusters;
+    std::vector<Border> borders;
+    std::vector<int32_t> bodyFirst;          // per body: first cluster id, + total at the end
+};
+struct SphereHpaGraph {
+    uint8_t layer = 0;
+    bool anyDirty = true;
+    std::vector<uint8_t> dirty;                                   // per cluster
+    std::vector<std::vector<std::pair<int32_t, int32_t>>> trans;  // per border: chosen entrance pairs
+    std::vector<std::vector<int32_t>> nodes;                      // per cluster: sorted entrance cells
+    std::vector<std::vector<std::vector<int32_t>>> partners;      // per cluster, per node: cells across
+    std::vector<std::vector<uint32_t>> dist;                      // per cluster: k*k intra costs
+};
+
 struct MapGrid {
     int w = 0, h = 0;
     // Planet maps (world block): the cube-sphere faces of every body stacked as rows (RtsSurface.h). Null on flat
@@ -126,6 +153,17 @@ struct MapGrid {
     int hpaMinCells = 256 * 256;
     bool bigMap() const { return !surf && w * h >= hpaMinCells; }
     int hpaStats[2] = {};  // queries answered by HPA*, fallbacks to plain A* (diagnostics only)
+    // Planets: bodies with at least this many cells (6 N^2) use HPA* for long paths (0 forces it on every body;
+    // headless --planet-hpa / RTS_PLANET_HPA=1). Same threshold as the flat 256x256.
+    int sphereHpaMinCells = 256 * 256;
+    bool sphereHpaBody(int body) const;
+    void prepareHpaSphere(uint8_t layer);   // build the graph now (match start) for the active bodies
+    // Tests / diagnostics: a digest of the planet HPA* graph of a layer (entrances, partners, costs), after
+    // bringing it up to date; resetHpaSphere() drops every graph (the next query rebuilds from scratch).
+    uint64_t hpaSphereDigest(uint8_t layer);
+    void resetHpaSphere() { sphereHpa_.clear(); }
+    // A path given as grid cells (start..goal) on a planet, without string pulling: HPA* (true) or plain A*.
+    bool sphereCellPath(int s, int g, uint8_t layer, bool hpa, std::vector<int>& cells, int maxNodes = 1 << 30);
     static int clearanceFor(Fixed radius);  // body radius -> cells of clearance
     bool lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const;
     bool nearestPassable(int& x, int& y, uint8_t layer, int radius = 12) const;
@@ -151,6 +189,7 @@ struct MapGrid {
     }
     // One step between neighbouring cells (8-connected, no corner cutting); on spheres via the neighbour table.
     bool canMoveCells(int c0, int c1, uint8_t layer) const;
+    bool canMoveDir(int c0, int k, uint8_t layer) const;   // sphere: step to neighbour k (Surface::kDx/kDy order)
     // Sphere: derives slopes / cliff levels from the bodies' face corners (rules terrain.model heightfield).
     void enableSphereHeights(Fixed levelHeight);
 
@@ -159,6 +198,15 @@ private:
     bool astarSphere(int s, int g, uint8_t layer, int maxNodes, std::vector<int>& cells);
     bool lineWalkableSphere(int a, int b, uint8_t layer) const;
     void updateClearanceSphere();
+    bool hpaPathSphere(int s, int g, uint8_t layer, std::vector<int>& cells);
+    SphereHpaGraph& hpaSphereFor(uint8_t layer);
+    void hpaSphereRefresh(SphereHpaGraph& G);
+    void hpaSphereBorder(SphereHpaGraph& G, int border);
+    void hpaSphereCluster(SphereHpaGraph& G, int c);
+    void sphereClusterCosts(int c, int src, uint8_t layer, std::vector<uint32_t>& d) const;
+    void markSphereDirty(int cell);
+    std::shared_ptr<const SphereHpaTopo> sphereTopo_;
+    std::vector<SphereHpaGraph> sphereHpa_;
     int pathClear_ = 0;
     bool pathSoft_ = false;
     int pathEndA_ = -1, pathEndB_ = -1;

@@ -132,7 +132,7 @@ void registerTileOps(Workspace& ws) {
         return t;
     };
 
-    add("tileset_list", "Tilesets of the open game (games/<id>/tilesets/*.json) with their terrains: id, map char, gameplay cell kind, level, resource field, autotile type. The map's tile layer uses one of them.",
+    add("tileset_list", "Tilesets of the open game (templates/<id>/tilesets/*.json) with their terrains: id, map char, gameplay cell kind, level, resource field, autotile type. The map's tile layer uses one of them.",
         "{}", [w](const Json&) {
             if (w->project.dir.empty()) throw std::runtime_error("no game is open: call open_game first");
             Json list = Json::array();
