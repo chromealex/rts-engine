@@ -374,7 +374,8 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp)
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
+    apps/editor/core/DataOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
@@ -385,7 +386,7 @@ endif()
 if(RTS_BUILD_EDITOR)
     # windows register themselves (RTS_EDITOR_WINDOW): any .cpp in apps/editor/windows is part of the editor
     file(GLOB RTS_EDITOR_WINDOWS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/windows/*.cpp)
-    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp
+    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp
                    ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")

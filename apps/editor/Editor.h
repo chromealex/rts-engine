@@ -160,6 +160,7 @@ private:
     void applyChanges();
     void pollAgentLink();
     void registerGuiOps();
+    void registerPlayOps();   // EditorPlayOps.cpp
     void samplePlayStats();
     void deliverShots(gfx::Device& dev);
 
