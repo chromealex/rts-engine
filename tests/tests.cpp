@@ -3183,7 +3183,8 @@ TEST(audiopack_profiles_and_conversion) {
 TEST(audiopack_stage_game_folder) {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "rts_audiopack_test";
-    fs::remove_all(root);
+    std::error_code cleanup;
+    fs::remove_all(root, cleanup);
     fs::create_directories(root / "game" / "music");
     auto write = [](const fs::path& p, const std::string& s) { std::ofstream f(p, std::ios::binary); f << s; };
     write(root / "game" / "game.json", R"({"name":"T","audio":"sound.json"})");
@@ -3192,16 +3193,19 @@ TEST(audiopack_stage_game_folder) {
     write(root / "game" / "rules.json", "{}");
     audiopack::Report rep;
     std::string err;
-    CHECK(audiopack::stageGame((root / "game").string(), (root / "web").string(), "web", rep, &err));
+    const bool staged = audiopack::stageGame((root / "game").string(), (root / "web").string(), "web", rep, &err);
+    if (!staged) std::printf("    stageGame: %s\n", err.c_str());
+    CHECK(staged);
     CHECK(fs::exists(root / "web" / "music" / "a.ogg") && !fs::exists(root / "web" / "music" / "a.wav") && fs::exists(root / "web" / "rules.json"));
-    CHECK(Json::parseFile((root / "web" / "sound.json").string())["music"].getStr("match") == "music/a.ogg");
+    // a failed staging must fail the check, not abort every following test with an exception
+    CHECK(fs::exists(root / "web" / "sound.json") && Json::parseFile((root / "web" / "sound.json").string())["music"].getStr("match") == "music/a.ogg");
     CHECK(fs::exists(root / "game" / "music" / "a.wav"));                 // the project itself is untouched
     CHECK(audiopack::stageGame((root / "game").string(), (root / "desktop").string(), "desktop", rep, &err));
     CHECK(fs::exists(root / "desktop" / "music" / "a.wav") && rep.items.empty());   // desktop keeps files by default
     write(root / "game" / "sound.json", R"({"sounds":{"x":{"file":"../../../etc/passwd"}},"build":{"web":{"sounds":"pcm"}}})");
     CHECK(audiopack::stageGame((root / "game").string(), (root / "web2").string(), "web", rep, &err));
     CHECK(rep.items.empty() && rep.warnings.size() == 1);                  // nothing outside the game folder is read
-    fs::remove_all(root);
+    fs::remove_all(root, cleanup);   // never throws: a locked temp file on Windows must not abort the run
 }
 
 // ---------------- particles (engine/fx, modules/rts/fx) ----------------
