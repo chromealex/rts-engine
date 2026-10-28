@@ -221,6 +221,9 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
     if (surf) clearanceDirty = true; // planet cells: rows are not geometric neighbours across seams
     else if (!clearanceDirty && clearance.size() == flags.size()) updateClearanceRect(x0 - 3, y0 - 3, x0 + fw + 2, y0 + fh + 2);
     else clearanceDirty = true;
+    if (surf)
+        for (int y = y0; y < y0 + fh; ++y)
+            for (int x = x0; x < x0 + fw; ++x) if (inside(x, y)) markSphereDirty(index(x, y));
     for (auto& G : hpa_)
         for (int cy = std::max(0, y0) / HpaGraph::kC; cy <= std::min(h - 1, y0 + fh - 1) / HpaGraph::kC && cy < G.ch; ++cy)
             for (int cx = std::max(0, x0) / HpaGraph::kC; cx <= std::min(w - 1, x0 + fw - 1) / HpaGraph::kC && cx < G.cw; ++cx) {
@@ -230,6 +233,7 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
 
 void MapGrid::cellChanged(int x, int y) {
     clearanceDirty = true;
+    if (surf && inside(x, y)) markSphereDirty(index(x, y));
     for (auto& G : hpa_)
         if (inside(x, y)) { G.dirty[size_t((y / HpaGraph::kC) * G.cw + x / HpaGraph::kC)] = 1; G.anyDirty = true; }
 }

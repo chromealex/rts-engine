@@ -1,0 +1,6 @@
+{
+  "name": "yandex-games",
+  "description": "Yandex Games SDK (HTML5 build on yandex.ru/games): in-game purchases, fullscreen / rewarded / sticky-banner ads, LoadingAPI.ready, pause on game_api_pause. Protocols: store and ads (docs/plugins.md). Config: signed (true = purchases carry a signature for server checks).",
+  "provides": ["store", "ads"],
+  "web": { "scripts": ["/sdk.js"], "js": ["web/yandex-games.js"] }
+}

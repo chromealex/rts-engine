@@ -2,7 +2,7 @@
 """Generates small seamless (tiling) terrain textures + normal maps for the terrain splat materials
 (docs/game-format.md "Terrain materials"). Output is procedural (no third-party art): CC0.
 
-    python3 tools/terrain/make_textures.py games/frostcrown/textures/terrain --preset frost
+    python3 tools/terrain/make_textures.py templates/frostcrown/textures/terrain --preset frost
 
 File names end in _repeat so the atlas packer never puts them on an atlas page (wrap needs its own
 texture). Needs numpy + Pillow (host tool only)."""

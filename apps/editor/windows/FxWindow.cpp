@@ -1,4 +1,4 @@
-// "Эффекты": particle effects of the open game (games/<id>/fx/*.json) with a live preview, tier
+// "Эффекты": particle effects of the open game (templates/<id>/fx/*.json) with a live preview, tier
 // switch (how it looks on an old Android) and an overdraw meter; plus the event bindings (fx.json).
 // Agents get the same through MCP (apps/editor/core/FxOps.cpp): fx_list, fx_get, fx_set, fx_delete,
 // fx_templates, fx_import_unity, fx_bind, and fx_preview (EditorFxOps.cpp); their writes bump

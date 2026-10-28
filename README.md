@@ -28,7 +28,7 @@ apps/
   headless/  матчи ботов и проверка реплеев без графики
   modelview/ просмотр моделей, клипов, материалов и всех типов игры
 tools/rtsbuild/  сборщик: exe / app / проект Xcode / проект Gradle / web
-games/
+templates/
   skirmish/  «Iron and Gold» — пример в духе Warcraft/Red Alert
   mushrooms/ «Mushroom Clash» — пример в духе Mushroom Wars
   showcase/  правила Iron and Gold с импортированными моделями (glTF, OBJ, анимации)
@@ -40,23 +40,23 @@ platform/    шаблоны упаковки (Info.plist, Gradle-проект, H
 ```bash
 cmake -S . -B build/mac -DCMAKE_BUILD_TYPE=Release      # нужны Xcode и CMake
 cmake --build build/mac -j 8
-open build/mac/RTSEditor.app                              # редактор (проект games/skirmish)
+open build/mac/RTSEditor.app                              # редактор (проект templates/skirmish)
 open build/mac/RTSGame.app                                # игра
 ./build/mac/rts_tests
 ```
 
-Другую игру в редакторе: `RTSEditor.app/Contents/MacOS/RTSEditor --project games/mushrooms`.
-Чтобы игра запускалась с другим набором данных, задайте `-DRTS_CONTENT_DIR=.../games/mushrooms`.
+Другую игру в редакторе: `RTSEditor.app/Contents/MacOS/RTSEditor --project templates/mushrooms`.
+Чтобы игра запускалась с другим набором данных, задайте `-DRTS_CONTENT_DIR=.../templates/mushrooms`.
 
 ## Сборка под платформы — rtsbuild
 
 ```bash
-./build/mac/rtsbuild --project games/skirmish --target macos     # dist/macos/<Name>.app (подписан ad-hoc)
-./build/mac/rtsbuild --project games/skirmish --target ios       # dist/ios/xcode/RTSEngine.xcodeproj + сборка для симулятора
-./build/mac/rtsbuild --project games/skirmish --target android   # dist/android/<Name> (Gradle) + APK, если есть SDK/NDK и gradle
-./build/mac/rtsbuild --project games/skirmish --target web       # dist/web (нужен emsdk)
-./build/mac/rtsbuild --project games/skirmish --target windows   # .exe через mingw-w64 (brew install mingw-w64) или исходники + build.bat
-./build/mac/rtsbuild --project games/skirmish --target all
+./build/mac/rtsbuild --project templates/skirmish --target macos     # dist/macos/<Name>.app (подписан ad-hoc)
+./build/mac/rtsbuild --project templates/skirmish --target ios       # dist/ios/xcode/RTSEngine.xcodeproj + сборка для симулятора
+./build/mac/rtsbuild --project templates/skirmish --target android   # dist/android/<Name> (Gradle) + APK, если есть SDK/NDK и gradle
+./build/mac/rtsbuild --project templates/skirmish --target web       # dist/web (нужен emsdk)
+./build/mac/rtsbuild --project templates/skirmish --target windows   # .exe через mingw-w64 (brew install mingw-w64) или исходники + build.bat
+./build/mac/rtsbuild --project templates/skirmish --target all
 ```
 
 То же самое доступно в редакторе: меню **Сборка**. Сгенерированные проекты iOS и Android самодостаточны
@@ -77,7 +77,7 @@ open build/mac/RTSGame.app                                # игра
 rtsbuild ... --no-pack          # класть папки как есть (отладка)
 rtsbuild ... --pack-level 9     # уровень zstd (по умолчанию 19 для Release, 3 для Debug)
 
-assetpipe pack -o content.rpak games/skirmish engine/assets=engine   # собрать пак вручную
+assetpipe pack -o content.rpak templates/skirmish engine/assets=engine   # собрать пак вручную
 assetpipe list content.rpak       # файлы, размеры, сжатие
 assetpipe verify content.rpak     # распаковать всё и проверить хеши
 assetpipe extract content.rpak out/
@@ -110,7 +110,7 @@ assetpipe diff old.rpak new.rpak  # что изменилось между ве�
 ```
 
 ```bash
-rtsbuild --project games/x --target web --split --chunk-size 4MB --base-size 15MB   # флаги важнее game.json
+rtsbuild --project templates/x --target web --split --chunk-size 4MB --base-size 15MB   # флаги важнее game.json
 ```
 
 Части кладутся рядом со сборкой (`dist/<платформа>/chunks/`) — их выкладывают по адресу из `sources`
@@ -190,7 +190,7 @@ rtsbuild --project ~/RTSGames/dune2 --target macos
 ## Локализация
 
 Игра переводится без изменения `rules.json`: имена в данных — текст на исходном языке игры, переводы
-лежат в `games/<id>/lang/<язык>.json` под ключами `type.footman`, `resource.gold`, `map.valley.title`…
+лежат в `<project>/lang/<язык>.json` под ключами `type.footman`, `resource.gold`, `map.valley.title`…
 Строки меню и HUD — в `engine/assets/lang/` (сейчас English и Русский), игра может переопределить любую.
 
 ```jsonc
@@ -200,8 +200,8 @@ rtsbuild --project ~/RTSGames/dune2 --target macos
 ```
 
 ```bash
-./build/mac/rts_i18n extract --project games/skirmish --lang de --write   # заготовка lang/de.json, новые строки помечены // TODO
-./build/mac/rts_i18n check   --project games/skirmish                     # плейсхолдеры, формы мн. числа, непереведённое
+./build/mac/rts_i18n extract --project templates/skirmish --lang de --write   # заготовка lang/de.json, новые строки помечены // TODO
+./build/mac/rts_i18n check   --project templates/skirmish                     # плейсхолдеры, формы мн. числа, непереведённое
 ```
 
 Язык выбирается так: выбор игрока в меню (запоминается) → язык системы → исходный язык игры.
@@ -225,7 +225,7 @@ rtsbuild --project ~/RTSGames/dune2 --target macos
 - F8 в клиенте — отладчик RmlUi (дерево элементов, стили, журнал).
 - Скин игры — `ui/skin.rcss` (подключается после `theme.rcss` во всех документах: цвета, рамки,
   кнопки, раскладка) и шрифт заголовков `fonts/title.ttf` (семейство `title`). У каждого прототипа
-  в `games/` есть свой скин. Портретная раскладка (`@media (orientation: portrait)`) — в теме движка;
+  в `templates/` есть свой скин. Портретная раскладка (`@media (orientation: portrait)`) — в теме движка;
   на ПК проверяется флагом `--size 540x960`.
 - Тексты в документах пишутся ключами `@menu.play`: перевод берётся из `engine/assets/lang` (и `lang/`
   игры) при загрузке документа, смена языка в меню перезагружает документы.
@@ -284,8 +284,8 @@ Linux ARM64 (GCC), macOS ARM64 (AppleClang) — одинаковые контр�
 
 ```bash
 ./build/mac/rts_server --config apps/server/server.json            # UDP 27015, WebSocket 27016
-./build/mac/rts_netbot --server 127.0.0.1 --project games/mushrooms --queue 1v1   # бот в очередь
-./build/mac/rts_netbot --server ws://127.0.0.1:27016 --project games/mushrooms --queue 1v1
+./build/mac/rts_netbot --server 127.0.0.1 --project templates/mushrooms --queue 1v1   # бот в очередь
+./build/mac/rts_netbot --server ws://127.0.0.1:27016 --project templates/mushrooms --queue 1v1
 ./build/mac/rts_net_tests                                          # сетевые тесты
 docker build -f apps/server/Dockerfile -t rts-server .             # сервер в контейнере
 ```
@@ -367,9 +367,9 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 - **Форматы**: ещё **FBX** (ufbx) и сжатые текстуры **KTX2** (ETC2/BC/ASTC, остаются сжатыми на GPU).
 
 Сломанная модель не ломает игру: тип рисуется фигурой, причина пишется в консоль редактора.
-Просмотр: `rts_modelview модель.glb@Walk` или `rts_modelview --game games/showcase` (все типы игры
+Просмотр: `rts_modelview модель.glb@Walk` или `rts_modelview --game templates/showcase` (все типы игры
 так, как их рисует игра); в редакторе — окно **Models** (клипы, узлы, материалы, портрет,
-перезагрузка при сохранении файла модели). Пример — `games/showcase`, полный формат — `docs/models.md`.
+перезагрузка при сохранении файла модели). Пример — `templates/showcase`, полный формат — `docs/models.md`.
 
 ## Освещение
 
@@ -472,6 +472,21 @@ UI (`UiLayer`) вызывает это сам при фокусе на `<input t
 - iPad: клавиатура Magic Keyboard / Bluetooth, мышь и трекпад (правая кнопка, наведение, прокрутка).
 - Буфер обмена работает везде; в браузере Ctrl/Cmd+V доходит до игры после того, как браузер отдал текст.
 - Web: `userDataDir()` хранится в IndexedDB — настройки и сохранения переживают перезагрузку страницы.
+
+### Нативные плагины: платежи и реклама
+
+Любой SDK платформы подключается плагином на её родном языке — Java (Android), Objective-C (iOS/macOS),
+JavaScript (web) или C++ — через один асинхронный мост `engine/platform/Plugins.h`. Игра пользуется
+общими API `rts::store` (покупки) и `rts::ads` (реклама) из `engine/services`, а провайдер выбирается
+по платформе в `game.json`. Готовые плагины в `plugins/`: **App Store**, **Google Play**, **RuStore**,
+**Яндекс Игры** (web: покупки и реклама), **Steam** (покупки через Inventory Service и DLC, Windows/
+Linux/macOS), **Yandex Mobile Ads**, **AdMob**, **AppLovin MAX**, **ironSource (Unity LevelPlay)**. В билд попадают только выбранные игрой плагины (`"plugins"` в
+game.json или `--plugins`): чужих SDK, зависимостей, записей манифеста и ключей Info.plist в нём нет,
+CI это проверяет. Для отладки на десктопе есть заглушки магазина и рекламы (`mock-store`, `mock-ads`;
+`RTS_MOCK_STORE`, `RTS_MOCK_ADS`): весь сценарий покупки проходит без телефона, а в релизные сборки
+заглушки не компилируются. rtsbuild сам вписывает плагины в Gradle/манифест, Info.plist/Podfile и
+HTML; для Google Play и RuStore собирайте отдельно: `--plugins googleplay,admob` и
+`--plugins rustore,yandex-ads`. Подробно — `docs/plugins.md`.
 
 ### Релизы
 
