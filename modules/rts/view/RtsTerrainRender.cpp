@@ -612,12 +612,25 @@ void TerrainRenderer::buildWater(gfx::Device& dev, const MapGrid& g, bool flatDi
                     size_t ni = size_t(g.index(nx, ny));
                     if (isWater(nx, ny)) { if (body[ni] < 0) { body[ni] = id; stack.push_back(int(ni)); } continue; }
                     // shore: the ground of the land cell next to the water (its centre; corners dip into the lake)
-                    rim = std::min(rim, terrain::heightAt(g, lh_, float(nx) + 0.5f, float(ny) + 0.5f));
+                    rim = std::min(rim, detailOn_ ? detail_.sample(float(nx) + 0.5f, float(ny) + 0.5f) : terrain::heightAt(g, lh_, float(nx) + 0.5f, float(ny) + 0.5f));
                 }
                 for (int cy = 0; cy <= 1; ++cy) for (int cx = 0; cx <= 1; ++cx) top = std::max(top, terrain::gridCorner(g, lh_, x + cx, y + cy, flatDig));
             }
             if (!deep && look_.water == TerrainLook::Water::Auto && !heightfield_) continue; // shallows alone: no surface
             const float y = (rim < 1e8f ? rim : top) + look_.waterOffset;
+            // detail surface: the water reaches one cell under the shore, the smooth bank cuts its outline
+            if (detailOn_) {
+                std::vector<int> grown = cells;
+                std::vector<uint8_t> in(size_t(W * H), 0);
+                for (int c : cells) in[size_t(c)] = 1;
+                for (int c : cells)
+                    for (auto [dx, dy] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}, std::pair{1, 1}, std::pair{-1, -1}, std::pair{1, -1}, std::pair{-1, 1}}) {
+                        const int nx = c % W + dx, ny = c / W + dy;
+                        if (!g.inside(nx, ny) || in[size_t(ny * W + nx)]) continue;
+                        in[size_t(ny * W + nx)] = 1; grown.push_back(ny * W + nx);
+                    }
+                cells.swap(grown);
+            }
             // rows of cells merged into runs
             std::sort(cells.begin(), cells.end());
             for (size_t i = 0; i < cells.size();) {
