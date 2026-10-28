@@ -462,3 +462,6 @@ target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
 endif()
+if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
+    target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
+endif()

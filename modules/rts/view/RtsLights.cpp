@@ -75,7 +75,31 @@ void RtsLights::init(const Rules& rules) {
     configure(Json{}, Json{});
 }
 
-void RtsLights::configure(const Json& game, const Json& map) {
+std::vector<RtsLights::MapLight> RtsLights::parseMapLights(const Json& lights) {
+    std::vector<MapLight> out;
+    for (const Json& j : lights.items()) {
+        if (!j.isObject()) continue;
+        MapLight m;
+        const Json& p = j["pos"];
+        m.x = p.size() >= 2 ? float(p[0].fx().toDouble()) : num(j, "x", 0);
+        m.z = p.size() >= 2 ? float(p[1].fx().toDouble()) : num(j, "z", 0);
+        m.height = num(j, "height", 1.0f);
+        m.color = color(j, m.color);
+        m.radius = num(j, "radius", 4.0f);
+        m.intensity = num(j, "intensity", 1.5f);
+        m.flicker = num(j, "flicker", 0.0f);
+        m.halo = halo(j, m.radius * 0.2f);
+        out.push_back(m);
+    }
+    return out;
+}
+
+void RtsLights::configure(const Json& game, const Json& mapBlock) {
+    configure(game, mapBlock, Json{});
+}
+
+void RtsLights::configure(const Json& game, const Json& map, const Json& lights) {
+    mapLights_ = parseMapLights(lights);
     auto pick = [&](const char* key, float def) { return num(map, key, num(game, key, def)); };
     cycle_ = game.isObject() || map.isObject();
     startTime_ = pick("time", 0.5f);
@@ -99,13 +123,14 @@ void RtsLights::configure(const Json& game, const Json& map) {
 
 void RtsLights::updateSky(Lighting& l, double seconds) {
     if (!haveBase_) { base_ = l; haveBase_ = true; }
-    if (!cycle_) {
+    const bool cycle = cycle_ || preview_;
+    if (!cycle) {
         night_ = dusk_ = 0;
         if (touched_) { l = base_; touched_ = false; }
         return;
     }
     touched_ = true;
-    float t = startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
+    float t = preview_ ? previewTime_ : startTime_ + (dayLength_ > 0 ? float(seconds) / dayLength_ : 0.0f);
     t -= std::floor(t);
     timeOfDay_ = t;
     // sun elevation: +1 noon, 0 dawn/dusk, -1 midnight
@@ -133,15 +158,16 @@ void RtsLights::updateSky(Lighting& l, double seconds) {
     // Storm: overcast (weaker, greyer sun) and lightning. A flash may start in each game second
     // with probability ~ storm; a hash of the second index keeps it identical in replays.
     lightning_ = 0;
-    if (storm_ > 0) {
-        l.sunIntensity *= 1.0f - 0.45f * storm_;
-        l.sunColor = mix(l.sunColor, {0.75f, 0.78f, 0.85f}, 0.5f * storm_);
-        l.fogColor = mix(l.fogColor, l.fogColor * 0.6f, storm_);
+    const float storm = preview_ ? previewStorm_ : storm_;
+    if (storm > 0) {
+        l.sunIntensity *= 1.0f - 0.45f * storm;
+        l.sunColor = mix(l.sunColor, {0.75f, 0.78f, 0.85f}, 0.5f * storm);
+        l.fogColor = mix(l.fogColor, l.fogColor * 0.6f, storm);
         const double sec = std::floor(seconds);
         for (int back = 0; back < 2; ++back) { // a flash started in this or the previous second
             uint32_t h = uint32_t(int64_t(sec) - back) * 2654435761u;
             h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
-            if (float(h & 0xffff) / 65535.0f > storm_ * 0.16f) continue;
+            if (float(h & 0xffff) / 65535.0f > storm * 0.16f) continue;
             const float start = float(sec - back) + float((h >> 16) & 0xff) / 255.0f;
             const float age = float(seconds) - start;
             if (age < 0 || age > 0.45f) continue;
@@ -216,16 +242,18 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
     LightSystem& ls = r.lights;
     ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
     {   // clouds drift with the wind in game time; a storm covers the sky
-        const float cover = cycle_ ? std::max(clouds_, storm_ * 0.85f) : 0.0f;
-        const float t = float(s.seconds);
-        ls.setClouds(cover, std::min(cloudStrength_ + storm_ * 0.3f, 0.9f), cloudScale_, -windX_ * t, -windZ_ * t);
+        const float clouds = preview_ ? previewClouds_ : clouds_, storm = preview_ ? previewStorm_ : storm_;
+        const float cover = (cycle_ || preview_) ? std::max(clouds, storm * 0.85f) : 0.0f;
+        const float t = float(preview_ && s.seconds == 0 ? time : s.seconds);   // editor preview drifts in real time
+        ls.setClouds(cover, std::min(cloudStrength_ + storm * 0.3f, 0.9f), cloudScale_, -windX_ * t, -windZ_ * t);
     }
     if (ls.quality() == LightQuality::Off) { active_.clear(); lastTick_ = s.tick; return; }
     consumeEvents(s, time, vision, grid, view);
     const float tt = float(time);
     // Constant lights matter at night; by day they only warm their surroundings a little.
-    const float glowK = cycle_ ? 0.55f + 0.45f * std::max(night_, dusk_) : 1.0f;
-    const float haloK = cycle_ ? 0.15f + 0.85f * std::max(night_, dusk_ * 0.7f) : 0.35f;
+    const bool cycle = cycle_ || preview_;
+    const float glowK = cycle ? 0.55f + 0.45f * std::max(night_, dusk_) : 1.0f;
+    const float haloK = cycle ? 0.15f + 0.85f * std::max(night_, dusk_ * 0.7f) : 0.35f;
     for (const SceneObject& o : s.objects) {
         if (!o.visible) continue;
         if (o.isProjectile) {
@@ -252,6 +280,21 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
         PointLight l{p, L.radius * scale, L.color, in, 0};
         l.halo = L.halo * scale;
         l.haloAlpha = haloK * std::min(in / std::max(L.intensity, 0.01f), 1.3f);
+        ls.add(l);
+    }
+    for (const MapLight& m : mapLights_) { // decorative lights: once the cell has been explored
+        if (vision && !vision->empty()) {
+            int x = int(std::floor(m.x)), y = int(std::floor(m.z));
+            if (!grid.inside(x, y) || (*vision)[size_t(grid.index(x, y))] == 0) continue;
+        }
+        float in = m.intensity * glowK;
+        if (m.flicker > 0) {
+            float ph = m.x * 1.7f + m.z * 2.3f;
+            in *= 1.0f + m.flicker * (0.6f * std::sin(tt * 9.0f + ph) + 0.4f * std::sin(tt * 23.0f + ph * 1.9f));
+        }
+        PointLight l{{m.x, view.heightAt(grid, m.x, m.z) + m.height, m.z}, m.radius, m.color, in, 0.3f};
+        l.halo = std::max(m.halo, 0.0f);
+        l.haloAlpha = haloK;
         ls.add(l);
     }
     emitActive(ls, time);

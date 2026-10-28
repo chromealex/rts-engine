@@ -18,6 +18,9 @@
 //     "clouds": 0.5,      cloud shadow coverage 0..1 (0 = clear sky)
 //     "cloudStrength": 0.45, "cloudScale": 1, "wind": [1.2, 0.5]   (world units / s)
 //     "storm": 0 }        0..1: overcast + lightning flashes (deterministic in game time)
+// Decorative lights (lanterns, lava, campfires) in the map's "lights" array:
+//   [{ "x": 10, "z": 12, "height": 1, "color": [1, 0.6, 0.3], "radius": 4, "intensity": 1.5,
+//      "flicker": 0.2, "halo": 0.8 }]   ("pos": [x, z] works too); shown once the cell is explored.
 // Without the block the scene keeps the renderer's default (noon) lighting.
 // Testing: RTS_TIME_OF_DAY=0..1 sets the start time, RTS_NIGHT=0..1 forces a fixed night amount.
 // At night emissive materials glow brighter (Renderer3D::lights.setNightGlow).
@@ -39,7 +42,14 @@ public:
     void init(const Rules& rules);
     // Day/night settings: game.json "lighting", then the map's "lighting" (either may be null).
     void configure(const Json& gameLighting, const Json& mapLighting);
+    // ... plus the map's decorative "lights" array.
+    void configure(const Json& gameLighting, const Json& mapLighting, const Json& mapLights);
     void setNight(float n) { forcedNight_ = n; }          // < 0: follow the cycle
+    // Editor preview: overrides time of day / clouds / storm until switched off.
+    void setPreview(bool on, float timeOfDay, float clouds, float storm) { preview_ = on; previewTime_ = timeOfDay; previewClouds_ = clouds; previewStorm_ = storm; }
+    struct MapLight { render::float3 color{1, 0.6f, 0.3f}; float x = 0, z = 0, height = 1, radius = 4, intensity = 1.5f, flicker = 0, halo = -1; };
+    static std::vector<MapLight> parseMapLights(const Json& lights);
+    const std::vector<MapLight>& mapLights() const { return mapLights_; }
     float night() const { return night_; }
     float lightning() const { return lightning_; }   // current lightning flash 0..1
     float timeOfDay() const { return timeOfDay_; }
@@ -70,6 +80,9 @@ private:
     float startTime_ = 0.5f, dayLength_ = 0, nightLevel_ = 1, forcedNight_ = -1;
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
     float lightning_ = 0;
+    bool preview_ = false;
+    float previewTime_ = 0.5f, previewClouds_ = 0, previewStorm_ = 0;
+    std::vector<MapLight> mapLights_;
     float night_ = 0, dusk_ = 0, timeOfDay_ = 0.5f;
     bool haveBase_ = false, touched_ = false;
     render::Lighting base_;
