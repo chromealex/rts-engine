@@ -83,6 +83,7 @@ void RtsLights::addContactShadows(Renderer3D& r, const RtsScene& s, const MapGri
         if (!o.visible || o.isProjectile || o.type >= types_.size()) continue;
         const UnitType& t = rules_->types[o.type];
         if (t.layer & kLayerAir) continue; // flyers have their own height blob
+        if (view.isSprite(o.type)) continue; // sprites: projected blobs / cast shadows (Rts2DView); a flat decal would z-fight on slopes
         const float c = types_[o.type].contact;
         if (c == 0) continue;
         const float scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());

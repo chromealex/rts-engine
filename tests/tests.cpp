@@ -5774,6 +5774,109 @@ TEST(icons_generate_platform_sets) {
     fs::remove_all(dir);
 }
 
+// ---- sprite shadows (RtsSpriteShadow): data keys, tiers, projected decal geometry
+#include "modules/rts/view/RtsSpriteShadow.h"
+
+TEST(sprite_shadow_data_keys) {
+    using game::SpriteShadowMode;
+    // defaults: blob, unlit; game.json wins over rules.json
+    game::SpriteDefaults d0 = game::parseSpriteDefaults(Json(), Json());
+    CHECK(d0.shadow == SpriteShadowMode::Blob && !d0.lit);
+    game::SpriteDefaults d = game::parseSpriteDefaults(Json::parse(R"({"shadow": "none", "lit": true})"), Json::parse(R"({"shadow": "cast"})"));
+    CHECK(d.shadow == SpriteShadowMode::Cast && d.lit);
+    // old files: missing shadow = blob for units, none for buildings and ground sprites
+    auto spec = [&](const char* js, const game::SpriteDefaults& dd, bool structure, bool ground = false) {
+        return game::parseSpriteShadow(Json::parse(js), dd, structure, ground, 1.0f, 1.5f, 2, 3);
+    };
+    CHECK(spec("{}", d0, false).mode == SpriteShadowMode::Blob);
+    CHECK(spec("{}", d0, true).mode == SpriteShadowMode::None);
+    CHECK(spec("{}", d, true).mode == SpriteShadowMode::Cast);          // game opts in: buildings cast
+    CHECK(spec("{}", d, false, true).mode == SpriteShadowMode::None);   // ground sprites never cast
+    CHECK(spec(R"({"shadow": false})", d, false).mode == SpriteShadowMode::None);
+    CHECK(spec(R"({"shadow": true})", d0, true).mode == SpriteShadowMode::Blob);
+    CHECK(spec(R"({"shadow": "cast"})", d0, false).mode == SpriteShadowMode::Cast);
+    // object form: blob (compatibility) unless "mode" says otherwise; size / alpha kept for the blob
+    game::SpriteShadowSpec o = spec(R"({"shadow": {"size": [0.9, 0.5], "alpha": 0.3}})", d, true);
+    CHECK(o.mode == SpriteShadowMode::Blob && std::fabs(o.blobW - 0.9f) < 1e-4f && std::fabs(o.blobH - 0.5f) < 1e-4f && std::fabs(o.blobAlpha - 0.3f) < 1e-4f);
+    CHECK(spec(R"({"shadow": {"mode": "cast", "size": [0.9, 0.5]}})", d0, true).mode == SpriteShadowMode::Cast);
+    // structure blob covers the footprint; caster height / offset / lit overrides
+    game::SpriteShadowSpec b = spec(R"({"castHeight": 2.5, "shadowOffset": [0.25, -0.5], "lit": false})", d, true);
+    CHECK(b.blobW > 2.0f && b.blobH > 3.0f && std::fabs(b.castHeight - 2.5f) < 1e-4f);
+    CHECK(std::fabs(b.offsetRight - 0.25f) < 1e-4f && std::fabs(b.offsetFront + 0.5f) < 1e-4f && !b.lit);
+    CHECK(std::fabs(spec("{}", d, false).castHeight - 1.5f) < 1e-4f && spec("{}", d, false).lit);
+    CHECK(std::fabs(b.castDepth - 3.0f) < 1e-4f && spec("{}", d, false).castDepth == 0);   // buildings: box of the footprint depth
+    CHECK(spec(R"({"castDepth": 0})", d, true).castDepth == 0);
+}
+
+TEST(sprite_shadow_tiers) {
+    using game::SpriteShadowMode;
+    using render::ShadowQuality;
+    auto at = [](SpriteShadowMode m, ShadowQuality q, bool s) { return game::shadowDrawFor(m, q, s); };
+    // Off: blobs only (the old look); Low: buildings cast, units blob; Medium+: all cast
+    CHECK(!at(SpriteShadowMode::Cast, ShadowQuality::Off, true).cast && at(SpriteShadowMode::Cast, ShadowQuality::Off, true).blobK == 1);
+    CHECK(at(SpriteShadowMode::Cast, ShadowQuality::Low, true).cast && !at(SpriteShadowMode::Cast, ShadowQuality::Low, false).cast);
+    CHECK(at(SpriteShadowMode::Cast, ShadowQuality::Medium, false).cast && at(SpriteShadowMode::Cast, ShadowQuality::High, false).cast);
+    CHECK(!at(SpriteShadowMode::Blob, ShadowQuality::High, false).cast && at(SpriteShadowMode::Blob, ShadowQuality::High, false).blobK == 1);
+    CHECK(!at(SpriteShadowMode::None, ShadowQuality::High, false).cast && at(SpriteShadowMode::None, ShadowQuality::Off, false).blobK == 0);
+}
+
+TEST(sprite_shadow_projected_decal_follows_ground) {
+    // levels map with a cliff: a blob across the edge is cut from both levels' surface triangles,
+    // every decal vertex lies on the terrain mesh (heightAt agrees inside a cell's top quad)
+    game::MapGrid g;
+    g.init(6, 4);
+    for (auto& f : g.flags) f = game::kCellGround;
+    for (int y = 0; y < 4; ++y) for (int x = 3; x < 6; ++x) g.level[size_t(g.index(x, y))] = 1;
+    for (size_t i = 0; i < g.height.size(); ++i) g.height[i] = int16_t(i * 5 % 16);
+    const float lh = 1.5f;
+    game::GroundSurface surf{&g, lh, false};
+    std::vector<render::float3> tris;
+    game::surfaceTriangles(surf, 2.4f, 1.4f, 3.6f, 2.6f, tris);
+    CHECK(tris.size() == 4 * 6);   // 2 x 2 cells, 2 triangles each
+    const render::float3 o{2.4f, 0, 1.4f}, aU{1, 0, 0}, aV{0, 0, 1};
+    int pieces = 0;
+    float minY = 1e9f, maxY = -1e9f;
+    for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+        const render::float3 t[3] = {tris[i], tris[i + 1], tris[i + 2]};
+        render::float3 poly[8];
+        int n = game::clipToRect(t, o, aU, 1.2f, aV, 1.2f, poly);
+        if (n) ++pieces;
+        for (int k = 0; k < n; ++k) {
+            CHECK(poly[k].x >= 2.4f - 1e-4f && poly[k].x <= 3.6f + 1e-4f && poly[k].z >= 1.4f - 1e-4f && poly[k].z <= 2.6f + 1e-4f);
+            // on the plane of its source triangle
+            const render::float3 nrm = render::cross(t[1] - t[0], t[2] - t[0]);
+            CHECK(std::fabs(render::dot(poly[k] - t[0], nrm)) < 1e-3f);
+            minY = std::min(minY, poly[k].y); maxY = std::max(maxY, poly[k].y);
+        }
+    }
+    CHECK(pieces == 8);
+    CHECK(minY < 1.0f && maxY > 1.5f);   // both sides of the cliff, no flat plate at one height
+    // flat cells (cell centres away from the cliff) match the view's ground height
+    std::vector<render::float3> one;
+    game::surfaceTriangles(surf, 0.5f, 0.5f, 0.5f, 0.5f, one);
+    CHECK(one.size() == 6);
+    // tile maps: flat cells at level * levelHeight + height / 16
+    game::GroundSurface tilesSurf{&g, lh, true};
+    one.clear();
+    game::surfaceTriangles(tilesSurf, 4.5f, 2.5f, 4.5f, 2.5f, one);
+    CHECK(one.size() == 6 && std::fabs(one[0].y - (1.5f + float(g.height[size_t(g.index(4, 2))]) / 16.0f)) < 1e-5f);
+    // fully outside the rect: nothing
+    const render::float3 far[3] = {{10, 0, 10}, {11, 0, 10}, {10, 0, 11}};
+    render::float3 out[8];
+    CHECK(game::clipToRect(far, o, aU, 1.2f, aV, 1.2f, out) == 0);
+}
+
+TEST(sprite_shadow_caster_faces_camera_unless_sun_grazes) {
+    const render::float3 gR{1, 0, 0}, gF{0, 0, 1};
+    // sun towards the camera: keep the camera's axis (silhouette as seen)
+    render::float3 r = game::casterRight(gR, gF, {0.2f, 1.0f, 0.8f});
+    CHECK(std::fabs(r.x - 1) < 1e-4f && std::fabs(r.z) < 1e-4f);
+    // sun from the side (along the sprite plane): turned so the shadow is not a sliver, still unit length
+    r = game::casterRight(gR, gF, {1.0f, 1.0f, 0.0f});
+    const float c = std::fabs(r.x);
+    CHECK(c < 0.9f && c > 0.4f && std::fabs(render::length(r) - 1) < 1e-3f);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
