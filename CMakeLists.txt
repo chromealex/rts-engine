@@ -143,6 +143,10 @@ add_library(rts_net_server STATIC
     engine/net/server/ServerMatch.cpp
     engine/net/server/Matchmaker.cpp)
 target_link_libraries(rts_net_server PUBLIC rts_net)
+# Game data on the network side: match loading like the game (tile maps) and the server's verdict
+# (re-simulating a match nobody settled). Server, bot client and net tests share it.
+add_library(rts_net_game STATIC apps/server/GameData.cpp)
+target_link_libraries(rts_net_game PUBLIC rts_net_server rts_game)
 
 # ---------------------------------------------------------------------------
 # Audio (presentation only): software mixer, sound banks from data, procedural synth, music
@@ -407,15 +411,15 @@ endif()
 
 if(RTS_BUILD_SERVER)
     add_executable(rts_server apps/server/main.cpp)
-    target_link_libraries(rts_server PRIVATE rts_net_server)
+    target_link_libraries(rts_server PRIVATE rts_net_game)
     add_executable(rts_netbot apps/netbot/main.cpp)
-    target_link_libraries(rts_netbot PRIVATE rts_net rts_game rts_i18n)
+    target_link_libraries(rts_netbot PRIVATE rts_net_game rts_i18n)
 endif()
 
 if(RTS_BUILD_TESTS)
     enable_testing()
     add_executable(rts_net_tests tests/net_tests.cpp)
-    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game rts_i18n)
+    target_link_libraries(rts_net_tests PRIVATE rts_net_game rts_i18n)
     target_compile_definitions(rts_net_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)

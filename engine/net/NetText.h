@@ -27,7 +27,7 @@ inline bool operator==(const NetText::Arg& a, const NetText::Arg& b) { return a.
 // other engine table (rts_net_tests checks it).
 inline const std::vector<std::string>& netTextKeys() {
     static const std::vector<std::string> keys = {
-        "net.connected", "net.disconnected", "net.chat_line", "net.desync", "net.rating_up", "net.rating_down",
+        "net.connected", "net.disconnected", "net.reconnecting", "net.chat_line", "net.desync", "net.rating_up", "net.rating_down",
         "net.player.back", "net.player.dropped", "net.player.left", "net.player.unnamed", "net.bot",
         "net.end.opponents_left", "net.end.everyone_left", "net.end.result_mismatch",
         "net.error.version", "net.error.bad_request", "net.error.no_such_room", "net.error.data_mismatch",
