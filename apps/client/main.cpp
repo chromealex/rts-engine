@@ -226,7 +226,7 @@ void GameClient::startMatch(size_t idx) {
     selection_.clear();
     for (auto& g : groups_) g.clear();
     view_.setTiles(map["tiles"]);
-    {   // generated maps (map "generate"): the view reads the map the simulation was built from
+    {   // generated maps (map / world body "generate"): the view reads the map the simulation was built from
         const Json& vm = mod().generatedMap() ? *mod().generatedMap() : map;
         view_.setWorld(vm);   // planets: map "world" block (no block: flat view, unchanged)
         view_.setTerrainMaterial(vm["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
