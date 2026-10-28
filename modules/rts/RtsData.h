@@ -293,6 +293,7 @@ struct UnitType {
     uint64_t crushTags = 0;                    // moving over units with these tags kills them (Dune / C&C tanks)
     uint32_t factionMask = 0;                  // "factions": only these factions may train / build it (0 = all)
     bool autoTrainAdvance = true;              // autoTrain.advance: false = the new units stay home (Northgard births)
+    int requiresRegions = 0;                   // trainable only with this many own regions (Z factory tech levels)
     int16_t deathFieldRes = -1;                // dying spreads a resource field (Dune spice bloom)
     Fixed deathFieldRadius = Fixed::fromInt(3), deathFieldAmount = Fixed::fromInt(100);
     Json view;

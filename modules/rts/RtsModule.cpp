@@ -437,6 +437,11 @@ bool RtsModule::canTrain(Simulation& sim, uint8_t player, uint16_t type) const {
     if (player < gs->players.size() && !gs->players[player].typeDisabled.empty() && gs->players[player].typeDisabled[type]) return false;
     if (t.unique && player < gs->players.size() && gs->players[player].typeCountAll[type] > 0) return false;
     if (t.hero && rules_.originals && !heroAllowed(sim, player, type)) return false;
+    if (t.requiresRegions > 0 && player != 0 && player < gs->players.size()) {   // Z: factory level from territories held
+        int owned = 0;
+        for (auto o : gs->regionOwner) if (o == player) ++owned;
+        if (owned < t.requiresRegions) return false;
+    }
     if (t.factionMask && player != 0 && player < gs->players.size()) {   // house / race units (Dune II houses)
         int fi = rules_.findFaction(gs->players[player].faction);
         if (fi < 0 || !(t.factionMask & (1u << fi))) return false;
