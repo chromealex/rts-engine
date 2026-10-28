@@ -188,6 +188,8 @@ const char* kInstructions =
     "attach to events with fx_bind (died, hit, attack, ability, spawned per type / weapon / ability). "
     "Look of the game: own meshes / textures via asset_import, then the type's \"view\" block with rules_merge "
     "(model, materials overrides per material name, team colour, clips: docs/models.md; model_info lists nodes, clips, materials); "
+    "custom materials: texture_generate (bricks, metal panels, wood, camo, scales, ... + normal maps, team masks) -> material_set "
+    "(shared library materials.json) -> material_apply {type, material, target | node} -> material_preview + view_screenshot; "
     "lighting: lighting_set (sun, sky, day/night, presets), light_add / light_update (point lights on the map); "
     "fog of war: rules_merge {path: \"fogOfWar\"} (mode, colour, style, softness, grid, lineOfSight for 3D visibility by heights, "
     "vision.blocks on wall types, delivery.blocksVision on smoke skills); "

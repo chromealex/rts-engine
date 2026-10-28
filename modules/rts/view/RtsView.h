@@ -206,6 +206,7 @@ private:
     struct ModelChoice {
         render::Model* model = nullptr;
         std::vector<render::Material> materials;  // per-type copy with overrides applied
+        std::vector<int> nodeMaterial;            // "assign": node -> index into materials (-1 = the model's)
         render::mat4 fix;                         // forward axis, fit, offset
         ClipSpec clips[kAnimCount];
         bool hasClip[kAnimCount] = {};
@@ -270,6 +271,14 @@ private:
     void buildLook(gfx::Device& dev, const UnitType& t, TypeLook& out);
     bool loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, const std::string& path, ModelChoice& out);
     void configureChoice(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c, bool isShape);
+    // Material library (materials.json): a reference ("steel", {"use": "steel", ...}) flattened into
+    // one override object; library entries inherit with "base".
+    Json resolveMaterial(const UnitType& t, const Json& ref, int depth = 0);
+public:
+    // A material reference / override object applied to `mt` (textures load into `m`).
+    void applyMaterial(gfx::Device& dev, const UnitType& t, render::Model& m, render::Material& mt, const Json& ref);
+    const Json& materialLibrary() const { return materialLib_; }
+private:
     void configureExtras(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c);
     render::Model* loadModelCached(gfx::Device& dev, const UnitType& t, const std::string& path);
     int loadTexture(gfx::Device& dev, const UnitType& t, render::Model& m, const std::string& path);
@@ -294,6 +303,7 @@ private:
 
     const Rules* rules_ = nullptr;
     render::FileReader read_;
+    Json materialLib_ = Json::object();   // materials.json "materials"
     gfx::Device* dev_ = nullptr;
     std::map<std::string, std::unique_ptr<render::Model>> models_;  // by path; shapes as "shape:<name>"
     std::vector<TypeLook> looks_;
