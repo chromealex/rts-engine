@@ -520,6 +520,10 @@ Rules loadRules(const Json& j) {
         }
         t.score = tj.getFx("score", t.structure ? Fixed::fromInt(5) : Fixed::fromInt(1));
         t.view = tj["view"];
+        if (const Json& sp = tj["sprite"]; !sp.isNull()) { // 2D games: presentation only, kept with the view block
+            if (!sp.isObject() || sp.getStr("sheet").empty()) throw std::runtime_error(where + ": sprite needs \"sheet\" (image path)");
+            t.view.set("sprite", sp);
+        }
     }
     if (const Json& ab = j["autoBuild"]; ab.isObject()) {
         for (auto& p : ab["pool"].items()) r.autoBuildPool.push_back(typeRef("autoBuild.pool", p.str()));

@@ -6,6 +6,7 @@
 //         the main pass is left open so the caller can draw UI, then calls device.endPass()]
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <vector>
 #include "../gfx/Gfx.h"
 #include "Math3D.h"
@@ -92,6 +93,14 @@ public:
     void quadXZ(float3 a, float3 b, float width, uint32_t color, float y = 0.02f);
     void circleXZ(float3 c, float radius, uint32_t color, int segments = 40, float y = 0.03f);
     void render(const gfx::PassDesc& screenPass); // shadow pass + opens the main pass and draws everything
+    // Extra renderers (sprites, tiles) that draw with their own pipelines inside the main pass: run
+    // after opaque and translucent meshes, before overlays (fog of war stays on top).
+    // Cleared by beginScene.
+    using CustomDraw = std::function<void(gfx::Device&)>;
+    void drawCustom(CustomDraw fn) { custom_.push_back(std::move(fn)); }
+    const RTSCamera& camera() const { return cam_; }
+    int sceneWidth() const { return sceneW_; }
+    int sceneHeight() const { return sceneH_; }
 
     const mat4& viewProj() const { return viewProj_; }
     Lighting lighting;
@@ -113,6 +122,8 @@ private:
     ShadowQuality quality_ = ShadowQuality::Medium;
     std::vector<DrawItem> items_;
     std::vector<ColorVertex> lines_, tris_;
+    std::vector<CustomDraw> custom_;
+    RTSCamera cam_;
     mat4 viewProj_, lightViewProj_;
     float3 camPos_;
     uint32_t drawCalls_ = 0;
