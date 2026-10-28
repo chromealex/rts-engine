@@ -83,12 +83,35 @@ void stopTextInput() {
     detail::showSoftKeyboard(false, S.textArea);
 }
 bool textInputActive() { return state().textInput; }
+Insets safeAreaInsets() { return state().safe; }
+void setFullscreen(bool on) { detail::applyFullscreen(on); }
+bool isFullscreen() {
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+    return true;
+#else
+    return state().fullscreen;
+#endif
+}
+#if !defined(__EMSCRIPTEN__)
+void syncUserData() {} // files are written straight to disk
+#endif
 float softKeyboardHeight() { return state().keyboardH; }
 
 namespace detail {
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
 void showSoftKeyboard(bool, const TextInputArea&) {} // desktop: the physical keyboard is always there
 #endif
+
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+void applyFullscreen(bool) {} // apps are always fullscreen
+#endif
+
+void setSafeArea(const Insets& in) {
+    auto& S = state();
+    if (in.left == S.safe.left && in.top == S.safe.top && in.right == S.safe.right && in.bottom == S.safe.bottom) return;
+    S.safe = in;
+    Event e; e.type = EventType::Resized; dispatch(e);
+}
 
 void setKeyboardHeight(float h) {
     auto& S = state();
@@ -187,7 +210,7 @@ uint64_t contentPacksHash() {
     return h.value();
 }
 
-#if !defined(__APPLE__) && !defined(_WIN32)
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
 std::string clipboardText() { return state().clipboard; }
 void setClipboardText(const std::string& s) { state().clipboard = s; }
 #endif

@@ -385,6 +385,33 @@ Android и в мобильных браузерах (на десктопе — �
 на любом языке, Backspace/Enter — как `KeyDown`/`KeyUp`; `softKeyboardHeight()` и событие `KeyboardChanged`
 сообщают, сколько экрана закрыто снизу, `TextInputEnded` — что пользователь сам закрыл клавиатуру.
 UI (`UiLayer`) вызывает это сам при фокусе на `<input type="text|password|search|email|number">` и `<textarea>`.
+
+Остальное в `Platform.h` для мобильных и браузера:
+- `safeAreaInsets()` — отступы от выреза камеры, скруглённых углов, полоски «домой» и системных панелей
+  (iOS, Android, мобильный Safari/Chrome; на десктопе 0, на MacBook с вырезом — в полноэкранном режиме).
+- `setFullscreen()` / `isFullscreen()`; встроенные переключатели — F11 (Windows, Linux, web), Alt+Enter (Windows).
+  В браузере вместе с полноэкранным режимом фиксируется ориентация (`AppConfig::orientation`).
+- Android: кнопка «Назад» приходит игре как `Key::Escape`; полноэкранный режим с прячущимися панелями;
+  физическая клавиатура и мышь (Chromebook, DeX) — обычные события клавиш и мыши.
+- iPad: клавиатура Magic Keyboard / Bluetooth, мышь и трекпад (правая кнопка, наведение, прокрутка).
+- Буфер обмена работает везде; в браузере Ctrl/Cmd+V доходит до игры после того, как браузер отдал текст.
+- Web: `userDataDir()` хранится в IndexedDB — настройки и сохранения переживают перезагрузку страницы.
+
+### Релизы
+
+`.github/workflows/release.yml`: тег `v1.2.3` (или ручной запуск с выбором папки игры) собирает все
+платформы через `rtsbuild` и публикует GitHub Release:
+
+| Платформа | Что выходит | Подпись (секреты репозитория) |
+|---|---|---|
+| Windows | установщик (Inno Setup, без прав администратора) + portable .zip | `WINDOWS_CERT_PFX_BASE64`, `WINDOWS_CERT_PASSWORD` |
+| Android | .apk и .aab для Google Play | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` |
+| macOS | .app в .zip, с нотаризацией | `MACOS_CERT_P12_BASE64`, `MACOS_CERT_PASSWORD` (Developer ID) + ключ App Store Connect |
+| iOS | проект Xcode; с ключом — сборка в TestFlight | `APPLE_TEAM_ID`, `ASC_KEY_ID`, `ASC_ISSUER_ID`, `ASC_KEY_P8_BASE64` |
+| Linux | .tar.gz | — |
+| Web | .zip; при `DEPLOY_WEB_PAGES=true` (переменная репозитория) — публикация на GitHub Pages | — |
+
+Без секретов релиз всё равно выходит: APK подписан отладочным ключом, .app — ad-hoc, Windows без подписи.
 Режим скриншота (`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`) шагает ровно по 1/60 с на кадр, поэтому
 кадр N одинаков на любой машине.
 
