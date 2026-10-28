@@ -1,4 +1,5 @@
 #include "RtsAI.h"
+#include "RtsAITerrain.h"
 #include <algorithm>
 #include <vector>
 #include <cstdio>
@@ -36,6 +37,7 @@ void RtsAI::update(Simulation& sim) {
     next_ = sim.tick() + cfg_.thinkTicks + rng_.below(cfg_.thinkTicks / 2 + 1);
     auto* m = dynamic_cast<RtsModule*>(&sim.module());
     if (!m) return;
+    applyRulesConfig(*m);
     auto* gs = sim.world().resource<GameState>();
     if (std::find(gs->wavePlayers.begin(), gs->wavePlayers.end(), player_) != gs->wavePlayers.end()) return; // scripted side
     bool hasGarrisons = false, hasOther = false;
@@ -53,6 +55,7 @@ void RtsAI::update(Simulation& sim) {
         if (!m->rules().diggables.empty() || !m->rules().rooms.empty()) dungeon(sim, *m);
         if (m->rules().settlers) settlers(sim, *m);
         if (m->rules().mech.any) mech(sim, *m);
+        watchBuilders(sim, *m);
         economy(sim, *m);
         military(sim, *m);
     }
@@ -79,7 +82,7 @@ bool RtsAI::train(Simulation& sim, RtsModule& m, uint16_t type) {
     return true;
 }
 
-bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type, int depth) {
+bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type, int depth, const Vec3* at) {
     World& w = sim.world();
     const Rules& R = m.rules();
     const UnitType& bt = R.types[type];
@@ -111,19 +114,31 @@ bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type, int depth) {
     });
     if (!builder.valid() || bestScore >= (1 << 20)) return false;
     Vec3 spot;
-    if (bt.placeOn != kNoType) {
+    if (at) {
+        spot = *at;
+    } else if (bt.placeOn != kNoType) {
         // nearest free node (geyser, metal spot) to the builder
         bool found = false;
         Fixed bestD{};
+        const uint32_t now = sim.tick();
         w.each<Unit, Transform>([&](Entity, Unit& u, Transform& tr) {
             if (u.type != bt.placeOn) return;
+            const int pc = m.state(sim).grid.cellOf(tr.pos);
+            for (auto& [c, until] : badSpots_) if (until > now && c == pc) return;
             if (!m.canPlace(sim, player_, type, tr.pos, builder)) return;
             Fixed d = dist(tr.pos, bpos);
             if (!found || d < bestD) { bestD = d; spot = tr.pos; found = true; }
         });
         if (!found) return false;
-    } else if (!m.findAutoSpot(sim, player_, type, spot)) {
-        return false;
+    } else {
+        // own spot finder (lanes kept free, random tie-breaks); fidelity games keep the sim's scoring (concrete...)
+        if (!hasHome_) refreshBases(sim, m);
+        bool ok = false;
+        if (!R.fidelity && hasHome_) {
+            const int r = std::max(6, R.buildRadius > 0 ? R.buildRadius : 12);
+            ok = findSpot(sim, m, type, home_, r, spot, false) || findSpot(sim, m, type, home_, r + 10, spot, false);
+        }
+        if (!ok && !m.findAutoSpot(sim, player_, type, spot)) return false;
     }
     Command c;
     c.type = kCmdBuild; c.units = {builder}; c.param = type; c.point = spot;
@@ -154,7 +169,11 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
         // sidebar: place finished structures
         if (auto* p = w.tryGet<Production>(e); p && p->ready != kNoType) {
             Vec3 spot;
-            if (m.findAutoSpot(sim, player_, p->ready, spot)) { Command c; c.type = kCmdPlace; c.units = {e}; c.point = spot; send(sim, c); }
+            if (!hasHome_) refreshBases(sim, m);
+            const int r = std::max(6, R.buildRadius > 0 ? R.buildRadius : 12);
+            if ((!R.fidelity && hasHome_ && findSpot(sim, m, p->ready, home_, r, spot, false)) || m.findAutoSpot(sim, player_, p->ready, spot)) {
+                Command c; c.type = kCmdPlace; c.units = {e}; c.point = spot; send(sim, c);
+            }
         }
         // squads: reinforce when weakened
         if (t.members > 1 && m.membersAlive(sim, e) < t.members && m.canAfford(sim, player_, t.reinforceCost)) {
@@ -308,7 +327,59 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
     });
 
-    // 1) idle workers gather the resource we have least of (nodes or fields)
+    // 7) military production buildings (and the tech they require); firstOnly: only while there is none
+    auto armyProducer = [&](bool firstOnly) -> bool {
+        int milProducers = 0;
+        std::vector<uint16_t> candidates;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            const UnitType& t = R.types[ti];
+            if (!t.structure) continue;
+            bool makesArmy = false;
+            for (uint16_t u : t.produces) if (isCombat(R.types[u]) && !R.types[u].unique) makesArmy = true; // hero altars don't count
+            if (t.waveUnit != kNoType) makesArmy = true;
+            if (!makesArmy) continue;
+            milProducers += count[ti];
+            if (m.canTrain(sim, player_, uint16_t(ti)) || !m.requirementsMet(sim, player_, t.requires_)) candidates.push_back(uint16_t(ti));   // own faction
+        }
+        if (firstOnly && milProducers > 0) return false;
+        int want = 1 + workers / 6 + std::min(escalation_, 2);
+        if (m.surface(sim)) {   // planets: one of each producer kind first (an orbital yard opens the other bodies)
+            std::vector<uint16_t> missingKinds;
+            for (uint16_t c : candidates) if (count[c] == 0) missingKinds.push_back(c);
+            if (!missingKinds.empty() && !firstOnly) { candidates = missingKinds; want = std::max(want, milProducers + 1); }
+            if (enemyOffBody_) {   // only orbit fleets reach the enemy: more yards
+                std::vector<uint16_t> orbit;
+                for (uint16_t c : candidates)
+                    for (uint16_t u : R.types[c].produces) if ((R.types[u].layer & kLayerOrbit) && std::find(orbit.begin(), orbit.end(), c) == orbit.end()) orbit.push_back(c);
+                int yards = 0;
+                for (uint16_t c : orbit) yards += count[c];
+                if (!orbit.empty() && yards < 2 + std::min(escalation_, 2)) { candidates = orbit; want = std::max(want, milProducers + 1); }
+            }
+        }
+        if (milProducers < want && !candidates.empty()) {
+            uint16_t pick = candidates[rng_.below(uint32_t(candidates.size()))];
+            if (!m.requirementsMet(sim, player_, R.types[pick].requires_)) {
+                for (auto& rq : R.types[pick].requires_)
+                    if (!rq.tech && count[rq.index] == 0 && build(sim, m, rq.index)) return true;
+            } else if (build(sim, m, pick)) return true;
+        }
+        return false;
+    };
+    // 1) idle workers gather the resource we have least of (nodes or fields); crowded nodes cost extra
+    //    (a dozen workers on one mine jam its entrance)
+    std::vector<std::pair<uint32_t, int>> onNode;   // (node index, own gatherers)
+    if (!idleWorkers.empty())
+        w.each<Orders, Owner>([&](Entity, Orders& ord, Owner& o) {
+            if (o.player != player_ || ord.queue.empty()) return;
+            const Order& f = ord.queue.front();
+            if ((f.type != OrderType::Gather && f.type != OrderType::Return) || !f.target.valid()) return;
+            for (auto& [n, k] : onNode) if (n == f.target.index) { ++k; return; }
+            onNode.push_back({f.target.index, 1});
+        });
+    auto crowd = [&](Entity n) {
+        for (auto& [i, k] : onNode) if (i == n.index) return Fixed::fromInt(std::max(0, k - 5) * 6);
+        return Fixed{};
+    };
     for (Entity wk : idleWorkers) {
         const UnitType& t = R.types[w.get<Unit>(wk).type];
         if (t.gathers.empty()) continue;
@@ -332,7 +403,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
                 if (rs.res != g.res || (!rs.infinite && rs.amount.raw <= 0) || (nu.flags & kUnitUnderConstruction)) return;
                 const UnitType& ntp = R.types[nu.type];
                 if (ntp.ownerOnly && no.player != player_) return;
-                Fixed score = dist(nt.pos, p) * 4 + have / 20;
+                Fixed score = dist(nt.pos, p) * 4 + have / 20 + crowd(n);
                 if (!any || score < bestScore) { any = true; best = n; bestScore = score; field = false; }
             });
         }
@@ -340,6 +411,11 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         Command c; c.type = kCmdGather; c.units = {wk};
         if (field) c.point = bestField; else c.target = best;
         send(sim, c);
+        if (!field) {
+            bool found = false;
+            for (auto& [i, k] : onNode) if (i == best.index) { ++k; found = true; }
+            if (!found) onNode.push_back({best.index, 1});
+        }
     }
 
     const bool canBuildNow = sim.tick() > lastBuildTick_ + 60;
@@ -399,10 +475,20 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             if (gives && !costsIt && t.structure && build(sim, m, uint16_t(ti))) return;
         }
     }
+    // 3c) the first army producer comes early: an economy that never fields an army never wins
+    if (canBuildNow && sim.tick() > 40 * sim.tickRate() && armyProducer(true)) return;
     // 4) income structures (TA metal extractors / energy, refineries on geysers, farms)
     for (size_t ti = 0; ti < R.types.size(); ++ti) {
         const UnitType& t = R.types[ti];
         if (!t.structure || !canBuildNow) continue;
+        // converters (metal makers: energy -> metal) only with a clear surplus of what they consume
+        bool converterStarved = false;
+        for (auto& a : t.income)
+            if (a.value.raw < 0) {
+                Fixed cap = eco.cap[a.res].raw > 0 ? eco.cap[a.res] : R.resources[a.res].storage;
+                if (eco.income[a.res] < -a.value * 2 || eco.stock[a.res] * 2 < cap) converterStarved = true;
+            }
+        if (converterStarved) continue;
         bool incomeLike = positiveIncome(t) || (t.placeOn != kNoType && t.takesOverNode) || (t.resourceNode >= 0 && t.ownerOnly);
         if (!incomeLike || count[ti] >= (t.placeOn != kNoType ? 8 : 6)) continue;
         if (t.placeOn != kNoType && workers < 8 && R.types[t.placeOn].resourceNode >= 0) continue; // geysers later
@@ -478,31 +564,9 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             for (uint16_t rq : missing) if (build(sim, m, rq)) return;
     }
     // 7) military production buildings (and the tech they require)
-    if (sim.tick() > lastBuildTick_ + 100 && building == 0) {
-        int milProducers = 0;
-        std::vector<uint16_t> candidates;
-        for (size_t ti = 0; ti < R.types.size(); ++ti) {
-            const UnitType& t = R.types[ti];
-            if (!t.structure) continue;
-            bool makesArmy = false;
-            for (uint16_t u : t.produces) if (isCombat(R.types[u]) && !R.types[u].unique) makesArmy = true; // hero altars don't count
-            if (t.waveUnit != kNoType) makesArmy = true;
-            if (makesArmy) { milProducers += count[ti]; candidates.push_back(uint16_t(ti)); }
-        }
-        int want = 1 + workers / 6;
-        if (m.surface(sim)) {   // planets: one of each producer kind first (an orbital yard opens the other bodies)
-            std::vector<uint16_t> missingKinds;
-            for (uint16_t c : candidates) if (count[c] == 0) missingKinds.push_back(c);
-            if (!missingKinds.empty()) { candidates = missingKinds; want = std::max(want, milProducers + 1); }
-        }
-        if (milProducers < want && !candidates.empty()) {
-            uint16_t pick = candidates[rng_.below(uint32_t(candidates.size()))];
-            if (!m.requirementsMet(sim, player_, R.types[pick].requires_)) {
-                for (auto& rq : R.types[pick].requires_)
-                    if (!rq.tech && count[rq.index] == 0 && build(sim, m, rq.index)) return;
-            } else if (build(sim, m, pick)) return;
-        }
-    }
+    if (sim.tick() > lastBuildTick_ + 100 && building == 0 && armyProducer(false)) return;
+    // 8) towers at the chokepoint toward the enemy (agent-ai-terrain), once the army is under way
+    if (sim.tick() > lastBuildTick_ + 100 && building == 0 && sim.tick() > 240 * sim.tickRate() && wave_ > 0) buildTowers(sim, m);
 }
 
 void RtsAI::military(Simulation& sim, RtsModule& m) {
@@ -531,7 +595,7 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
                 opts.push_back(ut);
                 if (cand.hero) { opts.assign(1, ut); break; } // heroes first
             }
-            if (!opts.empty()) { Command c; c.type = kCmdTrain; c.units = {e}; c.param = opts[rng_.below(uint32_t(opts.size()))]; send(sim, c); }
+            if (!opts.empty()) { Command c; c.type = kCmdTrain; c.units = {e}; c.param = opts.size() == 1 ? opts[0] : pickUnit(sim, m, opts); send(sim, c); }
         }
     });
     // capture points / flags not ours: send a small squad to the nearest one (tickets, Z flags, resource points)
@@ -549,60 +613,9 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
             idleArmy.erase(idleArmy.begin(), idleArmy.begin() + long(squad.size()));
         }
     }
-    // planets: a pair of orbit units scouts the other bodies now and then (each body in turn), so the bot
-    // learns to use transfers and claims what lies there
-    if (const Surface* S = m.surface(sim); S && sim.tick() % 600 < cfg_.thinkTicks + 1) {
-        std::vector<Entity> orbiters;
-        for (Entity e : idleArmy) if (R.types[w.get<Unit>(e).type].layer & kLayerOrbit) orbiters.push_back(e);
-        if (orbiters.size() >= 4) {
-            const int here = S->bodyAt(w.get<Transform>(orbiters[0]).pos);
-            int target = -1;
-            for (int k = 1; k <= int(S->bodies.size()) && target < 0; ++k) {
-                const int b = (here + k + wave_) % int(S->bodies.size());
-                if (b != here && m.canTransit(sim, orbiters[0], b)) target = b;
-            }
-            if (target >= 0) {
-                Command t; t.type = kCmdTransit; t.units = {orbiters[0], orbiters[1]}; t.param = target; send(sim, t);
-                idleArmy.erase(std::remove(idleArmy.begin(), idleArmy.end(), orbiters[0]), idleArmy.end());
-                idleArmy.erase(std::remove(idleArmy.begin(), idleArmy.end(), orbiters[1]), idleArmy.end());
-            }
-        }
-    }
     const bool defend = gs.victory.mode == VictoryMode::Survive;
-    int needed = defend ? 1 : std::min(cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth, cfg_.maxAttackArmy);
-    if (int(idleArmy.size()) < needed) return;
-    Vec3 c{};
-    for (Entity e : idleArmy) c += w.get<Transform>(e).pos;
-    c = c / Fixed::fromInt(int64_t(idleArmy.size()));
-    Entity best;
-    Fixed bestD{};
-    w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
-        if (!m.hostile(sim, player_, o.player) || u.hp.raw <= 0) return;
-        if (defend && hasHome && dist(t.pos, home) > Fixed::fromInt(25)) return;
-        Fixed d = dist(t.pos, c) - (R.types[u.type].structure ? Fixed::fromInt(5) : Fixed{});
-        if (o.player == kHostileNeutral) d += Fixed::fromInt(10); // creeps only when they are on the way
-        if (!best.valid() || d < bestD) { best = e; bestD = d; }
-    });
-    if (!best.valid()) return;
-    const Vec3 goal = w.get<Transform>(best).pos;
-    if (const Surface* S = m.surface(sim)) {
-        // planets: units that can't reach the target's body stay; orbit units take a transfer there first
-        const int gb = S->bodyAt(goal);
-        std::vector<Entity> go, transit;
-        for (Entity e : idleArmy) {
-            if (S->bodyAt(w.get<Transform>(e).pos) == gb) go.push_back(e);
-            else if (m.canTransit(sim, e, gb)) transit.push_back(e);
-        }
-        if (!transit.empty()) { Command t; t.type = kCmdTransit; t.units = transit; t.param = gb; send(sim, t); }
-        if (go.empty()) { if (!transit.empty() && !defend) ++wave_; return; }
-        idleArmy = go;
-    }
-    Command cmd;
-    cmd.type = kCmdAttack;
-    cmd.units = idleArmy;
-    cmd.point = goal; // attack-move
-    send(sim, cmd);
-    if (!defend) ++wave_;
+    (void)hasHome; (void)home;
+    tactics(sim, m, idleArmy, army, defend);
 }
 
 void RtsAI::dungeon(Simulation& sim, RtsModule& m) {
