@@ -321,10 +321,10 @@ private:
     std::vector<HpaGraph> hpa_;
     // flow fields (agent-mech BA): distance-to-goal per cell, shared by every unit sent to the same goal cell.
     // The path a unit gets is a pure function of the grid and the goal; the cache only saves the work.
-    struct FlowField { int goal = -1; uint8_t layer = 0; int clear = 0; uint32_t version = 0, used = 0; std::vector<uint32_t> dist; };
-    std::vector<FlowField> flow_;
+    struct MechFlowField { int goal = -1; uint8_t layer = 0; int clear = 0; uint32_t version = 0, used = 0; std::vector<uint32_t> dist; };
+    std::vector<MechFlowField> flow_;
     uint32_t flowUse_ = 0, pathVersion_ = 0;
-    const FlowField& flowFor(int goal, uint8_t layer);
+    const MechFlowField& flowFor(int goal, uint8_t layer);
     bool flowCells(int sx, int sy, int gx, int gy, uint8_t layer, std::vector<int>& cells);
 public:
     bool flowFields = false;      // rules "flowFields": long ground paths follow cached flow fields
