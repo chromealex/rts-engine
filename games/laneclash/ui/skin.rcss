@@ -1,0 +1,55 @@
+/* Lane Clash: UI skin (linked after engine/ui/theme.rcss). Arena duel (portrait): royal blue, gold trim, chunky buttons.
+   Title font: fonts/title.ttf (Pattaya, SIL OFL, fonts/OFL.txt). */
+
+body { color: #ffffff; }
+h1 { font-family: title; color: #ffd23f; font-size: 36dp; font-weight: normal; }
+h2 { color: #bcd0ff; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #bcd0ff; }
+.error { color: #ff6b6b; }
+
+.panel {
+    background-color: #173a86ec;
+    border: 3dp #ffd23f;
+    border-radius: 14dp;
+}
+
+button {
+    color: #ffffff;
+    border: 1dp #0f2a63;
+    border-radius: 12dp;
+    decorator: vertical-gradient(#3f8cffff #1f5fd6ff);
+}
+button:hover { decorator: vertical-gradient(#5aa0ffff #2a6ee6ff); border-color: #ffd23f; }
+button:active { decorator: vertical-gradient(#1f5fd6ff #3f8cffff); }
+button.active { border-color: #ffd23f; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#3f8cffff #1f5fd6ff); border-color: #0f2a63; }
+button .cost { color: #ffe78a; }
+button .tip { color: #ff6b6b; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #ffd23f; }
+
+#card .title { color: #ffd23f; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff6b6b; }
+.notice { color: #ffe78a; }
+#selbox { border-color: #ffd23f; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#2b6efeff #0c1f49ff); }
+input.text { background-color: #0f2a63; border-color: #0f2a63; color: #ffffff; }
+input.text:focus { border-color: #ffd23f; }
+#lobby .slot.mine { border-color: #ffd23f; }
+#lobby .roomtitle { color: #ffd23f; font-family: title; }
+
+#kb { background-color: #173a86ec; border-color: #ffd23f; }
+#kb .key { color: #ffffff; border-color: #0f2a63; border-radius: 12dp; decorator: vertical-gradient(#3f8cffff #1f5fd6ff); }
+#kb .key:active { border-color: #ffd23f; }
+#kb .key.on { border-color: #ffd23f; color: #ffffff; }
+
+/* chunky mobile buttons with a darker lip */
+button { border-bottom-width: 4dp; border-bottom-color: #0f2a63; font-weight: bold; }
+button:active { border-bottom-width: 1dp; margin-top: 5dp; }
+button.active { decorator: vertical-gradient(#ffd23fff #f0a800ff); color: #3a2400; }
+/* the auto-build button in the top bar is the main action */
+#topbar button { padding: 6dp 14dp; font-size: 15dp; decorator: vertical-gradient(#4cd964ff #2aa846ff); border-bottom-color: #136b2a; }
+#menu h1 { text-align: center; }

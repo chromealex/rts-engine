@@ -1,0 +1,52 @@
+/* Hearth and Haul: UI skin (linked after engine/ui/theme.rcss). Settler village: meadow green, timber and warm cream.
+   Title font: fonts/title.ttf (Kurale, SIL OFL, fonts/OFL.txt). */
+
+body { color: #f7f0dc; }
+h1 { font-family: title; color: #ffd98a; font-size: 28dp; font-weight: normal; }
+h2 { color: #c6c0a0; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #c6c0a0; }
+.error { color: #ff8c6b; }
+
+.panel {
+    background-color: #283421ea;
+    border: 2dp #8e6a3e;
+    border-radius: 8dp;
+}
+
+button {
+    color: #fff6df;
+    border: 1dp #7a5a34;
+    border-radius: 6dp;
+    decorator: vertical-gradient(#7a5530ff #5a3d22ff);
+}
+button:hover { decorator: vertical-gradient(#8c6339ff #684828ff); border-color: #ffd98a; }
+button:active { decorator: vertical-gradient(#5a3d22ff #7a5530ff); }
+button.active { border-color: #ffd98a; color: #ffe9b5; }
+button.disabled:hover { decorator: vertical-gradient(#7a5530ff #5a3d22ff); border-color: #7a5a34; }
+button .cost { color: #ffe1a0; }
+button .tip { color: #ff8c6b; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #ffd98a; }
+
+#card .title { color: #ffd98a; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff8c6b; }
+.notice { color: #fff0b8; }
+#selbox { border-color: #ffd98a; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#4c623eff #161c12ff); }
+input.text { background-color: #1a2216; border-color: #7a5a34; color: #f7f0dc; }
+input.text:focus { border-color: #ffd98a; }
+#lobby .slot.mine { border-color: #ffd98a; }
+#lobby .roomtitle { color: #ffd98a; font-family: title; }
+
+#kb { background-color: #283421ea; border-color: #8e6a3e; }
+#kb .key { color: #fff6df; border-color: #7a5a34; border-radius: 6dp; decorator: vertical-gradient(#7a5530ff #5a3d22ff); }
+#kb .key:active { border-color: #ffd98a; }
+#kb .key.on { border-color: #ffd98a; color: #ffe9b5; }
+
+/* eight goods: a compact resource bar */
+#topbar { padding: 4dp 8dp; }
+#topbar .item { margin: 0 5dp; font-size: 13dp; }
+#menu h1 { text-align: center; }

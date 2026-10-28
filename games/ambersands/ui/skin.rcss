@@ -1,0 +1,50 @@
+/* Amber Sands: UI skin (linked after engine/ui/theme.rcss). Desert war for spice: burnt sand, amber plates, brass.
+   Title font: fonts/title.ttf (Philosopher, SIL OFL, fonts/OFL.txt). */
+
+body { color: #f6e3c2; }
+h1 { font-family: title; color: #ffb347; font-size: 28dp; font-weight: bold; text-transform: uppercase; letter-spacing: 2dp; }
+h2 { color: #bf9a6a; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #bf9a6a; }
+.error { color: #ff6a4d; }
+
+.panel {
+    background-color: #2a190be8;
+    border: 2dp #d98b2b;
+    border-radius: 0;
+}
+
+button {
+    color: #fff0d6;
+    border: 1dp #8a5520;
+    border-radius: 0;
+    decorator: vertical-gradient(#8a5221ff #5a3311ff);
+}
+button:hover { decorator: vertical-gradient(#a3632aff #6d3e15ff); border-color: #ffb347; }
+button:active { decorator: vertical-gradient(#5a3311ff #8a5221ff); }
+button.active { border-color: #ffb347; color: #ffd18a; }
+button.disabled:hover { decorator: vertical-gradient(#8a5221ff #5a3311ff); border-color: #8a5520; }
+button .cost { color: #ffc070; }
+button .tip { color: #ff6a4d; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #ffb347; }
+
+#card .title { color: #ffb347; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff6a4d; }
+.notice { color: #ffd18a; }
+#selbox { border-color: #ffb347; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#4f2f14ff #170d06ff); }
+input.text { background-color: #170d05; border-color: #8a5520; color: #f6e3c2; }
+input.text:focus { border-color: #ffb347; }
+#lobby .slot.mine { border-color: #ffb347; }
+#lobby .roomtitle { color: #ffb347; font-family: title; }
+
+#kb { background-color: #2a190be8; border-color: #d98b2b; }
+#kb .key { color: #fff0d6; border-color: #8a5520; border-radius: 0; decorator: vertical-gradient(#8a5221ff #5a3311ff); }
+#kb .key:active { border-color: #ffb347; }
+#kb .key.on { border-color: #ffb347; color: #ffd18a; }
+
+.panel { border-top-width: 3dp; border-bottom-width: 3dp; }
+#topbar .item:first-child { font-size: 17dp; color: #ffcc66; }

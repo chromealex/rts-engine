@@ -1,0 +1,49 @@
+/* Spore Lanes: UI skin (linked after engine/ui/theme.rcss). Bioluminescent swamp: deep violet, glowing spores.
+   Title font: fonts/title.ttf (Underdog, SIL OFL, fonts/OFL.txt). */
+
+body { color: #efe6ff; }
+h1 { font-family: title; color: #9cff7a; font-size: 32dp; font-weight: normal; }
+h2 { color: #a690c9; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #a690c9; }
+.error { color: #ff7a9c; }
+
+.panel {
+    background-color: #170b24e8;
+    border: 2dp #8bff7a;
+    border-radius: 16dp;
+}
+
+button {
+    color: #f4ecff;
+    border: 1dp #5b2f8a;
+    border-radius: 12dp;
+    decorator: vertical-gradient(#4a2270ff #2c1245ff);
+}
+button:hover { decorator: vertical-gradient(#5c2c8aff #381858ff); border-color: #9cff7a; }
+button:active { decorator: vertical-gradient(#2c1245ff #4a2270ff); }
+button.active { border-color: #9cff7a; color: #d8ffcc; }
+button.disabled:hover { decorator: vertical-gradient(#4a2270ff #2c1245ff); border-color: #5b2f8a; }
+button .cost { color: #c6ff9c; }
+button .tip { color: #ff7a9c; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #9cff7a; }
+
+#card .title { color: #9cff7a; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff7a9c; }
+.notice { color: #c6ff9c; }
+#selbox { border-color: #9cff7a; background-color: #9cff7a22; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#2b1444ff #0c0613ff); }
+input.text { background-color: #0e0617; border-color: #5b2f8a; color: #efe6ff; }
+input.text:focus { border-color: #9cff7a; }
+#lobby .slot.mine { border-color: #9cff7a; }
+#lobby .roomtitle { color: #9cff7a; font-family: title; }
+
+#kb { background-color: #170b24e8; border-color: #8bff7a; }
+#kb .key { color: #f4ecff; border-color: #5b2f8a; border-radius: 12dp; decorator: vertical-gradient(#4a2270ff #2c1245ff); }
+#kb .key:active { border-color: #9cff7a; }
+#kb .key.on { border-color: #9cff7a; color: #d8ffcc; }
+
+#menu h1 { text-align: center; }
