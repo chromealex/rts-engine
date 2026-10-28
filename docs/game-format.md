@@ -904,8 +904,8 @@ These keys come from agent-mech; they are parsed into the single implementation 
   model floors at 1 and has no share floor.
 - `armorModel` percent uses the exact Warcraft III curve for negative armor (`2 - (1 - k)^-a`); `"armor"` keeps the
   linear `1 + min(-a·k, 0.71)` unless it says `"negative": "exponential"`.
-- **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
-  regenerate `regen`/s after `delay` seconds without hits.
+- type `"shields": {"max", "regen", "delay", "armor"}` = `health.shields` / `shieldRegen` / `shieldDelay` / `shieldArmor`
+  (same defaults: regen 2/s, delay 10 s); one shield component (`Shield`) for both spellings.
 - **maxWorkers**: further workers wait next to the node until a place is free.
 ### Genre mechanics (agent-mech stage 2)
 
@@ -1546,7 +1546,7 @@ uses none of them keeps its exact checksums.
 | `armor` (alias `armorModel`) | rules | `{"model": "subtract" \| "percent" \| "classes", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2, "negative": "linear" \| "exponential", "base": ["melee", "pierce"]}` — the one damage pipeline of every game: weapon `bonus`, shields, then the model. `subtract`: StarCraft / AoE with a floor (no block at all: damage - armor, at least damage / 5); `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `classes`: AoE II class attacks / armors (type `armors`, weapon `attacks`, see the agent-mech aliases above) |
 | `health.armor` object | type | `{"melee": 1, "pierce": 2}` (or `health.pierceArmor`): two armors; weapons pick one with `"armorClass": "pierce"`; stat `pierceArmor` / `armor2` for techs |
 | weapon `bonus` | type | `{"cavalry": 15, "armored": 10}` extra damage vs types with the tag, added before armor (AoE / SC2 bonuses) |
-| `health.shields` | type | shields soak damage first (`shieldArmor`), recharge `shieldRegen` per second after `shieldDelay` seconds without hits (StarCraft) |
+| `health.shields` (alias type `shields: {max, regen, delay, armor}`) | type | shields soak damage first (after the damage table and weapon bonuses; minus `shieldArmor`, at least the armor floor), the share that breaks through goes on to armor and hp; they recharge `shieldRegen` per second (default 2) after `shieldDelay` seconds (default 10) without a hit on the shield (StarCraft) |
 | `heroes` | rules | `{"skills": true, "max": 3, "freeFirst": true, "tiers": ["hall", "keep", "castle"], "revive": {"costShare": 0.4, "perLevel": 0.1, "timeShare": 0.6, "maxTime": 110, "maxCost": {"gold": 700}}}` — skill points (one at start, one per level; command `kCmdLearn`), ability `"learnAt": [1, 3, 5]` (default) / `[6]` (ultimate); hero n needs a structure from `tiers[n-1..]`; a dead hero is trained again as a revive (its level and skills, cheaper) |
 | `upkeep[].resources`, `incomeMult` (alias `upkeepResources`) | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower); rules `"upkeepResources": ["gold"]` is the default `resources` of every tier without its own |
 | `resourceNode.maxGatherers` | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |

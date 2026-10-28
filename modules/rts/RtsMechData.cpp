@@ -328,14 +328,6 @@ void loadMechRules(Rules& r, const Json& j) {
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];
         const std::string where = "type '" + id + "'";
-        if (const Json& sh = tj["shields"]; sh.isObject()) {
-            t.mech.shieldMax = sh.getFx("max");
-            if (t.mech.shieldMax.raw <= 0) fail(where + " shields.max", "must be > 0");
-            t.mech.shieldRegen = sh.getFx("regen", Fixed::fromInt(2));
-            t.mech.shieldDelay = sh.getFx("delay", t.mech.shieldDelay);
-            t.mech.shieldArmor = sh.getFx("armor");
-            m.any = m.shields = true;
-        }
         if (const Json& rn = tj["resourceNode"]; rn.isObject() && rn.has("maxWorkers")) {
             t.mech.maxWorkers = int(rn.getInt("maxWorkers", 0));
             if (t.mech.maxWorkers > 0) m.any = m.workerCaps = true;

@@ -199,7 +199,6 @@ bool RtsModule::applyMechCommand2(Simulation& sim, const Command& cmd) {
 // ================================================================= per tick
 
 void RtsModule::mechTick(Simulation& sim) {
-    mechTickCombat(sim);
     mechTickTactics(sim);
     mechTickSociety(sim);
     World& w = sim.world();

@@ -66,7 +66,6 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     if (!u || u->hp.raw <= 0) return;
     const UnitType& t = rules_.types[u->type];
     if (t.invulnerable) return;
-    if (rules_.mech.shields) { dmg = mechShieldAbsorb(sim, target, dmg); if (dmg.raw <= 0) { sim.emit({kEvHit, sourceOwner, target, source, 0, w.get<Transform>(target).pos}); return; } }
     const Fixed raw = dmgType == kDamagePure ? dmg : dmg * rules_.damageMult(dmgType, t.armorType);
     Fixed fin = mitigate(sim, target, raw, wd, dmgType);   // bonuses, shields, armor model (RtsOriginals.cpp)
     if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target, source);   // agent-mech (retreat, cover, armor arcs)

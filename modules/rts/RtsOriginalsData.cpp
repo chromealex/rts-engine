@@ -184,6 +184,14 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             t.shieldArmor = h.getFx("shieldArmor");
             if (t.shieldMax.raw > 0) any = true;
         }
+        if (const Json& sh = tj["shields"]; sh.isObject()) {   // alias (agent-mech): {"max", "regen", "delay", "armor"}
+            t.shieldMax = sh.getFx("max");
+            if (t.shieldMax.raw <= 0) fail(where + " shields.max", "must be > 0");
+            t.shieldRegen = sh.getFx("regen", Fixed::fromInt(2));
+            t.shieldDelay = sh.getFx("delay", t.shieldDelay);
+            t.shieldArmor = sh.getFx("armor");
+            any = true;
+        }
         size_t wi = 0;
         for (auto& wj : tj["weapons"].items()) {
             WeaponDef& w = t.weapons[wi++];
