@@ -27,6 +27,7 @@ bool Gallery::init(gfx::Device& dev, const std::string& dir, const std::vector<s
     if (!readFile(dir_ + "rules.json", text)) { err = dir_ + "rules.json not found"; return false; }
     try { rules_ = loadRules(Json::parse(text)); }
     catch (const std::exception& e) { err = e.what(); return false; }
+    dev_ = &dev;
     view_.init(dev, rules_, [this](const std::string& p, std::string& out) { return readFile(dir_ + p, out); });
     // structures in the back row, units in front; widths from footprints
     float xs = 2, xu = 2;
@@ -51,7 +52,14 @@ bool Gallery::init(gfx::Device& dev, const std::string& dir, const std::vector<s
     return true;
 }
 
-void Gallery::shutdown(gfx::Device& dev) { view_.shutdown(dev); }
+void Gallery::shutdown(gfx::Device& dev) { portrait_.shutdown(); view_.shutdown(dev); }
+
+gfx::TextureHandle Gallery::portrait(double time) {
+    if (slots_.empty() || !dev_) return {};
+    if (!portraitInit_) { portraitInit_ = true; portrait_.init(*dev_, 192); }
+    portrait_.render(view_, slots_[0].type, 1, time);
+    return portrait_.texture();
+}
 
 void Gallery::update(double time) {
     scene_.objects.clear();
@@ -87,7 +95,10 @@ void Gallery::update(double time) {
             const float dir = std::cos(u * 6.2831853f);
             o.facing = {dir >= 0 ? 1.0f : -1.0f, 0, 0};
             o.moving = true;
+            o.carry = 10; // carried cargo (socket attachments with "carry")
+            o.carryRes = int16_t((s.gen + i) % std::max<size_t>(1, rules_.resources.size()));
         }
+        if (ph >= 4) o.hp = 0.35f;  // damaged: damage stages, effect anchors
         if (armed && ph >= 4 && ph < 6.5f) {
             const float a = (ph - 4) * 1.2f;
             o.hasTarget = true;
@@ -95,6 +106,8 @@ void Gallery::update(double time) {
             o.order = uint8_t(OrderType::Attack) + 1;
             if (!t.structure) { float3 d = o.target - o.pos; o.facing = normalize(float3{d.x, 0, d.z}); }
         }
+        o.selected = i % 4 == 1; // selection outlines
+        o.hovered = i % 4 == 2;
         scene_.objects.push_back(o);
     }
     if (!events.empty()) { scene_.events = std::move(events); scene_.tick = ++tick_; }
@@ -102,6 +115,12 @@ void Gallery::update(double time) {
 
 void Gallery::draw(Renderer3D& r, double time) {
     view_.draw(r, scene_, time, nullptr, grid_);
+    // placement ghost of the first structure type, alternating allowed / blocked
+    for (const auto& sl : slots_)
+        if (rules_.types[sl.type].structure) {
+            view_.drawGhost(r, sl.type, {center_.x, 0, 12.0f}, std::fmod(time, 2.0) < 1.0, grid_, time);
+            break;
+        }
     // effect anchors and view events made visible (particles / sounds would attach here)
     for (const auto& e : view_.effects()) {
         r.circleXZ(e.pos, 0.12f, rgba(255, 220, 60, 230), 12, e.pos.y);

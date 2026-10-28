@@ -261,7 +261,7 @@ endif()
 
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
-    modules/rts/view/RtsViewDraw.cpp)
+    modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.

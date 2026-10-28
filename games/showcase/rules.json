@@ -52,7 +52,7 @@
           "attack": { "clip": "Attack", "events": { "0.35": "swing" } },
           "die": "Death"
         },
-        "attach": [ { "node": "arm.R", "model": "models/sword.glb", "offset": [0, -0.7, 0.05], "rotate": [90, 0, 0] } ],
+        "attach": [ { "node": "arm.R", "model": "models/sword.glb", "offset": [0, -0.7, 0.08], "rotate": [-90, 0, 0] } ],
         "additive": [ { "clip": "Breathe", "when": "idle" } ],
         "procedural": [ { "type": "lean" }, { "type": "shake", "node": "spine" } ],
         "dissolveDeath": true

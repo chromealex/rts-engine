@@ -27,11 +27,21 @@ Check a model or a whole game with the viewer:
 build/linux-release/rts_modelview games/mygame/models/knight.glb@Walk          # one model, one clip
 build/linux-release/rts_modelview a.glb b.gltf c.obj --quality low              # side by side, low tier
 build/linux-release/rts_modelview --game games/showcase                         # every type, as the game draws it
+build/linux-release/rts_modelview golem.glb@Walk --baked                        # skin from the baked clip texture
 ```
 
 The gallery (`--game`) cycles every type through idle → move → attack (+ hit) → death → respawn using
 the game's own view code, so view blocks, overrides and procedural animation look exactly as in a
-match. Keys: Space next clip, Q quality, V variant, T team colour, P pause; drag/wheel for the camera.
+match; effect anchors are drawn as yellow markers, view events (clip events, launches, deaths) as
+pink rings and listed in the corner, together with the first type's portrait. Keys: Space next clip,
+Q quality, V variant, T team colour, P pause; drag/wheel for the camera. `--types a,b` limits the
+gallery, `--start T --fixed-dt 0.016` make screenshots reproducible.
+
+In the editor, **Окна → Models** shows the selected type rendered by the view (portrait), its
+clips, materials, variants and nodes (the names to use in `procedural`, `attach`, `fx`, `muzzle`)
+and the warnings of its view block. Model files of the open game are watched: saving a `.glb` /
+`.gltf` / `.obj` / `.fbx` reloads the views. Agents get the same data through the MCP operation
+`model_info` (`{"type": "footman"}`).
 
 ## Formats
 
@@ -126,6 +136,30 @@ Quality tiers (`MaterialQuality`, chosen per GPU like shadows, `RTS_MATERIALS=lo
 
 ## Skeletal clips
 
+### Skinning modes
+
+`"skinning": "auto" | "baked" | "palette"`. **Baked** (the default whenever possible): every clip
+of the model is sampled once at load (30 fps, row 0 = bind pose) into a float texture of joint
+matrices; the GPU skins from it, so identical units are drawn **instanced** (32 per draw call) and
+cost no CPU per frame — 300 animated golems take 61 draw calls instead of 1801. Cross-fades and
+blend spaces still work (two samples mixed in the shader). **Palette**: joint matrices computed on
+the CPU per object per frame — needed for per-object bone edits; `auto` switches to it when the type
+uses masked overlay clips, procedural modifiers on nodes, additive clips or foot IK. In baked mode
+overlay clips (`hit`, `cast`, layered attacks) play on the base layer.
+
+### Animation LOD
+
+Objects off screen keep their clip clocks but skip the pose; beyond 40 / 70 units from the camera
+the pose is updated every 0.1 / 0.2 s (palette mode and sockets). `"lod"` swaps models by distance:
+
+```json
+"lod": [ { "model": "models/knight_lod1.glb", "distance": 25 }, { "model": "models/knight_lod2.glb", "distance": 50 } ]
+```
+
+LOD models share the base model's clips and nodes **by name** (same skeleton, fewer triangles /
+materials); they get no sockets, effects or IK.
+
+
 States of an object map to clips:
 
 | state | when | default loop |
@@ -152,11 +186,77 @@ States of an object map to clips:
 ```
 
 Clip spec: a name, an array of names (random) or `{ "clip", "speed", "speedRef", "loop", "fade",
-"layer": "base"|"overlay"|"hit"|0..2, "mask": "<node>" }`. A `mask` puts the clip on an overlay layer
+"layer": "base"|"overlay"|"hit"|0..2, "mask": "<node>", "events", "blend" }`. A `mask` puts the clip on an overlay layer
 limited to that node's subtree, so a unit can attack while its legs keep walking. Without an
 `"animations"` block clips are matched by name (`idle`, `walk`/`run`, `attack`/`shoot`,
 `death`/`die`, `gather`/`work`, `hit`, `spawn`, `cast`, …). Missing clips fall back (carry → move →
 idle; no idle = bind pose); a misspelt clip is reported with the list of clips the file has.
+
+**Blend space** (`move` / `carry`): `"blend": [{"clip": "Walk", "speed": 1.4}, {"clip": "Run", "speed":
+3.2}]` mixes the two clips around the current speed, phase-synchronized (feet stay in step), and
+scales the playback rate to the real speed.
+
+**Clip events**: `"events": {"0.35": "hit", "0.0": "step", "0.5": "step"}` — clip time → name. They
+are reported in `RtsView::events()` every time the clip passes that time (loops included).
+
+**Additive clips** on top of any action (breathing, wounded limp, recoil):
+`"additive": [{"clip": "Breathe", "when": "idle", "weight": 1}]` — adds `clip(t) - clip(0)`; the
+weight fades with the state.
+
+**Foot IK**: `"footIK": [{"hip": "thigh.L", "knee": "shin.L", "foot": "foot.L"}, ...]` — two-bone legs
+put their feet on the terrain under them when standing (ramps, cliffs, slopes).
+
+**Morph targets** (glTF: blend shapes for faces, squash, damage, wobble): up to 8 per primitive,
+deformed on the GPU from a float texture; weights come from the node / mesh defaults and from
+`weights` animation channels, so clips drive them like bones.
+
+## Sockets, muzzles, effects and events
+
+```json
+"attach": [
+  { "node": "hand.R", "model": "models/sword.glb", "offset": [0, -0.1, 0], "rotate": [-90, 0, 0], "scale": 1 },
+  { "node": "spine", "model": "models/sack.glb", "carry": "gold" },
+  { "node": "spine", "model": "models/banner.glb", "when": "moving" }
+],
+"muzzle": { "node": "Barrel", "offset": [0, 0, 0.7] },
+"fx": [ { "effect": "smoke", "node": "Chimney", "offset": [0, 0.3, 0], "hpBelow": 0.5 },
+        { "effect": "exhaust", "node": "Hull", "when": "moving", "intensity": 0.6 } ]
+```
+
+- **attach** draws another model on a node of this one (`rotate` in degrees, `when` = states,
+  `carry` = resource id or `"any"`: shown while carrying it). Materials named `*team*` take the
+  team colour.
+- **muzzle**: projectiles of this type start at that point and converge onto their simulated path;
+  a `launch` view event is reported there.
+- **fx**: effect anchors listed in `RtsView::effects()` every frame while active (`when`, `hpBelow`;
+  the intensity grows as health drops). A particle system spawns `effect` at `pos`.
+- **View events** (`RtsView::events()`, this frame): clip events, `launch`, `spawn`, `death`, each
+  with entity, type, owner and world position — the hook for sounds and particles.
+
+## Stages, construction and dissolve
+
+```json
+"stages": [
+  { "build": 0, "model": "models/scaffold.glb" },
+  { "build": 0.6 },
+  { "hp": 0.5, "variant": "burnt", "fx": [ { "effect": "fire", "offset": [0, 1.5, 0] } ] }
+],
+"construction": "stages",
+"dissolveSpawn": true, "dissolveDeath": true
+```
+
+- **stages** replace the model (or only its material `variant`) by construction progress (`build`:
+  the stage with the highest threshold ≤ progress) or by damage (`hp`: the lowest threshold ≥ health).
+  A stage may bring its own `fx`. A stage with another model keeps only whole-object procedural
+  modifiers.
+- **construction**: `grow` (default: the model rises from the ground), `dissolve` (materializes
+  with the progress, glowing edge) or `stages` (default when stages have `build`).
+- **dissolve**: `dissolveSpawn` burns new units in, `dissolveDeath` burns corpses away (instead of
+  fading); `"dissolve": true` sets both.
+
+Selected and hovered objects get an outline (`RtsView::setSelectionOutline`). The client shows the
+building to place as a translucent model (`RtsView::drawGhost`), and `game::Portrait`
+(`modules/rts/view/RtsPortrait.h`) renders any type into a texture for HUD portraits and buttons.
 
 ## Procedural animation
 
@@ -180,6 +280,8 @@ idle; no idle = bind pose); a misspelt clip is reported with the list of clips t
 | `lean` | bank into turns | `amp`, `limit` (deg) |
 | `aim` | turn towards the combat target (turrets) | `node`, `limit` (deg), `turnSpeed` (deg/s) |
 | `aimPitch` | raise towards the target (barrels) | `node`, `limit`, `turnSpeed` |
+| `look` | head turns towards the target | `node`, `limit` (70°), `turnSpeed` |
+| `align` | tilt onto the terrain slope (vehicles, buildings) | `node` (optional), `amp` (0..1), `turnSpeed` |
 | `fall` | tip over on death | `amp` (deg), `duration` |
 | `sink` | sink into the ground on death | `amp`, `duration` |
 | `custom` | build your own | everything below |
@@ -197,16 +299,33 @@ list replaces the defaults (`"proceduralDefaults": true` keeps them too; `[]` tu
 
 ## Example
 
-`games/showcase` is "Iron and Gold" with imported views: a skinned golem (clips, normal map, emissive
-eyes, team cloth), a tank (variants, team mask, turret aim, barrel recoil, wheels), a windmill
-(.gltf + .bin + .png, alpha-masked sails spinning) and an OBJ crystal tower (translucent, team tint).
+`games/showcase` is "Iron and Gold" with imported views:
+- footman: skinned golem in palette mode — blend space Walk/Run, clip events, sword on the right
+  arm, additive breathing, lean, shake on hit, dissolve on death;
+- archer: the same golem baked (instanced), a far LOD, muzzle on the hand, dissolve on spawn;
+- peasant: built-in shape carrying a gold sack or logs on its back;
+- catapult: tank — variant, team mask, turret aim, barrel recoil, wheels, terrain alignment, muzzle,
+  exhaust effect while moving;
+- gryphon: a morph-target slime (wobble clip on weights);
+- farm: windmill (.gltf + .bin + .png, alpha-masked sails spinning) built through a scaffold stage,
+  burnt variant and smoke below half health;
+- tower: OBJ crystal (translucent, team tint, KTX2 ETC2 texture) that dissolves in while built.
+
 The models are generated by `tools/models/gen_sample_models.py` (CC0).
 
 ## Engine API (for engine work)
 
-- `render::loadModel(path, reader, &warnings)` → `Model` (CPU), `uploadModel(dev, model)`.
-- `render::Animator` (clip layers, cross-fades, masks), `bindPose / sampleClip / worldMatrices`,
-  `applyProcedural(mods, inputs, runtime, pose, objectXf)`.
-- `Renderer3D::drawModel(ModelDraw)` — instance transform, pose, material overrides, tint, team
-  colour, hit flash, variant; frustum culling, opaque state sorting, blended back-to-front, shadows
-  with skinning and alpha test. Shaders: `engine/render/ModelShaders.h` (GLSL + MSL permutations).
+- `render::loadModel(path, reader, &warnings)` → `Model` (CPU), `uploadModel(dev, model)` (morph
+  texture, KTX2 blocks kept compressed when `Device::supports` the format).
+- `render::Animator` (clip layers, cross-fades, masks, blend spaces, additive slots, `baseSample()`),
+  `bindPose / sampleClip / sampleClipAdditive / worldMatrices / solveTwoBoneIK`,
+  `bakeAnimations(dev, model)` + `bakedRow`, `applyProcedural(mods, inputs, runtime, pose, objectXf)`.
+- `Renderer3D::drawModel(ModelDraw)` — instance transform, pose or baked sample, morph weights,
+  material overrides, tint, team colour, hit flash, dissolve, outline, variant; frustum culling,
+  state sorting with instanced batches (32 per draw), blended back-to-front, shadows with skinning,
+  morphs and alpha test. Shaders: `engine/render/ModelShaders.h` (GLSL + MSL permutations:
+  instanced, palette / baked skinning, morph, normal map, alpha mask, outline, quality tier).
+- RHI additions: `drawIndexed(..., instanceCount)`, `PixelFormat::RGBA32F` (data textures read in
+  vertex shaders), block-compressed formats (`ETC2_*`, `BC1/3/7`, `ASTC_4x4`) with `supports()`,
+  texture mipmaps.
+- CMake `RTS_FBX=OFF` drops the FBX importer (ufbx, ~0.5 MB of code) from size-sensitive builds.
