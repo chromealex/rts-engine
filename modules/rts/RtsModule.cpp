@@ -837,23 +837,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         return;
     }
 
-    if (cmd.type == kCmdAutoBuild) {
-        uint16_t type = kNoType;
-        if (cmd.param >= 0 && size_t(cmd.param) < rules_.types.size()) {
-            if (std::find(rules_.autoBuildPool.begin(), rules_.autoBuildPool.end(), uint16_t(cmd.param)) != rules_.autoBuildPool.end()) type = uint16_t(cmd.param);
-        } else {
-            std::vector<uint16_t> options;
-            for (uint16_t t : rules_.autoBuildPool) if (canTrain(sim, cmd.player, t)) options.push_back(t);
-            if (!options.empty()) type = options[sim.rng().below(uint32_t(options.size()))];
-        }
-        if (type == kNoType || !canTrain(sim, cmd.player, type)) return;
-        Vec3 spot;
-        if (!findAutoSpot(sim, cmd.player, type, spot)) { sim.emit({kEvNotEnough, cmd.player, kNullEntity, kNullEntity, 254, {}}); return; }
-        if (!pay(sim, cmd.player, autoBuildCost(sim, cmd.player, type), {})) return;
-        gs.autoBuilt[cmd.player]++;
-        placeStructure(sim, cmd.player, type, spot, kNullEntity, false);
-        return;
-    }
+    if (cmd.type == kCmdAutoBuild) { script_->callStd(sim, StdFn::AutoBuild, {cmd.player, cmd.param}); return; }   // lua/commands.lua
 
     std::vector<Entity> sel;
     for (Entity e : cmd.units) {
@@ -1032,14 +1016,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             placeStructure(sim, cmd.player, st, cmd.point, kNullEntity, true);
             return; // one placement per command
         }
-        case kCmdSell: {
-            if (!t.structure || !t.sellable) break;
-            refund(sim, cmd.player, t.cost, rules_.sellRefund * (w.get<Unit>(e).hp / fxMax(t.maxHp, kOne)));
-            sim.emit({kEvSold, cmd.player, e, kNullEntity, w.get<Unit>(e).type, w.get<Transform>(e).pos});
-            w.get<Unit>(e).hp = Fixed{};
-            w.get<Unit>(e).flags |= kUnitSilent;
-            break;
-        }
+        case kCmdSell: script_->callStd(sim, StdFn::Sell, {cmd.player, int64_t(e.packed())}); break;   // lua/commands.lua
         case kCmdDeploy: {
             if (t.deploysTo == kNoType) break;
             Vec3 at = w.get<Transform>(e).pos;

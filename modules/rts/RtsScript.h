@@ -28,6 +28,7 @@
 #pragma once
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <vector>
@@ -82,7 +83,7 @@ Json scriptApiReference();
 
 // Systems implemented by the engine's standard Lua library (modules/rts/lua/<name>.lua defines
 // std.<name>(tick)); a game overrides one with scripts/std/<name>.lua.
-enum class StdFn : uint8_t { Victory, Waves, Triggers, Count };
+enum class StdFn : uint8_t { Victory, Waves, Triggers, AutoBuild, Sell, Count };
 
 // The simulation VM of one match (owned by RtsModule). It always runs the standard library;
 // game scripts (rules/map "scripts") are loaded on top.
@@ -97,7 +98,8 @@ public:
     void load(Simulation& sim, const Json& rules, const Json& map);
     void tick(Simulation& sim);   // the "scripts" system (last in the tick)
     // A standard-library system (no instruction budget: engine code). Errors are logged once.
-    void callStd(Simulation& sim, StdFn fn);
+    // Extra integer arguments follow the tick (entities as packed handles).
+    void callStd(Simulation& sim, StdFn fn, std::initializer_list<int64_t> args = {});
     bool hasUserScripts() const { return userScripts_; }
 
     // Entry points for data: trigger condition / action {"type": "script", "fn": ...} and the ability
