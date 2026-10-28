@@ -79,6 +79,14 @@ public:
     // extraArgs: more rtsbuild flags (Build window: --estimate --out ..., --audio, --no-atlas, ...)
     void startBuild(const std::string& target, const std::string& config, const std::string& extraArgs = "");
     int buildResult() { std::lock_guard<std::mutex> lk(buildMutex_); return buildRc_; }
+    // Any rtsbuild run streamed into the same log (Build window / MCP): args after the executable;
+    // `label` names the log file (logs/<label>-<time>.log); withProject adds --project / --engine.
+    void startTool(const std::string& args, const std::string& label, bool withProject);
+    std::string runLabel() { std::lock_guard<std::mutex> lk(buildMutex_); return runLabel_; }   // "build-web", "estimate", "toolchain-web"
+    std::string lastLogFile() { std::lock_guard<std::mutex> lk(buildMutex_); return logFile_; }
+    int runCount() const { return runCount_; }   // increments when a run finishes
+    // rtsbuild --check-toolchain <target> --json (blocking: probes tools, about a second).
+    Json toolchainCheck(const std::string& target) const;
 
 private:
     void registerCoreOps();
@@ -87,6 +95,8 @@ private:
     std::mutex buildMutex_;
     std::string buildLog_;
     int buildRc_ = 0;
+    std::string runLabel_, logFile_;
+    std::atomic<int> runCount_{0};
     std::vector<Op> ops_;
 };
 
