@@ -13,6 +13,10 @@
     {
       "file": "maps/last_valley.json",
       "title": "Last Valley (survival)"
+    },
+    {
+      "file": "maps/horde_plain.json",
+      "title": "Horde Plain (big hordes, flow fields)"
     }
   ],
   "orientation": "landscape",

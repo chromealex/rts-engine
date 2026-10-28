@@ -88,6 +88,8 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
     `MapGrid::block` / `cellChanged` mark the touched clusters dirty, the next query rebuilds their borders and the
     clusters on both sides (pure function of the grid, never hashed). Goals inside obstacles are routed to the nearest
     free cell (no node-budget exhaustion on "walk up to a building" queries).
+- **Flow fields** (opt-in, `movement.flowField`; docs/pathfinding.md) work on planets too: full fields on small bodies,
+  hierarchical over the planet HPA* graph on big ones; fields never extend to other bodies.
 - **Vision.** `visionSphere`: cells within sight (offset walk across seams), 3D sight line sampled once per cell against
   the ground radius + blockers → hills and the horizon hide; air/orbit units see everything in range.
 - **Footprints** lie inside one face (`footprintAt(t, c, x0, y0, surface)` gives a plain grid rect or -1).
