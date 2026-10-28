@@ -19,7 +19,7 @@ struct WriteOptions {
 };
 
 struct WriteStats {
-    struct Item { std::string path; uint64_t rawSize = 0, storedSize = 0; Codec codec = Codec::Stored; bool duplicate = false; };
+    struct Item { std::string path; uint64_t rawSize = 0, storedSize = 0; Codec codec = Codec::Stored; bool duplicate = false; uint8_t chunk = 0; };
     std::vector<Item> items;     // in pack order
     uint64_t rawBytes = 0;       // sum of all input files
     uint64_t packBytes = 0;      // size of the .rpak
@@ -47,6 +47,26 @@ bool globMatch(const char* pattern, const char* text);
 // Files whose format is already compressed (images, audio, video, archives) are stored as is.
 bool alreadyCompressed(const std::string& path);
 
+// How to split content into a base pack (ships with the build) and downloadable chunks.
+// Every choice is the user's: whether to split, the chunk size and the size limits.
+struct SplitOptions {
+    uint64_t chunkSize = 8u << 20;          // max bytes per chunk file
+    uint64_t baseSize = 0;                  // max bytes of the base pack (0 = no limit)
+    uint64_t totalBudget = 0;               // max bytes of base + all chunks (0 = no limit)
+    bool fillBase = false;                  // false: base = only what must ship; true: fill up to baseSize
+    std::vector<std::string> base;          // globs that always ship in the base (needed to start)
+    std::vector<std::string> priority;      // globs in download order (earlier = sooner, and into base first)
+    std::string chunkPrefix = "content";    // chunk file names: <prefix>.001.rpkc
+};
+
+struct SplitResult {
+    struct Chunk { std::string file; uint64_t size = 0; size_t files = 0; std::string sha256; };
+    uint64_t baseBytes = 0, totalBytes = 0;
+    std::vector<Chunk> chunks;
+};
+
+bool writeFileAtomic(const std::string& path, const std::string& bytes, std::string* error = nullptr);
+
 class PackWriter {
 public:
     // Adds one file; `packPath` is normalized. Returns false on a duplicate path.
@@ -66,9 +86,17 @@ public:
     // Same, into memory (tests).
     bool writeToString(std::string& out, const WriteOptions& opt, WriteStats* stats = nullptr, std::string* error = nullptr);
 
+    // Split build: base pack + chunk files (empty when everything fits the base).
+    bool writeSplit(std::string& base, std::vector<std::string>& chunks, const WriteOptions& opt, const SplitOptions& split,
+                    WriteStats* stats = nullptr, SplitResult* result = nullptr, std::string* error = nullptr);
+    bool writeSplitFiles(const std::string& basePath, const std::string& chunkDir, const WriteOptions& opt, const SplitOptions& split,
+                         WriteStats* stats = nullptr, SplitResult* result = nullptr, std::string* error = nullptr);
+
     size_t size() const { return inputs_.size(); }
 
 private:
+    bool build(std::string& out, std::vector<std::string>& chunks, const WriteOptions& opt, const SplitOptions* split,
+               WriteStats* stats, SplitResult* result, std::string* error);
     struct Input { std::string path, disk, data; bool inMemory = false; };
     std::vector<Input> inputs_;
     std::set<std::string> paths_;

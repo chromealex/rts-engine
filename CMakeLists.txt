@@ -98,7 +98,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(RTS_CONTENT_PACK "" CACHE FILEPATH "Prebuilt content.rpak to ship instead of loose content (set by rtsbuild)")
 add_library(rts_zstd_dec STATIC third_party/zstd/zstddeclib.c)
-add_library(rts_pack STATIC engine/pack/Pack.cpp)
+add_library(rts_pack STATIC engine/pack/Pack.cpp engine/pack/Sha256.cpp engine/pack/Chunks.cpp engine/pack/HttpStub.cpp)
 target_include_directories(rts_pack PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 if(NOT MSVC)
     target_compile_options(rts_zstd_dec PRIVATE -w)
