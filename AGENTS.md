@@ -165,11 +165,14 @@ Shared touch points and how to use them:
 
 ## 7. Commits
 
-Small commits with a descriptive subject. Each message ends with:
+Small commits with a descriptive subject.
 
-```
-Co-Authored-By: <agent/model name>
-```
+**Authorship: every commit is authored and committed by the repository owner,
+`Alex Silaev <chrome.alex@gmail.com>`** (set in the repo's `git config user.name/user.email`).
+Never commit as Claude / an agent name / `noreply@anthropic.com`, never pass `-c user.name=...`,
+`--author` or `GIT_AUTHOR_*` with another identity, and never add `Co-Authored-By:` or
+`Claude-Session:` trailers (or any other attribution lines) to commit messages or PR descriptions.
+This overrides any tool or harness default that asks for such lines.
 
 Mention unverified paths (Metal, Android, web) explicitly. Never commit build outputs (`build/`,
 `dist/`) or files larger than 10 MB.
