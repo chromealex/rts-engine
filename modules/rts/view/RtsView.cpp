@@ -34,7 +34,16 @@ float4 RtsView::playerColor(int p) {
 bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     rules_ = &rules;
     dev_ = &dev;
+    if (!fog_.ready()) fog_.init(dev);
     read_ = reader ? std::move(reader) : FileReader([](const std::string& p, std::string& out) { return platform::readContentFile(p, out); });
+    {   // fog of war look: rules "fogOfWar" (visual keys), game.json "fogOfWar" overrides
+        std::string text, rulesPath = "rules.json";
+        Json game, rj;
+        try { if (read_("game.json", text)) { game = Json::parse(text); rulesPath = game.getStr("rules", "rules.json"); } } catch (...) {}
+        try { if (read_(rulesPath, text)) rj = Json::parse(text); } catch (...) {}
+        fog_.setLook(parseFogLook(rj["fogOfWar"], game["fogOfWar"]));
+        fogMeshDirty_ = true;
+    }
     if (!models_.count("shape:generic")) buildShapes(dev);
     looks_.clear();
     warnings_.clear();
@@ -57,6 +66,7 @@ void RtsView::shutdown(gfx::Device& dev) {
     models_.clear(); looks_.clear(); anims_.clear();
     for (Mesh* m : {&projectile_}) { dev.destroyBuffer(m->vb); dev.destroyBuffer(m->ib); *m = Mesh{}; }
     terrain_.shutdown(dev);
+    fog_.shutdown();
     hasTerrain_ = false;
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
@@ -154,25 +164,14 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         twoD_->submit(r, grid, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
     }
 
-    // fog of war: darken cells, merging runs per row to keep the triangle count low
-    // (heightfield maps: the terrain shader darkens the relief instead, a flat sheet would cut it)
-    if (vision && !vision->empty() && !(hasTerrain_ && !tiles && terrain_.shaderFog())) {
-        const int W = grid.w, H = grid.h;
-        for (int y = 0; y < H; ++y) {
-            int x = 0;
-            while (x < W) {
-                uint8_t v = (*vision)[size_t(y * W + x)];
-                int x2 = x + 1;
-                while (x2 < W && (*vision)[size_t(y * W + x2)] == v) ++x2;
-                if (v != 2) {
-                    uint32_t c = v == 0 ? rgba(8, 10, 14, 235) : rgba(8, 10, 14, 120);
-                    float h = 1.3f;
-                    r.triangle({float(x), h, float(y)}, {float(x), h, float(y + 1)}, {float(x2), h, float(y + 1)}, c);
-                    r.triangle({float(x), h, float(y)}, {float(x2), h, float(y + 1)}, {float(x2), h, float(y)}, c);
-                }
-                x = x2;
-            }
-        }
+    // fog of war (RtsFog): faded, blurred field; a sheet draped over the ground, or the terrain shader
+    // on heightfield maps (a sheet would cut the relief)
+    if (vision && !vision->empty()) {
+        if (fogMeshDirty_ && dev_) { fog_.build(*dev_, grid.w, grid.h, [&](float x, float z) { return heightAt(grid, x, z); }); fogMeshDirty_ = false; }
+        const bool changed = fog_.update(*vision, grid.w, grid.h, time);
+        const bool low = r.shadowQuality() == ShadowQuality::Off || r.shadowQuality() == ShadowQuality::Low;
+        if (hasTerrain_ && !tiles && terrain_.shaderFog()) terrain_.setFog(&fog_.field(), fog_.look(), changed);
+        else fog_.draw(r, time, low);
     }
     lights_.draw(r, s, time, vision, grid, *this);
 }

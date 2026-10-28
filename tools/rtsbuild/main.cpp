@@ -48,6 +48,7 @@
 #include "engine/pack/Unpacker.h"
 #include "tools/atlas/AtlasBuild.h"
 #include "tools/audiopack/AudioPack.h"
+#include "tools/rtsbuild/FileRules.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -74,6 +75,7 @@ struct Options {
     fs::path project, engine, out;
     std::string target, config = "Release", team;
     bool generateOnly = false;
+    bool estimate = false;    // --estimate: content packs and size-report.json only, no app build (editor Build window)
     bool pack = true;
     int packLevel = 0;        // 0 = by config: 19 for Release, 3 for Debug
     bool atlas = true;
@@ -355,9 +357,20 @@ fs::path gameContent(Options& o) {
 // Builds <out>/_pack[/<atlas key>][/audio-<profile>][/<split key>]/content.rpak (+ chunks/) from the
 // game folder and engine assets, once per distinct atlas + audio + split setting (targets that agree
 // share one pack).
+// Per-file rules (packaging.files) of the current target, as a short key for the pack cache.
+std::string fileRulesKey(const Options& o) {
+    const Json& p = o.gameJson["packaging"];
+    std::string k = p["files"].dump(-1) + "|" + p["targets"][o.profile]["files"].dump(-1);
+    if (k == "null|null") return "";
+    char buf[24];
+    std::snprintf(buf, sizeof buf, "files-%08llx", static_cast<unsigned long long>(rts::pack::hashBytes(k.data(), k.size()) & 0xffffffffu));
+    return buf;
+}
+
 fs::path packDir(const Options& o) {
     std::string key = atlasConfig(o).key(), audio = audioProfile(o), split = splitConfig(o).key();
     fs::path dir = key == "off" ? o.out / "_pack" : o.out / "_pack" / key;
+    if (std::string fk = fileRulesKey(o); !fk.empty()) dir /= fk;
     if (!(audio == "desktop" || audio == "off")) dir /= "audio-" + audio;
     return split.empty() ? dir : dir / split;
 }
@@ -365,7 +378,7 @@ fs::path packDir(const Options& o) {
 fs::path contentPack(Options& o) {
     rts::atlas::AtlasConfig ac = atlasConfig(o);
     SplitConfig sc = splitConfig(o);
-    const std::string audio = audioProfile(o), key = ac.key() + "|" + audio + "|" + sc.key();
+    const std::string audio = audioProfile(o), key = ac.key() + "|" + audio + "|" + sc.key() + "|" + fileRulesKey(o);
     if (auto it = o.packFiles.find(key); it != o.packFiles.end()) return it->second;
     const fs::path game = gameContent(o);
     step("Контент: сборка ресурс-пака" + (ac.key() == "off" ? std::string() : " (атласы: " + o.profile + ", страница до " + std::to_string(ac.pack.maxPage) + ")") +
@@ -382,12 +395,31 @@ fs::path contentPack(Options& o) {
     std::string err;
     if (w.addDirectory(game.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
         die(err);
+    // per-file settings from the Build window (exclude, zstd level, image size) before atlases
+    std::string ruleErr;
+    std::vector<rts::build::FileRule> fileRules = rts::build::readFileRules(o.gameJson, o.profile, &ruleErr);
+    if (!ruleErr.empty()) die(ruleErr);
+    rts::build::FileRulesReport fr;
+    std::vector<std::pair<std::string, int>> levelRules;
+    std::vector<std::string> fixedImages;   // frames addressed in pixels: sprite sheets, tile atlases
+    try {
+        Json rules = Json::parseFile((o.project / o.gameJson.getStr("rules", "rules.json")).string());
+        for (auto& [id, t] : rules["types"].members())
+            if (std::string sheet = t["sprite"].getStr("sheet"); !sheet.empty()) fixedImages.push_back(sheet);
+        std::error_code e3;
+        for (auto it = fs::directory_iterator(o.project / "tilesets", e3); !e3 && it != fs::directory_iterator(); it.increment(e3))
+            if (std::string at = Json::parseFile(it->path().string()).getStr("atlas"); !at.empty()) fixedImages.push_back(at);
+    } catch (const std::exception&) {}
+    if (!rts::build::applyFileRules(w, fileRules, levelRules, fr, &err, fixedImages)) die(err);
+    for (auto& m : fr.warnings) info("предупреждение: " + m);
+    for (auto& it : fr.items) info("файл " + it.path + ": " + it.what + (it.after ? " (" + rts::pack::formatBytes(it.before) + " → " + rts::pack::formatBytes(it.after) + ")" : ""));
     rts::atlas::AtlasStats as;
     if (!rts::atlas::applyAtlas(w, ac, as, &err)) die(err);
     for (auto& m : as.warnings) info("предупреждение: " + m);
     rts::pack::WriteOptions wo;
     wo.level = o.packLevel ? o.packLevel : (o.config == "Debug" ? 3 : 19);
     wo.threads = o.jobs;
+    wo.levelRules = levelRules;
     rts::pack::WriteStats st;
     fs::path dir = packDir(o), out = dir / "content.rpak";
     rts::pack::SplitResult sr;
@@ -422,6 +454,29 @@ fs::path contentPack(Options& o) {
     writeText(dir / "size-report.txt", report);
     {
         Json rep = packReportJson(st, as);
+        {   // every entry (the editor's Build window lists and sorts them) + what the file rules did
+            Json files = Json::array();
+            for (auto& it : st.items) {
+                Json e = Json::object();
+                e.set("path", Json::string(it.path));
+                e.set("rawBytes", Json::number(int64_t(it.rawSize)));
+                e.set("storedBytes", Json::number(int64_t(it.storedSize)));
+                e.set("codec", Json::string(it.codec == rts::pack::Codec::Zstd ? "zstd" : "store"));
+                if (it.duplicate) e.set("duplicate", Json::fromBool(true));
+                files.push(std::move(e));
+            }
+            rep.set("files", std::move(files));
+            Json rules = Json::array();
+            for (auto& it : fr.items) {
+                Json e = Json::object();
+                e.set("path", Json::string(it.path)); e.set("what", Json::string(it.what));
+                e.set("before", Json::number(int64_t(it.before))); e.set("after", Json::number(int64_t(it.after)));
+                rules.push(std::move(e));
+            }
+            rep.set("fileRules", std::move(rules));
+            rep.set("target", Json::string(o.profile));
+            rep.set("level", Json::number(int64_t(wo.level)));
+        }
         if (sc.enabled) {
             Json s = Json::object();
             s.set("baseBytes", Json::number(int64_t(sr.baseBytes)));
@@ -851,7 +906,8 @@ void usage() {
     std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
                  "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
                  "                [--no-pack] [--pack-level 1..22] [--no-atlas] [--audio auto|off|desktop|mobile|web]\n"
-                 "                [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]\n";
+                 "                [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]\n"
+                 "                [--estimate]  (content pack + size-report.json per target only, for the editor)\n";
 }
 
 } // namespace
@@ -870,6 +926,7 @@ int main(int argc, char** argv) {
         else if (a == "--team") o.team = next();
         else if (a == "--jobs") o.jobs = unsigned(std::atoi(next().c_str()));
         else if (a == "--generate-only") o.generateOnly = true;
+        else if (a == "--estimate") o.estimate = true;
         else if (a == "--no-pack") o.pack = false;
         else if (a == "--pack-level") o.packLevel = std::atoi(next().c_str());
         else if (a == "--no-atlas") o.atlas = false;
@@ -904,6 +961,7 @@ int main(int argc, char** argv) {
         g.orientation = m.getStr("orientation", g.orientation);
         g.icon = m.getStr("icon", "icon.png");
         if (o.team.empty()) o.team = m.getStr("appleTeamId", "");
+        if (!o.packLevel) o.packLevel = int(m["packaging"]["level"].integer(0));   // Build window setting
     } catch (const std::exception& e) {
         die(std::string("game.json: ") + e.what());
     }
@@ -913,6 +971,18 @@ int main(int argc, char** argv) {
     std::cout << "rtsbuild: " << g.name << " " << g.version << " (" << g.id << ")\n"
               << "  проект: " << o.project.string() << "\n  движок: " << o.engine.string() << "\n  вывод:  " << o.out.string()
               << "\n  хост:   " << kHost << ", конфигурация " << o.config << std::endl;
+    if (o.estimate) { // editor Build window: only the content as it would ship, per target
+        std::vector<std::string> ts = o.target == "all" ? std::vector<std::string>{"macos", "ios", "android", "web", "windows", "linux"} : std::vector<std::string>{o.target};
+        for (auto& t : ts) {
+            o.profile = t;
+            fs::path pack = contentPack(o);
+            std::error_code e2;
+            fs::create_directories(o.out / t, e2);
+            fs::copy_file(pack.parent_path() / "size-report.json", o.out / t / "size-report.json", fs::copy_options::overwrite_existing, e2);
+            std::cout << "оценка " << t << ": " << (o.out / t / "size-report.json").string() << std::endl;
+        }
+        return 0;
+    }
     if (findTool("cmake").empty()) die("cmake не найден в PATH");
 
     std::vector<std::string> targets;

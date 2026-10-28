@@ -1,0 +1,54 @@
+/* Mushroom Clash: UI skin (linked after engine/ui/theme.rcss). Cheerful forest: cream caps, soft rounded shapes.
+   Title font: fonts/title.ttf (Comfortaa, SIL OFL, fonts/OFL.txt). */
+
+body { color: #4a2e1c; }
+h1 { font-family: title; color: #c2412b; font-size: 32dp; font-weight: bold; }
+h2 { color: #8a6a52; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #8a6a52; }
+.error { color: #c2412b; }
+
+.panel {
+    background-color: #fff4e2f0;
+    border: 3dp #e7b98c;
+    border-radius: 18dp;
+}
+
+button {
+    color: #ffffff;
+    border: 1dp #b9542f;
+    border-radius: 14dp;
+    decorator: vertical-gradient(#ee7a4fff #d4552eff);
+}
+button:hover { decorator: vertical-gradient(#f58f63ff #df6538ff); border-color: #7ac943; }
+button:active { decorator: vertical-gradient(#d4552eff #ee7a4fff); }
+button.active { border-color: #7ac943; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#ee7a4fff #d4552eff); border-color: #b9542f; }
+button .cost { color: #ffe7c2; }
+button .tip { color: #c2412b; }
+
+progress { background-color: #e7b98c80; }
+progress fill { background-color: #7ac943; }
+
+#card .title { color: #c2412b; }
+#card .header { border-top-color: #e7b98c80; }
+#topbar .item.warn { color: #c2412b; }
+.notice { color: #fff4c2; }
+#selbox { border-color: #7ac943; background-color: #7ac94330; }
+#modal-bg { background-color: #3a201040; }
+#menu-bg { decorator: vertical-gradient(#eae0cfff #bfb7a9ff); }
+input.text { background-color: #fffaf1; border-color: #b9542f; color: #4a2e1c; }
+input.text:focus { border-color: #7ac943; }
+#lobby .slot.mine { border-color: #7ac943; }
+#lobby .roomtitle { color: #c2412b; font-family: title; }
+
+#kb { background-color: #fff4e2f0; border-color: #e7b98c; }
+#kb .key { color: #ffffff; border-color: #b9542f; border-radius: 14dp; decorator: vertical-gradient(#ee7a4fff #d4552eff); }
+#kb .key:active { border-color: #7ac943; }
+#kb .key.on { border-color: #7ac943; color: #ffffff; }
+
+button.active { decorator: vertical-gradient(#8fd65aff #64b232ff); border-color: #4e8f24; }
+button .hotkey { color: #ffe0c8; }
+#topbar .item { font-weight: bold; }
+.notice { color: #fff8d6; }
+#modehint { background-color: #4a2e1cd0; color: #fff4e2; }
+#menu h1 { text-align: center; }

@@ -157,6 +157,9 @@ bool UiLayer::init(gfx::Device& dev, const char* gameFont) {
         m.fonts.addFont(std::move(ttf), "ui", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Auto);
     if (platform::readContentFile("engine/fonts/ui.ttf", ttf) && !ttf.empty())
         m.fonts.addFont(std::move(ttf), "ui", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Auto);
+    // headings: the game's display font as family "title" (falls back to "ui" when absent)
+    if (platform::readContentFile("fonts/title.ttf", ttf) && !ttf.empty())
+        m.fonts.addFont(std::move(ttf), "title", Rml::Style::FontStyle::Normal, Rml::Style::FontWeight::Auto);
 
     m.context = Rml::CreateContext("main", {platform::framebufferWidth(), platform::framebufferHeight()});
     if (!m.context) { shutdown(); return false; }

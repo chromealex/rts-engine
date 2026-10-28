@@ -75,7 +75,9 @@ public:
     // background build (rtsbuild)
     bool building() const { return building_; }
     std::string buildLog() { std::lock_guard<std::mutex> lk(buildMutex_); return buildLog_; }
-    void startBuild(const std::string& target, const std::string& config);
+    // extraArgs: more rtsbuild flags (Build window: --estimate --out ..., --audio, --no-atlas, ...)
+    void startBuild(const std::string& target, const std::string& config, const std::string& extraArgs = "");
+    int buildResult() { std::lock_guard<std::mutex> lk(buildMutex_); return buildRc_; }
 
 private:
     void registerCoreOps();

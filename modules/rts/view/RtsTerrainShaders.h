@@ -28,7 +28,7 @@
 namespace rts::game::shaders {
 
 #define RTS_TERRAIN_GLSL_U0 \
-    "layout(std140) uniform U0 { vec4 t_lod; vec4 t_mode; vec4 t_scale; vec4 t_cliff; vec4 t_fog; vec4 t_tint[4]; vec4 t_cliffTint; };\n"
+    "layout(std140) uniform U0 { vec4 t_lod; vec4 t_mode; vec4 t_scale; vec4 t_cliff; vec4 t_fog; vec4 t_tint[4]; vec4 t_cliffTint; vec4 t_fogColor; vec4 t_fogGrid; };\n"
 
 inline const char* kTerrainVS =
     RTS_TERRAIN_GLSL_U0 RTS_GLSL_FRAME
@@ -180,9 +180,16 @@ void main() {
     if (t_mode.w > 0.5) { // fog of war of heightfield maps (the flat fog sheet would cut the relief)
         vec2 uv = v_wpos.xz / t_lod.zw;
         if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
-            float v = texture(tex15, uv).r;
-            float a = v > 0.75 ? 0.0 : v > 0.25 ? t_fog.x : t_fog.y;
-            outc = mix(outc, vec3(8.0, 10.0, 14.0) / 255.0, a);
+            if (t_fogColor.w > 0.5) uv = (floor(v_wpos.xz) + 0.5) / t_lod.zw;   // hard cells (RtsFog style)
+            float v = texture(tex15, uv).r;  // 0 unexplored, 0.5 explored, 1 visible (faded + blurred by RtsFog)
+            float a = v < 0.5 ? mix(t_fog.y, t_fog.x, v * 2.0) : mix(t_fog.x, 0.0, (v - 0.5) * 2.0);
+            vec3 fc = t_fogColor.rgb;
+            if (t_fogGrid.a > 0.0 && (t_fog.z > 0.5 || a > 0.01)) {
+                vec2 fw = fract(v_wpos.xz);
+                float g = t_fogGrid.a * (1.0 - smoothstep(0.015, 0.05, min(min(fw.x, 1.0 - fw.x), min(fw.y, 1.0 - fw.y))));
+                fc = mix(fc, t_fogGrid.rgb, g / max(a + g, 0.001)); a = max(a, g);
+            }
+            outc = mix(outc, fc, a);
         }
     }
     o_color = vec4(outc, 1.0);
@@ -191,7 +198,7 @@ void main() {
 
 inline const char* kTerrainMSL =
     "#include <metal_stdlib>\nusing namespace metal;\n"
-    "struct TU0 { float4 lod; float4 mode; float4 scale; float4 cliff; float4 fog; float4 tint[4]; float4 cliffTint; };\n"
+    "struct TU0 { float4 lod; float4 mode; float4 scale; float4 cliff; float4 fog; float4 tint[4]; float4 cliffTint; float4 fogColor; float4 fogGrid; };\n"
     RTS_MSL_FRAME RTS_MSL_SHADOW RTS_MSL_LIGHTS
     R"(
 struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; float2 morph [[attribute(3)]]; };
@@ -322,9 +329,16 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
     if (u.mode.w > 0.5) {
         float2 uv = in.wpos.xz / u.lod.zw;
         if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
+            if (u.fogColor.w > 0.5) uv = (floor(in.wpos.xz) + 0.5) / u.lod.zw;
             float v = tex15.sample(s15, uv).r;
-            float a = v > 0.75 ? 0.0 : v > 0.25 ? u.fog.x : u.fog.y;
-            outc = mix(outc, float3(8.0, 10.0, 14.0) / 255.0, a);
+            float a = v < 0.5 ? mix(u.fog.y, u.fog.x, v * 2.0) : mix(u.fog.x, 0.0, (v - 0.5) * 2.0);
+            float3 fc = u.fogColor.rgb;
+            if (u.fogGrid.a > 0.0 && (u.fog.z > 0.5 || a > 0.01)) {
+                float2 fw = fract(in.wpos.xz);
+                float g = u.fogGrid.a * (1.0 - smoothstep(0.015, 0.05, min(min(fw.x, 1.0 - fw.x), min(fw.y, 1.0 - fw.y))));
+                fc = mix(fc, u.fogGrid.rgb, g / max(a + g, 0.001)); a = max(a, g);
+            }
+            outc = mix(outc, fc, a);
         }
     }
     return float4(outc, 1.0);

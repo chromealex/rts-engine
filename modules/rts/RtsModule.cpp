@@ -206,7 +206,13 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         }
         recomputeMods(sim, uint8_t(p));
     }
-    gs.vision.assign(np + 1, std::vector<uint8_t>(size_t(mw * mh), 0));
+    {   // fog of war: the map may override the mode of the rules ("fogOfWar": {"mode": "none"})
+        FogMode fm = rules_.fog.mode;
+        std::string m = map["fogOfWar"].getStr("mode", "");
+        if (m == "full") fm = FogMode::Full; else if (m == "explored") fm = FogMode::Explored; else if (m == "none" || m == "off") fm = FogMode::None;
+        gs.fogMode = uint8_t(fm);
+        gs.vision.assign(np + 1, std::vector<uint8_t>(size_t(mw * mh), fm == FogMode::None ? 2 : fm == FogMode::Explored ? 1 : 0));
+    }
     gs.roadsOnly = map.getBool("roadsOnly", false);
     {
         uint8_t maxTeam = 0;
