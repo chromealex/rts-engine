@@ -222,7 +222,7 @@ struct ParticleSystem::Impl {
         float grav = 1;                // "gravityScale"
         float nsize = 1;               // noise size factor
         uint8_t mesh = 0, row = 0;
-        uint8_t flags = 0;             // 1 flip U, 2 flip V, 4 inside a trigger volume, 8 inside (previous frame known)
+        uint8_t flags = 0;             // 1 flip U, 2 flip V, 4 inside a trigger volume, 8 inside known, 16 align to direction, 32 mirrored rotation
     };
     struct Trail {
         std::array<float3, kTrailPts> p;

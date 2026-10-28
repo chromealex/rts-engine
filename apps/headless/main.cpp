@@ -91,7 +91,13 @@ static void dumpTypes(Simulation& sim) {
         std::printf("\n    income:");
         for (size_t r = 0; r < m->rules().resources.size(); ++r)
             std::printf(" %s=%.2f/s", m->rules().resources[r].id.c_str(), m->state(sim).players[p.slot].income[r].toDouble());
-        std::printf("  supply %d/%d\n", int(m->state(sim).players[p.slot].supplyUsed.toInt()), int(m->state(sim).players[p.slot].supplyCap.toInt()));
+        std::printf("  supply %d/%d", int(m->state(sim).players[p.slot].supplyUsed.toInt()), int(m->state(sim).players[p.slot].supplyCap.toInt()));
+        if (!m->state(sim).grid.foundation.empty()) {
+            int paved = 0;
+            for (auto f : m->state(sim).grid.foundation) if (f == p.slot) ++paved;
+            std::printf("  concrete %d", paved);
+        }
+        std::printf("\n");
         sim.world().each<game::Unit, Owner, game::Footprint>([&](Entity, game::Unit& u, Owner& o, game::Footprint& f) {
             if (o.player == p.slot) std::printf("    %s [%d,%d %dx%d]\n", m->rules().types[u.type].id.c_str(), f.x, f.y, f.w, f.h);
         });
@@ -214,9 +220,15 @@ static int play(const Args& a) {
         const Json& gm = *rm->generatedMap();
         if (!a.quiet) {
             const Json& gi = gm["generated"];
-            std::printf("Generated: preset=%s seed=%lld players=%lld symmetry=%s size=%lldx%lld objects=%zu hash=%016llx\n", gi.getStr("preset").c_str(),
-                        (long long)gi.getInt("seed"), (long long)gi.getInt("players"), gi.getStr("symmetry").c_str(), (long long)gm["size"][size_t(0)].integer(),
-                        (long long)gm["size"][size_t(1)].integer(), gm["entities"].size(), (unsigned long long)gen::mapHash(gm));
+            std::string size = std::to_string(gm["size"][size_t(0)].integer()) + "x" + std::to_string(gm["size"][size_t(1)].integer());
+            if (gm["world"].isObject()) {   // planet maps: bodies and face sizes
+                size = gi.getStr("layout");
+                for (auto& b : gm["world"]["bodies"].items())
+                    if (b.has("faceSize")) size += " " + b.getStr("id") + ":" + std::to_string(b.getInt("faceSize"));
+            }
+            std::printf("Generated: preset=%s seed=%lld players=%lld symmetry=%s size=%s objects=%zu hash=%016llx\n", gi.getStr("preset").c_str(),
+                        (long long)gi.getInt("seed"), (long long)gi.getInt("players"), gi.getStr("symmetry").c_str(), size.c_str(),
+                        gm["entities"].size(), (unsigned long long)gen::mapHash(gm));
             if (gi.has("paths")) std::printf("  paths %s  connected=%d\n", gi["paths"].dump(-1).c_str(), int(gi.getBool("connected")));
             for (auto& w : gi["warnings"].items()) std::printf("  warning: %s\n", w.str().c_str());
         }

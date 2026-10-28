@@ -143,7 +143,9 @@ using CornerFn = std::function<float3(float x, float y, float z)>;  // grid corn
 // Appends the visible faces of the grid as merged quads (4 vertices, 2 triangles each), one
 // primitive per material. Returns the mesh index or -1 when nothing is visible.
 int greedyMesh(Model& m, const std::string& name, const VoxelGrid& g, const StyleFn& style, const CornerFn& corner) {
-    struct Quad { float3 p[4]; uint32_t color; int material; };
+    // uv: face-plane voxel coordinates / 16 (box projection), so tiling textures of materials
+    // assigned to voxel models (docs/models.md "assign") land at 16 voxels per repeat
+    struct Quad { float3 p[4]; uint32_t color; int material; float2 uv[4]; };
     std::vector<Quad> quads;
     std::map<uint16_t, FaceStyle> styles;
     auto styleOf = [&](uint16_t k) {
@@ -183,8 +185,9 @@ int greedyMesh(Model& m, const std::string& name, const VoxelGrid& g, const Styl
                             return corner(b[0] + du[0] * a + dv[0] * bb, b[1] + du[1] * a + dv[1] * bb, b[2] + du[2] * a + dv[2] * bb);
                         };
                         const FaceStyle st = styleOf(k);
-                        Quad q{{at(0, 0), at(1, 0), at(1, 1), at(0, 1)}, st.color, st.material};
-                        if (dir < 0) std::swap(q.p[1], q.p[3]);  // e_u x e_v = +e_d: flip winding for -d faces
+                        auto tc = [&](float a, float bb) { return float2{(b[u] + float(w) * a) / 16.0f, (b[v] + float(h) * bb) / 16.0f}; };
+                        Quad q{{at(0, 0), at(1, 0), at(1, 1), at(0, 1)}, st.color, st.material, {tc(0, 0), tc(1, 0), tc(1, 1), tc(0, 1)}};
+                        if (dir < 0) { std::swap(q.p[1], q.p[3]); std::swap(q.uv[1], q.uv[3]); }  // e_u x e_v = +e_d: flip winding for -d faces
                         quads.push_back(q);
                         i += w;
                     }
@@ -203,15 +206,16 @@ int greedyMesh(Model& m, const std::string& name, const VoxelGrid& g, const Styl
             const Quad& qd = quads[q];
             const float3 n = normalize(cross(qd.p[1] - qd.p[0], qd.p[3] - qd.p[0]));
             const uint32_t base = uint32_t(m.vertices.size());
-            for (const float3& pos : qd.p) {
+            for (int c = 0; c < 4; ++c) {
                 ModelVertex vx;
-                vx.pos = pos; vx.nrm = n; vx.color = qd.color;
+                vx.pos = qd.p[c]; vx.nrm = n; vx.color = qd.color; vx.uv = qd.uv[c];
                 m.vertices.push_back(vx);
             }
             m.indices.insert(m.indices.end(), {base, base + 1, base + 2, base, base + 2, base + 3});
         }
         p.indexCount = uint32_t(m.indices.size()) - p.firstIndex;
         p.vertexCount = uint32_t(m.vertices.size()) - p.firstVertex;
+        generateTangents(m.vertices, m.indices, p.firstIndex, p.indexCount);   // normal maps of assigned materials
         md.primitives.push_back(std::move(p));
     }
     m.meshes.push_back(std::move(md));

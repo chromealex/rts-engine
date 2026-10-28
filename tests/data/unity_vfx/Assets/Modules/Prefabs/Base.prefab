@@ -1,0 +1,144 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &1700000000000001
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4700000000000001}
+  - component: {fileID: 1987000000000001}
+  - component: {fileID: 1997000000000001}
+  - component: {fileID: 1147000000000001}
+  m_Layer: 0
+  m_Name: Base
+  m_IsActive: 1
+--- !u!4 &4700000000000001
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1700000000000001}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children:
+  - {fileID: 4700000000000002}
+  m_Father: {fileID: 0}
+--- !u!198 &1987000000000001
+ParticleSystem:
+  m_GameObject: {fileID: 1700000000000001}
+  serializedVersion: 8
+  lengthInSec: 1
+  simulationSpeed: 1
+  looping: 0
+  startDelay:
+    minMaxState: 0
+    scalar: 0
+  moveWithTransform: 1
+  scalingMode: 1
+  InitialModule:
+    enabled: 1
+    startLifetime:
+      minMaxState: 0
+      scalar: 1
+    startSpeed:
+      minMaxState: 0
+      scalar: 2
+    startSize:
+      minMaxState: 0
+      scalar: 0.5
+    maxNumParticles: 1000
+  ShapeModule:
+    enabled: 1
+    type: 0
+    radius:
+      value: 0.2
+  EmissionModule:
+    enabled: 1
+    rateOverTime:
+      minMaxState: 0
+      scalar: 0
+    rateOverDistance:
+      minMaxState: 0
+      scalar: 0
+    m_Bursts:
+    - serializedVersion: 2
+      time: 0
+      countCurve:
+        minMaxState: 0
+        scalar: 6
+      cycleCount: 1
+      repeatInterval: 0.01
+      probability: 1
+--- !u!199 &1997000000000001
+ParticleSystemRenderer:
+  m_GameObject: {fileID: 1700000000000001}
+  m_Enabled: 1
+  m_Materials:
+  - {fileID: 2100000, guid: b2c2d2e2f2a24b2c8d2e2f2a2b2c0003, type: 2}
+  m_RenderMode: 0
+--- !u!114 &1147000000000001
+MonoBehaviour:
+  m_GameObject: {fileID: 1700000000000001}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: d4e4f4a4b4c44d4e8f4a4b4c4d4e0002, type: 3}
+--- !u!1 &1700000000000002
+GameObject:
+  m_ObjectHideFlags: 0
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 4700000000000002}
+  - component: {fileID: 1987000000000002}
+  - component: {fileID: 1997000000000002}
+  m_Layer: 0
+  m_Name: BaseGlow
+  m_IsActive: 1
+--- !u!4 &4700000000000002
+Transform:
+  m_ObjectHideFlags: 0
+  m_GameObject: {fileID: 1700000000000002}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0.5, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_Children: []
+  m_Father: {fileID: 4700000000000001}
+--- !u!198 &1987000000000002
+ParticleSystem:
+  m_GameObject: {fileID: 1700000000000002}
+  serializedVersion: 8
+  lengthInSec: 2
+  simulationSpeed: 1
+  looping: 1
+  startDelay:
+    minMaxState: 0
+    scalar: 0
+  moveWithTransform: 1
+  scalingMode: 1
+  InitialModule:
+    enabled: 1
+    startLifetime:
+      minMaxState: 0
+      scalar: 0.8
+    startSpeed:
+      minMaxState: 0
+      scalar: 0
+    startSize:
+      minMaxState: 0
+      scalar: 1
+    maxNumParticles: 1000
+  ShapeModule:
+    enabled: 0
+  EmissionModule:
+    enabled: 1
+    rateOverTime:
+      minMaxState: 0
+      scalar: 4
+    rateOverDistance:
+      minMaxState: 0
+      scalar: 0
+    m_Bursts: []
+--- !u!199 &1997000000000002
+ParticleSystemRenderer:
+  m_GameObject: {fileID: 1700000000000002}
+  m_Enabled: 1
+  m_Materials:
+  - {fileID: 2100000, guid: b2c2d2e2f2a24b2c8d2e2f2a2b2c0003, type: 2}
+  m_RenderMode: 0

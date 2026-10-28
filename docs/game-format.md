@@ -698,6 +698,8 @@ Common keys: `amount` (number or `[min, max]` rolled with the sim RNG), `percent
 | `sacrifice` | `percent`, `gain` | kills own units / garrison for resources per unit |
 | `stealSkill` | `duration`, `transfer` | takes a random skill the enemy has and you don't |
 | `cooldown` | `amount` | seconds added to (or taken from) the players' skill cooldowns |
+| `addCharges` | `amount`, `limit` (cap, default the type's `charges.max`) | a larva structure gets `amount` charges, beyond its natural cap up to `limit` (inject larvae: a status with this in `onExpire`) |
+| `teleportGroup` | `radius`, `origin` (`point` / `caster`), `destination` (`point2` / `caster` / `point`), `killTags`, `duration` + filter | units around the origin move to the destination keeping their formation; `killTags` units die instead (Chronosphere infantry); with a `duration` they come back (RA1). Chronosphere: player ability with `"target": "pointPair"`; Mass Teleport: unit ability, `origin: caster`; Strategic Recall: `origin: point`, `destination: caster` |
 
 ### Statuses
 
@@ -1512,7 +1514,27 @@ into a static map.
 | `caves` | caves | Dungeon Keeper (`diggable`) | `size` [48,32], `gold` 0.03 / `gems` 0.004 (share of rock that is a vein / infinite seam), `bedrock` 0.06, `caverns` 0.06 |
 | `lanes` | lanes | lane battlers / MOBA | `size` [32,64], `lanes` 3, `laneWidth` 4, `bend` 0.35 (rock everywhere else) |
 | `field` | lanes, `open` | Mushroom Wars 2 (garrisons + roads) | `size` [44,28], `obstacles` 0.12, `roads` from the template |
-| `rocky` / `ocean` / `moon` | planet | cube-sphere bodies | `faceSize`, `water` 0.25 / 0.7 / 0, `relief`, `ice` (polar caps), `craters` (moon) |
+| `rocky` / `ocean` / `moon` | planet | whole planet maps, or one body's terrain | `faceSize`, `water` 0.25 / 0.7 / 0, `relief`, `ice` (polar caps), `craters` (moon), `layout`, `moonResources`, `baseRadius` (moon 11) |
+
+**Planet maps.** A planet preset as the map's `generate` builds the whole `world` block: the bodies (and their orbits,
+visuals) come from the template map's `world` (e.g. `templates/planets`), else a sun + planet + moon. Every surface body
+gets per-face `rows`, `corners`, `material`; players get `start: {body, face, x, y}`; objects are written with `at`.
+- `layout: "shared"` (default): all players on the start body, rotational symmetry about the polar axis: exact for 2 and 4
+  players (half / quarter turns map the cube-sphere onto itself, heights are symmetrized corner by corner), averaged over the
+  rotations for 3, 5+ (`generated.symmetry`: `polar-exact` / `polar`). Starts near the equator in the middle of each longitude
+  sector, away from face seams and rough ground; base areas flattened; graded causeways where the ground doesn't connect.
+- `layout: "separate"`: every player on an identical planet of its own (same terrain, same objects), orbiting the star at
+  equal phases; players meet through orbit-layer units (warning when the rules have none).
+- Objects: the template's player-1 objects (offsets measured on its body, across face seams) are the kit; neutral objects
+  near the template bases / far / on moons are counted and reproduced (`objects[].moon`, `objects[].pole`); moons get
+  `moonResources` (default 2) x their share. `generated.nearResources` lists the resource objects within `nearRadius` of
+  each start (equal by construction; a warning otherwise).
+- Fairness: the generated map is loaded into a simulation and the engine's `MapGrid::findPath` measures the ground path
+  between every pair of starts (`generated.paths`, `connected`, `pathSpread` = spread of each player's distance to the nearest
+  rival, per mille).
+- One body only: `world.bodies[].generate` (terrain + reported start sites, no objects), as before.
+
+`rts_headless --project templates/planets --generate rocky --seed N --players 3 [--gen-params '{"layout": "separate"}']`.
 
 All params (any preset): `shape`, `size` [w, h] (16..1024; the map's own size wins unless `params.size` is given), `water`
 (share of corners below sea level), `rivers` (0..1: flow accumulation carved into rivers), `lakes` (pit depth that stays a lake),
@@ -1571,18 +1593,55 @@ uses none of them keeps its exact checksums.
 Recipes of `storage: "player"` games (no goods in buildings) take their inputs from the player stock and credit the
 outputs to it: buildings that gather around them (They Are Billions sawmills, Northgard lodges).
 
+### Foundations, traps, group teleports, charges (`RtsFidelity.cpp`)
+
+```json
+"foundation": {"startHp": 0.5, "decay": 0.25, "floor": 0.5, "lostWithBuilding": true},   // or just true
+"types": {
+  "concrete": {"structure": {"footprint": [1, 1], "terrain": "rock"}, "foundation": true, "cost": {"credits": 5, "time": 2}},
+  "wall":     {"weathers": false, ...},
+  "gas_trap": {"structure": {"footprint": [1, 1]}, "health": {"max": 200},
+               "trap": {"radius": 0.8, "charges": 5, "rearm": 8, "armTime": 0, "hidden": true, "revealFor": 4, "removeWhenEmpty": true,
+                        "layers": ["ground"], "tags": ["hero"],                          // trigger filter (effect filter keys; or "trigger": {...})
+                        "effects": [{"type": "area", "radius": 2, "lifetime": 5, "trigger": "periodic", "effects": [{"type": "damage", "amount": 18}]}]}},
+  "queen":    {"abilities": [{"id": "inject", "target": "unit", "energy": 25, "smart": "ownProducer",
+                              "effects": [{"type": "status", "status": "injected", "duration": 29, "affects": "own", "kind": "structure"}]}]}
+},
+"statuses": {"injected": {"onExpire": [{"type": "addCharges", "amount": 3, "limit": 19, "affects": "own"}]}},
+"playerAbilities": [{"id": "chronoshift", "target": "pointPair", "effects": [{"type": "teleportGroup", "radius": 1, "maxTargets": 1, "tags": ["vehicle"], "affects": "own", "duration": 180}]}]
+```
+
+- **Concrete (Dune II)**: a placed `foundation` structure turns its cells into the owner's concrete (`MapGrid::foundation`,
+  drawn by the view's `terrain.concrete` block: `color`, `seam`, `alpha`, `texture`) and goes away (event `kEvPaved`).
+  Concrete doesn't block anything. A structure finished with b = share of its cells not on own concrete gets at most
+  `1 - b·(1 - startHp)` of its hp and weathers by `decay·b` of its max hp per minute down to `1 - b·(1 - floor)`
+  (repairs raise it, the weather keeps going). `weathers: false` exempts a type. Structures of the starting map stand on
+  concrete; a destroyed structure takes its concrete with it (`lostWithBuilding`). Flat maps only. The AI keeps a few free
+  paved cells near the base and places its buildings on concrete first.
+- **Traps**: a structure with `trap` fires its `effects` at the nearest unit passing the trigger filter (enemy ground and air
+  units by default) within `radius` (target = the victim, point = its position, caster = the trap), then waits `rearm`
+  seconds; `charges` (0 = unlimited) run out and the trap disappears (`removeWhenEmpty`). `hidden` traps are invisible to
+  enemies (not targeted, not drawn) except for `revealFor` seconds after firing and to detectors. Event `kEvTrapFired`
+  (a = trap, b = victim). The AI builds a few traps at the front of its base, more as the match goes on.
+- **Group teleport**: see the `teleportGroup` effect; `pointPair` player abilities take two clicks (from, to); the second
+  point travels in `kCmdPlayerAbility` param bits 16..48 (`RtsModule::packPoint2`). Event `kEvGroupTeleport` (a = unit,
+  value 1 = return trip). The AI shifts its biggest matching group next to the nearest enemy structure.
+- **Smart rule `ownProducer`**: autocast / AI target: an own structure without the payload's status that has larva
+  charges (when the payload, or the status it gives, adds charges) or something in production (chrono boost:
+  a status with `{"stat": "productionSpeed", "mul": 1.5}`).
+
 ## Sample games (data only, `<project>/`; maps from `templates/_tools/mapgen.py`)
 
 | id | like | recipe |
 |---|---|---|
 | `frostcrown` | Warcraft III (Orcs) | percent armor, upkeep on gold, hall tiers, 3 heroes with learned skills / free first / revive, 5 peons per mine, creeps |
-| `starfall` | StarCraft II | Protoss warp + shields + pylon fields, Zerg morph + larva + creep, Terran add-ons (tech lab / reactor), attribute bonuses, 1 worker per patch |
-| `ironfront` | Red Alert | Allies / Soviets, sidebar, ore + gems, silos, power, engineers, Tanya, superweapons, crush |
-| `ambersands` | Dune II | houses, bases on rock (no concrete yet), spice without regrowth, blooms, sandworms that eat and resurface, crush, palaces |
+| `starfall` | StarCraft II | Protoss warp + shields + pylon fields + chrono boost + recall, Zerg morph + larva + inject + creep, Terran add-ons (tech lab / reactor), attribute bonuses, 1 worker per patch |
+| `ironfront` | Red Alert | Allies / Soviets, sidebar, ore + gems, silos, power, engineers, Tanya, superweapons incl. the Chronosphere, crush |
+| `ambersands` | Dune II | houses, bases on rock, concrete slabs and weathering, spice without regrowth, blooms, sandworms that eat and resurface, crush, palaces |
 | `metaltide` | Total Annihilation | Arm / Core, flows, progressive cost, D-gun, commander explosion, metal makers, heightfield |
 | `fourages` | Age of Empires II | four ages (requiresAny), melee / pierce armor and bonuses, AoE II gather rates, finite farms, techs |
 | `holdtheline` | Company of Heroes | US / Wehrmacht, sectors with supply lines, tickets, squads, manpower upkeep |
-| `lastcolony` | They Are Billions | buildings gather, workers / food / energy, tesla grid, infection, final wave |
+| `lastcolony` | They Are Billions | buildings gather, workers / food / energy, tesla grid, stake / blade traps, infection, final wave |
 | `clanlands` | Northgard | scouted and cleared regions, births, production in buildings, warband from villagers, happiness |
 | `flagsectors` | Z | flags, free factories with levels, drivers and empty vehicles / guns, fort |
 | `laneclash` | lane battler | `autoBuild` pool, `waveClock` + `waveSpawn`, `upgrades`, `victory: score` with `keyLoses` |

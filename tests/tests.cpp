@@ -1,3 +1,4 @@
+#include <chrono>
 // Dependency-free unit tests. Run: ctest  (or ./rts_tests)
 #include <filesystem>
 #include <cstdio>
@@ -5810,6 +5811,55 @@ TEST(fx_mesh_particles_from_model_files) {
     CHECK(ps.errors().empty());
 }
 
+TEST(fx_unity_importer_all_modules_play) {
+    // The synthetic project exercising every ParticleSystem module: imported effects parse and play.
+    if (std::system("python3 -c \"import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)\" > /dev/null 2>&1") != 0) {
+        std::printf("    (skipped: python3 not found)\n");
+        return;
+    }
+    const std::string src = std::string(RTS_SOURCE_DIR);
+    const std::string out = (std::filesystem::temp_directory_path() / "rts_unity_vfx_modules").string();
+    std::filesystem::remove_all(out);
+    std::filesystem::create_directories(out);
+    const std::string cmd = "python3 \"" + src + "/tools/importers/unity_vfx/import.py\" --source \"" + src +
+                            "/tests/data/unity_vfx/Assets/Modules\" --game \"" + out + "\" --json > \"" + out + "/report.json\"";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile(out + "/report.json");
+    CHECK(rep["effects"].size() >= 5);
+    auto read = [&](const std::string& p, std::string& text) {
+        std::ifstream f(out + "/" + p, std::ios::binary);
+        if (!f) return false;
+        text.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.setFileReader(read);
+    ps.setMeshLoader([&](const std::string& name, fx::FxMesh& m) { return fx::meshFromModelFile(name, read, m); });
+    ps.init(nullptr);
+    for (auto& e : rep["effects"].items()) {
+        int id = ps.effect(e.getStr("name"));
+        CHECK(id >= 0);
+        if (id < 0) continue;
+        ps.play(id, {0, 0, 0});
+        int most = 0;
+        for (int i = 0; i < 90; ++i) { ps.update(1 / 30.0f); most = std::max(most, ps.stats().particles); }
+        CHECK(most > 0);
+        std::vector<fx::FxParticleInfo> parts;
+        ps.snapshot(parts);
+        bool finite = true;
+        for (auto& p : parts) finite = finite && std::isfinite(p.pos.x + p.pos.y + p.pos.z + p.size);
+        CHECK(finite);
+    }
+    int meshErrors = 0;
+    for (auto& e : ps.errors()) {
+        if (e.find("rock.fbx") != std::string::npos) { ++meshErrors; continue; }   // a stub file in the test data
+        std::printf("    %s\n", e.c_str());
+    }
+    CHECK(ps.errors().size() == size_t(meshErrors));
+    std::filesystem::remove_all(out);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;
@@ -5941,6 +5991,7 @@ TEST(sphere_great_circle_steps) {
 #define GEN_GOLD_LANES 0x6010e5d33a6a8fdbull
 #define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
 #define GEN_GOLD_METAL 0x5e11afce218433b2ull
+#define GEN_GOLD_PLANET_WORLD 0x8101a56ab8e6f0c6ull
 #define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
 
 // ---------------- terrain / map generator (agent-terrain-gen) ----------------
@@ -8157,6 +8208,146 @@ TEST(models_dds_formats) {
     CHECK(!decodeImage(ddsHeader(0, 4, "DXT1"), img) && !decodeImage(ddsHeader(100000, 4, "DXT1"), img));
 }
 
+// ---- sprite shadows (RtsSpriteShadow): data keys, tiers, projected decal geometry
+#include "modules/rts/view/RtsSpriteShadow.h"
+
+TEST(sprite_shadow_data_keys) {
+    using game::SpriteShadowMode;
+    // defaults: blob, unlit; game.json wins over rules.json
+    game::SpriteDefaults d0 = game::parseSpriteDefaults(Json(), Json());
+    CHECK(d0.shadow == SpriteShadowMode::Blob && !d0.lit);
+    game::SpriteDefaults d = game::parseSpriteDefaults(Json::parse(R"({"shadow": "none", "lit": true})"), Json::parse(R"({"shadow": "cast"})"));
+    CHECK(d.shadow == SpriteShadowMode::Cast && d.lit);
+    // old files: missing shadow = blob for units, none for buildings and ground sprites
+    auto spec = [&](const char* js, const game::SpriteDefaults& dd, bool structure, bool ground = false) {
+        return game::parseSpriteShadow(Json::parse(js), dd, structure, ground, 1.0f, 1.5f, 2, 3);
+    };
+    CHECK(spec("{}", d0, false).mode == SpriteShadowMode::Blob);
+    CHECK(spec("{}", d0, true).mode == SpriteShadowMode::None);
+    CHECK(spec("{}", d, true).mode == SpriteShadowMode::Cast);          // game opts in: buildings cast
+    CHECK(spec("{}", d, false, true).mode == SpriteShadowMode::None);   // ground sprites never cast
+    CHECK(spec(R"({"shadow": false})", d, false).mode == SpriteShadowMode::None);
+    CHECK(spec(R"({"shadow": true})", d0, true).mode == SpriteShadowMode::Blob);
+    CHECK(spec(R"({"shadow": "cast"})", d0, false).mode == SpriteShadowMode::Cast);
+    // object form: blob (compatibility) unless "mode" says otherwise; size / alpha kept for the blob
+    game::SpriteShadowSpec o = spec(R"({"shadow": {"size": [0.9, 0.5], "alpha": 0.3}})", d, true);
+    CHECK(o.mode == SpriteShadowMode::Blob && std::fabs(o.blobW - 0.9f) < 1e-4f && std::fabs(o.blobH - 0.5f) < 1e-4f && std::fabs(o.blobAlpha - 0.3f) < 1e-4f);
+    CHECK(spec(R"({"shadow": {"mode": "cast", "size": [0.9, 0.5]}})", d0, true).mode == SpriteShadowMode::Cast);
+    // structure blob covers the footprint; caster height / offset / lit overrides
+    game::SpriteShadowSpec b = spec(R"({"castHeight": 2.5, "shadowOffset": [0.25, -0.5], "lit": false})", d, true);
+    CHECK(b.blobW > 2.0f && b.blobH > 3.0f && std::fabs(b.castHeight - 2.5f) < 1e-4f);
+    CHECK(std::fabs(b.offsetRight - 0.25f) < 1e-4f && std::fabs(b.offsetFront + 0.5f) < 1e-4f && !b.lit);
+    CHECK(std::fabs(spec("{}", d, false).castHeight - 1.5f) < 1e-4f && spec("{}", d, false).lit);
+    CHECK(std::fabs(b.castDepth - 3.0f) < 1e-4f && spec("{}", d, false).castDepth == 0);   // buildings: box of the footprint depth
+    CHECK(spec(R"({"castDepth": 0})", d, true).castDepth == 0);
+}
+
+TEST(sprite_shadow_tiers) {
+    using game::SpriteShadowMode;
+    using render::ShadowQuality;
+    auto at = [](SpriteShadowMode m, ShadowQuality q, bool s) { return game::shadowDrawFor(m, q, s); };
+    // Off: blobs only (the old look); Low: buildings cast, units blob; Medium+: all cast
+    CHECK(!at(SpriteShadowMode::Cast, ShadowQuality::Off, true).cast && at(SpriteShadowMode::Cast, ShadowQuality::Off, true).blobK == 1);
+    CHECK(at(SpriteShadowMode::Cast, ShadowQuality::Low, true).cast && !at(SpriteShadowMode::Cast, ShadowQuality::Low, false).cast);
+    CHECK(at(SpriteShadowMode::Cast, ShadowQuality::Medium, false).cast && at(SpriteShadowMode::Cast, ShadowQuality::High, false).cast);
+    CHECK(!at(SpriteShadowMode::Blob, ShadowQuality::High, false).cast && at(SpriteShadowMode::Blob, ShadowQuality::High, false).blobK == 1);
+    CHECK(!at(SpriteShadowMode::None, ShadowQuality::High, false).cast && at(SpriteShadowMode::None, ShadowQuality::Off, false).blobK == 0);
+}
+
+TEST(sprite_shadow_projected_decal_follows_ground) {
+    // levels map with a cliff: a blob across the edge is cut from both levels' surface triangles,
+    // every decal vertex lies on the terrain mesh (heightAt agrees inside a cell's top quad)
+    game::MapGrid g;
+    g.init(6, 4);
+    for (auto& f : g.flags) f = game::kCellGround;
+    for (int y = 0; y < 4; ++y) for (int x = 3; x < 6; ++x) g.level[size_t(g.index(x, y))] = 1;
+    for (size_t i = 0; i < g.height.size(); ++i) g.height[i] = int16_t(i * 5 % 16);
+    const float lh = 1.5f;
+    game::GroundSurface surf{&g, lh, false};
+    std::vector<render::float3> tris;
+    game::surfaceTriangles(surf, 2.4f, 1.4f, 3.6f, 2.6f, tris);
+    CHECK(tris.size() == 4 * 6);   // 2 x 2 cells, 2 triangles each
+    const render::float3 o{2.4f, 0, 1.4f}, aU{1, 0, 0}, aV{0, 0, 1};
+    int pieces = 0;
+    float minY = 1e9f, maxY = -1e9f;
+    for (size_t i = 0; i + 2 < tris.size(); i += 3) {
+        const render::float3 t[3] = {tris[i], tris[i + 1], tris[i + 2]};
+        render::float3 poly[8];
+        int n = game::clipToRect(t, o, aU, 1.2f, aV, 1.2f, poly);
+        if (n) ++pieces;
+        for (int k = 0; k < n; ++k) {
+            CHECK(poly[k].x >= 2.4f - 1e-4f && poly[k].x <= 3.6f + 1e-4f && poly[k].z >= 1.4f - 1e-4f && poly[k].z <= 2.6f + 1e-4f);
+            // on the plane of its source triangle
+            const render::float3 nrm = render::cross(t[1] - t[0], t[2] - t[0]);
+            CHECK(std::fabs(render::dot(poly[k] - t[0], nrm)) < 1e-3f);
+            minY = std::min(minY, poly[k].y); maxY = std::max(maxY, poly[k].y);
+        }
+    }
+    CHECK(pieces == 8);
+    CHECK(minY < 1.0f && maxY > 1.5f);   // both sides of the cliff, no flat plate at one height
+    // flat cells (cell centres away from the cliff) match the view's ground height
+    std::vector<render::float3> one;
+    game::surfaceTriangles(surf, 0.5f, 0.5f, 0.5f, 0.5f, one);
+    CHECK(one.size() == 6);
+    // tile maps: flat cells at level * levelHeight + height / 16
+    game::GroundSurface tilesSurf{&g, lh, true};
+    one.clear();
+    game::surfaceTriangles(tilesSurf, 4.5f, 2.5f, 4.5f, 2.5f, one);
+    CHECK(one.size() == 6 && std::fabs(one[0].y - (1.5f + float(g.height[size_t(g.index(4, 2))]) / 16.0f)) < 1e-5f);
+    // fully outside the rect: nothing
+    const render::float3 far[3] = {{10, 0, 10}, {11, 0, 10}, {10, 0, 11}};
+    render::float3 out[8];
+    CHECK(game::clipToRect(far, o, aU, 1.2f, aV, 1.2f, out) == 0);
+}
+
+TEST(sprite_shadow_caster_faces_camera_unless_sun_grazes) {
+    const render::float3 gR{1, 0, 0}, gF{0, 0, 1};
+    // sun towards the camera: keep the camera's axis (silhouette as seen)
+    render::float3 r = game::casterRight(gR, gF, {0.2f, 1.0f, 0.8f});
+    CHECK(std::fabs(r.x - 1) < 1e-4f && std::fabs(r.z) < 1e-4f);
+    // sun from the side (along the sprite plane): turned so the shadow is not a sliver, still unit length
+    r = game::casterRight(gR, gF, {1.0f, 1.0f, 0.0f});
+    const float c = std::fabs(r.x);
+    CHECK(c < 0.9f && c > 0.4f && std::fabs(render::length(r) - 1) < 1e-3f);
+}
+
+
+// ---------------- one-click MCP setup (editor Agent window) ----------------
+#if defined(RTS_TESTS_EDITOR_CORE)
+#include "apps/editor/core/McpInstall.h"
+TEST(mcp_install_patches_configs_as_text) {
+    using namespace rts::editor;
+    McpServerSpec sp; sp.command = "/opt/rts/rtsmcp"; sp.args = {"--engine", "/opt/rts"};
+    const std::string entry = mcpEntryJson(sp);
+    std::string err, t;
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));                        // empty file -> fresh config
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
+    // unrelated content stays byte for byte, including numbers our reader would round
+    std::string user = "{\n  \"numStartups\": 123456789012345,\n  \"ratio\": 0.123456789,\n  \"theme\": \"dark\"\n}\n";
+    t = user;
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
+    CHECK(t.find("123456789012345") != std::string::npos && t.find("0.123456789") != std::string::npos && t.find("\"theme\": \"dark\"") != std::string::npos);
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["args"].size() == 2);
+    // existing servers: added next to them, replaced in place on update, removed cleanly
+    t = R"({"mcpServers": {"other": {"command": "x"}}, "z": 1})";
+    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
+    Json j = Json::parse(t);
+    CHECK(j["mcpServers"]["other"]["command"].str() == "x" && j["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
+    sp.command = "/new/rtsmcp";
+    CHECK(mcpPatchJson(t, "rtsengine", mcpEntryJson(sp), &err));
+    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/new/rtsmcp" && t.find("/opt/rts/rtsmcp") == std::string::npos);
+    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
+    j = Json::parse(t);
+    CHECK(!j["mcpServers"].has("rtsengine") && j["mcpServers"]["other"]["command"].str() == "x" && j["z"].integer() == 1);
+    t = R"({"mcpServers": {"a": {}, "rtsengine": {"command": "y"}}})";       // last member: the comma before it goes
+    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
+    CHECK(!Json::parse(t)["mcpServers"].has("rtsengine") && Json::parse(t)["mcpServers"].has("a"));
+    t = "[1, 2]";
+    CHECK(!mcpPatchJson(t, "rtsengine", entry, &err) && !err.empty());   // not an object: refused, untouched
+    CHECK(t == "[1, 2]");
+}
+#endif
+
 // ---------------- Planets: surface, world block, orbit layer, transit ----------------
 static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/templates/planets";
 
@@ -8606,6 +8797,88 @@ TEST(sprite_shadow_lighting_sun_dir_and_softness) {
     CHECK(std::fabs(l.shadowSoftness - render::Lighting{}.shadowSoftness) < 1e-5f);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Materials on request: procedural textures, material library ops (models agent)
+// ---------------------------------------------------------------------------------------------
+#include "engine/render/TextureGen.h"
+TEST(materials_texture_patterns_tile_and_repeat) {
+    using namespace rts::render;
+    for (const auto& pat : texturePatterns()) {
+        Json spec = Json::object();
+        spec.set("pattern", Json::string(pat));
+        spec.set("size", Json::number(int64_t(64)));
+        spec.set("seed", Json::number(int64_t(7)));
+        Image a, b;
+        generateTexture(spec, a);
+        generateTexture(spec, b);
+        CHECK(a.width == 64 && a.height == 64 && a.rgba.size() == 64u * 64u * 4u && a.rgba == b.rgba);   // deterministic
+        if (pat == "gradient") continue;
+        // tileable: the left column continues the right one about as smoothly as neighbours do
+        long seam = 0, inner = 0;
+        for (int y = 0; y < 64; ++y)
+            for (int c = 0; c < 3; ++c) {
+                seam += std::abs(int(a.rgba[(size_t(y) * 64 + 0) * 4 + size_t(c)]) - int(a.rgba[(size_t(y) * 64 + 63) * 4 + size_t(c)]));
+                inner += std::abs(int(a.rgba[(size_t(y) * 64 + 31) * 4 + size_t(c)]) - int(a.rgba[(size_t(y) * 64 + 32) * 4 + size_t(c)]));
+            }
+        if (seam > inner * 3 + 64 * 3 * 40) std::printf("  pattern %s: seam %ld vs inner %ld\n", pat.c_str(), seam, inner);
+        CHECK(seam <= inner * 3 + 64 * 3 * 40);
+    }
+    Json mask = Json::parse(R"({"pattern": "stripes", "size": 32, "scale": 4, "output": "mask"})");
+    Image m;
+    generateTexture(mask, m);
+    int white = 0;
+    for (size_t i = 0; i < m.rgba.size(); i += 4) white += m.rgba[i] > 128 ? 1 : 0;
+    CHECK(white > 32 * 32 / 4 && white < 32 * 32 * 3 / 4);
+    Json nrm = Json::parse(R"({"pattern": "brick", "size": 32, "output": "normal"})");
+    Image n;
+    generateTexture(nrm, n);
+    CHECK(n.rgba[2] > 127);   // normals point out of the surface
+    bool threw = false;
+    try { Image x; generateTexture(Json::parse(R"({"pattern": "plaid"})"), x); } catch (const std::exception& e) { threw = std::string(e.what()).find("brick") != std::string::npos; }
+    CHECK(threw);
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/Workspace.h"
+TEST(materials_library_ops_round_trip) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / ("rts_mat_test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::remove_all(root);
+    fs::create_directories(root / "games");
+    fs::copy(fs::path(RTS_SOURCE_DIR) / "templates" / "showcase", root / "games" / "showcase", fs::copy_options::recursive);
+    editor::Workspace ws;
+    ws.engineDir = RTS_SOURCE_DIR;
+    std::string err;
+    CHECK(ws.openGame((root / "games" / "showcase").string(), &err));
+    auto ok = [](const Json& r) { if (r.has("error")) std::printf("  (op error) %s\n", r.getStr("error").c_str()); return !r.has("error"); };
+    Json r = ws.call("texture_generate", Json::parse(R"({"pattern": "panels", "size": 64, "seed": 4})"));
+    CHECK(ok(r) && r.getStr("path") == "textures/panels_4.png" && fs::file_size(root / "games/showcase/textures/panels_4.png") > 100);
+    CHECK(ok(ws.call("material_set", Json::parse(R"({"name": "steel", "material": {"color": [0.7,0.7,0.75], "metallic": 0.9, "texture": "textures/panels_4.png"}})"))));
+    CHECK(ok(ws.call("material_set", Json::parse(R"({"name": "rust", "material": {"base": "steel", "roughness": 0.9}})"))));
+    CHECK(!ok(ws.call("material_set", Json::parse(R"({"name": "x", "material": {"metallic": 3}})"))));
+    CHECK(!ok(ws.call("material_set", Json::parse(R"({"name": "y", "material": {"base": "nothing"}})"))));
+    Json g = ws.call("material_get", Json::parse(R"({"name": "rust"})"));
+    CHECK(g["resolved"].getStr("texture") == "textures/panels_4.png" && g["chain"].size() == 2);
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "catapult", "node": "Turret", "material": "rust"})"))));
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "footman", "target": "*", "material": {"use": "steel", "roughness": 0.2}})"))));
+    CHECK(ws.project.rulesJson["types"]["catapult"]["view"]["assign"].getStr("Turret") == "rust");
+    CHECK(ws.project.rulesJson["types"]["footman"]["view"]["materials"]["*"].getStr("use") == "steel");
+    Json l = ws.call("material_list", Json::parse(R"({"type": "catapult"})"));
+    CHECK(l["library"].has("steel") && l["types"].size() == 1 && l["types"][size_t(0)]["models"].size() == 2);
+    CHECK(!ok(ws.call("material_delete", Json::parse(R"({"name": "steel"})"))));   // used by rust and footman
+    CHECK(ok(ws.call("material_apply", Json::parse(R"({"type": "catapult", "node": "Turret", "remove": true})"))));
+    CHECK(!ws.project.rulesJson["types"]["catapult"]["view"].has("assign"));
+    CHECK(ok(ws.call("material_delete", Json::parse(R"({"name": "rust"})"))));
+    Json saved = Json::parseFile((root / "games/showcase/materials.json").string());
+    CHECK(saved["materials"].has("steel") && !saved["materials"].has("rust"));
+    fs::remove_all(root);
+}
+#endif
+}
+
+#include "tests_fidelity.inc"
+
 // ---------------- Planets: HPA* on cube-sphere bodies ----------------
 namespace {
 // A planet map JSON: bodies with random obstacle blobs (seeded), walls along seams with gaps, a blocked cube corner.
@@ -8793,6 +9066,85 @@ TEST(pack_file_copy_into_existing) {
 
 
 #include "tests_mech.inc"   // agent-mech
+}
+
+
+TEST(gen_planet_world_players) {
+    // a whole planet map from a planet preset: players, kit, objects, moons, engine-path fairness, determinism
+    const std::string rules = R"({"victory": "keyUnits", "terrain": {"model": "heightfield", "maxSlope": {"ground": 0.8}},
+      "resources": {"metal": {"start": 500}},
+      "types": {"boss": {"key": true, "move": {"speed": 2, "radius": 0.5}, "builds": ["lab"], "weapons": [{"range": 2, "damage": 5, "cooldown": 1}]},
+                "lab": {"structure": {"footprint": [3, 3]}, "produces": ["ship"]},
+                "ship": {"move": {"speed": 3, "radius": 0.5, "layer": "orbit"}},
+                "spot": {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+                "drill": {"structure": {"footprint": [2, 2], "on": "spot"}, "income": {"metal": 2}},
+                "rock": {"structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "metal", "amount": 100}}}})";
+    Json rj = Json::parse(rules);
+    game::Rules R = game::loadRules(rj);
+    auto make = [&](int players, uint64_t seed, const std::string& layout, Json& out) {
+        gen::GenRequest req;
+        req.preset = "rocky"; req.seed = seed; req.players = players;
+        req.params = Json::object();
+        req.params.set("layout", Json::string(layout));
+        out = Json::parse(R"({"name": "w", "players": []})");
+        std::string err;
+        const bool ok = gen::generateMap(req, R, rj, out, &err);
+        if (!ok) std::printf("  planet gen error: %s\n", err.c_str());
+        return ok;
+    };
+    for (int np : {2, 3, 4}) {
+        Json m;
+        CHECK(make(np, 5, "shared", m));
+        const Json& g = m["generated"];
+        CHECK(g.getBool("connected"));
+        CHECK(int(m["players"].size()) == np);
+        int own[9] = {}, moon = 0;
+        for (auto& e : m["entities"].items()) {
+            const int o = int(e.getInt("owner"));
+            if (o >= 1 && o <= 8) own[o]++;
+            if (e["at"].getStr("body") == "luna") moon++;
+            CHECK(e["at"].isObject());
+        }
+        for (int p = 2; p <= np; ++p) CHECK(own[p] == own[1]);
+        CHECK(own[1] >= 1 && moon > 0);
+        const Json& nr = g["nearResources"];
+        for (size_t p = 1; p < nr.size(); ++p) CHECK(nr[p].integer() == nr[size_t(0)].integer());
+        if (np == 2 || np == 4) CHECK(g.getInt("pathSpread", 99) <= 2);     // exact quarter / half turn symmetry
+        else CHECK(g.getInt("pathSpread", 999) <= 150);
+        // the generated map loads and plays deterministically
+        auto run = [&]() {
+            SimConfig cfg; cfg.seed = 3;
+            Simulation sim(cfg, std::make_unique<game::RtsModule>());
+            sim.setup(rj, m);
+            for (int i = 0; i < 60; ++i) sim.step();
+            return sim.checksum();
+        };
+        CHECK(run() == run());
+        if (np == 2) {
+            std::printf("  planet world 2p %016llx\n", (unsigned long long)gen::mapHash(m));
+            CHECK(gen::mapHash(m) == GEN_GOLD_PLANET_WORLD);
+        }
+    }
+    Json a, b;
+    CHECK(make(3, 9, "separate", a) && make(3, 9, "separate", b));
+    CHECK(gen::mapHash(a) == gen::mapHash(b));
+    CHECK(a["world"]["bodies"].size() >= 4);                      // star + 3 worlds (+ moon)
+    CHECK(a["generated"]["nearResources"][size_t(0)].integer() == a["generated"]["nearResources"][size_t(2)].integer());
+    // match-time: "generate" with a planet preset regenerates from the match seed
+    Json mm = Json::parse(R"({"name": "m", "players": [{}, {}], "generate": {"preset": "moon", "seed": "match", "players": 2}})");
+    CHECK(gen::prepareGenerate(mm, [](const std::string&, std::string&) { return false; }, nullptr));
+    auto runMatch = [&](uint64_t seed) {
+        SimConfig cfg; cfg.seed = seed;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rj, mm);
+        auto* mod = dynamic_cast<game::RtsModule*>(&sim.module());
+        CHECK(mod->surface(sim) != nullptr && mod->generatedMap() != nullptr);
+        for (int i = 0; i < 40; ++i) sim.step();
+        return sim.checksum();
+    };
+    CHECK(runMatch(4) == runMatch(4));
+    CHECK(runMatch(4) != runMatch(5));
+}
 
 // ---------------- Lua scripting (scripting agent) ----------------
 #include "modules/rts/RtsScript.h"

@@ -9,5 +9,5 @@
   "howto.step1": "One worker mines a patch at a time, 5 minerals a trip; gas is 4 a trip from an assimilator, extractor or refinery.",
   "howto.step2": "Guild: probes start a structure and walk on; structures work only in a pylon field. Swarm: drones become structures, up to 3 larva per hatchery, everything on creep.",
   "howto.step3": "Legion: SCVs build; barracks and factory take add-ons — a tech lab (marauders, siege tanks) or a reactor (two marines at once).",
-  "howto.step4": "Damage = attack + bonus vs armored or light − armor. Low ground can't see up the plateau."
+  "howto.step4": "Damage = attack + bonus vs armored or light − armor. Low ground can't see up the plateau. Queens inject 3 extra larvae into a hatchery; a nexus chrono-boosts production and recalls the army home."
 }
