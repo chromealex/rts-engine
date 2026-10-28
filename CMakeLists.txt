@@ -104,6 +104,7 @@ add_library(rts_game STATIC
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
     modules/rts/RtsWorld.cpp
+    modules/rts/RtsVision.cpp
     modules/rts/RtsTriggers.cpp
     modules/rts/RtsDungeon.cpp
     modules/rts/RtsSettlers.cpp
@@ -392,7 +393,7 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
     modules/rts/view/RtsFog.cpp
-    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
+    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
 # visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
 add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
 target_link_libraries(rts_terrain_detail PUBLIC rts_game)
@@ -441,6 +442,7 @@ function(rts_package_app target)
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${res_dir}"
                 COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_CONTENT_DIR}" "${res_dir}/content"
+                COMMAND ${CMAKE_COMMAND} -E rm -rf "${res_dir}/content/Builds" "${res_dir}/content/logs"   # project outputs
                 COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "${res_dir}/content/engine"
                 COMMENT "Bundling content")
         endif()
@@ -467,6 +469,7 @@ function(rts_package_app target)
         else()
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_CONTENT_DIR}" "$<TARGET_FILE_DIR:${target}>/content"
+                COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:${target}>/content/Builds" "$<TARGET_FILE_DIR:${target}>/content/logs"   # project outputs
                 COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_FILE_DIR:${target}>/content/engine"
                 COMMENT "Copying content next to the executable")
         endif()
@@ -670,8 +673,10 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_link_libraries(rts_tests PRIVATE rts_terrain_detail)   # terrain detail surface tests (agent-terrain)
-    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
+    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
+    target_sources(rts_tests PRIVATE engine/ui/UiLua.cpp)    # UI Lua sandbox (no RmlUi)
+    target_link_libraries(rts_tests PRIVATE rts_lua)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
     target_sources(rts_tests PRIVATE tools/rtsbuild/Toolchains.cpp)   # toolchain detection (fake HOME)
     if(TARGET rts_modelconv)   # model conversion step of packs (models agent)
@@ -701,15 +706,24 @@ if(NOT MSVC)
     target_compile_options(rts_rmlui PRIVATE -w)
 endif()
 
-add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp engine/ui/UiKeyboard.cpp)
+# Lua 5.4: target rts_lua is defined by the scripting block below (deterministic build, no os/io libs).
+# RmlUi's Lua plugin (<script>, onclick="...", rmlui.* in documents)
+file(GLOB RTS_RMLUI_LUA_SRC CONFIGURE_DEPENDS third_party/rmlui/Source/Lua/*.cpp third_party/rmlui/Source/Lua/Elements/*.cpp)
+add_library(rts_rmlui_lua STATIC ${RTS_RMLUI_LUA_SRC})
+target_link_libraries(rts_rmlui_lua PUBLIC rts_rmlui rts_lua)
+if(NOT MSVC)
+    target_compile_options(rts_rmlui_lua PRIVATE -w)
+endif()
+
+add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui/UiFont.cpp engine/ui/UiStb.cpp engine/ui/UiKeyboard.cpp engine/ui/UiLua.cpp)
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
-target_link_libraries(rts_ui PUBLIC rts_rmlui rts_engine)
+target_link_libraries(rts_ui PUBLIC rts_rmlui rts_rmlui_lua rts_lua rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/ClientScript.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/ClientScript.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 
@@ -843,6 +857,8 @@ endif()
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/BrandingOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_branding)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/UiOps.cpp)   # UI agent: game screens + ui_preview
+    target_link_libraries(rts_editor_core PUBLIC rts_lua)
 endif()
 
 # Material library and procedural textures (models agent): material_* / texture_* editor operations
@@ -862,7 +878,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(RTS_LUA_SRC lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
     llex.c lmathlib.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c
-    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c)
+    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c rts_linit.c)
 list(TRANSFORM RTS_LUA_SRC PREPEND third_party/lua/)
 add_library(rts_lua STATIC ${RTS_LUA_SRC})
 target_include_directories(rts_lua PUBLIC third_party/lua)
@@ -871,6 +887,12 @@ if(MSVC)
     target_compile_options(rts_lua PRIVATE /W0)
 else()
     target_compile_options(rts_lua PRIVATE -w)
+endif()
+# os library for the UI / meta-screen Lua (engine/ui/UiLua.cpp: clocks and dates only, the dangerous
+# functions are removed there); simulation states never open it
+target_sources(rts_lua PRIVATE third_party/lua/loslib.c)
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    target_compile_definitions(rts_lua PRIVATE LUA_USE_IOS)   # no system() on iOS
 endif()
 target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp
     modules/rts/RtsScriptStd.cpp)

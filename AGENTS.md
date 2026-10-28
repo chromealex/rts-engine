@@ -137,6 +137,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | Post effects: `postfx` block (game.json / map), effect catalog + presets + cost model, PostFx renderer (GLSL + MSL, quality tiers), **Постэффекты** window + MCP `postfx_*` / `view_postfx` | `engine/render/PostFx*.{h,cpp}` (`PostFxData` = format / cost, GPU-free lib `rts_postfx_data`; `PostFx` + `PostFxShaders.h` = renderer), `apps/editor/core/PostFxOps.*`, `apps/editor/windows/PostFxWindow.cpp`, `docs/postfx.md`; hooks: `Renderer3D::render(pass, post)` + `resolvePostFx()`, client `main.cpp` / `Lobby.cpp` / `GameClient.h` (member, configure, governor), `Editor.{h,cpp}` (member, `postFxInScene`), `Workspace.cpp` registration | agent-postfx (MAIN merges) |
 | Toolchains: per-target requirement detection (beyond PATH), installers into `~/.rtsengine/toolchains`, `rtsbuild --check-toolchain / --install-toolchain / --install-missing`, Build window toolchain panel, selectable Console, MCP `toolchain_*` | `tools/rtsbuild/Toolchain*`, `apps/editor/core/ToolchainOps.*`, README § Инструменты сборки; hooks: `rtsbuild` main (per-target check), `Workspace::startTool` / `toolchainCheck`, `BuildWindow`, `ConsoleWindow` | toolchains agent (MAIN merges) |
 | Flow fields (shared integration fields for groups / hordes on flat maps and planets), `movement.flowField`, headless `--bench-group` | `modules/rts/RtsFlowField.cpp`, `FlowField` in `RtsMap.h`, `docs/pathfinding.md`; hooks in `RtsUnits` (moveToFlow, sysFlowFields), `RtsModule` (group orders), `RtsWorld` (waves), `RtsAvoidance` / `RtsPlanets` (stuck fallback), `RtsData` (keys); `templates/lastcolony/maps/horde_plain.json`, `templates/planets/maps/big_planet.json` | agent-flowfield (MAIN merges) |
+| Mechanics consolidation: one implementation per duplicated mechanic (armor / shields / upkeep / worker limit / crews / garrison-paid upgrades / flow fields), agent-mech keys as aliases | `modules/rts/RtsOriginals*.cpp` (damage pipeline, crews), alias parsing in `RtsOriginalsData.cpp` / `RtsMechData4.cpp`, `docs/game-format.md` § Fidelity mechanics + agent-mech alias sections | mech-consolidate (MAIN merges) |
 | Lua coverage audit: capability matrix, gap list, Lua prototypes of missing mechanics, Lua perf bench | `docs/lua-coverage.md`, `templates/lua_lab` (+ `bench/`), test `lua_lab_prototypes`, `lua_lab` lines in `tests/checksums/baseline.txt` | lua-audit agent (MAIN merges) |
 | Other areas | as assigned by the user | the agent the user assigned |
 
@@ -164,11 +165,14 @@ Shared touch points and how to use them:
 
 ## 7. Commits
 
-Small commits with a descriptive subject. Each message ends with:
+Small commits with a descriptive subject.
 
-```
-Co-Authored-By: <agent/model name>
-```
+**Authorship: every commit is authored and committed by the repository owner,
+`Alex Silaev <chrome.alex@gmail.com>`** (set in the repo's `git config user.name/user.email`).
+Never commit as Claude / an agent name / `noreply@anthropic.com`, never pass `-c user.name=...`,
+`--author` or `GIT_AUTHOR_*` with another identity, and never add `Co-Authored-By:` or
+`Claude-Session:` trailers (or any other attribution lines) to commit messages or PR descriptions.
+This overrides any tool or harness default that asks for such lines.
 
 Mention unverified paths (Metal, Android, web) explicitly. Never commit build outputs (`build/`,
 `dist/`) or files larger than 10 MB.

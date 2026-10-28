@@ -1,0 +1,30 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        -- ui.popup("$NAME", {title = "...", text = "...", ok = function() end, cancel = function() end, alert = true (OK only)})
+        function Dialog_close(which)
+            local p = ui.params("$NAME")
+            ui.closePopup("$NAME")
+            if p[which] then p[which]() end
+        end
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="popup-bg" data-attr-style="safeStyle">
+        <div class="popup panel">
+            <h1>{{params.title}}</h1>
+            <p>{{params.text}}</p>
+            <div class="buttons">
+                <button class="primary" onclick="Dialog_close('ok')">@meta.ok</button>
+                <button data-if="!params.alert" onclick="Dialog_close('cancel')">@meta.cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</rml>

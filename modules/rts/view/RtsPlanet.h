@@ -34,6 +34,15 @@ struct PlanetBody {
     float atmoHeight = 0.06f;         // shell thickness as a fraction of the radius
     std::vector<int16_t> corners;     // 6 * (N+1)^2, 1/16 units, faces 0..5 row-major
     std::vector<uint8_t> flags;       // 6 * N * N cell flags (cellFlagsFromChar of the face rows)
+    // sub-cell detail surface (docs/terrain.md "Detail surface", planets): body terrain keys
+    //   "style": "smooth" | "classic" (default: the game's terrain.style), "detailLook": {scale, roughness, craters},
+    //   "detail": {"scale": k, "file": "maps/<map>.<body>.detail.r16"} explicit heights 6 * (N*k+1)^2 (int16 LE, 1/16 units)
+    int style = -1;                   // -1 inherit, 0 classic, 1 smooth
+    int detailScale = 0;              // samples per cell wanted (0 = the game's detailLook.scale)
+    float roughness = -1;             // fine noise amplitude (world units); -1 = the game's
+    float craters = -1;               // crater density 0..1; -1 = auto (moons 0.6, planets 0)
+    int detailK = 0;                  // explicit detail: samples per cell of `detail`
+    std::vector<int16_t> detail;      // explicit detail heights 6 * (N*detailK+1)^2, seam duplicates equal
     bool surface() const { return faceSize > 0 && kind != Kind::Star; }
     bool star() const { return kind == Kind::Star; }
 };
@@ -79,12 +88,38 @@ inline bool onSphereF(render::float3 p) { return p.x >= float(Surface::kSphereOr
 inline int bodyAtF(render::float3 p) { return int(std::floor((p.x - float(Surface::kSphereOrigin - Surface::kBodySpacing / 2)) / float(Surface::kBodySpacing))); }
 
 // Float cube-sphere surface of one body (body-local: origin = body centre).
+// Synthesis settings of a body's detail surface (resolved from the body keys and the game's TerrainLook).
+struct PlanetDetailParams {
+    int k = 0;                        // samples per cell (0 = no detail: the corner grid is drawn)
+    float roughness = 0.05f, craters = 0;
+    uint32_t seed = 1;
+};
+
 class PlanetSurface {
 public:
+    struct Rect { int x0 = 0, y0 = 0, x1 = -1, y1 = -1; };
     void init(const PlanetBody& b);
+    // Sub-cell detail grid (RtsPlanetDetail.cpp): M = N * k samples per face side, (M+1)^2 per face, seam
+    // samples bit-identical across faces (one canonical direction, averaged height). Explicit heights
+    // (b.detail, b.detailK == k) or synthesis: Catmull-Rom through the corners (continued across seams),
+    // fine 3D noise per cell kind, crater field on moons. heightAt / normalAt / raycast follow it.
+    void initDetail(const PlanetBody& b, const PlanetDetailParams& p);
+    // Corners changed inside the per-face corner rects: resynthesise the detail around them (synthesis only).
+    void resynthDetail(const PlanetBody& b, const Rect (&cornerRect)[6]);
+    // Explicit detail changed: copy, return the changed per-face sample rects (seams included).
+    bool updateDetail(const std::vector<int16_t>& detail, Rect (&sampleRect)[6]);
+    int detailScale() const { return k_; }
+    // The drawn grid: the detail samples when present, else the corners. Indices like the corners.
+    int gridSize() const { return k_ ? m_ : n_; }
+    int gridIndex(int face, int i, int j) const { const int G = gridSize(); return (face * (G + 1) + j) * (G + 1) + i; }
+    const render::float3& gridDir(int face, int i, int j) const { return k_ ? ddirs_[size_t(gridIndex(face, i, j))] : cornerDir(face, i, j); }
+    float gridHeight(int face, int i, int j) const { return k_ ? dh_[size_t(gridIndex(face, i, j))] : cornerHeight(face, i, j); }
+    render::float3 gridPos(int face, int i, int j) const { return gridDir(face, i, j) * (radius_ + gridHeight(face, i, j)); }
+    const render::float3& gridNormal(int face, int i, int j) const { return k_ ? dn_[size_t(gridIndex(face, i, j))] : cornerNormal(face, i, j); }
+    float gridCavity(int face, int i, int j) const;   // 0.5 flat, < 0.5 ridge, > 0.5 hollow (detail only)
+    float coarseHeightAt(render::float3 dir) const;   // the corner grid surface (synthesis, sim comparison)
     // New corner heights of the same body: heights everywhere, normals only inside the per-face corner
     // rects [x0, x1] x [y0, y1] (grown by one corner). rect[f].x1 < x0 = face unchanged.
-    struct Rect { int x0 = 0, y0 = 0, x1 = -1, y1 = -1; };
     void updateHeights(const PlanetBody& b, const Rect (&rect)[6]);
     int faceSize() const { return n_; }
     float radius() const { return radius_; }
@@ -116,6 +151,18 @@ private:
     std::vector<float> heights_;
     std::vector<int> canon_;
     std::vector<uint8_t> flags_;
+    // detail grid
+    int k_ = 0, m_ = 0;
+    std::vector<render::float3> ddirs_, dn_;
+    std::vector<float> dh_;
+    std::vector<int> dcanon_;
+    PlanetDetailParams dp_;
+    void synthRect(const PlanetBody& b, int face, int i0, int j0, int i1, int j1);
+    void normalsRect(int face, int i0, int j0, int i1, int j1);
+    void seamAverage(int face, int i0, int j0, int i1, int j1);
+    void detailRange();
+    render::float3 coarseNormalAt(render::float3 dir) const;
+    render::float3 sampleNormal(int face, int i, int j) const;
 };
 
 } // namespace rts::game

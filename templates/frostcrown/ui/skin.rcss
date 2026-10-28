@@ -46,6 +46,14 @@ input.text:focus { border-color: #a9dcff; }
 #kb .key:active { border-color: #a9dcff; }
 #kb .key.on { border-color: #a9dcff; color: #ffffff; }
 
+/* the game's own screens (ui/screens, screens.rcss) */
+.screen { decorator: vertical-gradient(#162b48ff #060c14ff); }
+.screen-title { color: #cfe8ff; }
+.currency { color: #bfe3ff; }
+.badge, .avatar, .progress-fill { background-color: #a9dcff; }
+.card, .list-row, .stat { border-color: #ffffff18; }
+.stat-value { color: #cfe8ff; }
+
 .panel { border-top-width: 3dp; }
 #menu h1 { text-align: center; }
 h2 { letter-spacing: 3dp; }

@@ -1,0 +1,49 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        -- opened by ui/screens.json "afterMatch" with params.result = {won, seconds, map, mapTitle, ...}.
+        -- Rewards: a win gives gold and XP, a loss a little XP; a level every level * 100 XP.
+        ui.screen("$NAME", {
+            open = function(p)
+                local r = p.result
+                if not r or r.spectator or p.rewarded then return end
+                p.rewarded = true                       -- once, also when the screen is entered again
+                profile.add("stats.matches", 1)
+                if r.won then profile.add("stats.wins", 1) end
+                local gold, xp = r.won and 100 or 20, r.won and 50 or 15
+                profile.give({gold = gold, xp = xp})
+                while profile.get("xp", 0) >= profile.get("level", 1) * 100 do
+                    profile.add("xp", -profile.get("level", 1) * 100)
+                    profile.add("level", 1)
+                end
+                ui.set("reward", {gold = gold, xp = xp})
+            end,
+        })
+        ui.set("reward", {gold = 0, xp = 0})
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-body center">
+            <div class="spacer"></div>
+            <h1 data-if="params.result.won">@meta.victory</h1>
+            <h1 data-if="!params.result.won">@meta.defeat</h1>
+            <p class="muted">{{params.result.mapTitle}}</p>
+            <div class="spacer"></div>
+            <div class="stats" style="justify-content: center;">
+                <div class="stat"><span class="stat-value">+{{reward.gold}}</span><span class="stat-label">@currency.gold</span></div>
+                <div class="stat"><span class="stat-value">+{{reward.xp}}</span><span class="stat-label">@meta.xp</span></div>
+            </div>
+        </div>
+        <div class="screen-footer">
+            <button class="big primary" onclick="ui.home()">@meta.continue</button>
+        </div>
+    </div>
+</div>
+</body>
+</rml>
