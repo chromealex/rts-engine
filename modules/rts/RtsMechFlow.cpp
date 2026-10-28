@@ -13,12 +13,12 @@ const int kDy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
 constexpr uint32_t kInf = 0xFFFFFFFFu;
 } // namespace
 
-const MapGrid::FlowField& MapGrid::flowFor(int goal, uint8_t layer) {
+const MapGrid::MechFlowField& MapGrid::flowFor(int goal, uint8_t layer) {
     ++flowUse_;
     for (auto& f : flow_)
         if (f.goal == goal && f.layer == layer && f.clear == pathClear_ && f.version == pathVersion_) { f.used = flowUse_; return f; }
     // reuse the least recently used slot
-    FlowField* slot = nullptr;
+    MechFlowField* slot = nullptr;
     if (int(flow_.size()) < std::max(1, flowCacheSize)) { flow_.emplace_back(); slot = &flow_.back(); }
     else { slot = &flow_[0]; for (auto& f : flow_) if (f.used < slot->used) slot = &f; }
     slot->goal = goal; slot->layer = layer; slot->clear = pathClear_; slot->version = pathVersion_; slot->used = flowUse_;
@@ -53,7 +53,7 @@ const MapGrid::FlowField& MapGrid::flowFor(int goal, uint8_t layer) {
 
 bool MapGrid::flowCells(int sx, int sy, int gx, int gy, uint8_t layer, std::vector<int>& cells) {
     const int goal = index(gx, gy);
-    const FlowField& f = flowFor(goal, layer);
+    const MechFlowField& f = flowFor(goal, layer);
     int cur = index(sx, sy);
     if (f.dist[size_t(cur)] == kInf) return false;   // unreachable from here: the caller falls back to A*
     cells.clear();
