@@ -1,0 +1,5 @@
+/* Per-game skin: empty in the engine. A game ships ui/skin.rcss to restyle the default documents
+   (it is linked after theme.rcss and keyboard.rcss, so its rules win) without copying them.
+   Font families: "ui" (body: the game's fonts/ui.ttf or the engine font) and "title" (headings:
+   the game's fonts/title.ttf, falling back to "ui"). Useful hooks: .panel, button, button.active,
+   h1/h2, #topbar, #card, #minimap, #modal, #menu, #lobby, #kb .key, progress fill, .notice. */

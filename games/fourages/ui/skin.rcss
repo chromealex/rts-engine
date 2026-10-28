@@ -1,0 +1,53 @@
+/* Four Ages: UI skin (linked after engine/ui/theme.rcss). Historical empire: parchment pages, ink and bronze.
+   Title font: fonts/title.ttf (Forum, SIL OFL, fonts/OFL.txt). */
+
+body { color: #3a2a14; }
+h1 { font-family: title; color: #5a2e0c; font-size: 32dp; font-weight: normal; }
+h2 { color: #7a6646; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #7a6646; }
+.error { color: #a3261b; }
+
+.panel {
+    background-color: #eadbb6f0;
+    border: 2dp #8b6b3d;
+    border-radius: 3dp;
+}
+
+button {
+    color: #2e2010;
+    border: 1dp #a4885a;
+    border-radius: 3dp;
+    decorator: vertical-gradient(#f6ead0ff #ddc79bff);
+}
+button:hover { decorator: vertical-gradient(#fff4dcff #e8d4aaff); border-color: #8c3b12; }
+button:active { decorator: vertical-gradient(#ddc79bff #f6ead0ff); }
+button.active { border-color: #8c3b12; color: #8c3b12; }
+button.disabled:hover { decorator: vertical-gradient(#f6ead0ff #ddc79bff); border-color: #a4885a; }
+button .cost { color: #7a4a12; }
+button .tip { color: #a3261b; }
+
+progress { background-color: #8b6b3d40; }
+progress fill { background-color: #8c3b12; }
+
+#card .title { color: #5a2e0c; }
+#card .header { border-top-color: #8b6b3d40; }
+#topbar .item.warn { color: #a3261b; }
+.notice { color: #ffe8b0; }
+#selbox { border-color: #8c3b12; background-color: #ffffff28; }
+#modal-bg { background-color: #1a120840; }
+#menu-bg { decorator: vertical-gradient(#d7c9a7ff #afa488ff); }
+input.text { background-color: #fbf4e2; border-color: #a4885a; color: #3a2a14; }
+input.text:focus { border-color: #8c3b12; }
+#lobby .slot.mine { border-color: #8c3b12; }
+#lobby .roomtitle { color: #5a2e0c; font-family: title; }
+
+#kb { background-color: #eadbb6f0; border-color: #8b6b3d; }
+#kb .key { color: #2e2010; border-color: #a4885a; border-radius: 3dp; decorator: vertical-gradient(#f6ead0ff #ddc79bff); }
+#kb .key:active { border-color: #8c3b12; }
+#kb .key.on { border-color: #8c3b12; color: #8c3b12; }
+
+#topbar .item { color: #3a2a14; }
+.notice { color: #fff0c8; }
+#modehint { background-color: #3a2a14d0; color: #f6ead0; }
+#kb .key.fn { color: #5a4020; }
+#menu h1 { text-align: center; }

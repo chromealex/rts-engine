@@ -1,0 +1,54 @@
+/* Iron Front: UI skin (linked after engine/ui/theme.rcss). Cold-war armies: gunmetal plates, red alert stripes.
+   Title font: fonts/title.ttf (Stalinist One, SIL OFL, fonts/OFL.txt). */
+
+body { color: #e8eaec; }
+h1 { font-family: title; color: #ff4a3d; font-size: 22dp; font-weight: normal; text-transform: uppercase; letter-spacing: 2dp; }
+h2 { color: #9aa1a8; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #9aa1a8; }
+.error { color: #ff5a4f; }
+
+.panel {
+    background-color: #16191ced;
+    border: 2dp #c0262d;
+    border-radius: 0;
+}
+
+button {
+    color: #f1f3f5;
+    border: 1dp #4a5058;
+    border-radius: 0;
+    decorator: vertical-gradient(#3a4047ff #24282dff);
+}
+button:hover { decorator: vertical-gradient(#4a525bff #2d3238ff); border-color: #ff4a3d; }
+button:active { decorator: vertical-gradient(#24282dff #3a4047ff); }
+button.active { border-color: #ff4a3d; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#3a4047ff #24282dff); border-color: #4a5058; }
+button .cost { color: #ffb0a8; }
+button .tip { color: #ff5a4f; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #ff4a3d; }
+
+#card .title { color: #ff4a3d; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff5a4f; }
+.notice { color: #ffd27a; }
+#selbox { border-color: #ff4a3d; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#292f35ff #0c0d0fff); }
+input.text { background-color: #0c0e10; border-color: #4a5058; color: #e8eaec; }
+input.text:focus { border-color: #ff4a3d; }
+#lobby .slot.mine { border-color: #ff4a3d; }
+#lobby .roomtitle { color: #ff4a3d; font-family: title; }
+
+#kb { background-color: #16191ced; border-color: #c0262d; }
+#kb .key { color: #f1f3f5; border-color: #4a5058; border-radius: 0; decorator: vertical-gradient(#3a4047ff #24282dff); }
+#kb .key:active { border-color: #ff4a3d; }
+#kb .key.on { border-color: #ff4a3d; color: #ffffff; }
+
+/* sidebar on the right, like the build sidebars of the genre */
+#card { top: 52dp; bottom: 8dp; right: 8dp; width: 250dp; max-height: none; }
+.touch #card { width: 280dp; }
+#card .cell button { text-align: left; }
+#topbar { border-radius: 0; }
+h2 { color: #ff8a80; }

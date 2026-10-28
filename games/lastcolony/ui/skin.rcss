@@ -1,0 +1,52 @@
+/* Last Colony: UI skin (linked after engine/ui/theme.rcss). Last stand of the colony: brass, rivets, dark leather.
+   Title font: fonts/title.ttf (Oranienbaum, SIL OFL, fonts/OFL.txt). */
+
+body { color: #efe2c9; }
+h1 { font-family: title; color: #e7b866; font-size: 32dp; font-weight: normal; letter-spacing: 1dp; }
+h2 { color: #a89574; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #a89574; }
+.error { color: #ff6a4d; }
+
+.panel {
+    background-color: #1c1611ee;
+    border: 2dp #b08d57;
+    border-radius: 3dp;
+}
+
+button {
+    color: #f6e9cf;
+    border: 1dp #6b5536;
+    border-radius: 3dp;
+    decorator: vertical-gradient(#5c4529ff #3b2b18ff);
+}
+button:hover { decorator: vertical-gradient(#6e5431ff #47351fff); border-color: #e7b866; }
+button:active { decorator: vertical-gradient(#3b2b18ff #5c4529ff); }
+button.active { border-color: #e7b866; color: #ffe2a6; }
+button.disabled:hover { decorator: vertical-gradient(#5c4529ff #3b2b18ff); border-color: #6b5536; }
+button .cost { color: #e0bd80; }
+button .tip { color: #ff6a4d; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #e7b866; }
+
+#card .title { color: #e7b866; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff6a4d; }
+.notice { color: #ffcf7a; }
+#selbox { border-color: #e7b866; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#352920ff #0f0c09ff); }
+input.text { background-color: #110d09; border-color: #6b5536; color: #efe2c9; }
+input.text:focus { border-color: #e7b866; }
+#lobby .slot.mine { border-color: #e7b866; }
+#lobby .roomtitle { color: #e7b866; font-family: title; }
+
+#kb { background-color: #1c1611ee; border-color: #b08d57; }
+#kb .key { color: #f6e9cf; border-color: #6b5536; border-radius: 3dp; decorator: vertical-gradient(#5c4529ff #3b2b18ff); }
+#kb .key:active { border-color: #e7b866; }
+#kb .key.on { border-color: #e7b866; color: #ffe2a6; }
+
+.panel { border-top-width: 4dp; border-bottom-width: 4dp; }
+/* the survival timer is what matters */
+#topbar .item.warn { font-size: 18dp; }
+#menu h1 { text-align: center; }
