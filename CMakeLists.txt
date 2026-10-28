@@ -95,6 +95,7 @@ add_library(rts_game STATIC
     modules/rts/RtsHpa.cpp
     modules/rts/RtsMapSphere.cpp
     modules/rts/RtsHpaSphere.cpp
+    modules/rts/RtsFlowField.cpp
     modules/rts/RtsSphere.cpp
     modules/rts/RtsSurface.cpp
     modules/rts/RtsModule.cpp
@@ -383,10 +384,14 @@ endif()
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
-    modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp
+    modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
     modules/rts/view/RtsFog.cpp
     modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
+# visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
+add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
+target_link_libraries(rts_terrain_detail PUBLIC rts_game)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
+target_link_libraries(rts_game_view PUBLIC rts_terrain_detail)
 
 # Helper: package content + platform metadata around an executable.
 function(rts_package_app target)
@@ -517,6 +522,7 @@ if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp
     apps/editor/core/SimTools.cpp apps/editor/core/ScenarioOps.cpp apps/editor/core/SchemaOps.cpp apps/editor/core/CampaignOps.cpp)   # scenario_run, rules_lint, rules_schema keys
     target_link_libraries(rts_editor_core PUBLIC rts_game)
+    target_link_libraries(rts_editor_core PUBLIC rts_terrain_detail)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
         target_link_libraries(rts_editor_core PUBLIC ws2_32)
@@ -652,6 +658,7 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
+    target_link_libraries(rts_tests PRIVATE rts_terrain_detail)   # terrain detail surface tests (agent-terrain)
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
@@ -708,7 +715,7 @@ target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts
 target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
-    target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp)   # terrain agent: sculpt, materials, heightmaps
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp apps/editor/core/TerrainDetailOps.cpp)   # terrain agent: sculpt, materials, heightmaps
     target_sources(rts_editor_core PRIVATE apps/editor/core/GenOps.cpp)       # terrain-gen agent: map_generate, gen_presets
 endif()
 

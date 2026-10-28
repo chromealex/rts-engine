@@ -28,7 +28,7 @@
 namespace rts::game::shaders {
 
 #define RTS_TERRAIN_GLSL_U0 \
-    "layout(std140) uniform U0 { vec4 t_lod; vec4 t_mode; vec4 t_scale; vec4 t_cliff; vec4 t_fog; vec4 t_tint[4]; vec4 t_cliffTint; vec4 t_fogColor; vec4 t_fogGrid; };\n"
+    "layout(std140) uniform U0 { vec4 t_lod; vec4 t_mode; vec4 t_scale; vec4 t_cliff; vec4 t_fog; vec4 t_tint[4]; vec4 t_cliffTint; vec4 t_fogColor; vec4 t_fogGrid; vec4 t_detail; vec4 t_rock; vec4 t_blend; };\n"
 
 inline const char* kTerrainVS =
     RTS_TERRAIN_GLSL_U0 RTS_GLSL_FRAME
@@ -93,6 +93,10 @@ uniform sampler2D tex12;
 uniform sampler2D tex13;
 uniform sampler2D tex14;
 uniform mediump sampler2D tex15;
+#if TERRAIN_DETAIL
+uniform sampler2D tex16;   // detail normals: rg = n.xz, b = cavity, a = macro variation
+uniform sampler2D tex17;   // detail splat weights
+#endif
 in vec3 v_nrm;
 in vec3 v_wpos;
 in vec3 v_col;
@@ -112,16 +116,56 @@ vec3 planarNormal(vec3 n, vec3 tn) {
 void main() {
     vec3 n = normalize(v_nrm);
     vec3 albedoS = v_col;
+    vec3 geoN = n;                                        // surface normal for slope tests
+#if TERRAIN_DETAIL
+    // per-pixel normal of the detail surface (cheap: one fetch, every tier)
+    vec4 dn = texture(tex16, v_wpos.xz * t_detail.xy + t_detail.zw);
+    vec2 nxz = dn.rg * 2.0 - 1.0;
+    n = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.0)), nxz.y));
+    geoN = n;
+    float macroV = (dn.a - 0.5) * t_blend.y;
+    float cavity = mix(1.0, 0.55 + 0.9 * dn.b, t_blend.z);
+    // automatic rock on steep slopes (vertex-colour tiers and games without a cliff texture)
+    float rockW = smoothstep(t_cliff.z, t_cliff.w, 1.0 - n.y) * t_rock.w;
+    albedoS = mix(albedoS, t_rock.rgb * (0.85 + 0.3 * dn.a), rockW);
+    albedoS *= (1.0 + macroV) * cavity;
+#endif
 #if TERRAIN_TIER >= 1
     if (t_mode.y > 0.5) {
+#if TERRAIN_DETAIL
+        vec4 w = texture(tex17, v_wpos.xz * t_detail.xy + t_detail.zw);
+#else
         vec4 w = texture(tex4, v_wpos.xz / t_lod.zw);
+#endif
         w /= max(w.r + w.g + w.b + w.a, 0.0001);
         vec2 p = v_wpos.xz;
         vec3 s = vec3(0.0);
+#if TERRAIN_DETAIL
+        // height-based blending: each layer's brightness acts as its height, the transition band keeps
+        // the higher material (pebbles over sand) instead of a linear cross-fade
+        vec3 c0 = texture(tex5, p / t_scale.x).rgb * t_tint[0].rgb, c1 = texture(tex6, p / t_scale.y).rgb * t_tint[1].rgb;
+        vec3 c2 = texture(tex7, p / t_scale.z).rgb * t_tint[2].rgb, c3 = texture(tex8, p / t_scale.w).rgb * t_tint[3].rgb;
+#if TERRAIN_TIER >= 2
+        // second, rotated sample at 1/3.7 scale against visible tiling
+        mat2 rot = mat2(0.8, 0.6, -0.6, 0.8);
+        vec2 q = rot * p / 3.7;
+        c0 = mix(c0, texture(tex5, q / t_scale.x).rgb * t_tint[0].rgb, 0.35);
+        c1 = mix(c1, texture(tex6, q / t_scale.y).rgb * t_tint[1].rgb, 0.35);
+        c2 = mix(c2, texture(tex7, q / t_scale.z).rgb * t_tint[2].rgb, 0.35);
+        c3 = mix(c3, texture(tex8, q / t_scale.w).rgb * t_tint[3].rgb, 0.35);
+#endif
+        vec4 hb = w + t_blend.x * (vec4(dot(c0, vec3(0.33)), dot(c1, vec3(0.33)), dot(c2, vec3(0.33)), dot(c3, vec3(0.33))) - 0.5);
+        float hm = max(max(hb.r, hb.g), max(hb.b, hb.a)) - 0.25 * (1.0 - 0.5 * t_blend.x);
+        vec4 bw = max(hb - hm, vec4(0.0)) * step(vec4(0.002), w);
+        bw /= max(bw.r + bw.g + bw.b + bw.a, 0.0001);
+        w = mix(w, bw, t_blend.x);
+        s = w.r * c0 + w.g * c1 + w.b * c2 + w.a * c3;
+#else
         if (w.r > 0.002) s += w.r * texture(tex5, p / t_scale.x).rgb * t_tint[0].rgb;
         if (w.g > 0.002) s += w.g * texture(tex6, p / t_scale.y).rgb * t_tint[1].rgb;
         if (w.b > 0.002) s += w.b * texture(tex7, p / t_scale.z).rgb * t_tint[2].rgb;
         if (w.a > 0.002) s += w.a * texture(tex8, p / t_scale.w).rgb * t_tint[3].rgb;
+#endif
 #if TERRAIN_TIER >= 2
         if (t_mode.z > 0.5) {
             vec3 tn = vec3(0.0, 0.0, 0.001);
@@ -132,10 +176,10 @@ void main() {
             n = planarNormal(n, normalize(tn));
         }
 #endif
-        float slope = 1.0 - abs(normalize(v_nrm).y);
+        float slope = 1.0 - abs(geoN.y);
         float cw = smoothstep(t_cliff.z, t_cliff.w, slope);
         if (cw > 0.002) {
-            vec3 an = abs(normalize(v_nrm));
+            vec3 an = abs(geoN);
             vec3 q = v_wpos / t_cliff.x;
 #if TERRAIN_TIER >= 2
             // triplanar: three projections blended by the normal
@@ -143,7 +187,7 @@ void main() {
             bw /= bw.x + bw.y + bw.z;
             vec3 c = texture(tex13, q.zy).rgb * bw.x + texture(tex13, q.xz).rgb * bw.y + texture(tex13, q.xy).rgb * bw.z;
             if (t_cliffTint.w > 0.5) { // UDN-blended triplanar normal
-                vec3 nn = normalize(v_nrm);
+                vec3 nn = geoN;
                 vec3 tx = unpackN(texture(tex14, q.zy)), ty = unpackN(texture(tex14, q.xz)), tz = unpackN(texture(tex14, q.xy));
                 vec3 wn = normalize(vec3(0.0, tx.y, tx.x) * bw.x + vec3(ty.x, 0.0, ty.y) * bw.y + vec3(tz.x, tz.y, 0.0) * bw.z + nn);
                 n = normalize(mix(n, wn, cw));
@@ -155,7 +199,10 @@ void main() {
 #endif
             s = mix(s, c * t_cliffTint.rgb, cw);
         }
-        albedoS = mix(v_col, s, t_cliff.y);
+#if TERRAIN_DETAIL
+        s *= (1.0 + macroV) * cavity;
+#endif
+        albedoS = mix(albedoS, s, t_cliff.y);
     }
 #endif
     vec3 alb = albedoS + v_dyn;
@@ -198,7 +245,7 @@ void main() {
 
 inline const char* kTerrainMSL =
     "#include <metal_stdlib>\nusing namespace metal;\n"
-    "struct TU0 { float4 lod; float4 mode; float4 scale; float4 cliff; float4 fog; float4 tint[4]; float4 cliffTint; float4 fogColor; float4 fogGrid; };\n"
+    "struct TU0 { float4 lod; float4 mode; float4 scale; float4 cliff; float4 fog; float4 tint[4]; float4 cliffTint; float4 fogColor; float4 fogGrid; float4 detail; float4 rock; float4 blend; };\n"
     RTS_MSL_FRAME RTS_MSL_SHADOW RTS_MSL_LIGHTS
     R"(
 struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; float2 morph [[attribute(3)]]; };
@@ -261,19 +308,63 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
                         texture2d<float> tex12 [[texture(12)]], sampler s12 [[sampler(12)]],
                         texture2d<float> tex13 [[texture(13)]], sampler s13 [[sampler(13)]],
                         texture2d<float> tex14 [[texture(14)]], sampler s14 [[sampler(14)]],
-                        texture2d<float> tex15 [[texture(15)]], sampler s15 [[sampler(15)]]) {
+                        texture2d<float> tex15 [[texture(15)]], sampler s15 [[sampler(15)]]
+#if TERRAIN_DETAIL
+                        , texture2d<float> tex16 [[texture(16)]], texture2d<float> tex17 [[texture(17)]]
+#endif
+                        ) {
+#if TERRAIN_DETAIL
+    // Metal has sampler slots 0..15 per stage: the detail textures use constant samplers
+    constexpr sampler s16(filter::linear, mip_filter::linear, address::clamp_to_edge);
+    constexpr sampler s17(filter::linear, mip_filter::linear, address::clamp_to_edge);
+#endif
     float3 n = normalize(in.nrm);
     float3 albedoS = in.col;
+    float3 geoN = n;
+#if TERRAIN_DETAIL
+    float4 dn = tex16.sample(s16, in.wpos.xz * u.detail.xy + u.detail.zw);
+    float2 nxz = dn.rg * 2.0 - 1.0;
+    n = normalize(float3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.0)), nxz.y));
+    geoN = n;
+    float macroV = (dn.a - 0.5) * u.blend.y;
+    float cavity = mix(1.0, 0.55 + 0.9 * dn.b, u.blend.z);
+    float rockW = smoothstep(u.cliff.z, u.cliff.w, 1.0 - n.y) * u.rock.w;
+    albedoS = mix(albedoS, u.rock.rgb * (0.85 + 0.3 * dn.a), rockW);
+    albedoS *= (1.0 + macroV) * cavity;
+#endif
 #if TERRAIN_TIER >= 1
     if (u.mode.y > 0.5) {
+#if TERRAIN_DETAIL
+        float4 w = tex17.sample(s17, in.wpos.xz * u.detail.xy + u.detail.zw);
+#else
         float4 w = tex4.sample(s4, in.wpos.xz / u.lod.zw);
+#endif
         w /= max(w.r + w.g + w.b + w.a, 0.0001);
         float2 p = in.wpos.xz;
         float3 s = float3(0.0);
+#if TERRAIN_DETAIL
+        float3 c0 = tex5.sample(s5, p / u.scale.x).rgb * u.tint[0].rgb, c1 = tex6.sample(s6, p / u.scale.y).rgb * u.tint[1].rgb;
+        float3 c2 = tex7.sample(s7, p / u.scale.z).rgb * u.tint[2].rgb, c3 = tex8.sample(s8, p / u.scale.w).rgb * u.tint[3].rgb;
+#if TERRAIN_TIER >= 2
+        float2x2 rot = float2x2(float2(0.8, 0.6), float2(-0.6, 0.8));
+        float2 q2 = rot * p / 3.7;
+        c0 = mix(c0, tex5.sample(s5, q2 / u.scale.x).rgb * u.tint[0].rgb, 0.35);
+        c1 = mix(c1, tex6.sample(s6, q2 / u.scale.y).rgb * u.tint[1].rgb, 0.35);
+        c2 = mix(c2, tex7.sample(s7, q2 / u.scale.z).rgb * u.tint[2].rgb, 0.35);
+        c3 = mix(c3, tex8.sample(s8, q2 / u.scale.w).rgb * u.tint[3].rgb, 0.35);
+#endif
+        float4 hb = w + u.blend.x * (float4(dot(c0, float3(0.33)), dot(c1, float3(0.33)), dot(c2, float3(0.33)), dot(c3, float3(0.33))) - 0.5);
+        float hm = max(max(hb.r, hb.g), max(hb.b, hb.a)) - 0.25 * (1.0 - 0.5 * u.blend.x);
+        float4 bw4 = max(hb - hm, float4(0.0)) * step(float4(0.002), w);
+        bw4 /= max(bw4.r + bw4.g + bw4.b + bw4.a, 0.0001);
+        w = mix(w, bw4, u.blend.x);
+        s = w.r * c0 + w.g * c1 + w.b * c2 + w.a * c3;
+#else
         if (w.r > 0.002) s += w.r * tex5.sample(s5, p / u.scale.x).rgb * u.tint[0].rgb;
         if (w.g > 0.002) s += w.g * tex6.sample(s6, p / u.scale.y).rgb * u.tint[1].rgb;
         if (w.b > 0.002) s += w.b * tex7.sample(s7, p / u.scale.z).rgb * u.tint[2].rgb;
         if (w.a > 0.002) s += w.a * tex8.sample(s8, p / u.scale.w).rgb * u.tint[3].rgb;
+#endif
 #if TERRAIN_TIER >= 2
         if (u.mode.z > 0.5) {
             float3 tn = float3(0.0, 0.0, 0.001);
@@ -284,17 +375,17 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
             n = planarNormal(n, normalize(tn));
         }
 #endif
-        float slope = 1.0 - abs(normalize(in.nrm).y);
+        float slope = 1.0 - abs(geoN.y);
         float cw = smoothstep(u.cliff.z, u.cliff.w, slope);
         if (cw > 0.002) {
-            float3 an = abs(normalize(in.nrm));
+            float3 an = abs(geoN);
             float3 q = in.wpos / u.cliff.x;
 #if TERRAIN_TIER >= 2
             float3 bw = pow(an, float3(4.0));
             bw /= bw.x + bw.y + bw.z;
             float3 c = tex13.sample(s13, q.zy).rgb * bw.x + tex13.sample(s13, q.xz).rgb * bw.y + tex13.sample(s13, q.xy).rgb * bw.z;
             if (u.cliffTint.w > 0.5) {
-                float3 nn = normalize(in.nrm);
+                float3 nn = geoN;
                 float3 tx = unpackN(tex14.sample(s14, q.zy)), ty = unpackN(tex14.sample(s14, q.xz)), tz = unpackN(tex14.sample(s14, q.xy));
                 float3 wn = normalize(float3(0.0, tx.y, tx.x) * bw.x + float3(ty.x, 0.0, ty.y) * bw.y + float3(tz.x, tz.y, 0.0) * bw.z + nn);
                 n = normalize(mix(n, wn, cw));
@@ -305,7 +396,10 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
 #endif
             s = mix(s, c * u.cliffTint.rgb, cw);
         }
-        albedoS = mix(in.col, s, u.cliff.y);
+#if TERRAIN_DETAIL
+        s *= (1.0 + macroV) * cavity;
+#endif
+        albedoS = mix(albedoS, s, u.cliff.y);
     }
 #endif
     float3 alb = albedoS + in.dyn;
