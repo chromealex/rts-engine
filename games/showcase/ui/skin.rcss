@@ -1,0 +1,49 @@
+/* Model Showcase: UI skin (linked after engine/ui/theme.rcss). Viewer: neutral studio grey, no ornaments.
+   No title font: headings use the UI font. */
+
+body { color: #1f2328; }
+h1 { font-family: title; color: #1f2328; font-size: 28dp; font-weight: bold; }
+h2 { color: #6a737d; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #6a737d; }
+.error { color: #cf222e; }
+
+.panel {
+    background-color: #f6f8faee;
+    border: 1dp #d0d7de;
+    border-radius: 8dp;
+}
+
+button {
+    color: #1f2328;
+    border: 1dp #d0d7de;
+    border-radius: 6dp;
+    decorator: vertical-gradient(#ffffffff #eef1f4ff);
+}
+button:hover { decorator: vertical-gradient(#f6f8faff #e6eaefff); border-color: #0969da; }
+button:active { decorator: vertical-gradient(#eef1f4ff #ffffffff); }
+button.active { border-color: #0969da; color: #0969da; }
+button.disabled:hover { decorator: vertical-gradient(#ffffffff #eef1f4ff); border-color: #d0d7de; }
+button .cost { color: #57606a; }
+button .tip { color: #cf222e; }
+
+progress { background-color: #d0d7de; }
+progress fill { background-color: #0969da; }
+
+#card .title { color: #1f2328; }
+#card .header { border-top-color: #d0d7de; }
+#topbar .item.warn { color: #cf222e; }
+.notice { color: #ffffff; }
+#selbox { border-color: #0969da; background-color: #0969da22; }
+#modal-bg { background-color: #1f232840; }
+#menu-bg { decorator: vertical-gradient(#e2e4e6ff #b8babbff); }
+input.text { background-color: #ffffff; border-color: #d0d7de; color: #1f2328; }
+input.text:focus { border-color: #0969da; }
+#lobby .slot.mine { border-color: #0969da; }
+#lobby .roomtitle { color: #1f2328; font-family: title; }
+
+#kb { background-color: #f6f8faee; border-color: #d0d7de; }
+#kb .key { color: #1f2328; border-color: #d0d7de; border-radius: 6dp; decorator: vertical-gradient(#ffffffff #eef1f4ff); }
+#kb .key:active { border-color: #0969da; }
+#kb .key.on { border-color: #0969da; color: #0969da; }
+
+#modehint { background-color: #1f2328d0; color: #ffffff; }

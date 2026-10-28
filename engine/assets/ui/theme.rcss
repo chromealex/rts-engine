@@ -1,5 +1,5 @@
-/* RTSEngine default UI theme. A game overrides it with games/<id>/ui/theme.rcss
-   (or overrides single documents: ui/hud.rml, ui/menu.rml).
+/* RTSEngine default UI theme. A game restyles it with games/<id>/ui/skin.rcss (linked after this
+   file), or replaces it entirely with ui/theme.rcss, or single documents (ui/hud.rml, ui/menu.rml).
    Units are dp (density-independent pixels); the font family "ui" is the game's fonts/ui.ttf
    or the engine font (Latin + Cyrillic). */
 
@@ -15,7 +15,7 @@ body {
 }
 .touch { font-size: 17dp; }
 
-h1 { font-size: 26dp; font-weight: bold; color: #f2d48a; margin-bottom: 8dp; }
+h1 { font-family: title; font-size: 26dp; font-weight: bold; color: #f2d48a; margin-bottom: 8dp; }
 h2 { font-size: 13dp; color: #9aa6b5; margin: 12dp 0 6dp 0; text-transform: uppercase; letter-spacing: 1dp; }
 .dim { color: #8d98a6; font-size: 13dp; }
 .error { color: #ff7a6b; margin-bottom: 8dp; }
@@ -66,6 +66,7 @@ progress {
 progress fill { background-color: #e8c26a; border-radius: 2dp; }
 
 /* ---------------------------------------------------------------- menu */
+#menu-bg { position: absolute; left: 0; top: 0; right: 0; bottom: 0; }   /* a skin may paint the menu backdrop */
 #menu {
     position: absolute; top: 12%; left: 0; right: 0;
     width: 440dp; margin: 0 auto;
@@ -95,7 +96,7 @@ progress fill { background-color: #e8c26a; border-radius: 2dp; }
     overflow-y: auto;
 }
 .touch #card { width: 340dp; }
-#card .title { font-weight: bold; color: #f2d48a; margin-bottom: 3dp; }
+#card .title { font-family: title; font-weight: bold; color: #f2d48a; margin-bottom: 3dp; }
 #card .info { color: #9aa6b5; font-size: 13dp; }
 #card .header { display: block; margin-top: 6dp; padding-top: 4dp; border-top: 1dp #ffffff14; }
 #card .section-title { font-size: 12dp; color: #8d98a6; margin-bottom: 1dp; }
@@ -114,7 +115,7 @@ progress fill { background-color: #e8c26a; border-radius: 2dp; }
 #modehint { position: absolute; font-size: 14dp; color: #ffffff; background-color: #00000090; padding: 2dp 6dp; border-radius: 4dp; }
 
 #modal-bg { position: absolute; left: 0; top: 0; right: 0; bottom: 0; background-color: #00000070; pointer-events: auto; }
-#modal { position: absolute; top: 24%; left: 0; right: 0; width: 280dp; margin: 0 auto; padding: 16dp 18dp; text-align: center; }
+#modal { position: absolute; top: 18%; left: 0; right: 0; width: 340dp; margin: 0 auto; padding: 16dp 18dp; text-align: center; }
 #modal button.wide { margin: 5dp 0; }
 #modal .choice { margin: 8dp 0; }
 #modal .choice button { padding: 4dp 7dp; font-size: 13dp; }
@@ -164,3 +165,21 @@ input.text selection { background-color: #e8c26a66; color: #ffffff; }
 
 #menu button.online { margin-top: 10dp; text-align: center; border-color: #e8c26a80; }
 #modal .choice.shadows button { display: block; margin: 3dp 0; }
+
+/* ---------------------------------------------------------------- portrait (phones held upright) */
+@media (orientation: portrait) {
+    #menu { top: 6%; left: 4%; right: 4%; width: auto; margin: 0; }
+    #topwrap { top: 4dp; }
+    #topbar { padding: 4dp 8dp; }
+    #topbar .item { margin: 0 5dp; }
+    #notices { top: 44dp; }
+    #minimap { top: 48dp; bottom: auto; left: 6dp; padding: 4dp; }
+    #card { left: 6dp; right: 6dp; bottom: 6dp; width: auto; max-height: 38%; }
+    .touch #card { width: auto; }
+    #card .cell.list, #card .cell.grid { display: inline-block; width: 49%; }
+    #card .cell.list button, #card .cell.grid button { margin: 2dp 2dp; }
+    #modal { left: 5%; right: 5%; width: auto; margin: 0; top: 12%; }
+    #lobby { top: 3%; }
+    #lobby .cols { display: block; }
+    #lobby .col { margin-right: 0; }
+}

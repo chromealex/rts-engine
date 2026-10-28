@@ -8,6 +8,8 @@
 //   "projectileLight": { "color", "radius", "intensity", "halo" }           its projectiles
 //   "hitLight":        { ... }                                              impact of its attacks
 //   "deathLight":      { ... }                                              explosion when it dies
+//   "abilityLights":   { "<ability id>": { "color", "radius", "intensity", "time", "halo" } | false }
+//                      (default: colour from what the ability does — damage orange, heal green, ...)
 //   "contactShadow":   0..1 strength of the soft ground shadow / AO under it, false = none
 //                      (default: buildings always, units stronger when sun shadows are off/low)
 //   "contactShape":    "box" | "round"  (default: round for 1x1 structures and resource nodes)
@@ -20,7 +22,9 @@
 //     "nightLevel": 1,    how dark the night gets, 0..1
 //     "clouds": 0.5,      cloud shadow coverage 0..1 (0 = clear sky)
 //     "cloudStrength": 0.45, "cloudScale": 1, "wind": [1.2, 0.5]   (world units / s)
-//     "storm": 0 }        0..1: overcast + lightning flashes (deterministic in game time)
+//     "storm": 0,         0..1: overcast + lightning flashes (deterministic in game time)
+//     "preset": "desert" }   desert | snow | volcanic | overcast | cave (underground: permanent
+//                         night, almost no ambient); sets palettes and defaults, fields still win
 // Decorative lights (lanterns, lava, campfires) in the map's "lights" array:
 //   [{ "x": 10, "z": 12, "height": 1, "color": [1, 0.6, 0.3], "radius": 4, "intensity": 1.5,
 //      "flicker": 0.2, "halo": 0.8 }]   ("pos": [x, z] works too); shown once the cell is explored.
@@ -29,6 +33,7 @@
 // At night emissive materials glow brighter (Renderer3D::lights.setNightGlow).
 #pragma once
 #include <cstdint>
+#include <string>
 #include <vector>
 #include "../../../engine/data/Json.h"
 #include "../../../engine/render/Renderer3D.h"
@@ -67,12 +72,19 @@ public:
         float contact = -1;          // < 0 automatic
         bool contactBox = false;
         Flash attack, projectile, hit, death;
+        std::vector<Flash> abilities;    // by ability index of the type
     };
     const TypeLights& typeLights(uint16_t type) const { return types_[type]; }
 
+    // Day/night + weather on the renderer's lighting (pure; called by draw()).
+    void updateSky(render::Lighting& l, double seconds);
+    // Lightning brightness 0..1 at a game time for a storm strength (pure function of its inputs).
+    static float lightningAt(double seconds, float storm);
+    const std::string& preset() const { return preset_; }
+    struct Palette { render::float3 sun{1, 1, 1}, sky, ground, fog; float sunK = -1; };   // sunK < 0: unset
+
 private:
     struct Active { render::float3 pos, color; float radius, intensity, born, life, halo; };
-    void updateSky(render::Lighting& l, double seconds);
     void consumeEvents(const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view);
     void emitActive(render::LightSystem& ls, double time);
     void addContactShadows(render::Renderer3D& r, const RtsScene& s, const MapGrid& grid, const RtsView& view);
@@ -86,6 +98,8 @@ private:
     float startTime_ = 0.5f, dayLength_ = 0, nightLevel_ = 1, forcedNight_ = -1;
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
     float lightning_ = 0;
+    std::string preset_;
+    Palette day_, night_p_;
     bool preview_ = false;
     float previewTime_ = 0.5f, previewClouds_ = 0, previewStorm_ = 0;
     std::vector<MapLight> mapLights_;

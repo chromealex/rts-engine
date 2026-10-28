@@ -1,0 +1,50 @@
+/* Underlord: UI skin (linked after engine/ui/theme.rcss). Dungeon lord: black stone, blood red, candle gold.
+   Title font: fonts/title.ttf (Yeseva One, SIL OFL, fonts/OFL.txt). */
+
+body { color: #f1dcd4; }
+h1 { font-family: title; color: #e8b04d; font-size: 32dp; font-weight: normal; }
+h2 { color: #a9817a; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #a9817a; }
+.error { color: #ff5a5a; }
+
+.panel {
+    background-color: #140708ef;
+    border: 2dp #8a1a1a;
+    border-radius: 2dp;
+}
+
+button {
+    color: #f6e1d9;
+    border: 1dp #5e1414;
+    border-radius: 2dp;
+    decorator: vertical-gradient(#4a1212ff #2a0909ff);
+}
+button:hover { decorator: vertical-gradient(#5e1818ff #360c0cff); border-color: #e8b04d; }
+button:active { decorator: vertical-gradient(#2a0909ff #4a1212ff); }
+button.active { border-color: #e8b04d; color: #ffd27a; }
+button.disabled:hover { decorator: vertical-gradient(#4a1212ff #2a0909ff); border-color: #5e1414; }
+button .cost { color: #e8b04d; }
+button .tip { color: #ff5a5a; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #e8b04d; }
+
+#card .title { color: #e8b04d; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff5a5a; }
+.notice { color: #ffb35c; }
+#selbox { border-color: #e8b04d; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#260d0fff #0b0304ff); }
+input.text { background-color: #0d0405; border-color: #5e1414; color: #f1dcd4; }
+input.text:focus { border-color: #e8b04d; }
+#lobby .slot.mine { border-color: #e8b04d; }
+#lobby .roomtitle { color: #e8b04d; font-family: title; }
+
+#kb { background-color: #140708ef; border-color: #8a1a1a; }
+#kb .key { color: #f6e1d9; border-color: #5e1414; border-radius: 2dp; decorator: vertical-gradient(#4a1212ff #2a0909ff); }
+#kb .key:active { border-color: #e8b04d; }
+#kb .key.on { border-color: #e8b04d; color: #ffd27a; }
+
+#menu h1 { text-align: center; }
+h2 { color: #c96a5a; }

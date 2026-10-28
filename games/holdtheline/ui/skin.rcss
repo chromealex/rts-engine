@@ -1,0 +1,51 @@
+/* Hold the Line: UI skin (linked after engine/ui/theme.rcss). Infantry war: olive drab, stencil and khaki.
+   Title font: fonts/title.ttf (Russo One, SIL OFL, fonts/OFL.txt). */
+
+body { color: #ece5c8; }
+h1 { font-family: title; color: #e3d48c; font-size: 28dp; font-weight: normal; text-transform: uppercase; letter-spacing: 2dp; }
+h2 { color: #a9a283; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #a9a283; }
+.error { color: #ff6a52; }
+
+.panel {
+    background-color: #2b2f22ec;
+    border: 2dp #8a8a5c;
+    border-radius: 0;
+}
+
+button {
+    color: #f1ebd0;
+    border: 1dp #5d5f43;
+    border-radius: 0;
+    decorator: vertical-gradient(#4a4f37ff #333726ff);
+}
+button:hover { decorator: vertical-gradient(#5a6043ff #3d412dff); border-color: #e3d48c; }
+button:active { decorator: vertical-gradient(#333726ff #4a4f37ff); }
+button.active { border-color: #e3d48c; color: #fff3b0; }
+button.disabled:hover { decorator: vertical-gradient(#4a4f37ff #333726ff); border-color: #5d5f43; }
+button .cost { color: #d9cc87; }
+button .tip { color: #ff6a52; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #e3d48c; }
+
+#card .title { color: #e3d48c; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff6a52; }
+.notice { color: #fff0a0; }
+#selbox { border-color: #e3d48c; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#515940ff #171912ff); }
+input.text { background-color: #171a12; border-color: #5d5f43; color: #ece5c8; }
+input.text:focus { border-color: #e3d48c; }
+#lobby .slot.mine { border-color: #e3d48c; }
+#lobby .roomtitle { color: #e3d48c; font-family: title; }
+
+#kb { background-color: #2b2f22ec; border-color: #8a8a5c; }
+#kb .key { color: #f1ebd0; border-color: #5d5f43; border-radius: 0; decorator: vertical-gradient(#4a4f37ff #333726ff); }
+#kb .key:active { border-color: #e3d48c; }
+#kb .key.on { border-color: #e3d48c; color: #fff3b0; }
+
+button { text-transform: uppercase; font-size: 13dp; }
+/* tickets are the score: make them stand out */
+#topbar .item { font-size: 16dp; }

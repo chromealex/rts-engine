@@ -192,6 +192,7 @@ void GameClient::startMatch(size_t idx) {
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
+        quality_.reset(int(r3d_.shadowQuality()), int(r3d_.lights.quality()));
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
     }
@@ -604,6 +605,11 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         auto& g = mod().state(*sim_).grid;
         cam_.target.x = std::clamp(cam_.target.x, 0.0f, float(g.w));
         cam_.target.z = std::clamp(cam_.target.z, 0.0f, float(g.h));
+        if (quality_.update(dt)) { // too slow for these tiers: step down (keeps the pause menu in sync)
+            r3d_.setShadowQuality(ShadowQuality(quality_.shadows()));
+            r3d_.lights.setQuality(rts::render::LightQuality(quality_.lights()));
+            shadowQuality_ = boundShadowQuality_ = quality_.shadows();
+        }
 
         if (!netMatch_) {
             for (auto& b : bots_) b.update(*sim_);
@@ -679,11 +685,16 @@ int rtsMain(int argc, char** argv) {
     cb.frame = [](gfx::Device& d, double dt) { g_client->frame(d, dt); };
     cb.event = [](const Event& e) { g_client->event(e); };
     cb.shutdown = [] { g_client->shutdown(); };
-    // --map N [--spectate]: jump straight into a match (CI screenshots, quick testing)
+    // --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
         if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);
+        // --size WxH: window size on desktops (e.g. 540x960 to look at a portrait game)
+        if (a == "--size" && i + 1 < argc) {
+            int w = 0, h = 0;
+            if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) { cfg.width = w; cfg.height = h; }
+        }
         if (a == "--map" && i + 1 < argc) {
             size_t idx = size_t(std::stoul(argv[++i]));
             auto oldInit = cb.init;

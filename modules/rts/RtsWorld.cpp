@@ -18,6 +18,7 @@ void RtsModule::sysVision(Simulation& sim) {
     if (sim.tick() % 5 != 0) return;
     World& w = sim.world();
     GameState& gs = state(sim);
+    if (gs.fogMode == uint8_t(FogMode::None)) return;   // everything stays visible
     const MapGrid& g = gs.grid;
     const int W = g.w, H = g.h;
     const size_t np = gs.vision.size();
@@ -28,7 +29,7 @@ void RtsModule::sysVision(Simulation& sim) {
         gs.visibleCells[p].clear();
     }
     std::vector<std::vector<uint8_t>> sharers(np);
-    for (size_t p = 1; p < np; ++p) for (size_t q = 1; q < np; ++q) if (sim.allied(uint8_t(p), uint8_t(q))) sharers[p].push_back(uint8_t(q));
+    for (size_t p = 1; p < np; ++p) for (size_t q = 1; q < np; ++q) if (q == p || (rules_.fog.shareAllies && sim.allied(uint8_t(p), uint8_t(q)))) sharers[p].push_back(uint8_t(q));
     const bool cliffs = rules_.heights.blockVision;
     const bool los = g.hf && cliffs;   // heightfield: real line of sight over the surface
     // heights in corner-sum units (4 corners of 1/16 = 1/64 units) so the ray test stays integer

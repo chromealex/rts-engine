@@ -260,6 +260,7 @@ void GameClient::updateUi() {
         if (shadowQuality_ != boundShadowQuality_) { // changed from the pause menu
             r3d_.setShadowQuality(ShadowQuality(std::clamp(shadowQuality_, 0, 3)));
             boundShadowQuality_ = shadowQuality_;
+            quality_.lock();   // the player chose: no adaptive changes any more
         }
         if (matQuality_ != boundMatQuality_) { // changed from the pause menu
             r3d_.setMaterialQuality(rts::render::MaterialQuality(std::clamp(matQuality_, 0, 2)));

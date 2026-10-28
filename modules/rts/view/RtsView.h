@@ -23,6 +23,7 @@
 #include "Rts2DView.h"
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
+#include "RtsFog.h"
 #include "RtsTerrainRender.h"
 
 namespace rts::game {
@@ -133,6 +134,8 @@ public:
     // Screen-space hit test for sprite objects (they are drawn above their ground point).
     bool spriteHit(const render::RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const;
     RtsLights& lights() { return lights_; }
+    const FogLook& fogLook() const { return fog_.look(); }
+    void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }
 
 private:
     struct ClipSpec {
@@ -260,6 +263,8 @@ private:
     uint64_t frame_ = 0;
     RtsLights lights_;
     RtsGroundFx groundFx_;   // territory, diggable rock, lanes, roads (RtsGroundFx.cpp)
+    FogOfWar fog_;           // fog of war look + sheet (RtsFog.cpp)
+    bool fogMeshDirty_ = false;
     render::mat4 viewProj_;
     render::float3 camPos_;
 };
