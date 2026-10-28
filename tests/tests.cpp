@@ -4989,6 +4989,142 @@ TEST(lighting_quality_governor) {
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
 }
 
+// ---------------- Native plugins bridge, store and ads services (platforms agent) ----------------
+#include "engine/platform/PluginJson.h"
+#include "engine/platform/Plugins.h"
+#include "engine/services/Ads.h"
+#include "engine/services/Store.h"
+#include <cstdlib>
+#include <thread>
+
+static void setEnvVar(const char* k, const char* v) {
+#if defined(_WIN32)
+    _putenv_s(k, v);
+#else
+    setenv(k, v, 1);
+#endif
+}
+
+TEST(plugin_json_keeps_numbers_and_unicode) {
+    namespace json = plugins::json;
+    json::Value v;
+    std::string err;
+    CHECK(json::parse(R"({"price":0.99,"micros":1990000000,"t":"Привет 🙂","a":[true,null]})", v, &err));
+    CHECK(v["price"].s == "0.99" && v["micros"].i64() == 1990000000);
+    CHECK(v["t"].str() == "Привет 🙂");
+    CHECK(json::dump(v) == "{\"price\":0.99,\"micros\":1990000000,\"t\":\"Привет 🙂\",\"a\":[true,null]}");
+    CHECK(!json::parse("{\"a\":}", v, &err) && !err.empty());
+    CHECK(json::parseOr(json::stripComments("// head\n{ \"u\": \"http://x\" /* c */ }"))["u"].str() == "http://x");
+    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","ios":"I","default":"D"},"n":{"web":1}})", "ios") == R"({"id":"I","n":null})");
+    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","desktop":"PC"}})", "linux") == R"({"id":"PC"})");
+}
+
+namespace {
+struct EchoPlugin : plugins::NativePlugin {
+    std::vector<std::string> calls;
+    void call(const std::string& method, const std::string& args, plugins::Reply r) override {
+        calls.push_back(method + " " + args);
+        if (method == "fail") { r.fail("nope"); return; }
+        if (method == "later") { std::thread([r] { r.ok(R"({"from":"thread"})"); }).join(); return; }
+        if (method == "event") plugins::emit("echo", "ping", R"({"n":1})");
+        r.ok(args);
+    }
+    void update() override { ++updates; }
+    int updates = 0;
+};
+} // namespace
+
+TEST(plugin_bridge_calls_replies_events) {
+    plugins::configure(R"({"echo":{"key":{"linux":"L","windows":"L","macos":"L","default":"L"}}})");
+    auto echo = std::make_shared<EchoPlugin>();
+    plugins::registerPlugin("echo", echo);
+    CHECK(plugins::available("echo") && !plugins::available("no-such-plugin"));
+    // desktop mocks exist only when the game lists them (a shipped build must not offer fake purchases)
+    if (!std::getenv("RTS_MOCK_PLUGINS")) CHECK(!plugins::available("mock-store") && !plugins::available("mock-ads"));
+    std::vector<std::string> got;
+    plugins::pump();
+    CHECK(echo->updates == 0); // no per-frame work before "init"
+    plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
+    CHECK(got.empty()); // replies never arrive inside call()
+    plugins::pump();
+    CHECK(echo->updates == 1); // then update() every frame
+    CHECK(got.size() == 1 && got[0] == R"({"x":1})");
+    CHECK(echo->calls.size() == 2 && echo->calls[0] == R"(init {"key":"L"})"); // config first, resolved
+    plugins::call("echo", "again", "{}", {});
+    plugins::call("echo", "fail", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "ERR " + r.error); });
+    plugins::call("echo", "later", "{}", [&](const plugins::Result& r) { got.push_back(r.data); });
+    plugins::call("no-such-plugin", "x", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "missing"); });
+    std::vector<std::string> events;
+    int id = plugins::addListener("echo", [&](const std::string& ev, const std::string& d) { events.push_back(ev + d); });
+    plugins::call("echo", "event", "{}", {});
+    plugins::pump();
+    CHECK(echo->calls.size() == 6); // init went out only once
+    CHECK(got.size() == 4 && got[1] == "ERR nope" && got[2] == R"({"from":"thread"})" && got[3] == "missing");
+    CHECK(events.size() == 1 && events[0] == R"(ping{"n":1})");
+    plugins::removeListener(id);
+    plugins::unregisterPlugin("echo");
+}
+
+TEST(store_and_ads_through_mock_plugins) {
+    plugins::configureGame(R"(// comments allowed, like every game.json
+    {
+      "plugins": { "mock-store": {}, "mock-ads": {} },
+      "store": { "providers": ["no-such-store", "mock-store"],
+                 "products": [ { "id": "gems", "type": "consumable" },
+                               { "id": "noads", "type": "nonConsumable", "ids": { "default": "com.game.noads" } } ] },
+      "ads": { "providers": { "default": ["mock-ads"] } }
+    })");
+    CHECK(store::available() && store::provider() == "mock-store");
+    CHECK(store::typeOf("noads") == store::ProductType::NonConsumable);
+    std::vector<store::Product> prods;
+    store::products([&](bool ok, const std::vector<store::Product>& p, const std::string&) { if (ok) prods = p; });
+    plugins::pump();
+    CHECK(prods.size() == 2 && prods[1].id == "noads" && prods[0].price == "$0.99" && prods[0].priceMicros == 990000);
+
+    std::vector<store::Purchase> done, async;
+    store::onPurchase([&](const store::Purchase& p) { async.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "purchased");
+    store::purchase("noads", [&](const store::Purchase& p) { done.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "cancelled");
+    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "pending");
+    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
+    plugins::pump();
+    setEnvVar("RTS_MOCK_STORE", "purchased");
+    CHECK(done.size() == 3);
+    CHECK(done[0].state == store::PurchaseState::Purchased && done[0].productId == "noads" && !done[0].token.empty());
+    CHECK(done[1].state == store::PurchaseState::Cancelled);
+    CHECK(done[2].state == store::PurchaseState::Pending);
+    CHECK(async.size() == 1 && async[0].state == store::PurchaseState::Purchased && async[0].productId == "gems");
+
+    std::vector<store::Purchase> restored;
+    store::finish(async[0]); // consumable granted → consumed, no longer restored
+    store::restore([&](bool ok, const std::vector<store::Purchase>& p, const std::string&) { if (ok) restored = p; });
+    plugins::pump();
+    CHECK(restored.size() == 1 && restored[0].productId == "noads" && restored[0].restored);
+
+    CHECK(ads::available() && ads::provider() == "mock-ads");
+    ads::preload(ads::Format::Rewarded);
+    plugins::pump();
+    CHECK(ads::ready(ads::Format::Rewarded));
+    std::vector<ads::ShowResult> shown;
+    int pauses = 0;
+    int l = plugins::addListener("*", [&](const std::string& ev, const std::string&) { pauses += ev == "app.pause"; });
+    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); }, "double_reward");
+    setEnvVar("RTS_MOCK_ADS", "noreward");
+    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); });
+    setEnvVar("RTS_MOCK_ADS", "ok");
+    ads::setEnabled(false);
+    ads::show(ads::Format::Interstitial, [&](const ads::ShowResult& r) { shown.push_back(r); });
+    ads::setEnabled(true);
+    plugins::pump();
+    CHECK(shown.size() == 3);
+    CHECK(shown[0].shown == false && shown[0].error == "ads disabled"); // answered at once, no plugin call
+    CHECK(shown[1].shown && shown[1].rewarded);
+    CHECK(shown[2].shown && !shown[2].rewarded);
+    CHECK(pauses == 2 && !ads::ready(ads::Format::Interstitial));
+    plugins::removeListener(l);
+}
 
 // ---------------- overlays (data-driven helper elements; overlays agent) ----------------
 #include "engine/platform/Platform.h"
@@ -5336,136 +5472,6 @@ TEST(fx_unity_importer_output_is_valid) {
     }
     CHECK(std::filesystem::exists(out + "/fx/textures/smoke.png"));
     std::filesystem::remove_all(out);
-}
-
-// ---------------- Native plugins bridge, store and ads services (platforms agent) ----------------
-#include "engine/platform/PluginJson.h"
-#include "engine/platform/Plugins.h"
-#include "engine/services/Ads.h"
-#include "engine/services/Store.h"
-#include <cstdlib>
-#include <thread>
-
-static void setEnvVar(const char* k, const char* v) {
-#if defined(_WIN32)
-    _putenv_s(k, v);
-#else
-    setenv(k, v, 1);
-#endif
-}
-
-TEST(plugin_json_keeps_numbers_and_unicode) {
-    namespace json = plugins::json;
-    json::Value v;
-    std::string err;
-    CHECK(json::parse(R"({"price":0.99,"micros":1990000000,"t":"Привет 🙂","a":[true,null]})", v, &err));
-    CHECK(v["price"].s == "0.99" && v["micros"].i64() == 1990000000);
-    CHECK(v["t"].str() == "Привет 🙂");
-    CHECK(json::dump(v) == "{\"price\":0.99,\"micros\":1990000000,\"t\":\"Привет 🙂\",\"a\":[true,null]}");
-    CHECK(!json::parse("{\"a\":}", v, &err) && !err.empty());
-    CHECK(json::parseOr(json::stripComments("// head\n{ \"u\": \"http://x\" /* c */ }"))["u"].str() == "http://x");
-    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","ios":"I","default":"D"},"n":{"web":1}})", "ios") == R"({"id":"I","n":null})");
-    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","desktop":"PC"}})", "linux") == R"({"id":"PC"})");
-}
-
-namespace {
-struct EchoPlugin : plugins::NativePlugin {
-    std::vector<std::string> calls;
-    void call(const std::string& method, const std::string& args, plugins::Reply r) override {
-        calls.push_back(method + " " + args);
-        if (method == "fail") { r.fail("nope"); return; }
-        if (method == "later") { std::thread([r] { r.ok(R"({"from":"thread"})"); }).join(); return; }
-        if (method == "event") plugins::emit("echo", "ping", R"({"n":1})");
-        r.ok(args);
-    }
-};
-} // namespace
-
-TEST(plugin_bridge_calls_replies_events) {
-    plugins::configure(R"({"echo":{"key":{"linux":"L","windows":"L","macos":"L","default":"L"}}})");
-    auto echo = std::make_shared<EchoPlugin>();
-    plugins::registerPlugin("echo", echo);
-    CHECK(plugins::available("echo") && !plugins::available("no-such-plugin"));
-    std::vector<std::string> got;
-    plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
-    CHECK(got.empty()); // replies never arrive inside call()
-    plugins::pump();
-    CHECK(got.size() == 1 && got[0] == R"({"x":1})");
-    CHECK(echo->calls.size() == 2 && echo->calls[0] == R"(init {"key":"L"})"); // config first, resolved
-    plugins::call("echo", "again", "{}", {});
-    plugins::call("echo", "fail", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "ERR " + r.error); });
-    plugins::call("echo", "later", "{}", [&](const plugins::Result& r) { got.push_back(r.data); });
-    plugins::call("no-such-plugin", "x", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "missing"); });
-    std::vector<std::string> events;
-    int id = plugins::addListener("echo", [&](const std::string& ev, const std::string& d) { events.push_back(ev + d); });
-    plugins::call("echo", "event", "{}", {});
-    plugins::pump();
-    CHECK(echo->calls.size() == 6); // init went out only once
-    CHECK(got.size() == 4 && got[1] == "ERR nope" && got[2] == R"({"from":"thread"})" && got[3] == "missing");
-    CHECK(events.size() == 1 && events[0] == R"(ping{"n":1})");
-    plugins::removeListener(id);
-    plugins::unregisterPlugin("echo");
-}
-
-TEST(store_and_ads_through_mock_plugins) {
-    plugins::configureGame(R"(// comments allowed, like every game.json
-    {
-      "plugins": { "mock-store": {}, "mock-ads": {} },
-      "store": { "providers": ["no-such-store", "mock-store"],
-                 "products": [ { "id": "gems", "type": "consumable" },
-                               { "id": "noads", "type": "nonConsumable", "ids": { "default": "com.game.noads" } } ] },
-      "ads": { "providers": { "default": ["mock-ads"] } }
-    })");
-    CHECK(store::available() && store::provider() == "mock-store");
-    CHECK(store::typeOf("noads") == store::ProductType::NonConsumable);
-    std::vector<store::Product> prods;
-    store::products([&](bool ok, const std::vector<store::Product>& p, const std::string&) { if (ok) prods = p; });
-    plugins::pump();
-    CHECK(prods.size() == 2 && prods[1].id == "noads" && prods[0].price == "$0.99" && prods[0].priceMicros == 990000);
-
-    std::vector<store::Purchase> done, async;
-    store::onPurchase([&](const store::Purchase& p) { async.push_back(p); });
-    setEnvVar("RTS_MOCK_STORE", "purchased");
-    store::purchase("noads", [&](const store::Purchase& p) { done.push_back(p); });
-    setEnvVar("RTS_MOCK_STORE", "cancelled");
-    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
-    setEnvVar("RTS_MOCK_STORE", "pending");
-    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
-    plugins::pump();
-    setEnvVar("RTS_MOCK_STORE", "purchased");
-    CHECK(done.size() == 3);
-    CHECK(done[0].state == store::PurchaseState::Purchased && done[0].productId == "noads" && !done[0].token.empty());
-    CHECK(done[1].state == store::PurchaseState::Cancelled);
-    CHECK(done[2].state == store::PurchaseState::Pending);
-    CHECK(async.size() == 1 && async[0].state == store::PurchaseState::Purchased && async[0].productId == "gems");
-
-    std::vector<store::Purchase> restored;
-    store::finish(async[0]); // consumable granted → consumed, no longer restored
-    store::restore([&](bool ok, const std::vector<store::Purchase>& p, const std::string&) { if (ok) restored = p; });
-    plugins::pump();
-    CHECK(restored.size() == 1 && restored[0].productId == "noads" && restored[0].restored);
-
-    CHECK(ads::available() && ads::provider() == "mock-ads");
-    ads::preload(ads::Format::Rewarded);
-    plugins::pump();
-    CHECK(ads::ready(ads::Format::Rewarded));
-    std::vector<ads::ShowResult> shown;
-    int pauses = 0;
-    int l = plugins::addListener("*", [&](const std::string& ev, const std::string&) { pauses += ev == "app.pause"; });
-    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); }, "double_reward");
-    setEnvVar("RTS_MOCK_ADS", "noreward");
-    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); });
-    setEnvVar("RTS_MOCK_ADS", "ok");
-    ads::setEnabled(false);
-    ads::show(ads::Format::Interstitial, [&](const ads::ShowResult& r) { shown.push_back(r); });
-    ads::setEnabled(true);
-    plugins::pump();
-    CHECK(shown.size() == 3);
-    CHECK(shown[0].shown == false && shown[0].error == "ads disabled"); // answered at once, no plugin call
-    CHECK(shown[1].shown && shown[1].rewarded);
-    CHECK(shown[2].shown && !shown[2].rewarded);
-    CHECK(pauses == 2 && !ads::ready(ads::Format::Interstitial));
-    plugins::removeListener(l);
 }
 
 // ---------------- Cube-sphere (RtsSphere) ----------------

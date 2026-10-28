@@ -29,7 +29,7 @@ void load() {
     const json::Value& prov = cfg["providers"];
     if (prov.isArray()) for (auto& v : prov.arr) order.push_back(v.str());
     else if (!prov.isNull()) order.push_back(prov.str());
-    if (order.empty()) order = {"yandex-ads", "admob", "yandex-games", "mock-ads"};
+    if (order.empty()) order = {"yandex-ads", "admob", "applovin", "ironsource", "yandex-games", "mock-ads"};
     for (auto& n : order) if (plugins::available(n)) { s.provider = n; break; }
     if (s.provider.empty()) return;
     s.listener = plugins::addListener(s.provider, [](const std::string& ev, const std::string& data) {

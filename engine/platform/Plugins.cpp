@@ -1,6 +1,9 @@
 #include "Plugins.h"
 #include "PluginJson.h"
+#if RTS_WITH_MOCK_PLUGINS
 #include "engine/services/MockPlugins.h"
+#endif
+#include <cstdlib>
 
 #include <cstdio>
 #include <map>
@@ -56,6 +59,20 @@ json::Value resolve(const json::Value& v, const std::string& platform) {
     return v;
 }
 
+// Desktop mocks (mock-store / mock-ads) exist only where they were asked for: listed in game.json
+// "plugins" or RTS_MOCK_PLUGINS=1 in the environment. Packaged builds compile them out entirely
+// unless the game lists them (rtsbuild → plugins.cmake → RTS_MOCK_PLUGINS).
+void syncMocks(const json::Value& config) {
+#if RTS_WITH_MOCK_PLUGINS
+    const char* env = std::getenv("RTS_MOCK_PLUGINS");
+    const bool all = env && std::string(env) == "1";
+    for (const char* name : {"mock-store", "mock-ads"})
+        if (all || config.find(name)) services::registerMockPlugin(name);
+#else
+    (void)config;
+#endif
+}
+
 struct Pending { std::string plugin; Callback cb; };
 struct Delivery {
     enum Kind { Reply, Event } kind = Reply;
@@ -94,18 +111,23 @@ struct Bridge {
             configured = true;
             loader = configLoader;
         }
-        if (!loader) return;
+        if (!loader) { syncMocks(json::Value::object()); return; }
         std::string text = loader();
-        if (text.empty()) return;
+        if (text.empty()) { syncMocks(json::Value::object()); return; }
         json::Value game;
         std::string err;
         if (!json::parse(json::stripComments(text), game, &err)) { std::fprintf(stderr, "[plugins] game.json: %s\n", err.c_str()); return; }
-        std::lock_guard<std::mutex> l(m);
-        gameJson = game;
-        if (const json::Value* p = game.find("plugins")) {
-            if (p->isObject()) config = *p;
-            else std::fprintf(stderr, "[plugins] game.json \"plugins\" must be an object\n");
+        json::Value cfg;
+        {
+            std::lock_guard<std::mutex> l(m);
+            gameJson = game;
+            if (const json::Value* p = game.find("plugins")) {
+                if (p->isObject()) config = *p;
+                else std::fprintf(stderr, "[plugins] game.json \"plugins\" must be an object\n");
+            }
+            cfg = config;
         }
+        syncMocks(cfg);
     }
 
     // Starts a call on the plugin; "init" with the game.json config goes first, once per plugin.
@@ -145,22 +167,10 @@ struct Bridge {
     }
 };
 
-// Built-in plugins, registered on first use (static registration inside a static library would be
-// dropped by the linker). Desktop builds get the mock store and ads for development.
-namespace {
-void ensureBuiltins() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        if (std::string(kPlatform) == "windows" || std::string(kPlatform) == "macos" || std::string(kPlatform) == "linux")
-            services::registerMockPlugins();
-    });
-}
-} // namespace
-
 // ---------------------------------------------------------------- public API
 bool available(const std::string& plugin) {
-    ensureBuiltins();
     Bridge& b = Bridge::get();
+    b.ensureConfig();
     detail::Backend* be;
     {
         std::lock_guard<std::mutex> l(b.m);
@@ -171,7 +181,6 @@ bool available(const std::string& plugin) {
 }
 
 void call(const std::string& plugin, const std::string& method, const std::string& argsJson, Callback cb) {
-    ensureBuiltins();
     Bridge& b = Bridge::get();
     b.ensureConfig();
     uint64_t id;
@@ -199,10 +208,14 @@ void removeListener(int id) {
 void configure(const std::string& pluginsObjectJson) {
     Bridge& b = Bridge::get();
     json::Value v = json::parseOr(pluginsObjectJson, json::Value::object());
-    std::lock_guard<std::mutex> l(b.m);
-    b.config = v.isObject() ? std::move(v) : json::Value::object();
-    b.configured = true;
-    b.initSent.clear(); // new config → plugins get "init" again before their next call
+    json::Value cfg = v.isObject() ? std::move(v) : json::Value::object();
+    {
+        std::lock_guard<std::mutex> l(b.m);
+        b.config = cfg;
+        b.configured = true;
+        b.initSent.clear(); // new config → plugins get "init" again before their next call
+    }
+    syncMocks(cfg);
 }
 
 std::string gameSection(const std::string& key) {
@@ -216,12 +229,16 @@ std::string gameSection(const std::string& key) {
 void configureGame(const std::string& gameJsonText) {
     Bridge& b = Bridge::get();
     json::Value game = json::parseOr(json::stripComments(gameJsonText), json::Value::object());
-    std::lock_guard<std::mutex> l(b.m);
-    b.gameJson = game;
     const json::Value* p = game.find("plugins");
-    b.config = p && p->isObject() ? *p : json::Value::object();
-    b.configured = true;
-    b.initSent.clear();
+    json::Value cfg = p && p->isObject() ? *p : json::Value::object();
+    {
+        std::lock_guard<std::mutex> l(b.m);
+        b.gameJson = game;
+        b.config = cfg;
+        b.configured = true;
+        b.initSent.clear();
+    }
+    syncMocks(cfg);
 }
 
 std::string platformName() { return kPlatform; }
@@ -245,6 +262,15 @@ std::vector<std::string> configured() {
 
 void pump() {
     Bridge& b = Bridge::get();
+    std::vector<std::shared_ptr<NativePlugin>> cpp; // per-frame work of C++ plugins (SDK callbacks)
+    {
+        std::lock_guard<std::mutex> l(b.m);
+        for (auto& [name, p] : b.native) {
+            auto it = b.initSent.find(name);
+            if (it != b.initSent.end() && it->second) cpp.push_back(p);
+        }
+    }
+    for (auto& p : cpp) p->update();
     std::vector<Delivery> q;
     { std::lock_guard<std::mutex> l(b.m); q.swap(b.queue); }
     for (auto& d : q) {
