@@ -53,6 +53,9 @@ struct AppConfig {
     int width = 1280, height = 720;  // logical size of the initial window (desktop)
     bool highDpi = true;
     float clearColor[3] = {0.08f, 0.09f, 0.11f};
+    // "landscape" | "portrait" | "any". Locks the screen when the web build goes fullscreen; native
+    // mobile apps get it from game.json through rtsbuild (Info.plist / AndroidManifest).
+    std::string orientation = "landscape";
 };
 
 struct AppCallbacks {
@@ -73,8 +76,21 @@ int framebufferHeight();
 float dpiScale();         // framebuffer pixels per logical point
 bool isTouchDevice();
 const char* name();       // "macos", "ios", "android", "web", "windows", "linux"
-void requestQuit();
+void requestQuit();        // Android's Back button arrives as Key::Escape; quit from your own menu
 void setTitle(const std::string& title);
+
+// --- screen ---
+// Parts of the window covered by hardware or system UI: notch / Dynamic Island, rounded corners,
+// home indicator, display cutouts, system bars. Logical points from each edge; 0 on desktop.
+// Keep buttons and text inside, let backgrounds extend under them. Changes arrive as Resized.
+struct Insets { float left = 0, top = 0, right = 0, bottom = 0; };
+Insets safeAreaInsets();
+// Desktop: borderless fullscreen window. Web: browser fullscreen + orientation lock (call it from
+// an input event handler — browsers require a user gesture). Mobile apps are always fullscreen.
+// The user can leave fullscreen on their own (Esc in a browser): isFullscreen() follows that.
+// Built-in toggles: F11 (Windows, Linux, web), Alt+Enter (Windows), the green button (macOS).
+void setFullscreen(bool on);
+bool isFullscreen();
 
 // --- text input / on-screen keyboard ---
 // Call startTextInput when a text field gets focus and stopTextInput when it loses it. Phones and
@@ -106,7 +122,12 @@ bool mountPack(const std::string& path);
 uint64_t contentPacksHash();
 // Writable per-user directory (settings, saved replays).
 std::string userDataDir();
-// Text clipboard (editor copy/paste). May be a no-op on mobile.
+// Makes recent writes to userDataDir() durable. Native platforms write through (no-op); the web
+// keeps the folder in IndexedDB and also syncs by itself every few seconds and when the page hides.
+void syncUserData();
+// Text clipboard (copy/paste). Web: setClipboardText writes the system clipboard; reading the
+// system clipboard silently is not allowed by browsers, so clipboardText() returns what the user
+// pasted last (Ctrl/Cmd+V is delivered after the browser handed over the pasted text).
 std::string clipboardText();
 void setClipboardText(const std::string& s);
 
