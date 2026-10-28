@@ -12,6 +12,9 @@
   "maxQueue": 5,
   "buildRadius": 2,
   "sellRefund": 0.5,
+  // concrete: a structure not standing on the owner's slabs is finished at 50% hp (less with partial concrete)
+  // and weathers down to 50% (2 minutes when fully bare); repairs bring it back, the weather keeps eating it
+  "foundation": {"startHp": 0.5, "decay": 0.25, "floor": 0.5},
   "resources": {
     "spice": {"name": "Пряность", "field": true, "regrow": 0, "cellMax": 100, "convertsTo": {"credits": 1}},   // first: drawn orange
     "credits": {"name": "Кредиты", "start": 1000, "capped": true, "storage": 0},
@@ -53,7 +56,7 @@
     // ------------------------------------------------------------ structures
     "const_yard": {"name": "Сборочный цех", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 800, "armorType": "building"}, "sight": 5,
                    "cost": {"credits": 400, "time": 40}, "storage": {"credits": 1000}, "supply": 25,
-                   "produces": ["windtrap", "refinery", "silo", "barracks", "wor", "light_factory", "heavy_factory", "hightech_factory", "outpost",
+                   "produces": ["concrete", "large_concrete", "windtrap", "refinery", "silo", "barracks", "wor", "light_factory", "heavy_factory", "hightech_factory", "outpost",
                                 "repair", "ix", "starport", "palace_atreides", "palace_harkonnen", "palace_ordos", "turret", "rocket_turret", "wall"],
                    "view": {"shape": "hall"}},
     "windtrap": {"name": "Ветровая ловушка", "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 400, "armorType": "building"},
@@ -101,7 +104,12 @@
                       "weapons": [{"range": 8, "minRange": 2, "damage": 40, "cooldown": 2.4, "projectileSpeed": 10, "damageType": "rocket", "targets": ["ground", "air"]}],
                       "view": {"shape": "tower"}},
     "wall": {"name": "Стена", "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 300, "armor": 3, "armorType": "heavy"},
-             "cost": {"credits": 50, "time": 4}, "countsForVictory": false, "requires": ["const_yard"], "view": {"shape": "rock"}},
+             "cost": {"credits": 50, "time": 4}, "countsForVictory": false, "requires": ["const_yard"], "weathers": false, "view": {"shape": "rock"}},
+    // concrete slabs: placed like a structure, they become concrete ground of the owner (no hp, nothing to target)
+    "concrete": {"name": "Бетонная плита", "tags": ["concrete"], "structure": {"footprint": [1, 1], "terrain": "rock"}, "health": {"max": 20},
+                 "foundation": true, "cost": {"credits": 5, "time": 2}, "countsForVictory": false, "sellable": false, "requires": ["const_yard"], "view": {"shape": "rock", "scale": 0.3}},
+    "large_concrete": {"name": "Большая бетонная плита", "tags": ["concrete"], "structure": {"footprint": [2, 2], "terrain": "rock"}, "health": {"max": 80},
+                       "foundation": true, "cost": {"credits": 20, "time": 6}, "countsForVictory": false, "sellable": false, "requires": ["const_yard"], "view": {"shape": "rock", "scale": 0.3}},
 
     // ------------------------------------------------------------ infantry (crushed by vehicles)
     "soldier": {"name": "Солдат", "tags": ["infantry"], "health": {"max": 40, "armorType": "infantry"}, "move": {"speed": 1.2, "radius": 0.25}, "sight": 4,

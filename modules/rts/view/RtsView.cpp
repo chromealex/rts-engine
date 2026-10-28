@@ -241,6 +241,8 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
             uint8_t v = gs.grid.inside(x, y) ? gs.vision[viewer][size_t(gs.grid.index(x, y))] : 0;
             so.visible = ut.structure && o.player == 0 ? v >= 1 : v == 2;
         }
+        if (so.visible && ut.trap >= 0 && viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer) && w.has<TrapState>(e) &&
+            (m->statusFlags(sim, e) & kStInvisible) && !(m->statusFlags(sim, e) & kStRevealed)) so.visible = false;   // hidden trap
         out.objects.push_back(so);
     });
     w.each<Projectile, Transform>([&](Entity e, Projectile& pr, Transform& t) {

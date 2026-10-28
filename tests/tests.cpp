@@ -8825,6 +8825,9 @@ TEST(materials_library_ops_round_trip) {
     fs::remove_all(root);
 }
 #endif
+}
+
+#include "tests_fidelity.inc"
 
 // ---------------- Planets: HPA* on cube-sphere bodies ----------------
 namespace {
