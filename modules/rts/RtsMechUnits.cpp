@@ -196,6 +196,7 @@ bool RtsModule::applyMechCommand2(Simulation& sim, const Command& cmd) {
 // ================================================================= per tick
 
 void RtsModule::mechTick(Simulation& sim) {
+    mechTickCombat(sim);
     World& w = sim.world();
     const Fixed dt = sim.dt();
     std::vector<Entity> addVet;

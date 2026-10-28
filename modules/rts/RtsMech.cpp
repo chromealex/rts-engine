@@ -385,6 +385,7 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* b = w.tryGet<Boarded>(e)) { h.u32(0xB0A7); h.u64(b->carrier.packed()); h.u32(b->fires); }
     if (auto* v = w.tryGet<Veteran>(e)) { h.u32(0x7E7E); h.i32(v->level); h.fx(v->xp); }
     if (auto* rp = w.tryGet<RallyPath>(e)) { h.u32(0x9A11); h.u32(uint32_t(rp->points.size())); }
+    if (auto* sh = w.tryGet<Shield>(e)) { h.u32(0x5E1D); h.fx(sh->hp); }
 }
 
 } // namespace rts::game

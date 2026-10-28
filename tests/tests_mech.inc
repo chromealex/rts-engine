@@ -214,3 +214,69 @@ TEST(mech_guard_follow_rally_route) {
     (void)sawGate;
     CHECK(true);
 }
+
+// ---------------------------------------------------------------- combat / economy models (templates audit)
+TEST(mech_armor_models) {
+    // Warcraft III percent armor: 5 armor -> 23% less (0.3 / 1.3)
+    auto pct = makeSimJson(R"({"resources": {"gold": {}}, "armorModel": "percent", "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},
+      "types": {"grunt": {"move": {"speed": 2}, "health": {"max": 700, "armor": 5}}, "peon": {"move": {"speed": 2}, "health": {"max": 250, "armor": -2}}}})",
+      flatMap(20, 10, R"(,"entities":[{"type":"grunt","owner":1,"pos":[3,3]},{"type":"peon","owner":1,"pos":[6,3]}])"));
+    Entity g = findType(*pct, "grunt", 1), p = findType(*pct, "peon", 1);
+    mod(*pct).dealDamage(*pct, g, Fixed::fromInt(100), 0, kNullEntity, 2);
+    Fixed took = Fixed::fromInt(700) - hpOf(*pct, g);
+    CHECK(took > Fixed::fromInt(76) && took < Fixed::fromInt(78));
+    mod(*pct).dealDamage(*pct, p, Fixed::fromInt(100), 0, kNullEntity, 2);
+    Fixed took2 = Fixed::fromInt(250) - hpOf(*pct, p);
+    CHECK(took2 > Fixed::fromInt(111) && took2 < Fixed::fromInt(113));   // 2 - 0.94^2 = 1.1164
+    // Age of Empires II classes: spearman 3 melee + 15 vs cavalry; knight 2 melee armor -> 16; vs archer (0 melee, no cavalry) -> 3
+    auto aoe = makeSimJson(R"({"resources": {"gold": {}}, "armorModel": {"type": "classes", "base": ["melee", "pierce"]}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},
+      "types": {
+        "spear": {"move": {"speed": 2}, "sight": 6, "health": {"max": 45}, "weapons": [{"range": 1, "damage": 3, "cooldown": 1, "attacks": {"melee": 3, "cavalry": 15}}]},
+        "knight": {"move": {"speed": 0}, "health": {"max": 1000}, "armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
+        "archer": {"move": {"speed": 0}, "health": {"max": 1000}, "armors": {"melee": 0, "pierce": 0, "archer": 0}}
+      }})", flatMap(20, 10, R"(,"entities":[{"type":"spear","owner":1,"pos":[3,3]},{"type":"knight","owner":2,"pos":[4,3]},{"type":"spear","owner":1,"pos":[12,3]},{"type":"archer","owner":2,"pos":[13,3]}])"));
+    run(*aoe, 1.6);
+    Fixed kn = Fixed::fromInt(1000) - hpOf(*aoe, findType(*aoe, "knight", 2));
+    Fixed ar = Fixed::fromInt(1000) - hpOf(*aoe, findType(*aoe, "archer", 2));
+    CHECK(kn.raw > 0 && ar.raw > 0);
+    CHECK(kn * 3 == ar * 16);   // per hit 16 vs 3
+}
+
+TEST(mech_shields_upkeep_workers) {
+    const char* rules = R"({"resources": {"gold": {"start": 0}, "wood": {"start": 0}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},
+      "upkeep": [{"supply": 2, "gatherMult": 0.5}], "upkeepResources": ["gold"],
+      "types": {
+        "zealot": {"move": {"speed": 2}, "health": {"max": 100, "armor": 1}, "shields": {"max": 50, "regen": 10, "delay": 2}},
+        "hall": {"structure": {"footprint": [2, 2]}, "dropoff": ["gold", "wood"], "health": {"max": 1000}},
+        "mine": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 100000, "maxWorkers": 1}},
+        "tree": {"structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 100000}},
+        "peon": {"move": {"speed": 3}, "health": {"max": 50}, "cost": {"supply": 1}, "gather": {"gold": {"carry": 10, "time": 1}, "wood": {"carry": 10, "time": 1}}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(30, 12, R"(,"entities":[{"type":"zealot","owner":1,"pos":[20,8]},{"type":"hall","owner":1,"pos":[4,4]},{"type":"mine","owner":0,"pos":[9,4]},{"type":"tree","owner":0,"pos":[4,9]},{"type":"peon","owner":1,"pos":[6,6]},{"type":"peon","owner":1,"pos":[6,7]}])"));
+    World& w = sim->world();
+    run(*sim, 0.2);
+    Entity z = findType(*sim, "zealot", 1);
+    CHECK(w.has<game::Shield>(z) && w.get<game::Shield>(z).hp == Fixed::fromInt(50));
+    mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);
+    CHECK(hpOf(*sim, z) == Fixed::fromInt(100) && w.get<game::Shield>(z).hp == Fixed::fromInt(20));
+    mod(*sim).dealDamage(*sim, z, Fixed::fromInt(30), 0, kNullEntity, 2);   // 20 shield, 10 left - 1 armor = 9 to hp
+    CHECK(w.get<game::Shield>(z).hp.raw == 0 && hpOf(*sim, z) == Fixed::fromInt(91));
+    run(*sim, 4);
+    CHECK(w.get<game::Shield>(z).hp > Fixed::fromInt(10));   // regenerates after the delay
+    // two peons on a mine with room for one: only one gathers at a time; upkeep halves gold, not wood
+    std::vector<Entity> peons;
+    w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && mod(*sim).rules().types[u.type].id == "peon") peons.push_back(e); });
+    Entity mine = findType(*sim, "mine", 0);
+    sim->submit(mechCmd(1, game::kCmdGather, peons, mine));
+    int maxAtOnce = 0;
+    for (int i = 0; i < 20 * 10; ++i) {
+        sim->step();
+        int n = 0;
+        for (Entity p : peons) { auto& o = w.get<game::Orders>(p); if (!o.queue.empty() && o.queue.front().type == game::OrderType::Gather && o.queue.front().state == 2) ++n; }
+        maxAtOnce = std::max(maxAtOnce, n);
+    }
+    CHECK(maxAtOnce == 1);
+    CHECK(stockOf(*sim, 1, "gold").raw > 0);
+    CHECK(mod(*sim).gatherMultFor(*sim, 1, mod(*sim).rules().findResource("wood")) == Fixed::fromInt(1));
+    CHECK(mod(*sim).gatherMultFor(*sim, 1, mod(*sim).rules().findResource("gold")) == Fixed::fromRatio(1, 2));
+}

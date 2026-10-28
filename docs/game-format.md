@@ -879,6 +879,29 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
   them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
 - **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
 
+### Combat and economy models (agent-mech)
+
+```json
+"armorModel": "percent",                                               // Warcraft III: armor a cuts a*0.06/(1+a*0.06); "factor" changes 0.06
+"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // default (StarCraft): damage - armor, at least 20%
+"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // Age of Empires II
+"upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
+"types": {
+  "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
+  "knight":   {"armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
+  "zealot":   {"shields": {"max": 50, "regen": 2, "delay": 10, "armor": 0}},   // StarCraft shields
+  "goldmine": {"resourceNode": {"resource": "gold", "amount": 12500, "maxWorkers": 5}}
+}
+```
+
+- **classes**: damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that class)); `base`
+  classes always count (a missing armor is 0, armor upgrades raise them), other classes only against types that list
+  them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first base class
+  with its `damage`. The damage table is not used in this model.
+- **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
+  regenerate `regen`/s after `delay` seconds without hits.
+- **maxWorkers**: further workers wait next to the node until a place is free.
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
