@@ -226,25 +226,7 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
         std::fprintf(stderr, "[planet] t=%.0f transit %d orbit-units %d on-other-bodies %d\n", s.seconds, tr, orbit, moon);
     }
     planets_.draw(r, pframe_, s.seconds, planetCam_.body(), blend);
-    static const bool terrDemo = std::getenv("RTS_PLANET_TERRITORY_DEMO") != nullptr;
-    if (terrDemo && Wd.sim) { // testing: owner slots within 4 cells of each player's structures (the sim does not claim on spheres yet)
-        territoryDemo_.assign(grid.flags.size(), 0);
-        for (auto& o : s.objects) {
-            if (o.body < 0 || o.owner == 0 || o.isProjectile || o.type >= rules_->types.size() || !rules_->types[o.type].structure) continue;
-            const PlanetSurface* sf = planets_.surface(o.body);
-            if (!sf) continue;
-            int f; float a, b;
-            sf->faceFromDir(normalize(o.pos), f, a, b);
-            const int cx = int(a), cy = int(b);
-            for (int dy = -4; dy <= 4; ++dy)
-                for (int dx = -4; dx <= 4; ++dx) {
-                    if (dx * dx + dy * dy > 16) continue;
-                    const int c = Wd.sim->offset(Wd.sim->gridCell(o.body, f, std::clamp(cx, 0, sf->faceSize() - 1), std::clamp(cy, 0, sf->faceSize() - 1)), dx, dy);
-                    if (c >= 0 && (grid.flags[size_t(c)] & kCellGround) && !territoryDemo_[size_t(c)]) territoryDemo_[size_t(c)] = o.owner;
-                }
-        }
-    }
-    if (dev_ && rules_ && planetGroundFx_.draw(*dev_, r, planets_, pframe_, s, time, vision, grid, groundFx_, *rules_, terrDemo ? &territoryDemo_ : nullptr))
+    if (dev_ && rules_ && planetGroundFx_.draw(*dev_, r, planets_, pframe_, s, time, vision, grid, groundFx_, *rules_))
         for (size_t bi = 0; bi < Wd.bodies.size(); ++bi) { // rock dug out (seen): the terrain under it becomes ground
             if (!Wd.bodies[bi].surface()) continue;
             const int N = Wd.bodies[bi].faceSize;
