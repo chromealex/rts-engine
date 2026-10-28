@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates the sample models of games/showcase/models (CC0, written from scratch).
+"""Generates the sample models of templates/showcase/models (CC0, written from scratch).
 
 They exercise every path of the model pipeline:
   golem.glb      skinned character, 8 joints, clips Idle / Walk / Attack / Death, base colour +
@@ -18,12 +18,12 @@ They exercise every path of the model pipeline:
   scaffold.glb   construction stage of the windmill; windmill.gltf has a "burnt" material variant
   slime.glb      morph targets (Squash, Stretch) animated by a weights channel (Wobble)
 
-Usage: python3 tools/models/gen_sample_models.py games/showcase/models   (needs Pillow)
+Usage: python3 tools/models/gen_sample_models.py templates/showcase/models   (needs Pillow)
 """
 import json, math, os, struct, sys
 from PIL import Image, ImageDraw
 
-OUT = sys.argv[1] if len(sys.argv) > 1 else "games/showcase/models"
+OUT = sys.argv[1] if len(sys.argv) > 1 else "templates/showcase/models"
 os.makedirs(OUT, exist_ok=True)
 
 # ------------------------------------------------------------------ geometry helpers

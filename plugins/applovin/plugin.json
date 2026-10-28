@@ -1,0 +1,16 @@
+{
+  "name": "applovin",
+  "description": "AppLovin MAX (mediation: interstitial, rewarded, adaptive banner) for Android and iOS. Protocol: ads (docs/plugins.md). Config: sdkKey, interstitial / rewarded / banner ad unit ids (per platform), testDevices (advertising ids that get test ads).",
+  "provides": ["ads"],
+  "android": {
+    "java": "android/java",
+    "classes": { "applovin": "com.rtsengine.plugins.AppLovinMaxPlugin" },
+    "dependencies": ["com.applovin:applovin-sdk:13.6.3", "com.google.android.gms:play-services-ads-identifier:18.1.0"]
+  },
+  "ios": {
+    "sources": ["ios/*.mm"],
+    "classes": { "applovin": "RTSAppLovinMaxPlugin" },
+    "pods": ["pod 'AppLovinSDK', '13.6.3'"],
+    "skAdNetworks": ["ludvb6z3bs"]
+  }
+}

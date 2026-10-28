@@ -1,4 +1,4 @@
-// Particle effects as data: one effect = one file `games/<id>/fx/<name>.json` with 1..16 emitters.
+// Particle effects as data: one effect = one file `templates/<id>/fx/<name>.json` with 1..16 emitters.
 // Presentation only (float math); nothing here is read by the simulation.
 //
 //   {

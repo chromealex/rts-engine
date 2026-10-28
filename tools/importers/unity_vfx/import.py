@@ -2,15 +2,15 @@
 """Unity particle effects -> RTSEngine particle effects ("make the same effect").
 
     python3 tools/importers/unity_vfx/import.py --source <file.prefab | folder | file.unitypackage>
-        --game games/<id> [--name fire] [--prefab Explosion] [--scale 1] [--ignore-root-rotation] [--json] [--dry-run]
+        --game templates/<id> [--name fire] [--prefab Explosion] [--scale 1] [--ignore-root-rotation] [--json] [--dry-run]
 
 Reads Unity's serialized YAML (ParticleSystem = class 198, ParticleSystemRenderer = 199, GameObject /
 Transform hierarchy, materials and .meta files) with the standard library only, maps every module the
 engine format can express (engine/fx/FxEffect.h) and writes
 
-    games/<id>/fx/<name>.json             one emitter per Unity ParticleSystem (child systems = layers)
-    games/<id>/fx/<name>_<child>.json     sub-emitters (birth / death / collision) as effects of their own
-    games/<id>/fx/textures/*.png          main textures (TGA decoded here; PSD/JPG/TIF/EXR via ImageMagick/ffmpeg)
+    templates/<id>/fx/<name>.json             one emitter per Unity ParticleSystem (child systems = layers)
+    templates/<id>/fx/<name>_<child>.json     sub-emitters (birth / death / collision) as effects of their own
+    templates/<id>/fx/textures/*.png          main textures (TGA decoded here; PSD/JPG/TIF/EXR via ImageMagick/ffmpeg)
 
 and a report of what was mapped exactly, approximately or dropped (custom shaders, Shader Graph, VFX Graph,
 meshes as particles, scripts, ...). Unity space (Y up, left-handed) becomes engine space by flipping Z; the
@@ -820,7 +820,7 @@ def find_inputs(source, rep):
 def run(argv=None):
     ap = argparse.ArgumentParser(description='Unity particle effects -> RTSEngine fx')
     ap.add_argument('--source', required=True, help='.prefab, a folder with prefabs (+ materials, textures, .meta) or a .unitypackage')
-    ap.add_argument('--game', required=True, help='game folder (games/<id>): writes fx/<name>.json and fx/textures/')
+    ap.add_argument('--game', required=True, help='game folder (templates/<id>): writes fx/<name>.json and fx/textures/')
     ap.add_argument('--name', help='effect name (default: the prefab name)')
     ap.add_argument('--prefab', help='only prefabs whose file name contains this')
     ap.add_argument('--scale', type=float, default=1.0, help='Unity metres -> engine units (default 1)')

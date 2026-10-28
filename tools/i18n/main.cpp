@@ -1,9 +1,9 @@
 // rts_i18n — string tables for the engine and games.
 //
-//   rts_i18n check   [--project games/skirmish] [--engine engine/assets]
+//   rts_i18n check   [--project templates/skirmish] [--engine engine/assets]
 //       Validates engine tables against English and the game's tables against its data
 //       (names in rules/maps/game.json). Exit code 1 if there are errors.
-//   rts_i18n extract --project games/skirmish --lang ru [--write]
+//   rts_i18n extract --project templates/skirmish --lang ru [--write]
 //       Prints lang/ru.json with every translatable key: existing translations are kept,
 //       missing ones get the source text and a // TODO comment. --write saves it.
 #include "engine/data/Json.h"

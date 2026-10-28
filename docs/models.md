@@ -24,9 +24,9 @@ starting.
 Check a model or a whole game with the viewer:
 
 ```sh
-build/linux-release/rts_modelview games/mygame/models/knight.glb@Walk          # one model, one clip
+build/linux-release/rts_modelview templates/mygame/models/knight.glb@Walk          # one model, one clip
 build/linux-release/rts_modelview a.glb b.gltf c.obj --quality low              # side by side, low tier
-build/linux-release/rts_modelview --game games/showcase                         # every type, as the game draws it
+build/linux-release/rts_modelview --game templates/showcase                         # every type, as the game draws it
 build/linux-release/rts_modelview golem.glb@Walk --baked                        # skin from the baked clip texture
 ```
 
@@ -299,7 +299,7 @@ list replaces the defaults (`"proceduralDefaults": true` keeps them too; `[]` tu
 
 ## Example
 
-`games/showcase` is "Iron and Gold" with imported views:
+`templates/showcase` is "Iron and Gold" with imported views:
 - footman: skinned golem in palette mode — blend space Walk/Run, clip events, sword on the right
   arm, additive breathing, lean, shake on hit, dissolve on death;
 - archer: the same golem baked (instanced), a far LOD, muzzle on the hand, dissolve on spawn;
