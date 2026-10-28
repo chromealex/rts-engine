@@ -45,6 +45,8 @@ bool ensureDetail(Workspace& ws, int scale);
 // Returns the touched cell rect. Heightfield maps: corners follow the detail.
 bool detailSculpt(Workspace& ws, Sculpt op, const std::vector<std::pair<float, float>>& pts, float radius, float strength, float hardness,
                   uint32_t seed, const std::string& stamp, float angle, int& x0, int& y0, int& x1, int& y1, std::string* err);
+// Material layer (0..3) painted into the detail splat weights (soft brush, world units).
+void paintDetailMaterial(Workspace& ws, float x, float z, float radius, int layer, float strength, float hardness);
 // Visual vs simulated ground on walkable cells: largest difference and cells above the threshold.
 struct DetailDeviation { float maxDev = 0; int cellsOver = 0, x = -1, y = -1; };
 DetailDeviation detailDeviation(const Workspace& ws, float threshold);
