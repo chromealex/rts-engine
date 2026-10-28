@@ -336,7 +336,7 @@ void RtsModule::runTriggerActions(Simulation& sim, size_t di, uint8_t player, En
             for (int k = 0; k < a.count; ++k) {
                 Vec3 p = at + Vec3{Fixed::fromRatio(k % 4, 1) * Fixed::fromRatio(7, 10), Fixed{}, Fixed::fromRatio(k / 4, 1) * Fixed::fromRatio(7, 10)};
                 int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
-                if (!rules_.types[a.type].structure && !gs.grid.nearestPassable(cx, cy, rules_.types[a.type].layer, 6)) continue;
+                if (!rules_.types[a.type].structure && !gs.grid.nearestPassable(cx, cy, rules_.types[a.type].pathLayer, 6)) continue;
                 made.push_back(spawn(sim, a.type, owner, rules_.types[a.type].structure ? p : gs.grid.cellCenter(cx, cy)));
             }
             if (a.attackMove) {

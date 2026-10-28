@@ -25,12 +25,22 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
   `RTS_*_SHADOW` and `RTS_*_LIGHTS`. Textures via `TextureCache::resolve(path)`; tiling splat textures are kept out of atlases.
 - 2D tile maps (`RtsTileView`) are drawn separately and must not change: check `games/tiles2d` and `games/km2d`.
 
-## Rules for the simulation (`model: "heightfield"`)
-- Fixed-point only: `MapGrid::surfaceHeight(Fixed x, Fixed z)` (bilinear on corners), slope per cell, passability by
-  `maxSlope` per move layer, uphill speed, line of sight / range by height, unit and projectile Y from the surface.
-- Cliff `levels` are derived from heights for the existing bonuses (`heights.blockVision` etc.).
-- Corners are hashed in `hashState` only when the model is `heightfield` (old checksums unchanged).
-- Large maps: hierarchical pathfinding so A* stays bounded on 1024x1024.
+## Rules for the simulation (`model: "heightfield"`) — implemented (agent-terrain-sim)
+- Data keys: rules `terrain.{model, maxSlope (number or {ground, sand}), buildSlope, uphillSpeed, downhillSpeed,
+  eyeHeight, targetHeight}`, type `move.maxSlope`; full description in docs/game-format.md "Heightfield terrain".
+- `MapGrid::surfaceHeight(x, z)` (bilinear, fixed), `cellHeight`, `gradient`, `slope[]` (1/256 units per cell),
+  `hf` flag; `enableHeightfield()` derives slopes and cliff `level` = floor(h / levelHeight). Passability by slope
+  per move layer / slope class (`UnitType::pathLayer` = layer | class << 4); `canStep` ignores cliffs on heightfields.
+- Uphill/downhill speed factor, mobile unit `pos.y` = surface, projectile Y from the surface, LOS vision,
+  `RtsModule::heightAdvantage` for range/damage/missUphill.
+- Corners and the model are hashed only when the heightfield is active (old checksums unchanged).
+- `terrain.cornersFile`: raw int16 LE; `applyCornersFile(map, reader)` (called by `applyTilesToMap`, so every
+  loader gets it) attaches the bytes as in-memory `terrain.cornersBlob`; `MapDoc` loads/saves it (file above
+  257x257 corners). Size cap `kMaxMapSize` = 2048.
+- Large maps: HPA* (`RtsHpa.cpp`) on maps >= 256x256, built at setup, clusters invalidated by `MapGrid::block` /
+  `cellChanged`; clearance updated locally on block; fog reset, soft obstacles and spatial hash reset are O(used).
+- The view should keep reading `corners` for its own surface; on heightfield games mobile units now carry a real
+  `pos.y` (the view may keep using `heightAt`, which matches the sim surface when it is bilinear on corners).
 
 ## Branches
 | Branch | Scope |
@@ -38,3 +48,13 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
 | `agent-terrain` | terrain rendering (chunks, LOD, splat materials, quality tiers, water), visual `terrain` block, editor sculpt/paint ops + window + MCP |
 | `agent-terrain-fx` | territory colours and glowing borders, diggable rock blocks and gold veins, lanes (MW2 splines) and K&M roads |
 | `agent-terrain-sim` | `terrain.model`, heightfield in the simulation, `cornersFile`, hierarchical pathfinding, sample heightfield game map |
+
+## View implementation (agent-terrain)
+- `modules/rts/view/RtsTerrainSurface.h`: the surface math (levels mode as before; heightfield = two triangles per
+  cell, diagonal (0,0)-(1,1)). `RtsView::heightAt` and the editor's sculpt ops use it; the mesh is built from it.
+- `RtsTerrainRender.*`: 32x32 chunks with a per-chunk input hash (only dirty chunks rebuild), frustum culling, CDLOD
+  (5 levels, geomorph + skirts) on heightfield maps above 256 cells, per-cell textures for fields / creep / fog of war,
+  water sheet or water bodies. `RtsGroundFx` is invalidated whenever terrain geometry changes.
+- Materials, tiers, editor ops and MCP tools: `docs/game-format.md` § Terrain materials.
+- Measured (VM, Mesa llvmpipe, 1280x800, whole 1024² map in view): LOD off 1.19M triangles / 374 ms,
+  LOD on 41k / 112 ms; gameplay zoom 32k triangles / ~20 ms on 512² and 1024² alike; full build 1024² ~100 ms.

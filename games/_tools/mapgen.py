@@ -27,8 +27,13 @@ class Map:
         self.entities = []
         self.fields = []
         self.extra = {}
+        self.corners = None   # heightfield: (w+1)*(h+1) ints, 1/16 units
 
     # ---- terrain
+    def heightfield(self, f):
+        """Corner heights from f(x, y) -> world units (rounded to 1/16)."""
+        self.corners = [int(round(f(x, y) * 16)) for y in range(self.h + 1) for x in range(self.w + 1)]
+
     def cell(self, x, y, c):
         if 0 <= x < self.w and 0 <= y < self.h:
             self.rows[y][x] = c
@@ -107,6 +112,8 @@ class Map:
              "terrain": {"rows": ["".join(r) for r in self.rows]}}
         if self.levels:
             m["terrain"]["levels"] = ["".join(str(v) for v in r) for r in self.levels]
+        if self.corners and (self.w + 1) * (self.h + 1) <= 257 * 257:
+            m["terrain"]["corners"] = self.corners   # big maps: write_corners_file() + terrain.cornersFile
         if self.fields:
             m["fields"] = self.fields
         if self.regions:
@@ -130,13 +137,62 @@ def duel(f1="", f2="", **kw):
     return [a, b]
 
 
+def write_big_heightfield(path, size, seed=7):
+    """Benchmark map for the heightfield simulation: size x size cells, procedural hills and ridges, corners in
+    a raw int16 LE file next to the JSON (terrain.cornersFile). Not a sample game map: write it to
+    <scratch game>/maps/ (copy game.json + rules.json of games/metaltide next to it)."""
+    import math
+    import random
+    import struct
+    rnd = random.Random(seed)
+    waves = [(rnd.uniform(0.004, 0.03), rnd.uniform(0.004, 0.03), rnd.uniform(0, 6.28), rnd.uniform(0.5, 3.0)) for _ in range(6)]
+    n = size + 1
+    vals = []
+    for y in range(n):
+        for x in range(n):
+            v = sum(a * math.sin(x * fx + y * fy + ph) for (fx, fy, ph, a) in waves)
+            # long steep ridges (two crossing families) with periodic passes: a maze for slope-limited units
+            for (fx, fy, gap) in ((0.031, 0.012, 0.017), (-0.009, 0.027, 0.021)):
+                r = max(0.0, 1.0 - abs(math.sin(x * fx + y * fy)) * 6)
+                if math.sin((x * fy - y * fx) * gap * 40) > 0.85:
+                    r *= 0.15   # pass
+                v += 7.0 * r
+            vals.append(int(round(max(0.0, v + 4.0) * 16)))
+    base = os.path.splitext(path)[0]
+    with open(base + ".r16", "wb") as f:
+        f.write(struct.pack("<%dh" % len(vals), *vals))
+    m = Map("Big heightfield %d" % size, size, size, duel())
+    m.border()
+    a, b = size // 8, size - size // 8
+    for (px, py) in ((a, a), (b, b)):
+        for yy in range(py - 8, py + 9):
+            for xx in range(px - 8, px + 9):
+                vals[yy * n + xx] = 64
+    with open(base + ".r16", "wb") as f:
+        f.write(struct.pack("<%dh" % len(vals), *vals))
+    m.ent("commander", 1, [a, a])
+    for k in range(6):
+        m.ent("metal_spot", 0, [a + 6 + 2 * (k % 3), a - 4 + 4 * (k // 3)])
+    j = m.to_json()
+    j["terrain"]["cornersFile"] = "maps/" + os.path.basename(base) + ".r16"   # relative to the game folder
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(j, f, ensure_ascii=False)
+    print("wrote", path, "and", base + ".r16")
+
+
 def write(game, m, fname=None):
     d = os.path.join(ROOT, game, "maps")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, (fname or m.name.lower().replace(" ", "_")) + ".json")
+    j = m.to_json()
+    corners = j["terrain"].pop("corners", None)
+    text = json.dumps(j, ensure_ascii=False, indent=1)
+    if corners:  # one map row of corners per line instead of one number per line
+        n = m.w + 1
+        rows = ",\n   ".join(", ".join(str(v) for v in corners[i:i + n]) for i in range(0, len(corners), n))
+        text = text.replace('"terrain": {', '"terrain": {\n  "corners": [\n   ' + rows + '\n  ],', 1)
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(m.to_json(), f, ensure_ascii=False, indent=1)
-        f.write("\n")
+        f.write(text + "\n")
     print("wrote", os.path.relpath(path, ROOT))
 
 
@@ -207,10 +263,40 @@ def ambersands():
     write("ambersands", m, "spice_basin")
 
 
+def metaltide_heights(w, h, bases, spots):
+    """Twin Craters relief (world units): a ridge between the bases that blocks sight, too steep for heavy
+    kbots (maxSlope 0.8) but fine for light ones (1.6), two gentle saddles, rolling hills; flat pads at bases
+    and metal spots. Point-symmetric like the rest of the map."""
+    import math
+
+    def tri(d, r):
+        return max(0.0, 1.0 - abs(d) / r)
+
+    def half(x, y):
+        saddle = max(tri(y - 12, 6), tri(y - 36, 6))
+        ridge = (4.0 - 2.6 * saddle) * tri(x - 32, 4.0 if saddle < 0.5 else 5.0)
+        hills = 0.9 * max(0.0, math.sin(x * 0.35) * math.cos(y * 0.3)) + 0.5 * tri(math.hypot(x - 16, y - 40), 6)
+        return ridge, hills
+
+    def f(x, y):
+        r1, h1 = half(x, y)
+        r2, h2 = half(w - x, h - y)
+        v = max(r1, r2) + 0.5 * (h1 + h2)
+        for (px, py, r) in bases + spots:
+            for (qx, qy) in ((px, py), (w - px, h - py)):
+                k = min(1.0, max(0.0, (math.hypot(x - qx, y - qy) - r) / 3.0))
+                v *= k
+        return v
+    return f
+
+
 def metaltide():
     m = Map("Twin Craters", 64, 48, duel())
     m.border()
     m.disc(32, 24, 5, '#', sym=False)
+    m.heightfield(metaltide_heights(64, 48, [(10, 24, 7)],
+                                    [(6, 18, 2), (6, 30, 2), (14, 16, 2), (14, 32, 2), (20, 24, 2), (24, 10, 2), (26, 38, 2),
+                                     (16, 20, 1), (16, 28, 1), (8, 12, 1)]))
     m.ent("commander", 1, [10, 24])
     for p in [(6, 18), (6, 30), (14, 16), (14, 32), (20, 24), (24, 10), (26, 38)]:
         m.ent("metal_spot", 0, [p[0], p[1]])
@@ -412,5 +498,8 @@ GAMES = {f.__name__: f for f in [frostcrown, starfall, ironfront, ambersands, me
                                    spellbunkers]}
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--big"]:   # mapgen.py --big 1024 /scratch/big.json
+        write_big_heightfield(sys.argv[3], int(sys.argv[2]))
+        sys.exit(0)
     for g in (sys.argv[1:] or GAMES):
         GAMES[g]()

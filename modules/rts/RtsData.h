@@ -155,6 +155,8 @@ struct UnitType {
     Fixed radius = Fixed::fromRatio(1, 2);     // body radius: collisions, pathing clearance, edge-to-edge ranges
     Fixed mass = Fixed::fromInt(1);            // push resistance (default 4 * radius^2)
     uint8_t layer = kLayerGround;
+    uint8_t pathLayer = kLayerGround;          // layer | slope class << 4: what pathing / passability get
+    Fixed maxSlope = Fixed::fromInt(-1);       // move.maxSlope (heightfield terrain); <0: the layer's default
     Fixed speed{};
     int footprintW = 0, footprintH = 0;
     Fixed sight = Fixed::fromInt(8);
@@ -290,6 +292,23 @@ struct HeightRules {
     Fixed damagePerLevel{};                   // multiplier added per level of advantage
 };
 
+// Terrain model (rules "terrain" block; visual keys there belong to the view and are ignored here).
+//   levels (default): cliff levels + ramps, exactly the classic behaviour; flat: levels ignored (all 0);
+//   heightfield: map corners drive surface height, slope passability, uphill speed, line of sight.
+enum class TerrainModel : uint8_t { Levels, Flat, Heightfield };
+struct TerrainRules {
+    TerrainModel model = TerrainModel::Levels;
+    Fixed maxSlopeGround = Fixed::fromInt(1);  // rise per cell a ground unit can climb (1 = 45 degrees)
+    Fixed maxSlopeSand = Fixed::fromInt(-1);   // <0: same as ground
+    Fixed buildSlope = Fixed::fromRatio(35, 100); // steepest cell a structure may stand on
+    Fixed uphillSpeed = Fixed::fromRatio(1, 2);   // speed *= 1 - uphillSpeed * climb (climb = rise per cell along the move)
+    Fixed downhillSpeed = Fixed::fromRatio(1, 5); // speed *= 1 + downhillSpeed * descent
+    Fixed eyeHeight = Fixed::fromInt(1);       // line of sight starts this high above the ground
+    Fixed targetHeight = Fixed::fromRatio(1, 2); // a cell counts as seen when this point above it is in sight
+    std::vector<Fixed> slopeClasses;           // per-type move.maxSlope values (class 1..15; 0 = layer default)
+    bool heightfield() const { return model == TerrainModel::Heightfield; }
+};
+
 struct RegionRules {
     bool enabled = false;
     std::vector<Amount> claimCost;
@@ -369,6 +388,7 @@ struct Rules {
     Fixed autoBuildGrowth{};                  // cost grows by x per structure already auto-built
     VictoryRules victory;
     HeightRules heights;
+    TerrainRules terrain;
     RegionRules regions;
     std::vector<DiggableDef> diggables;
     std::vector<RoomDef> rooms;

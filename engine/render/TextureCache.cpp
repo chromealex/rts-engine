@@ -81,14 +81,14 @@ bool TextureCache::resolveAtlased(const std::string& path, bool nearest, const s
     return true;
 }
 
-TextureRef TextureCache::resolve(const std::string& path, bool nearest, const std::string& base) {
-    std::string key = base + path + (nearest ? "#n" : "#l");
+TextureRef TextureCache::resolve(const std::string& path, bool nearest, const std::string& base, bool tiling) {
+    std::string key = base + path + (nearest ? "#n" : "#l") + (tiling ? "#t" : "");
     if (auto it = cache_.find(key); it != cache_.end()) return it->second;
     TextureRef r;
     std::string bytes;
     std::vector<uint8_t> rgba;
     int w = 0, h = 0;
-    if (dev_ && resolveAtlased(path, nearest, base, r)) {
+    if (dev_ && !tiling && resolveAtlased(path, nearest, base, r)) {
         // packed into a texture atlas at build time
     } else if (!dev_ || !platform::readContentFile(base + path, bytes)) {
         error_ = "texture not found: " + path;
@@ -102,6 +102,7 @@ TextureRef TextureCache::resolve(const std::string& path, bool nearest, const st
         td.filter = nearest ? gfx::Filter::Nearest : gfx::Filter::Linear;
         td.data = rgba.data();
         td.label = path.c_str();
+        td.repeat = tiling; td.mipmaps = tiling;
         r.tex = dev_->createTexture(td);
         r.width = w; r.height = h;
     }
