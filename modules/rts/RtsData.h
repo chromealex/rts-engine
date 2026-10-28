@@ -489,6 +489,7 @@ struct FlowFieldRules {
 };
 struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2);
                        FlowFieldRules flow;
+                       bool blockedGoalNearest = false;   // movement.blockedGoals: "nearest" (vs "search")
                        int planetHpaCells = 256 * 256; };   // planets: HPA* on bodies with >= this many cells (0 = all)
 
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.

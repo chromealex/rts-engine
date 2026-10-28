@@ -41,7 +41,25 @@ face seams and cube corners (7 neighbours) are ordinary steps.
   re-samples it first (crowds clear by themselves) and falls back to its own A* path after repeated stalls; one pushed
   into a cell that can't reach the goal falls back at once. Planet followers slide along walls on the face axes.
 
-### Measured (VM, headless `--bench-group N --bench-flow on|off`, one move order to the far side)
+### Crowds (flow-field groups)
+
+- **Arrival contagion.** A follower settles (stops, `Mobile::flowArrived` = goal cell) when it reaches the goal point,
+  or when it touches a unit that already settled at the same goal while inside the settled disc
+  (1.3 x 0.53 x body diameter x sqrt(settled) + 2). A follower that is stuck or has circled the crowd for 20 s settles
+  wherever it touches it (up to twice the goal area); the first follower hovering 2 s in the goal area settles when the
+  goal point itself is taken. The crowd fills the area around the goal from the inside out instead of jamming.
+- **Pass-through.** Followers of the same field add no velocity obstacles for each other (they move the same way;
+  separation keeps bodies apart) and are dropped from the ORCA candidate list before sorting; settled units are static
+  obstacles for followers still arriving and never take yield requests (others go around or settle against them).
+- **Cheaper avoidance:** separation and ORCA neighbour candidates come from a one-cell grid over the agents with a
+  partial sort (agent-mech, bit-identical to the spatial hash); flow followers additionally drop their own crowd from
+  the candidates before sorting.
+- **Blocked goals** (`movement.blockedGoals: "nearest"`, rules or map; off by default because it picks different cells
+  than the classic search): a path to a goal inside a structure / obstacle aims at the free cell around it nearest to
+  the start, instead of A* exploring the whole reachable area for the closest cell (chasing a building).
+
+### Measured (VM, headless `--bench-group N --bench-flow on|off`, one move order across the map; `RTS_BENCH_HIST=1`
+prints where the units ended up)
 
 See the table in the agent-flowfield report / `docs/planets.md`. On flat 256² / 1024² and a faceSize-128 planet the
 order tick drops from hundreds or thousands of ms (one search per unit) to a few ms; total path time falls by 2-40x;
