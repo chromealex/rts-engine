@@ -73,13 +73,23 @@ void CubeSphere::faceFromDir(Vec3 d, int& face, Fixed& a, Fixed& b) const {
     b = unwarp(dotI(d, f.v));
 }
 
-int CubeSphere::cellFromDir(Vec3 dir) const {
-    int face; Fixed a, b;
-    faceFromDir(dir, face, a, b);
-    int x = int(a.floorInt()), y = int(b.floorInt());
-    if (x >= n_) x = n_ - 1;
-    if (y >= n_) y = n_ - 1;
-    return cellId(face, x, y);
+int CubeSphere::cellFromDir(Vec3 d) const {
+    // same face choice and cell-edge table as faceFromDir, without the atan for the position inside the cell
+    const Fixed ax = fxAbs(d.x), ay = fxAbs(d.y), az = fxAbs(d.z);
+    if (ax.raw == 0 && ay.raw == 0 && az.raw == 0) return cellId(0, n_ / 2, n_ / 2);
+    int face;
+    if (ax >= ay && ax >= az) face = d.x.raw >= 0 ? 0 : 1;
+    else if (ay >= az) face = d.y.raw >= 0 ? 2 : 3;
+    else face = d.z.raw >= 0 ? 4 : 5;
+    const SphereFace& f = kSphereFaces[face];
+    const Fixed dn = dotI(d, f.n);
+    auto cellOf = [&](Fixed du) {
+        const Fixed sw = fxClamp(du / dn, warp_.front(), warp_.back());
+        int lo = 0, hi = n_;
+        while (hi - lo > 1) { const int mid = (lo + hi) / 2; if (warp_[size_t(mid)] <= sw) lo = mid; else hi = mid; }
+        return lo;
+    };
+    return cellId(face, cellOf(dotI(d, f.u)), cellOf(dotI(d, f.v)));
 }
 
 int CubeSphere::neighbor(int id, int dx, int dy) const {
