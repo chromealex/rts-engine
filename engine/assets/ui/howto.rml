@@ -5,7 +5,7 @@
     <link type="text/rcss" href="skin.rcss"/>
 </head>
 <!-- "How to play": shown over the main menu and the pause modal. Texts are the game's language keys
-     howto.like, howto.goal, howto.step1.., howto.tip (games/<id>/lang/<language>.json).
+     howto.like, howto.goal, howto.step1.., howto.tip (templates/<id>/lang/<language>.json).
      Model "game": hasHowto, howtoOpen, howtoLike, howtoGoal, howtoSteps[], howtoTip, gameName; event howto() toggles. -->
 <body>
 <div class="root" data-model="game" data-class-touch="touch">

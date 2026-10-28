@@ -30,5 +30,7 @@
         <string>UIInterfaceOrientationLandscapeLeft</string>
         <string>UIInterfaceOrientationLandscapeRight</string>
     </array>
+    <!-- native plugins (rtsbuild → plugins.cmake) -->
+    ${RTS_PLUGIN_PLIST_XML}
 </dict>
 </plist>

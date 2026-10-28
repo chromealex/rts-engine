@@ -10,8 +10,8 @@
   // Game id (game.json "id") -> folder: saved replays reference real files, and the server can
   // decide a match nobody settled (everyone left, results disagree) by re-simulating it.
   "games": {
-    "com.rtsengine.ironandgold": "games/skirmish",
-    "com.rtsengine.mushroomclash": "games/mushrooms"
+    "com.rtsengine.ironandgold": "templates/skirmish",
+    "com.rtsengine.mushroomclash": "templates/mushrooms"
   },
   // Defaults for every queue (each queue may override them).
   "defaults": { "tickRate": 20, "inputDelay": 2, "rollbackWindow": 8, "lagToleranceMs": 300 },

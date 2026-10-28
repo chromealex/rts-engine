@@ -2,6 +2,7 @@
 #include "RtsInternal.h"
 #include "gen/MapGen.h"
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace rts::game {
@@ -61,6 +62,13 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (g.bigMap())
         for (auto& t : rules_.types)
             if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpa(t.pathLayer);
+    // planets: HPA* on bodies above the cell threshold (RtsHpaSphere.cpp). RTS_PLANET_HPA=1 / 0 forces it on / off
+    // (testing and benchmarks only: every peer of a match must use the same setting)
+    g.sphereHpaMinCells = rules_.movement.planetHpaCells;
+    if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
+    if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
+        for (auto& t : rules_.types)
+            if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpaSphere(t.pathLayer);
 }
 
 void RtsModule::setupMap(Simulation& sim, const Json& map) {
