@@ -100,6 +100,18 @@ void Gallery::update(double time) {
     if (!events.empty()) { scene_.events = std::move(events); scene_.tick = ++tick_; }
 }
 
-void Gallery::draw(Renderer3D& r, double time) { view_.draw(r, scene_, time, nullptr, grid_); }
+void Gallery::draw(Renderer3D& r, double time) {
+    view_.draw(r, scene_, time, nullptr, grid_);
+    // effect anchors and view events made visible (particles / sounds would attach here)
+    for (const auto& e : view_.effects()) {
+        r.circleXZ(e.pos, 0.12f, rgba(255, 220, 60, 230), 12, e.pos.y);
+        r.line(e.pos, e.pos + float3{0, 0.3f, 0}, rgba(255, 220, 60, 230));
+    }
+    for (const auto& e : view_.events()) {
+        r.circleXZ(e.pos, 0.35f, rgba(255, 90, 200, 255), 16, e.pos.y + 0.05f);
+        recent_.push_back(e.name + " (" + rules_.types[e.type].id + ")");
+    }
+    if (recent_.size() > 8) recent_.erase(recent_.begin(), recent_.end() - 8);
+}
 
 } // namespace rts::modelview

@@ -130,7 +130,9 @@ bool decodeImage(const std::string& bytes, Image& out) {
         auto ci = std::make_shared<CompressedImage>();
         std::string err;
         std::vector<uint8_t> rgba;
-        if (!parseKtx2(bytes, *ci, err) || !decodeBlocks(*ci, 0, rgba)) return false;
+        if (!parseKtx2(bytes, *ci, err)) return false;
+        // no CPU decoder (ASTC): usable only where the GPU samples it natively (uploadModel)
+        if (!decodeBlocks(*ci, 0, rgba) && ci->format != BlockFormat::ASTC_4x4) return false;
         out.width = ci->width; out.height = ci->height;
         out.rgba = std::move(rgba);
         out.compressed = std::move(ci);
@@ -210,8 +212,43 @@ void generateTangents(std::vector<ModelVertex>& v, const std::vector<uint32_t>& 
 }
 
 namespace {
+gfx::PixelFormat gpuFormat(const CompressedImage& c) {
+    switch (c.format) {
+        case BlockFormat::ETC2_RGB8: return gfx::PixelFormat::ETC2_RGB8;
+        case BlockFormat::ETC2_RGBA8: return gfx::PixelFormat::ETC2_RGBA8;
+        case BlockFormat::BC1: return c.vkFormat == 131 || c.vkFormat == 132 ? gfx::PixelFormat::RGBA8 : gfx::PixelFormat::BC1;
+        case BlockFormat::BC3: return gfx::PixelFormat::BC3;
+        case BlockFormat::BC7: return gfx::PixelFormat::BC7;
+        case BlockFormat::ASTC_4x4: return gfx::PixelFormat::ASTC_4x4;
+        default: return gfx::PixelFormat::RGBA8; // EAC R11 / BC4 / RGBA8: the decoded copy
+    }
+}
+
 void uploadImage(gfx::Device& dev, Image& img) {
-    if (img.tex.valid() || img.rgba.empty()) return;
+    if (img.tex.valid()) return;
+    if (img.compressed && !img.compressed->levels.empty()) {
+        // keep KTX2 blocks compressed in VRAM when the GPU samples them (shaders decode sRGB themselves)
+        const CompressedImage& c = *img.compressed;
+        const gfx::PixelFormat pf = gpuFormat(c);
+        if (pf != gfx::PixelFormat::RGBA8 && dev.supports(pf)) {
+            std::vector<const void*> data;
+            std::vector<size_t> sizes;
+            for (const auto& l : c.levels) { data.push_back(l.data()); sizes.push_back(l.size()); }
+            gfx::TextureDesc td;
+            td.width = c.width; td.height = c.height;
+            td.format = pf;
+            td.filter = img.nearest ? gfx::Filter::Nearest : gfx::Filter::Linear;
+            td.repeat = img.repeat;
+            td.levelCount = int(c.levels.size());
+            td.levelData = data.data();
+            td.levelSize = sizes.data();
+            td.label = img.name.c_str();
+            img.tex = dev.createTexture(td);
+            img.gpuCompressed = img.tex.valid();
+            if (img.tex.valid()) return;
+        }
+    }
+    if (img.rgba.empty()) return;
     gfx::TextureDesc td;
     td.width = img.width; td.height = img.height;
     td.format = gfx::PixelFormat::RGBA8;
@@ -233,7 +270,7 @@ bool uploadModel(gfx::Device& dev, Model& m, bool keepCpu) {
     }
     for (auto& img : m.images) {
         uploadImage(dev, img);
-        if (!keepCpu) { img.rgba.clear(); img.rgba.shrink_to_fit(); }
+        if (!keepCpu) { img.rgba.clear(); img.rgba.shrink_to_fit(); img.compressed.reset(); }
     }
     // morph deltas of every primitive in one float texture: 2 texels (position, normal) per vertex and target
     size_t texels = 0;

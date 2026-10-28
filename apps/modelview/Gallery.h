@@ -19,6 +19,7 @@ public:
     render::float3 center() const { return center_; }
     float extent() const { return extent_; }
     const std::vector<std::string>& warnings() const { return view_.warnings(); }
+    const std::vector<std::string>& recentEvents() const { return recent_; }
 
 private:
     struct Slot { uint16_t type; render::float3 base; uint32_t gen = 0; float lastPhase = -1; bool alive = true; };
@@ -31,6 +32,7 @@ private:
     render::float3 center_;
     float extent_ = 10;
     uint32_t tick_ = 0;
+    std::vector<std::string> recent_;
 };
 
 } // namespace rts::modelview
