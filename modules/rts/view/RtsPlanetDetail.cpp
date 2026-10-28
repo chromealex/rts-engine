@@ -91,8 +91,12 @@ float catmull(float a, float b, float c, float d, float t) {
 float PlanetSurface::gridCavity(int face, int i, int j) const {
     if (!k_) return 0.5f;
     const int G = m_;
-    const int il = std::max(i - 1, 0), ir = std::min(i + 1, G), jl = std::max(j - 1, 0), jr = std::min(j + 1, G);
-    const float lap = 0.25f * (gridHeight(face, il, j) + gridHeight(face, ir, j) + gridHeight(face, i, jl) + gridHeight(face, i, jr)) - gridHeight(face, i, j);
+    // neighbours past the face edge come from the next face (no one-sided bias along the seams)
+    auto H = [&](int x, int y) {
+        if (x >= 0 && y >= 0 && x <= G && y <= G) return gridHeight(face, x, y);
+        return heightAt(dirFromFace(face, float(x) / float(k_), float(y) / float(k_)));
+    };
+    const float lap = 0.25f * (H(i - 1, j) + H(i + 1, j) + H(i, j - 1) + H(i, j + 1)) - gridHeight(face, i, j);
     const float cs = radius_ * 1.5708f / float(G);   // sample spacing (world units)
     return std::clamp(0.5f + lap / cs * 2.5f, 0.0f, 1.0f);
 }

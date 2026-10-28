@@ -13,6 +13,7 @@
 #include <vector>
 #include "../../../engine/data/Json.h"
 #include "../../../engine/render/Math3D.h"
+#include "../RtsMap.h"
 #include "../RtsSurface.h"
 
 namespace rts::game {
@@ -65,6 +66,12 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings 
 // them) and cell flags from the simulation's Surface / grid; only visual keys (atmosphere, colours, which body
 // has an ocean) from `visual` (loadPlanetWorld of the same map; may be empty).
 PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::vector<uint8_t>& gridFlags, const PlanetWorld& visual);
+// Explicit planet detail (body terrain.detail): int16 LE, 1/16 units, 6 faces x (N*k+1)^2 row-major. The map
+// JSON carries {"scale": k, "file": "..."} (read here, paths relative to the game folder) or an inline
+// "blob" (binary string; the editor's live document).
+bool decodePlanetDetail(const std::string& bytes, int N, int k, std::vector<int16_t>& out, std::string* err);
+std::string encodePlanetDetail(const std::vector<int16_t>& v);
+void loadPlanetDetailFiles(PlanetWorld& w, const Json& map, const ContentReader& read, std::vector<std::string>* warnings);
 
 // Seam-aware box blur of a per-grid-cell byte field of a planet map (fog of war): every face is blurred as an
 // (N + 2r)^2 image whose border comes from the neighbouring faces across the seams (Surface::offset; past a cube
