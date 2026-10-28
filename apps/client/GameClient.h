@@ -28,6 +28,7 @@
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/audio/RtsAudio.h"
 #include "modules/rts/view/RtsView.h"
+#include "ClientFx.h"
 
 namespace Rml { class ElementDocument; class Element; }
 
@@ -187,11 +188,13 @@ private:
     std::vector<std::function<void()>> actions_, nextActions_;
     int shadowQuality_ = 0, boundShadowQuality_ = 0;
     int volume_ = 100, boundVolume_ = 100, musicVolume_ = 100, boundMusicVolume_ = 100;  // percent, pause menu
+    int fxQuality_ = 0, boundFxQuality_ = 0;   // pause menu: particles off/low/medium/high
     bool uiOwnsPointer_ = false;
     Minimap minimap_;
 
     Renderer3D r3d_;
     RtsView view_;
+    ClientFx fx_;                         // particle effects (ClientFx.cpp)
     audio::AudioEngine audio_;
     RtsAudio sound_;
     std::vector<Entity> heardSelection_;  // selection when the last select sound played

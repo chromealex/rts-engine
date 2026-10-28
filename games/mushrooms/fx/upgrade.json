@@ -1,0 +1,8 @@
+// Village grows / building finished: a puff of golden spores.
+{
+  "emitters": [
+    { "texture": "builtin:spark", "blend": "additive", "burst": 16, "life": [0.6, 1.1], "speed": [1.2, 2.4],
+      "spread": 40, "shape": "disc", "radius": 0.6, "gravity": [0, -1, 0], "drag": 1, "size": [0.15, 0.28],
+      "color": [[0, "#fff3b0ff"], [1, "#ffc04000"]] }
+  ]
+}

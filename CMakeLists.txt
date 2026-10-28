@@ -210,6 +210,12 @@ endif()
 add_library(rts_game_audio STATIC modules/rts/audio/RtsAudio.cpp)
 target_link_libraries(rts_game_audio PUBLIC rts_game rts_audio)
 
+# Particles: CPU simulation + RHI rendering (presentation only), and the RTS event bridge.
+add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp)
+target_link_libraries(rts_fx PUBLIC rts_engine)
+add_library(rts_game_fx STATIC modules/rts/fx/RtsFx.cpp)
+target_link_libraries(rts_game_fx PUBLIC rts_game rts_fx)
+
 # ---------------------------------------------------------------------------
 # Runtime: platform layer + RHI backend + renderer + Dear ImGui
 # ---------------------------------------------------------------------------
@@ -390,6 +396,7 @@ if(RTS_BUILD_EDITOR)
     add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp
                    ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
+    target_link_libraries(rts_editor PRIVATE rts_game_fx)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     if(APPLE)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
@@ -470,6 +477,7 @@ if(RTS_BUILD_TESTS)
     add_executable(rts_tests tests/tests.cpp)
     target_link_libraries(rts_tests PRIVATE rts_game rts_i18n rts_pack_writer rts_models)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
+    target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_compile_definitions(rts_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_tests COMMAND rts_tests)
 endif()
@@ -492,12 +500,12 @@ add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_link_libraries(rts_ui PUBLIC rts_rmlui rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
-    target_link_libraries(rts_client PRIVATE rts_ui rts_net)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp)
-    target_link_libraries(main PRIVATE rts_ui rts_net)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp)
+    target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 
 # ---------------------------------------------------------------------------

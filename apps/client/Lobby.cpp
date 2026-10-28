@@ -194,6 +194,7 @@ void GameClient::startNetMatch() {
     fitCamera();
     minimap_.build(*dev_, mod().state(*sim_), rules_);
     ui_.setDynamicTexture("minimap", minimap_.texture(), minimap_.width(), minimap_.height());
+    fx_.startMatch(*sim_, spectator_ ? 0 : human_, view_, mod().state(*sim_).grid);
     mode_ = Mode::Normal;
     notices_.clear();
     setScreen(Screen::Playing);
@@ -201,6 +202,7 @@ void GameClient::startNetMatch() {
 
 void GameClient::leaveNetMatch() {
     if (net_) { net_->leaveMatch(); net_->refreshRooms(); }   // detach before the simulation goes away
+    fx_.stopMatch();
     sim_.reset();
     bots_.clear();
     selection_.clear();

@@ -7,7 +7,7 @@
      top[] {text, sub, style, warn}, topActions[], clock, notices[], minimapStyle,
      hasSelection, ownSelection, selTitle, selInfo[], emptyHint, showCard,
      card[] {header, kind, label, cost, hotkey, tip, enabled, active, progress, id} (header = section start),
-     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows, volume, music (0..100).
+     boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows, particles (0..3), volume, music (0..100).
      netMatch (online match: no restart, "leave match" instead of "main menu").
      Events: act(id), pause(), resume(), restart(), tomenu(). Static text: {{ 'key' | tr(lang) }}, keys in engine/assets/lang (engine/i18n/README.md). -->
 <body>
@@ -63,6 +63,13 @@
                 <button data-class-active="shadows == 1" data-event-click="shadows = 1">{{ 'pause.shadows_low' | tr(lang) }}</button>
                 <button data-class-active="shadows == 2" data-event-click="shadows = 2">{{ 'pause.shadows_medium' | tr(lang) }}</button>
                 <button data-class-active="shadows == 3" data-event-click="shadows = 3">{{ 'pause.shadows_high' | tr(lang) }}</button>
+            </div>
+            <div class="choice">
+                <span class="dim">{{ 'pause.particles' | tr(lang) }} </span>
+                <button data-class-active="particles == 0" data-event-click="particles = 0">{{ 'pause.off' | tr(lang) }}</button>
+                <button data-class-active="particles == 1" data-event-click="particles = 1">{{ 'pause.low' | tr(lang) }}</button>
+                <button data-class-active="particles == 2" data-event-click="particles = 2">{{ 'pause.medium' | tr(lang) }}</button>
+                <button data-class-active="particles == 3" data-event-click="particles = 3">{{ 'pause.high' | tr(lang) }}</button>
             </div>
             <div class="choice">
                 <span class="dim">{{ 'pause.sound' | tr(lang) }} </span>

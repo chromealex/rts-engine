@@ -2931,6 +2931,156 @@ TEST(audiopack_stage_game_folder) {
     fs::remove_all(root);
 }
 
+// ---------------- particles (engine/fx, modules/rts/fx) ----------------
+#include <cstdlib>
+#include "engine/fx/ParticleSystem.h"
+#include "modules/rts/fx/RtsFx.h"
+
+namespace {
+fx::EffectDef fxParse(const char* text, std::vector<std::string>* errs = nullptr) {
+    fx::EffectDef d;
+    std::vector<std::string> e;
+    fx::parseEffect(Json::parse(text), "t.json", d, e);
+    if (errs) *errs = e;
+    return d;
+}
+} // namespace
+
+TEST(fx_parse_validates_and_round_trips) {
+    std::vector<std::string> errs;
+    fx::EffectDef d = fxParse(R"({"emitters": [{ "texture": "builtin:smoke", "blend": "alpha", "align": "velocity", "burst": 12,
+        "life": [0.5, 1], "speed": 3, "size": [0.2, 0.4], "spread": 30, "shape": "ring", "radius": 2, "gravity": [0, -9, 0],
+        "color": [[0, "#ff8000ff"], [1, "#20202000"]], "sizeOverLife": [[0, 1], [1, 3]], "minQuality": "medium" }]})", &errs);
+    CHECK(errs.empty());
+    CHECK(d.emitters.size() == 1);
+    auto& e = d.emitters[0];
+    CHECK(e.blend == fx::FxBlend::Alpha && e.align == fx::FxAlign::Velocity && e.shape == fx::FxShape::Ring);
+    CHECK(e.burst == 12 && e.speed.min == 3 && e.speed.max == 3 && e.minQuality == fx::FxQuality::Medium);
+    CHECK(std::fabs(e.color[0].rgba.y - 128 / 255.0f) < 1e-3f && e.color[1].rgba.w == 0);
+    fx::EffectDef back;
+    std::vector<std::string> e2;
+    CHECK(fx::parseEffect(fx::effectToJson(d), "t.json", back, e2) && e2.empty());
+    CHECK(back.emitters.size() == 1 && back.emitters[0].burst == 12 && back.emitters[0].radius == 2 && back.emitters[0].gravity.y == -9);
+
+    fxParse(R"({"emitters": [{ "burst": 3, "blend": "screen", "colour": "#fff" }]})", &errs);
+    CHECK(errs.size() == 2);   // unknown blend, unknown field (typos must not pass silently)
+    fxParse(R"({"emitters": [{ "rate": 5 }]})", &errs);
+    CHECK(errs.size() == 1 && errs[0].find("duration") != std::string::npos);
+    fxParse(R"({"emitters": []})", &errs);
+    CHECK(!errs.empty());
+}
+
+TEST(fx_quality_tiers_bound_particles) {
+    fx::EffectDef d = fxParse(R"({"emitters": [{ "burst": 2000, "life": 5 }, { "burst": 10, "life": 5, "minQuality": "high" }]})");
+    auto count = [&](fx::FxQuality q) {
+        fx::ParticleSystem ps;
+        ps.setQuality(q);
+        ps.init(nullptr);
+        int id = ps.define("boom", d);
+        ps.play(id, {0, 0, 0});
+        ps.update(0.016f);
+        return ps.stats().particles;
+    };
+    CHECK(count(fx::FxQuality::Off) == 0);
+    CHECK(count(fx::FxQuality::Low) == fx::limitsFor(fx::FxQuality::Low).maxParticles);   // budget is a hard cap
+    CHECK(count(fx::FxQuality::Medium) == 1400);                                           // 2000 x 0.7, high-only emitter off
+    CHECK(count(fx::FxQuality::High) == 2010);
+    CHECK(fx::defaultQualityFor("Mali-T720", true) == fx::FxQuality::Low || std::getenv("RTS_PARTICLES"));
+    CHECK(fx::defaultQualityFor("Adreno (TM) 640", true) == fx::FxQuality::Medium || std::getenv("RTS_PARTICLES"));
+    CHECK(fx::defaultQualityFor("Apple M2", false) == fx::FxQuality::High || std::getenv("RTS_PARTICLES"));
+}
+
+TEST(fx_attached_trail_follows_and_stops) {
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    int id = ps.define("trail", fxParse(R"({"emitters": [{ "perMeter": 10, "loop": true, "life": 0.5, "speed": 0 }]})"));
+    fx::FxHandle h = ps.play(id, {0, 1, 0});
+    CHECK(h.valid() && ps.playing(h));
+    for (int i = 1; i <= 10; ++i) { ps.move(h, {float(i), 1, 0}); ps.update(0.01f); }
+    CHECK(ps.stats().particles >= 99 && ps.stats().particles <= 101);   // 10 m x 10 per metre, wherever the frames fall
+    ps.stop(h);
+    ps.update(0.01f);
+    CHECK(!ps.playing(h));
+    for (int i = 0; i < 60; ++i) ps.update(0.02f);
+    CHECK(ps.stats().particles == 0);
+    CHECK(ps.effect("missing") < 0 && !ps.errors().empty());
+}
+
+TEST(fx_offscreen_one_shots_are_not_spawned) {
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    int id = ps.define("puff", fxParse(R"({"emitters": [{ "burst": 5, "life": 1, "speed": 1 }]})"));
+    render::RTSCamera cam;
+    cam.target = {50, 0, 50};
+    ps.setView(cam, cam.proj(16.0f / 9.0f, false) * cam.view(), 1600, 900);
+    CHECK(ps.play(id, {50, 0, 50}).valid());
+    CHECK(!ps.play(id, {50, 0, 140}).valid());   // behind the camera
+    CHECK(!ps.play(id, {400, 0, 50}).valid());   // far off to the side
+    CHECK(ps.stats().culled == 2);
+}
+
+TEST(fx_sample_games_have_valid_effects) {
+    for (std::string g : {"skirmish", "mushrooms"}) {
+        const std::string dir = "games/" + g + "/";
+        fx::ParticleSystem ps;
+        ps.init(nullptr);
+        ps.setFileReader([&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); });
+        game::Rules rules = game::loadRules(Json::parse(readSource(dir + "rules.json")));
+        game::RtsFx bridge;
+        std::string err;
+        CHECK(bridge.init(ps, rules, Json::parse(readSource(dir + "fx/fx.json")), &err));
+        for (auto& w : bridge.warnings()) std::printf("    %s: %s\n", g.c_str(), w.c_str());
+        CHECK(bridge.warnings().empty());
+        for (auto& entry : std::filesystem::directory_iterator(std::string(RTS_SOURCE_DIR) + "/" + dir + "fx")) {
+            const std::string name = entry.path().stem().string();
+            if (name == "fx") continue;
+            CHECK(ps.effect(name) >= 0);
+        }
+        for (auto& e : ps.errors()) std::printf("    %s\n", e.c_str());
+        CHECK(ps.errors().empty());
+    }
+}
+
+TEST(fx_rts_events_keep_sim_deterministic) {
+    // Same bot match with and without effects: identical checksums, and effects actually played.
+    const std::string dir = "games/skirmish/";
+    Json rulesJson = Json::parse(readSource(dir + "rules.json"));
+    Json map = Json::parse(readSource(dir + "maps/valley.json"));
+    Json bank = Json::parse(readSource(dir + "fx/fx.json"));
+    game::Rules rules = game::loadRules(rulesJson);
+    auto play = [&](bool withFx, int& played) {
+        fx::ParticleSystem ps;
+        ps.setQuality(fx::FxQuality::Low);
+        ps.init(nullptr);
+        ps.setFileReader([&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); });
+        game::RtsFx bridge;
+        if (withFx) bridge.init(ps, rules, bank);
+        SimConfig cfg;
+        cfg.seed = 11;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rulesJson, map);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim.players()) bots.emplace_back(p.slot, 11);
+        if (withFx) bridge.attach(sim, 0);
+        for (int t = 0; t < 20 * 240 && sim.result() == 0; ++t) {
+            for (auto& b : bots) b.update(sim);
+            sim.step();
+            if (t % 2) continue;   // two ticks per frame: the collector keeps both ticks' events
+            bridge.update(sim, nullptr);
+            ps.update(0.1f);
+        }
+        played = bridge.played();
+        bridge.detach();
+        return sim.checksum();
+    };
+    int none = 0, some = 0;
+    const uint64_t without = play(false, none), with = play(true, some);
+    CHECK(without == with);
+    CHECK(none == 0 && some > 20);   // first four minutes of a bot match: deaths, hits, buildings
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
