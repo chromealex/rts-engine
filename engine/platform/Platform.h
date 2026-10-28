@@ -52,7 +52,7 @@ struct AppConfig {
     std::string title = "RTSEngine";
     int width = 1280, height = 720;  // logical size of the initial window (desktop)
     bool highDpi = true;
-    float clearColor[3] = {0.08f, 0.09f, 0.11f};
+    float clearColor[3] = {0.08f, 0.09f, 0.11f};  // window background until the first frame (Windows, macOS)
     // "landscape" | "portrait" | "any". Locks the screen when the web build goes fullscreen; native
     // mobile apps get it from game.json through rtsbuild (Info.plist / AndroidManifest).
     std::string orientation = "landscape";
