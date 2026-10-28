@@ -4882,6 +4882,176 @@ TEST(lighting_quality_governor) {
     CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
 }
 
+// ------------------------------------------------------------------ splash & icons (splash agent)
+#include "engine/splash/SplashData.h"
+#include "tools/branding/Icons.h"
+#include "tools/branding/Splash.h"
+
+TEST(splash_parse_and_timeline) {
+    Json j = Json::parse(R"({"background": "#102030", "image": "bg.png",
+        "logos": [{"image": "a.png", "start": 0, "duration": 2, "scale": 0.5, "animation": {"fadeIn": 0.5, "fadeOut": 0.5}},
+                  {"sheet": "s.png", "frame": [64, 32], "count": 6, "fps": 10, "start": 1.5,
+                   "animation": [{"t": 0, "opacity": 0, "scale": 0.5}, {"t": 1, "opacity": 1, "scale": 1, "ease": "out"}]}],
+        "minSeconds": 1, "maxSeconds": 4, "loop": true,
+        "progress": {"color": "#ff0000", "position": "top", "width": 0.5, "height": 4}})");
+    std::vector<std::string> warn;
+    splash::Spec s = splash::parseSpec(j, &warn);
+    CHECK(s.enabled && s.layers.size() == 3);
+    CHECK(std::abs(s.background.r - 16.0f / 255) < 1e-4f && std::abs(s.background.b - 48.0f / 255) < 1e-4f);
+    CHECK(s.layers[0].fit == splash::Fit::Cover && s.layers[1].fit == splash::Fit::Contain);
+    CHECK(s.layers[2].frames() == 6 && s.layers[2].frameW == 64);
+    CHECK(std::abs(s.sequenceLength() - 2.0f) < 1e-4f && std::abs(s.minimumTime() - 1.0f) < 1e-4f);
+    CHECK(s.images().size() == 3);
+    float st[splash::kPropCount];
+    splash::layerState(s.layers[1], 0.25f, st);
+    CHECK(std::abs(st[splash::kOpacity] - 0.5f) < 1e-3f);           // half way through fadeIn
+    splash::layerState(s.layers[1], 1.75f, st);
+    CHECK(std::abs(st[splash::kOpacity] - 0.5f) < 1e-3f);           // half way through fadeOut
+    splash::layerState(s.layers[2], 0.5f, st);
+    CHECK(st[splash::kOpacity] > 0.5f && st[splash::kScale] > 0.75f); // eased out: ahead of linear
+    std::vector<splash::ImageSize> sizes = {{1920, 1080}, {400, 200}, {64, 32}};
+    auto items = splash::evaluate(s, sizes, 1.0f, 1280, 720);
+    CHECK(items.size() == 2);                                         // bg + logo a, the sheet starts at 1.5
+    CHECK(std::abs(items[0].w - 1280) < 1 && std::abs(items[1].w - 640) < 1 && std::abs(items[1].h - 320) < 1);
+    items = splash::evaluate(s, sizes, 1.5f + 0.35f, 1280, 720);
+    CHECK(items.back().layer == 2 && items.back().frame == 3);       // 0.35 s at 10 fps
+    // looping while loading wraps the timeline, the real time keeps counting
+    CHECK(splash::advanceTimeline(s, 1.9f, 0.2f, true) < 0.2f);
+    CHECK(splash::advanceTimeline(s, 1.9f, 0.2f, false) > 2.0f);
+    CHECK(!splash::readyToLeave(s, 0.5f, true, false) && splash::readyToLeave(s, 0.5f, true, true) && !splash::readyToLeave(s, 9, false, true));
+    float x, y, w, h;
+    CHECK(splash::progressRect(s, 1000, 500, 2, x, y, w, h) && w == 500 && h == 8 && x == 250);
+    bool threw = false;
+    try { splash::parseSpec(Json::parse(R"({"logos": [{"image": "a.png", "fit": "squash"}]})")); } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("logos[0]") != std::string::npos;
+    }
+    CHECK(threw);
+    CHECK(!splash::parseSpec(Json()).enabled);
+    splash::Color c;
+    CHECK(splash::parseColor(std::string("#fff8"), c) && std::abs(c.a - 0x88 / 255.0f) < 1e-4f && !splash::parseColor(std::string("red"), c));
+}
+
+TEST(icons_resize_and_render) {
+    branding::Image src = branding::makeImage(64, 64, {1, 0, 0, 1});
+    for (int y = 0; y < 32; ++y) for (int x = 0; x < 64; ++x) src.px(x, y)[3] = 0;   // top half transparent
+    branding::Image half = branding::resize(src, 32, 32);
+    CHECK(half.width == 32 && half.height == 32);
+    CHECK(half.px(10, 25)[0] == 255 && half.px(10, 25)[3] == 255 && half.px(10, 5)[3] == 0);
+    // transparent pixels don't darken the colour of the edge (premultiplied resampling)
+    branding::Image tiny = branding::resize(src, 1, 1);
+    CHECK(tiny.px(0, 0)[0] == 255 && std::abs(int(tiny.px(0, 0)[3]) - 128) <= 1);
+    branding::Image up = branding::resize(src, 200, 100);
+    CHECK(up.width == 200 && up.height == 100);
+    // iOS look: opaque, flattened on the background
+    branding::IconLook ios;
+    ios.opaque = true;
+    ios.hasBackground = true;
+    ios.background = {0, 0, 1, 1};
+    branding::Image i = branding::renderIcon(src, 40, ios);
+    CHECK(!branding::hasAlpha(i) && i.px(20, 5)[2] == 255 && i.px(20, 35)[0] == 255);
+    branding::IconLook mac;
+    mac.margin = 0.1f;
+    mac.cornerRadius = 0.25f;
+    branding::Image m = branding::renderIcon(branding::makeImage(16, 16, {0, 1, 0, 1}), 100, mac);
+    CHECK(m.px(2, 50)[3] == 0 && m.px(50, 50)[3] == 255 && m.px(11, 11)[3] == 0);   // margin, body, rounded corner
+}
+
+TEST(icons_ico_icns_png_writers) {
+    std::vector<branding::Image> imgs;
+    for (int s : branding::windowsIcoSizes()) imgs.push_back(branding::makeImage(s, s, {0.5f, 0.5f, 0.5f, 1}));
+    std::string ico = branding::encodeIco(imgs);
+    auto u16 = [&](size_t o) { return unsigned(uint8_t(ico[o])) | unsigned(uint8_t(ico[o + 1])) << 8; };
+    auto u32 = [&](size_t o) { return u16(o) | u16(o + 2) << 16; };
+    CHECK(u16(0) == 0 && u16(2) == 1 && u16(4) == imgs.size());
+    size_t end = 0;
+    for (size_t k = 0; k < imgs.size(); ++k) {
+        size_t e = 6 + 16 * k;
+        int w = uint8_t(ico[e]) == 0 ? 256 : uint8_t(ico[e]);
+        CHECK(w == imgs[k].width && u16(e + 6) == 32);
+        size_t size = u32(e + 8), off = u32(e + 12);
+        if (w == 256) CHECK(ico.compare(off + 1, 3, "PNG") == 0);
+        else CHECK(u32(off) == 40 && u32(off + 4) == unsigned(w) && u32(off + 8) == unsigned(w * 2) && size == size_t(40 + w * w * 4 + ((w + 31) / 32) * 4 * w));
+        end = std::max(end, off + size);
+    }
+    CHECK(end == ico.size());
+    std::string icns = branding::encodeIcns({{"ic07", branding::makeImage(128, 128)}, {"ic10", branding::makeImage(1024, 1024)}});
+    auto be32 = [&](size_t o) { return unsigned(uint8_t(icns[o])) << 24 | unsigned(uint8_t(icns[o + 1])) << 16 | unsigned(uint8_t(icns[o + 2])) << 8 | unsigned(uint8_t(icns[o + 3])); };
+    CHECK(icns.compare(0, 4, "icns") == 0 && be32(4) == icns.size() && icns.compare(8, 4, "ic07") == 0);
+    CHECK(icns.compare(8 + be32(12), 4, "ic10") == 0);
+    std::string png = branding::encodePng(branding::makeImage(3, 2, {1, 1, 1, 1}));
+    atlas::Image back;
+    CHECK(atlas::decodeImageFile(png, back) && back.width == 3 && back.height == 2);
+}
+
+TEST(icons_generate_platform_sets) {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "rts_icons_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir / "game");
+    branding::Image master = branding::makeImage(512, 384, {0.9f, 0.6f, 0.1f, 0.5f});   // too small, not square, alpha
+    CHECK(branding::writePng((dir / "game" / "m.png").string(), master));
+    Json game = Json::parse(R"({"name": "Test Game", "icons": {"default": "m.png", "background": "#203040",
+        "android": {"background": "#112233", "monochrome": "m.png"}},
+        "splash": {"background": "#000000", "logos": [{"image": "m.png", "duration": 1}]}})");
+    branding::IconSpec s = branding::parseIcons(game);
+    auto warnings = branding::validateIcons(s, (dir / "game").string());
+    auto has = [&](const char* w) { for (auto& x : warnings) if (x.find(w) != std::string::npos) return true; return false; };
+    CHECK(has("square") && has("at least 1024") && has("transparency"));
+    branding::Generated g;
+    branding::generateIOS(s, (dir / "game").string(), (dir / "ios" / "Assets.xcassets").string(), g);
+    Json contents = Json::parseFile((dir / "ios" / "Assets.xcassets" / "AppIcon.appiconset" / "Contents.json").string());
+    CHECK(contents["images"].size() == branding::iosIconSet().size());
+    for (auto& im : contents["images"].items()) CHECK(fs::exists(dir / "ios" / "Assets.xcassets" / "AppIcon.appiconset" / im.getStr("filename")));
+    branding::Image i180;
+    CHECK(branding::loadImageFile((dir / "ios" / "Assets.xcassets" / "AppIcon.appiconset" / "icon_180.png").string(), i180) && i180.width == 180 && !branding::hasAlpha(i180));
+    branding::generateAndroid(s, (dir / "game").string(), (dir / "res").string(), (dir / "play.png").string(), g);
+    for (const char* d : {"mdpi", "hdpi", "xhdpi", "xxhdpi", "xxxhdpi"}) {
+        CHECK(fs::exists(dir / "res" / (std::string("mipmap-") + d) / "ic_launcher.png"));
+        CHECK(fs::exists(dir / "res" / (std::string("mipmap-") + d) / "ic_launcher_round.png"));
+        CHECK(fs::exists(dir / "res" / (std::string("mipmap-") + d) / "ic_launcher_monochrome.png"));
+    }
+    branding::Image fg;
+    CHECK(branding::loadImageFile((dir / "res" / "mipmap-xxxhdpi" / "ic_launcher_foreground.png").string(), fg) && fg.width == 432);
+    std::ifstream ax(dir / "res" / "mipmap-anydpi-v26" / "ic_launcher.xml");
+    std::string axml((std::istreambuf_iterator<char>(ax)), {});
+    CHECK(axml.find("@color/ic_launcher_background") != std::string::npos && axml.find("monochrome") != std::string::npos);
+    branding::Image play;
+    CHECK(branding::loadImageFile((dir / "play.png").string(), play) && play.width == 512 && !branding::hasAlpha(play));
+    branding::generateWindows(s, (dir / "game").string(), (dir / "win").string(), g);
+    CHECK(fs::file_size(dir / "win" / "app.ico") > 1000 && fs::exists(dir / "win" / "app.rc"));
+    branding::GameMeta meta;
+    meta.name = "Test Game"; meta.exe = "Test_Game"; meta.backgroundColor = "#000000";
+    branding::generateWeb(s, (dir / "game").string(), (dir / "web").string(), meta, g);
+    Json man = Json::parseFile((dir / "web" / "manifest.webmanifest").string());
+    CHECK(man.getStr("name") == "Test Game" && man["icons"].size() == 4 && man["icons"][size_t(1)].getStr("purpose") == "maskable");
+    for (auto& ic : man["icons"].items()) CHECK(fs::exists(dir / "web" / ic.getStr("src")));
+    CHECK(fs::exists(dir / "web" / "favicon.ico") && fs::exists(dir / "web" / "apple-touch-icon.png"));
+    branding::generateLinux(s, (dir / "game").string(), (dir / "linux").string(), meta, g);
+    CHECK(fs::exists(dir / "linux" / "share" / "icons" / "hicolor" / "256x256" / "apps" / "Test_Game.png"));
+    CHECK(fs::exists(dir / "linux" / "share" / "applications" / "Test_Game.desktop"));
+    branding::generateMac(s, (dir / "game").string(), (dir / "mac").string(), g);
+    CHECK(fs::exists(dir / "mac" / "AppIcon.iconset" / "icon_512x512@2x.png") && fs::file_size(dir / "mac" / "AppIcon.icns") > 1000);
+    // launch screens
+    branding::NativeSplash n = branding::nativeSplash(game);
+    CHECK(n.enabled && n.image == "m.png");
+    branding::generateIOSLaunch(n, (dir / "game").string(), (dir / "ios" / "Assets.xcassets").string(), (dir / "ios").string(), g);
+    CHECK(fs::exists(dir / "ios" / "LaunchScreen.storyboard") && fs::exists(dir / "ios" / "Assets.xcassets" / "LaunchImage.imageset" / "launch@3x.png"));
+    branding::generateAndroidLaunch(n, (dir / "game").string(), (dir / "res").string(), g);
+    std::ifstream tv31(dir / "res" / "values-v31" / "rts_themes.xml");
+    std::string themes((std::istreambuf_iterator<char>(tv31)), {});
+    CHECK(themes.find("windowSplashScreenBackground") != std::string::npos && themes.find("rts_splash_icon") != std::string::npos);
+    CHECK(fs::exists(dir / "res" / "drawable" / "rts_launch.xml") && fs::exists(dir / "res" / "drawable-xxhdpi" / "rts_splash_logo.png"));
+    CHECK(branding::splashBaseFiles(game).size() == 1);
+    CHECK(g.warnings.empty());
+    // previews render (agents look at them through MCP)
+    std::vector<std::string> pw;
+    branding::Image sheet = branding::iconsContactSheet(s, (dir / "game").string(), &pw);
+    CHECK(sheet.width > 600 && sheet.height > 400);
+    branding::Image strip = branding::splashStrip(splash::parseSpec(game["splash"]), (dir / "game").string(), {0, 0.5f}, 160, 90, &pw);
+    CHECK(strip.width > 320 && strip.height > 90);
+    fs::remove_all(dir);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
