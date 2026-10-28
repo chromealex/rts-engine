@@ -6,6 +6,9 @@
 #include "engine/core/Hash.h"
 #include <cstdint>
 #include <cstdlib>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 namespace rts::platform {
 
@@ -65,6 +68,64 @@ bool isTouchDevice() { return state().touch; }
 void requestQuit() { state().quit = true; }
 std::string contentRoot() { return state().contentRoot; }
 std::string userDataDir() { return state().userDir; }
+
+// ------------------------------------------------------------------ text input
+void startTextInput(const TextInputArea& area) {
+    auto& S = state();
+    S.textArea = area;
+    S.textInput = true;
+    detail::showSoftKeyboard(true, area); // also when already active: the field may have moved
+}
+void stopTextInput() {
+    auto& S = state();
+    if (!S.textInput) return;
+    S.textInput = false;
+    detail::showSoftKeyboard(false, S.textArea);
+}
+bool textInputActive() { return state().textInput; }
+float softKeyboardHeight() { return state().keyboardH; }
+
+namespace detail {
+#if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+void showSoftKeyboard(bool, const TextInputArea&) {} // desktop: the physical keyboard is always there
+#endif
+
+void setKeyboardHeight(float h) {
+    auto& S = state();
+    if (h < 0) h = 0;
+    if (h == S.keyboardH) return;
+    S.keyboardH = h;
+    Event e; e.type = EventType::KeyboardChanged; dispatch(e);
+}
+
+void textInputEndedByUser() {
+    auto& S = state();
+    if (!S.textInput) return;
+    S.textInput = false;
+    Event e; e.type = EventType::TextInputEnded; dispatch(e);
+}
+
+void dispatchKeyPress(Key k) {
+    Event e; e.type = EventType::KeyDown; e.key = k; dispatch(e);
+    e.type = EventType::KeyUp; dispatch(e);
+}
+
+void dispatchText(const std::string& s) {
+    const auto* p = reinterpret_cast<const unsigned char*>(s.data());
+    const auto* end = p + s.size();
+    while (p < end) {
+        uint32_t cp = *p++;
+        int extra = cp >= 0xF0 ? 3 : cp >= 0xE0 ? 2 : cp >= 0xC0 ? 1 : 0;
+        if (extra) cp &= (0x3Fu >> extra);
+        for (; extra > 0 && p < end && (*p & 0xC0) == 0x80; --extra) cp = (cp << 6) | (*p++ & 0x3Fu);
+        if (extra) continue; // truncated sequence
+        if (cp == '\n' || cp == '\r') dispatchKeyPress(Key::Enter);
+        else if (cp == '\b') dispatchKeyPress(Key::Backspace);
+        else if (cp == '\t') dispatchKeyPress(Key::Tab);
+        else if (cp >= 32 && cp != 127) { Event e; e.type = EventType::Char; e.codepoint = cp; dispatch(e); }
+    }
+}
+} // namespace detail
 
 namespace detail {
 namespace {

@@ -66,6 +66,7 @@ void GameClient::init(gfx::Device& dev) {
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
     r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
+    fx_.init(dev, rules_);
     initAudio();
     initUi();
 }
@@ -113,7 +114,9 @@ void GameClient::updateAudio(double dt) {
                 sound_.onSelect(*sim_, first);
             heardSelection_ = selection_;
         }
-        audio_.setListener(cam_.target.x, cam_.target.z, cam_.yaw, std::max(8.0f, cam_.distance * 0.75f));
+        const float3 eye = cam_.eye();
+        const float target[3] = {cam_.target.x, cam_.target.y, cam_.target.z}, eyeP[3] = {eye.x, eye.y, eye.z};
+        audio_.setListener(RtsAudio::cameraListener(target, eyeP));
     }
     if (volume_ != boundVolume_ || musicVolume_ != boundMusicVolume_) { // changed from the pause menu
         audio_.setMasterVolume(float(std::clamp(volume_, 0, 100)) / 100);
@@ -127,6 +130,7 @@ void GameClient::updateAudio(double dt) {
 
 void GameClient::toMenu() {
     sound_.detach();
+    fx_.stopMatch();
     audio_.stopAll(0.2f);
     sim_.reset();
     setScreen(Screen::Menu);
@@ -158,10 +162,12 @@ void GameClient::applyLanguage(const std::string& tag, bool save) {
         maps_.push_back({file, loc_.trOr("map." + mapStem(file) + ".title", m.getStr("title", file))});
     }
     if (!netMaps_.empty()) describeNetMaps(); // localized titles
+    ui_.setKeyboardLanguage(loc_.language());
 }
 
 void GameClient::shutdown() {
     net_.reset(); // detaches from the simulation before it goes away
+    fx_.shutdown();
     sound_.detach();
     audio_.shutdown();
     view_.shutdown(*dev_);
@@ -184,6 +190,7 @@ void GameClient::startMatch(size_t idx) {
         cfg.seed = uint64_t(std::time(nullptr));
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
+        view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
     }
@@ -207,7 +214,8 @@ void GameClient::startMatch(size_t idx) {
     mode_ = Mode::Normal;
     setScreen(Screen::Playing);
     audio_.stopAll(0.1f);
-    sound_.attach(*sim_, spectator_ ? 0 : human_);
+    sound_.attach(*sim_, spectator_ ? 0 : human_, maps_[idx].file);
+    fx_.startMatch(*sim_, spectator_ ? 0 : human_, view_, mod().state(*sim_).grid);
     heardSelection_.clear();
 }
 
@@ -628,6 +636,8 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         r3d_.beginScene(cam_, dev.framebufferWidth(), dev.framebufferHeight());
         auto& gs = mod().state(*sim_);
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
+        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
@@ -641,6 +651,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             }
         }
         r3d_.render(pass);
+        fx_.render(r3d_.lighting);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;

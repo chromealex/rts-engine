@@ -8,11 +8,15 @@
 #include <android/asset_manager.h>
 #include <android/log.h>
 #include <android_native_app_glue.h>
+#include <jni.h>
 
 #include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
 
 namespace rts::platform {
 using detail::state;
@@ -25,6 +29,34 @@ EGLSurface g_surf = EGL_NO_SURFACE;
 EGLConfig g_cfg = nullptr;
 std::unique_ptr<gfx::Device> g_device;
 bool g_inited = false;
+
+// ---- on-screen keyboard (RtsActivity.java). Java calls arrive on the UI thread; they are queued
+// and dispatched on the game thread, which owns the UI and the sim.
+struct TextMsg { enum Kind { Text, Backspace, Enter, Keyboard, Ended } kind; std::string text; int px = 0; };
+std::mutex g_textMutex;
+std::vector<TextMsg> g_textQueue;
+void pushText(TextMsg m) { std::lock_guard<std::mutex> l(g_textMutex); g_textQueue.push_back(std::move(m)); }
+
+void drainTextQueue() {
+    std::vector<TextMsg> q;
+    { std::lock_guard<std::mutex> l(g_textMutex); q.swap(g_textQueue); }
+    for (auto& m : q) {
+        switch (m.kind) {
+        case TextMsg::Text: detail::dispatchText(m.text); break;
+        case TextMsg::Backspace: detail::dispatchKeyPress(Key::Backspace); break;
+        case TextMsg::Enter: detail::dispatchKeyPress(Key::Enter); break;
+        case TextMsg::Keyboard: detail::setKeyboardHeight(float(m.px) / state().scale); break;
+        case TextMsg::Ended: detail::textInputEndedByUser(); break;
+        }
+    }
+}
+
+// JNIEnv of the game thread (attached on first use, detached when android_main ends).
+JNIEnv* gameThreadEnv() {
+    static thread_local JNIEnv* env = nullptr;
+    if (!env && g_app) g_app->activity->vm->AttachCurrentThread(&env, nullptr);
+    return env;
+}
 detail::FrameClock g_clock;
 
 bool initEGL() {
@@ -105,6 +137,20 @@ int32_t onInput(android_app*, AInputEvent* ev) {
 }
 } // namespace
 
+namespace detail {
+void showSoftKeyboard(bool show, const TextInputArea&) {
+    JNIEnv* env = gameThreadEnv();
+    if (!env) return;
+    jobject activity = g_app->activity->clazz;
+    jclass cls = env->GetObjectClass(activity);
+    jmethodID m = env->GetMethodID(cls, "showTextInput", "(Z)V");
+    if (m) env->CallVoidMethod(activity, m, jboolean(show));
+    else __android_log_print(ANDROID_LOG_WARN, "rts", "activity has no showTextInput: not RtsActivity?");
+    if (env->ExceptionCheck()) env->ExceptionClear(); // never let a Java error kill the game thread
+    env->DeleteLocalRef(cls);
+}
+} // namespace detail
+
 const char* name() { return "android"; }
 void setTitle(const std::string&) {}
 
@@ -174,6 +220,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
             if (src) src->process(g_app, src);
             if (g_app->destroyRequested) { S.quit = true; break; }
         }
+        if (g_device) drainTextQueue();
         if (!g_inited || S.quit) continue;
         EGLint w = 0, h = 0;
         eglQuerySurface(g_dpy, g_surf, EGL_WIDTH, &w);
@@ -198,11 +245,54 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 
 } // namespace rts::platform
 
+// ---- JNI entry points of com.rtsengine.platform.RtsActivity (UI thread)
+namespace {
+std::string utf8(JNIEnv* env, jstring s) {
+    if (!s) return {};
+    const char* c = env->GetStringUTFChars(s, nullptr); // modified UTF-8; fine for BMP text,
+    std::string r = c ? c : "";                          // supplementary chars are rebuilt below
+    if (c) env->ReleaseStringUTFChars(s, c);
+    // modified UTF-8 encodes U+10000.. as two 3-byte surrogates: merge them into 4-byte UTF-8
+    std::string out;
+    for (size_t i = 0; i < r.size();) {
+        auto b = [&](size_t k) { return uint32_t(static_cast<unsigned char>(r[k])); };
+        if (i + 5 < r.size() && b(i) == 0xED && (b(i + 1) & 0xF0) == 0xA0 && b(i + 3) == 0xED && (b(i + 4) & 0xF0) == 0xB0) {
+            uint32_t hi = 0xD000 | ((b(i + 1) & 0x3F) << 6) | (b(i + 2) & 0x3F);
+            uint32_t lo = 0xD000 | ((b(i + 4) & 0x3F) << 6) | (b(i + 5) & 0x3F);
+            uint32_t cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
+            out += char(0xF0 | (cp >> 18)); out += char(0x80 | ((cp >> 12) & 63));
+            out += char(0x80 | ((cp >> 6) & 63)); out += char(0x80 | (cp & 63));
+            i += 6;
+        } else {
+            out += r[i++];
+        }
+    }
+    return out;
+}
+} // namespace
+
+extern "C" {
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeText(JNIEnv* env, jclass, jstring s) {
+    rts::platform::pushText({rts::platform::TextMsg::Text, utf8(env, s)});
+}
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeKey(JNIEnv*, jclass, jint key) {
+    rts::platform::pushText({key == 0 ? rts::platform::TextMsg::Backspace : rts::platform::TextMsg::Enter, {}});
+}
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeKeyboard(JNIEnv*, jclass, jint px) {
+    rts::platform::TextMsg m{rts::platform::TextMsg::Keyboard, {}}; m.px = px;
+    rts::platform::pushText(std::move(m));
+}
+JNIEXPORT void JNICALL Java_com_rtsengine_platform_RtsActivity_nativeTextInputEnded(JNIEnv*, jclass) {
+    rts::platform::pushText({rts::platform::TextMsg::Ended, {}});
+}
+}
+
 void android_main(android_app* app) {
     rts::platform::g_app = app;
     char arg0[] = "rts";
     char* argv[] = {arg0, nullptr};
     rtsMain(1, argv);
+    app->activity->vm->DetachCurrentThread();
     // NativeActivity may call android_main again in the same process when the activity is
     // recreated, but the engine and the app keep function-level statics (platform state with
     // quit=true, the game client) that are not designed to be re-entered. Ending the process
