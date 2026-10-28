@@ -482,7 +482,6 @@ private:
     void sysCapture(Simulation& sim);
     void sysCreep(Simulation& sim);
     void sysVision(Simulation& sim);
-    void sysTriggers(Simulation& sim);
     void sysDungeon(Simulation& sim);     // RtsDungeon.cpp: jobs, needs, portals, territory, possession
     void setupDungeon(Simulation& sim, const Json& map);
     void applyDungeonCommand(Simulation& sim, const Command& cmd);
@@ -523,8 +522,6 @@ private:
     bool runLaneWalk(Simulation& sim, Entity e, Order& o);
     bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
     void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
-    void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
-    bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
     bool runOrder(Simulation& sim, Entity e, Order& o);
     bool runGather(Simulation& sim, Entity e, Order& o);

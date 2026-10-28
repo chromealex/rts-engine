@@ -270,6 +270,450 @@ int rWaveObjective(lua_State* L, Vm& vm) {
     return 3;
 }
 
+// ---------------------------------------------------------------- triggers (lua/triggers.lua)
+// Relations of TrigPlayer (rel: 0 triggering, 1 all, 2 enemies, 3 allies, 4 fixed slot, 5 hostile creeps).
+bool playerMatches(Simulation& sim, RtsModule& m, const TrigPlayer& p, uint8_t slot, uint8_t triggering) {
+    switch (p.rel) {
+        case 0: return triggering == 0 || slot == triggering;
+        case 1: return slot != 0;
+        case 2: return triggering != 0 && m.hostile(sim, triggering, slot);
+        case 3: return slot == triggering || (slot != 0 && slot != kHostileNeutral && triggering != 0 && triggering != kHostileNeutral && sim.allied(slot, triggering));
+        case 4: return slot == uint8_t(p.slot);
+        case 5: return slot == kHostileNeutral;
+    }
+    return false;
+}
+std::vector<uint8_t> resolvePlayers(Simulation& sim, RtsModule& m, const TrigPlayer& p, uint8_t triggering) {
+    std::vector<uint8_t> out;
+    if (p.rel == 4) { out.push_back(uint8_t(p.slot)); return out; }
+    if (p.rel == 5) { out.push_back(kHostileNeutral); return out; }
+    if (p.rel == 0) { if (triggering) out.push_back(triggering); return out; }
+    for (auto& pi : sim.players()) if (playerMatches(sim, m, p, pi.slot, triggering)) out.push_back(pi.slot);
+    return out;
+}
+const char* const kTrigEvents[] = {"start", "time", "every", "enterArea", "leaveArea", "unitDied", "built", "trained", "researched", "captured",
+                                   "resource", "variable", "wave", "regionClaimed", "playerDefeated", "ability", "levelUp"};
+const char* const kTrigCmp[] = {">=", ">", "<=", "<", "==", "!="};
+const char* const kTrigCond[] = {"count", "resource", "variable", "researched", "random", "time", "alive", "regions", "script"};
+const char* const kTrigAction[] = {"spawn", "give", "take", "setOwner", "kill", "remove", "damage", "heal", "buff", "message", "setVariable",
+    "addVariable", "research", "enableType", "disableType", "victory", "defeat", "enableTrigger", "disableTrigger", "addScore",
+    "setRegionOwner", "attackMove", "move", "setTickets", "castAbility", "script"};
+
+void pushTrigPlayer(lua_State* L, const TrigPlayer& p) {
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, p.rel); lua_setfield(L, -2, "rel");
+    lua_pushinteger(L, uint8_t(p.slot)); lua_setfield(L, -2, "slot");
+}
+void pushTrigFilter(lua_State* L, const TrigFilter& f) {
+    lua_createtable(L, 0, 4);
+    if (f.type != kNoType) { lua_pushinteger(L, f.type); lua_setfield(L, -2, "type"); }
+    lua_pushinteger(L, lua_Integer(f.tags)); lua_setfield(L, -2, "tags");
+    lua_pushboolean(L, f.structures); lua_setfield(L, -2, "structures");
+    lua_pushboolean(L, f.units); lua_setfield(L, -2, "units");
+}
+// The parsed triggers (rules + map) as Lua tables; indices are 1-based mirrors of TriggerSet::defs.
+int rTriggerDefs(lua_State* L, Vm& vm) {
+    const TriggerSet& ts = vm.module->triggers();
+    lua_createtable(L, int(ts.defs.size()), 0);
+    for (size_t i = 0; i < ts.defs.size(); ++i) {
+        const TriggerDef& d = ts.defs[i];
+        lua_createtable(L, 0, 16);
+        lua_pushstring(L, d.id.c_str()); lua_setfield(L, -2, "id");
+        lua_pushboolean(L, d.once); lua_setfield(L, -2, "once");
+        lua_pushboolean(L, d.forEachPlayer); lua_setfield(L, -2, "for_each_player");
+        lua_pushstring(L, kTrigEvents[size_t(d.event)]); lua_setfield(L, -2, "event");
+        pushFx(L, d.seconds); lua_setfield(L, -2, "seconds");
+        lua_pushinteger(L, d.area); lua_setfield(L, -2, "area");
+        pushTrigFilter(L, d.filter); lua_setfield(L, -2, "filter");
+        pushTrigPlayer(L, d.player); lua_setfield(L, -2, "player");
+        lua_pushinteger(L, d.index); lua_setfield(L, -2, "index");
+        lua_pushstring(L, d.name.c_str()); lua_setfield(L, -2, "name");
+        lua_pushstring(L, kTrigCmp[size_t(d.cmp)]); lua_setfield(L, -2, "cmp");
+        pushFx(L, d.value); lua_setfield(L, -2, "value");
+        lua_createtable(L, int(d.conditions.size()), 0);
+        for (size_t k = 0; k < d.conditions.size(); ++k) {
+            const TrigCondition& c = d.conditions[k];
+            lua_createtable(L, 0, 9);
+            lua_pushstring(L, kTrigCond[size_t(c.kind)]); lua_setfield(L, -2, "kind");
+            pushTrigPlayer(L, c.player); lua_setfield(L, -2, "player");
+            lua_pushinteger(L, c.index); lua_setfield(L, -2, "index");
+            lua_pushstring(L, c.name.c_str()); lua_setfield(L, -2, "name");
+            lua_pushstring(L, kTrigCmp[size_t(c.cmp)]); lua_setfield(L, -2, "cmp");
+            pushFx(L, c.value); lua_setfield(L, -2, "value");
+            lua_pushboolean(L, c.negate); lua_setfield(L, -2, "negate");
+            lua_rawseti(L, -2, lua_Integer(k + 1));
+        }
+        lua_setfield(L, -2, "conditions");
+        lua_createtable(L, int(d.actions.size()), 0);
+        for (size_t k = 0; k < d.actions.size(); ++k) {
+            const TrigAction& a = d.actions[k];
+            lua_createtable(L, 0, 20);
+            lua_pushstring(L, kTrigAction[size_t(a.kind)]); lua_setfield(L, -2, "kind");
+            pushTrigPlayer(L, a.player); lua_setfield(L, -2, "player");
+            lua_pushinteger(L, a.area); lua_setfield(L, -2, "area");
+            lua_pushboolean(L, a.triggeringUnit); lua_setfield(L, -2, "triggering_unit");
+            if (a.type != kNoType) { lua_pushinteger(L, a.type); lua_setfield(L, -2, "type"); }
+            lua_pushinteger(L, a.count); lua_setfield(L, -2, "count");
+            lua_pushinteger(L, a.index); lua_setfield(L, -2, "index");
+            pushFx(L, a.amount); lua_setfield(L, -2, "amount");
+            pushFx(L, a.duration); lua_setfield(L, -2, "duration");
+            lua_pushinteger(L, int(a.mod.stat)); lua_setfield(L, -2, "stat");
+            pushFx(L, a.mod.add); lua_setfield(L, -2, "add");
+            pushFx(L, a.mod.mul); lua_setfield(L, -2, "mul");
+            lua_pushboolean(L, a.hasAt); lua_setfield(L, -2, "has_at");
+            pushFx(L, a.at.x); lua_setfield(L, -2, "at_x");
+            pushFx(L, a.at.z); lua_setfield(L, -2, "at_z");
+            lua_pushboolean(L, a.attackMove); lua_setfield(L, -2, "attack_move");
+            lua_pushstring(L, a.text.c_str()); lua_setfield(L, -2, "text");
+            lua_pushstring(L, a.name.c_str()); lua_setfield(L, -2, "name");
+            lua_pushinteger(L, a.kind == TrigAction::EnableTrigger || a.kind == TrigAction::DisableTrigger ? ts.findTrigger(a.name) : -1);
+            lua_setfield(L, -2, "trigger");
+            lua_rawseti(L, -2, lua_Integer(k + 1));
+        }
+        lua_setfield(L, -2, "actions");
+        lua_rawseti(L, -2, lua_Integer(i + 1));
+    }
+    return 1;
+}
+int rTriggerAreas(lua_State* L, Vm& vm) {
+    const TriggerSet& ts = vm.module->triggers();
+    lua_createtable(L, int(ts.areas.size()), 0);
+    for (size_t i = 0; i < ts.areas.size(); ++i) {
+        const TrigArea& a = ts.areas[i];
+        lua_createtable(L, 0, 4);
+        pushFx(L, a.x); lua_setfield(L, -2, "x");
+        pushFx(L, a.z); lua_setfield(L, -2, "z");
+        pushFx(L, a.w); lua_setfield(L, -2, "w");
+        pushFx(L, a.h); lua_setfield(L, -2, "h");
+        lua_rawseti(L, -2, lua_Integer(i + 1));
+    }
+    return 1;
+}
+// Per-type flags for filters: {tags = {...}, structure = {...}} indexed by type index + 1
+int rTypeFlags(lua_State* L, Vm& vm) {
+    const Rules& R = vm.module->rules();
+    lua_createtable(L, 0, 2);
+    lua_createtable(L, int(R.types.size()), 0);
+    for (size_t i = 0; i < R.types.size(); ++i) { lua_pushinteger(L, lua_Integer(R.types[i].tags)); lua_rawseti(L, -2, lua_Integer(i + 1)); }
+    lua_setfield(L, -2, "tags");
+    lua_createtable(L, int(R.types.size()), 0);
+    for (size_t i = 0; i < R.types.size(); ++i) { lua_pushboolean(L, R.types[i].structure); lua_rawseti(L, -2, lua_Integer(i + 1)); }
+    lua_setfield(L, -2, "structure");
+    return 1;
+}
+// First call of a match: the runtime arrays of TriggerState sized for the defs.
+int rTrigInit(lua_State*, Vm& vm) {
+    TriggerState& ts = vm.module->state(*vm.sim).trig;
+    const auto& defs = vm.module->triggers().defs;
+    const size_t nd = defs.size(), slots = 256;
+    if (ts.enabled.size() != nd) {
+        ts.enabled.resize(nd);
+        for (size_t i = 0; i < nd; ++i) ts.enabled[i] = defs[i].enabled;
+        ts.fired.assign(nd, std::vector<uint8_t>(slots, 0));
+        ts.inside.assign(nd, {});
+        ts.edge.assign(nd, std::vector<uint8_t>(slots, 0));
+    }
+    return 0;
+}
+// get/set of TriggerState flags: rts.trig_flag("enabled"|"fired"|"edge", def [, player] [, value])
+int rTrigEnabled(lua_State* L, Vm& vm) {
+    auto& v = vm.module->state(*vm.sim).trig.enabled;
+    const size_t di = size_t(intArg(L, 1) - 1);
+    if (di >= v.size()) { lua_pushboolean(L, 0); return 1; }
+    if (!lua_isnone(L, 2)) v[di] = lua_toboolean(L, 2);
+    lua_pushboolean(L, v[di]);
+    return 1;
+}
+int rTrigFired(lua_State* L, Vm& vm) {
+    auto& v = vm.module->state(*vm.sim).trig.fired;
+    const size_t di = size_t(intArg(L, 1) - 1), p = size_t(intArg(L, 2));
+    if (di >= v.size() || p >= v[di].size()) { lua_pushboolean(L, 0); return 1; }
+    if (!lua_isnone(L, 3)) v[di][p] = lua_toboolean(L, 3);
+    lua_pushboolean(L, v[di][p]);
+    return 1;
+}
+int rTrigEdge(lua_State* L, Vm& vm) {
+    auto& v = vm.module->state(*vm.sim).trig.edge;
+    const size_t di = size_t(intArg(L, 1) - 1), p = size_t(intArg(L, 2));
+    if (di >= v.size() || p >= v[di].size()) { lua_pushboolean(L, 0); return 1; }
+    if (!lua_isnone(L, 3)) v[di][p] = lua_toboolean(L, 3);
+    lua_pushboolean(L, v[di][p]);
+    return 1;
+}
+int rTrigStarted(lua_State* L, Vm& vm) {
+    auto& ts = vm.module->state(*vm.sim).trig;
+    if (!lua_isnone(L, 1)) ts.started = lua_toboolean(L, 1);
+    lua_pushboolean(L, ts.started);
+    return 1;
+}
+// Simulation events of this tick that triggers listen to: {type, player, a (handle or nil), value, x, y, z}
+// (mask: bit per event type the caller listens to)
+int rTrigEvents(lua_State* L, Vm& vm) {
+    const uint64_t mask = uint64_t(intArg(L, 1));
+    const std::vector<SimEvent> evs = vm.sim->events();
+    lua_newtable(L);
+    int n = 0;
+    for (const SimEvent& ev : evs) {
+        if (ev.type >= 64 || !((mask >> ev.type) & 1)) continue;
+        lua_createtable(L, 0, 7);
+        lua_pushinteger(L, ev.type); lua_setfield(L, -2, "type");
+        lua_pushinteger(L, ev.player); lua_setfield(L, -2, "player");
+        if (ev.a.valid()) { pushEntity(L, ev.a); lua_setfield(L, -2, "a"); }
+        lua_pushinteger(L, ev.value); lua_setfield(L, -2, "value");
+        pushFx(L, ev.pos.x); lua_setfield(L, -2, "x");
+        pushFx(L, ev.pos.y); lua_setfield(L, -2, "y");
+        pushFx(L, ev.pos.z); lua_setfield(L, -2, "z");
+        lua_rawseti(L, -2, ++n);
+    }
+    return 1;
+}
+int rResolvePlayers(lua_State* L, Vm& vm) {   // (def, kind "c"|"a"|"e", index, triggering) -> slots
+    const auto& d = vm.module->triggers().defs[size_t(intArg(L, 1) - 1)];
+    const char* k = lua_tostring(L, 2);
+    const size_t i = size_t(intArg(L, 3) - 1);
+    const TrigPlayer& tp = *k == 'c' ? d.conditions[i].player : *k == 'a' ? d.actions[i].player : d.player;
+    auto v = resolvePlayers(*vm.sim, *vm.module, tp, uint8_t(intArg(L, 4)));
+    lua_createtable(L, int(v.size()), 0);
+    for (size_t j = 0; j < v.size(); ++j) { lua_pushinteger(L, v[j]); lua_rawseti(L, -2, lua_Integer(j + 1)); }
+    return 1;
+}
+int rPlayerMatches(lua_State* L, Vm& vm) {    // (def, slot, triggering): the event's player filter
+    const auto& d = vm.module->triggers().defs[size_t(intArg(L, 1) - 1)];
+    lua_pushboolean(L, playerMatches(*vm.sim, *vm.module, d.player, uint8_t(intArg(L, 2)), uint8_t(intArg(L, 3))));
+    return 1;
+}
+// Condition "count": living units matching the condition's filter / player / area
+int rTrigCount(lua_State* L, Vm& vm) {
+    CTX;
+    const auto& c = m.triggers().defs[size_t(intArg(L, 1) - 1)].conditions[size_t(intArg(L, 2) - 1)];
+    const uint8_t player = uint8_t(intArg(L, 3));
+    int n = 0;
+    w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& t) {
+        if (u.hp.raw <= 0 || !c.filter.matches(R, u.type) || !playerMatches(sim, m, c.player, o.player, player)) return;
+        if (c.area >= 0 && !m.triggers().areas[size_t(c.area)].contains(t.pos)) return;
+        ++n;
+    });
+    lua_pushinteger(L, n);
+    return 1;
+}
+// Action targets in ECS order: the triggering unit, or living units matching filter / players / area
+int rTrigTargets(lua_State* L, Vm& vm) {
+    CTX;
+    const auto& a = m.triggers().defs[size_t(intArg(L, 1) - 1)].actions[size_t(intArg(L, 2) - 1)];
+    const uint8_t player = uint8_t(intArg(L, 3));
+    Entity unit = lua_isnoneornil(L, 4) ? kNullEntity : entArg(L, 4);
+    std::vector<Entity> out;
+    if (a.triggeringUnit) { if (w.alive(unit) && w.has<Unit>(unit)) out.push_back(unit); }
+    else {
+        std::vector<uint8_t> players = resolvePlayers(sim, m, a.player, player);
+        w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+            if (u.hp.raw <= 0 || !a.filter.matches(R, u.type)) return;
+            if (std::find(players.begin(), players.end(), o.player) == players.end()) return;
+            if (a.area >= 0 && !m.triggers().areas[size_t(a.area)].contains(t.pos)) return;
+            out.push_back(e);
+        });
+    }
+    lua_createtable(L, int(out.size()), 0);
+    for (size_t i = 0; i < out.size(); ++i) { pushEntity(L, out[i]); lua_rawseti(L, -2, lua_Integer(i + 1)); }
+    return 1;
+}
+// setOwner without a triggering unit: every unit matching filter / area (any owner, any hp)
+int rTrigOwnerTargets(lua_State* L, Vm& vm) {
+    CTX;
+    const auto& a = m.triggers().defs[size_t(intArg(L, 1) - 1)].actions[size_t(intArg(L, 2) - 1)];
+    std::vector<Entity> out;
+    w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner&, Transform& t) {
+        if (a.filter.matches(R, u.type) && (a.area < 0 || m.triggers().areas[size_t(a.area)].contains(t.pos))) out.push_back(e);
+    });
+    lua_createtable(L, int(out.size()), 0);
+    for (size_t i = 0; i < out.size(); ++i) { pushEntity(L, out[i]); lua_rawseti(L, -2, lua_Integer(i + 1)); }
+    return 1;
+}
+// enterArea / leaveArea: updates the def's inside set; returns the entities to fire in order
+// (enter: {e, owner at scan time}, leave: {e} of units that left and still exist)
+int rTrigAreaUpdate(lua_State* L, Vm& vm) {
+    CTX;
+    const size_t di = size_t(intArg(L, 1) - 1);
+    const TriggerDef& d = m.triggers().defs[di];
+    const TrigArea& ar = m.triggers().areas[size_t(d.area)];
+    std::vector<uint64_t> now;
+    std::vector<std::pair<Entity, uint8_t>> entered;
+    w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+        if (u.hp.raw <= 0 || !d.filter.matches(R, u.type) || !playerMatches(sim, m, d.player, o.player, o.player)) return;
+        if (!ar.contains(t.pos)) return;
+        now.push_back(e.packed());
+        entered.push_back({e, o.player});
+    });
+    std::sort(now.begin(), now.end());
+    auto& prev = gs.trig.inside[di];
+    lua_newtable(L);
+    int n = 0;
+    if (d.event == TrigEvent::EnterArea) {
+        std::sort(entered.begin(), entered.end(), [](auto& x, auto& y) { return x.first.packed() < y.first.packed(); });
+        for (auto& [e, owner] : entered)
+            if (!std::binary_search(prev.begin(), prev.end(), e.packed())) {
+                lua_createtable(L, 2, 0);
+                pushEntity(L, e); lua_rawseti(L, -2, 1);
+                lua_pushinteger(L, owner); lua_rawseti(L, -2, 2);
+                lua_rawseti(L, -2, ++n);
+            }
+    } else {
+        for (uint64_t pk : prev)
+            if (!std::binary_search(now.begin(), now.end(), pk)) {
+                lua_createtable(L, 1, 0);
+                pushEntity(L, Entity::fromPacked(pk)); lua_rawseti(L, -2, 1);
+                lua_rawseti(L, -2, ++n);
+            }
+    }
+    prev.swap(now);
+    return 1;
+}
+int rAliveEntity(lua_State* L, Vm& vm) { lua_pushboolean(L, vm.sim->world().alive(entArg(L, 1))); return 1; }
+int rIsUnit(lua_State* L, Vm& vm) { Entity e = entArg(L, 1); lua_pushboolean(L, vm.sim->world().alive(e) && vm.sim->world().has<Unit>(e)); return 1; }
+int rTrigScriptCondition(lua_State* L, Vm& vm) {
+    CTX;
+    const auto& c = m.triggers().defs[size_t(intArg(L, 1) - 1)].conditions[size_t(intArg(L, 2) - 1)];
+    bool r = m.scripts()->callCondition(sim, c.name, c.args, uint8_t(intArg(L, 3)), kNullEntity, {});
+    lua_sethook(L, nullptr, 0, 0);   // back in engine code: no budget
+    lua_pushboolean(L, r);
+    return 1;
+}
+int rTrigScriptAction(lua_State* L, Vm& vm) {
+    CTX;
+    const auto& d = m.triggers().defs[size_t(intArg(L, 1) - 1)];
+    const auto& a = d.actions[size_t(intArg(L, 2) - 1)];
+    Entity unit = lua_isnoneornil(L, 4) ? kNullEntity : entArg(L, 4);
+    m.scripts()->callAction(sim, a.name, a.args, uint8_t(intArg(L, 3)), unit, {fxArg(L, 5), fxArg(L, 6), fxArg(L, 7)}, d.id);
+    lua_sethook(L, nullptr, 0, 0);
+    return 0;
+}
+
+// ---------------------------------------------------------------- state primitives
+int rVar(lua_State* L, Vm& vm) {
+    auto& vars = vm.module->state(*vm.sim).trig.vars;
+    const char* k = lua_tostring(L, 1);
+    if (!k) return 0;
+    if (!lua_isnone(L, 2)) { vars[k] = fxArg(L, 2); pushFx(L, vars[k]); return 1; }
+    auto it = vars.find(k);
+    pushFx(L, it == vars.end() ? Fixed{} : it->second);
+    return 1;
+}
+int rAddVar(lua_State* L, Vm& vm) { Fixed& x = vm.module->state(*vm.sim).trig.vars[lua_tostring(L, 1) ? lua_tostring(L, 1) : ""]; x += fxArg(L, 2); return 0; }
+int rPlayerSlots(lua_State* L, Vm& vm) { lua_pushinteger(L, lua_Integer(vm.module->state(*vm.sim).players.size())); return 1; }
+int rStock(lua_State* L, Vm& vm) {   // (player, res [, set]): raw stock (no caps)
+    auto& gs = vm.module->state(*vm.sim);
+    const size_t p = size_t(intArg(L, 1)), r = size_t(intArg(L, 2));
+    if (p >= gs.players.size() || r >= gs.players[p].stock.size()) { pushFx(L, Fixed{}); return 1; }
+    if (!lua_isnone(L, 3)) gs.players[p].stock[r] = fxArg(L, 3);
+    pushFx(L, gs.players[p].stock[r]);
+    return 1;
+}
+int rAddResource(lua_State* L, Vm& vm) { vm.module->addResource(*vm.sim, uint8_t(intArg(L, 1)), uint16_t(intArg(L, 2)), fxArg(L, 3)); return 0; }
+int rResearched(lua_State* L, Vm& vm) {
+    auto& gs = vm.module->state(*vm.sim);
+    const size_t p = size_t(intArg(L, 1)), t = size_t(intArg(L, 2));
+    lua_pushboolean(L, p < gs.players.size() && t < gs.players[p].researched.size() && gs.players[p].researched[t]);
+    return 1;
+}
+int rResearch(lua_State* L, Vm& vm) {
+    auto& gs = vm.module->state(*vm.sim);
+    const size_t p = size_t(intArg(L, 1)), t = size_t(intArg(L, 2));
+    if (p >= gs.players.size()) return 0;
+    gs.players[p].researched[t] = 1;
+    vm.module->recomputeMods(*vm.sim, uint8_t(p));
+    return 0;
+}
+int rTypeDisabled(lua_State* L, Vm& vm) {
+    auto& gs = vm.module->state(*vm.sim);
+    const size_t p = size_t(intArg(L, 1)), t = size_t(intArg(L, 2));
+    if (p < gs.players.size() && t < gs.players[p].typeDisabled.size()) gs.players[p].typeDisabled[t] = lua_toboolean(L, 3);
+    return 0;
+}
+int rHp(lua_State* L, Vm& vm) {   // (e [, set])
+    Entity e = entArg(L, 1);
+    auto* u = vm.sim->world().tryGet<Unit>(e);
+    if (!u) return 0;
+    if (!lua_isnone(L, 2)) u->hp = fxArg(L, 2);
+    pushFx(L, u->hp);
+    return 1;
+}
+int rAddUnitFlags(lua_State* L, Vm& vm) { if (auto* u = vm.sim->world().tryGet<Unit>(entArg(L, 1))) u->flags |= uint8_t(intArg(L, 2)); return 0; }
+int rStat(lua_State* L, Vm& vm) { pushFx(L, vm.module->stat(*vm.sim, entArg(L, 1), Stat(intArg(L, 2)))); return 1; }
+int rDealDamage(lua_State* L, Vm& vm) {   // (e, amount, damageType, source|nil, sourceOwner)
+    vm.module->dealDamage(*vm.sim, entArg(L, 1), fxArg(L, 2), uint16_t(intArg(L, 3)), lua_isnoneornil(L, 4) ? kNullEntity : entArg(L, 4), uint8_t(intArg(L, 5)));
+    return 0;
+}
+int rAddBuff(lua_State* L, Vm& vm) {     // (e, stat, add, mul, until)
+    if (auto* b = vm.sim->world().tryGet<Buffs>(entArg(L, 1)))
+        b->list.push_back({Stat(intArg(L, 2)), fxArg(L, 3), fxArg(L, 4), uint32_t(intArg(L, 5)), kNoType});
+    return 0;
+}
+int rSetOwner(lua_State* L, Vm& vm) { if (auto* o = vm.sim->world().tryGet<Owner>(entArg(L, 1))) o->player = uint8_t(intArg(L, 2)); return 0; }
+int rMessageIndex(lua_State* L, Vm& vm) {
+    auto& msgs = vm.module->state(*vm.sim).trig.messages;
+    const std::string text = lua_tostring(L, 1) ? lua_tostring(L, 1) : "";
+    auto it = std::find(msgs.begin(), msgs.end(), text);
+    const int64_t idx = it - msgs.begin();
+    if (it == msgs.end()) msgs.push_back(text);
+    lua_pushinteger(L, idx);
+    return 1;
+}
+int rAddScore(lua_State* L, Vm& vm) {     // (team, amount)
+    auto& s = vm.module->state(*vm.sim).score;
+    const size_t t = size_t(intArg(L, 1));
+    if (t < s.size()) s[t] += fxArg(L, 2);
+    return 0;
+}
+int rSetTickets(lua_State* L, Vm& vm) {
+    auto& s = vm.module->state(*vm.sim).tickets;
+    const size_t t = size_t(intArg(L, 1));
+    if (t < s.size()) s[t] = fxArg(L, 2);
+    return 0;
+}
+int rSetRegionOwnerByName(lua_State* L, Vm& vm) {
+    auto& gs = vm.module->state(*vm.sim);
+    const std::string name = lua_tostring(L, 1) ? lua_tostring(L, 1) : "";
+    for (int i = 0; i < gs.regionCount; ++i)
+        if (gs.regionNames[size_t(i)] == name) gs.regionOwner[size_t(i)] = uint8_t(intArg(L, 2));
+    return 0;
+}
+int rRegionsOwned(lua_State* L, Vm& vm) {
+    int n = 0;
+    for (auto o : vm.module->state(*vm.sim).regionOwner) if (o == intArg(L, 1)) ++n;
+    lua_pushinteger(L, n);
+    return 1;
+}
+// Nearest hostile (non-creep) structure of any hp to (x, z), first in ECS order on ties: x, y, z or nothing
+int rNearestEnemyStructure(lua_State* L, Vm& vm) {
+    CTX;
+    const uint8_t owner = uint8_t(intArg(L, 1));
+    const Vec3 np{fxArg(L, 2), fxArg(L, 3), fxArg(L, 4)};
+    Entity best; Fixed bestD{};
+    w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+        if (!m.hostile(sim, owner, o.player) || o.player == kHostileNeutral || !R.types[u.type].structure) return;
+        Fixed dd = dist2D(t.pos, np);
+        if (!best.valid() || dd < bestD) { best = e; bestD = dd; }
+    });
+    if (!best.valid()) return 0;
+    pushV3(L, w.get<Transform>(best).pos);
+    return 3;
+}
+// (player, ability index, x, y, z, unit|nil, free)
+int rCastPlayerAbility(lua_State* L, Vm& vm) {
+    CTX;
+    const uint8_t p = uint8_t(intArg(L, 1));
+    const int idx = int(intArg(L, 2));
+    const Vec3 at{fxArg(L, 3), fxArg(L, 4), fxArg(L, 5)};
+    Entity unit = lua_isnoneornil(L, 6) ? kNullEntity : entArg(L, 6);
+    if (!lua_toboolean(L, 7)) { m.castPlayerAbility(sim, p, idx, at, unit); return 0; }
+    EffectCtx ctx; ctx.owner = p; ctx.point = flat(at); ctx.origin = ctx.point; ctx.target = w.alive(unit) ? unit : kNullEntity;
+    sim.emit({kEvPlayerAbility, p, kNullEntity, ctx.target, idx, ctx.point});
+    m.applyPayload(sim, m.playerAbilityFor(sim, p, idx).payload, ctx);
+    return 0;
+}
+int rHostile(lua_State* L, Vm& vm) { lua_pushboolean(L, vm.module->hostile(*vm.sim, uint8_t(intArg(L, 1)), uint8_t(intArg(L, 2)))); return 1; }
+int rRatio(lua_State* L, Vm&) { pushFx(L, Fixed::fromRatio(intArg(L, 1), intArg(L, 2))); return 1; }
+
 } // namespace
 
 void openStdApi(Vm& vm) {
@@ -283,6 +727,21 @@ void openStdApi(Vm& vm) {
         {"pos", bind<rPos>}, {"owner", bind<rOwner>},
         {"waves", bind<rWaves>}, {"wave_done", bind<rWaveDone>}, {"lane_wave_sources", bind<rLaneWaveSources>},
         {"wave_clock_ticks", bind<rWaveClock>}, {"next_wave_tick", bind<rNextWaveTick>}, {"wave_objective", bind<rWaveObjective>},
+        {"trigger_defs", bind<rTriggerDefs>}, {"trigger_areas", bind<rTriggerAreas>}, {"type_flags", bind<rTypeFlags>},
+        {"trig_init", bind<rTrigInit>}, {"trig_enabled", bind<rTrigEnabled>}, {"trig_fired", bind<rTrigFired>}, {"trig_edge", bind<rTrigEdge>},
+        {"trig_started", bind<rTrigStarted>}, {"trig_events", bind<rTrigEvents>}, {"trig_players", bind<rResolvePlayers>},
+        {"trig_player_matches", bind<rPlayerMatches>}, {"trig_count", bind<rTrigCount>}, {"trig_targets", bind<rTrigTargets>},
+        {"trig_owner_targets", bind<rTrigOwnerTargets>}, {"trig_area_update", bind<rTrigAreaUpdate>},
+        {"trig_script_condition", bind<rTrigScriptCondition>}, {"trig_script_action", bind<rTrigScriptAction>},
+        {"alive_entity", bind<rAliveEntity>}, {"is_unit", bind<rIsUnit>},
+        {"var", bind<rVar>}, {"add_var", bind<rAddVar>}, {"player_slots", bind<rPlayerSlots>}, {"stock", bind<rStock>},
+        {"add_resource", bind<rAddResource>}, {"researched", bind<rResearched>}, {"research", bind<rResearch>},
+        {"set_type_disabled", bind<rTypeDisabled>}, {"hp", bind<rHp>}, {"add_unit_flags", bind<rAddUnitFlags>}, {"stat", bind<rStat>},
+        {"deal_damage", bind<rDealDamage>}, {"add_buff", bind<rAddBuff>}, {"set_owner", bind<rSetOwner>},
+        {"message_index", bind<rMessageIndex>}, {"add_score", bind<rAddScore>}, {"set_tickets", bind<rSetTickets>},
+        {"set_region_owner_by_name", bind<rSetRegionOwnerByName>}, {"regions_owned", bind<rRegionsOwned>},
+        {"nearest_enemy_structure", bind<rNearestEnemyStructure>}, {"cast_player_ability", bind<rCastPlayerAbility>},
+        {"hostile", bind<rHostile>}, {"ratio", bind<rRatio>},
         {nullptr, nullptr}};
     luaL_newlib(vm.L, funcs);
     lua_pushinteger(vm.L, kPresAny); lua_setfield(vm.L, -2, "PRES_ANY");
@@ -294,7 +753,9 @@ void openStdApi(Vm& vm) {
     // event and order ids used by the library (RtsModule.h)
     static const std::pair<const char*, int> ids[] = {
         {"EV_WAVE", kEvWave}, {"EV_TRAIN_DONE", kEvTrainDone}, {"EV_PLAYER_DEFEATED", kEvPlayerDefeated}, {"EV_MESSAGE", kEvMessage},
-        {"EV_PLAYER_ABILITY", kEvPlayerAbility},
+        {"EV_PLAYER_ABILITY", kEvPlayerAbility}, {"EV_DIED", kEvDied}, {"EV_BUILD_DONE", kEvBuildDone}, {"EV_RESEARCHED", kEvResearched},
+        {"EV_CAPTURED", kEvCaptured}, {"EV_REGION_CLAIMED", kEvRegionClaimed}, {"EV_ABILITY", kEvAbility}, {"EV_LEVEL_UP", kEvLevelUp},
+        {"UNIT_SILENT", kUnitSilent}, {"STAT_MAX_HP", int(Stat::MaxHp)}, {"HOSTILE_NEUTRAL", kHostileNeutral},
         {"ORDER_MOVE", int(OrderType::Move)}, {"ORDER_ATTACK_MOVE", int(OrderType::AttackMove)}, {"ORDER_ATTACK", int(OrderType::Attack)}};
     for (auto& [k, v] : ids) { lua_pushinteger(vm.L, v); lua_setfield(vm.L, -2, k); }
     lua_setglobal(vm.L, "rts");

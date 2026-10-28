@@ -54,6 +54,7 @@ struct ScriptEngine::Impl {
     uint32_t budgetTick = UINT32_MAX;
     std::vector<PendingEffect> effects;
     int stdRefs[size_t(StdFn::Count)];
+    uint32_t stdPeriod[size_t(StdFn::Count)] = {};   // std.period.<name>: call when tick % period == 0 (0: never)
     bool stdFailed[size_t(StdFn::Count)] = {};
 
     Impl(ScriptEngine& s, RtsModule& mod) : self(s), m(mod) { for (int& r : stdRefs) r = LUA_NOREF; }
@@ -328,6 +329,8 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     openGameApi(vm);
     openStdApi(vm);
     lua_newtable(L);
+    lua_newtable(L);
+    lua_setfield(L, -2, "period");
     lua_setglobal(L, "std");
     lua_getglobal(L, "game");
     lua_pushcfunction(L, bind<lAfter>); lua_setfield(L, -2, "after");
@@ -354,14 +357,23 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
             im.logLine(true, err);
         }
     }
-    static const char* const kStdNames[] = {"victory", "waves"};
+    static const char* const kStdNames[] = {"victory", "waves", "triggers"};
     static_assert(sizeof(kStdNames) / sizeof(kStdNames[0]) == size_t(StdFn::Count));
+    // modules schedule themselves: std.period.<name> = N (every N ticks, 0 = not needed by this game)
     lua_getglobal(L, "std");
+    lua_getfield(L, -1, "period");
+    const bool hasPeriods = lua_istable(L, -1);
     for (size_t k = 0; k < size_t(StdFn::Count); ++k) {
-        if (lua_getfield(L, -1, kStdNames[k]) == LUA_TFUNCTION) im.stdRefs[k] = luaL_ref(L, LUA_REGISTRYINDEX);
+        im.stdPeriod[k] = 1;
+        if (hasPeriods) {
+            lua_getfield(L, -1, kStdNames[k]);
+            if (lua_isinteger(L, -1)) im.stdPeriod[k] = uint32_t(std::max<lua_Integer>(0, lua_tointeger(L, -1)));
+            lua_pop(L, 1);
+        }
+        if (lua_getfield(L, -2, kStdNames[k]) == LUA_TFUNCTION) im.stdRefs[k] = luaL_ref(L, LUA_REGISTRYINDEX);
         else { lua_pop(L, 1); im.logLine(true, std::string("standard library: std.") + kStdNames[k] + " is missing"); }
     }
-    lua_pop(L, 1);
+    lua_pop(L, 2);
     // the game's files (a larger budget: setup work)
     const int64_t tickBudget = vm.budget;
     vm.budget = tickBudget * 20;
@@ -496,7 +508,8 @@ void ScriptEngine::tick(Simulation& sim) {
 void ScriptEngine::callStd(Simulation& sim, StdFn fn) {
     Impl& im = *impl_;
     const int ref = im.stdRefs[size_t(fn)];
-    if (ref == LUA_NOREF) return;
+    const uint32_t period = im.stdPeriod[size_t(fn)];
+    if (ref == LUA_NOREF || period == 0 || (period > 1 && sim.tick() % period != 0)) return;
     lua_State* L = im.vm.L;
     im.enter(sim);
     lua_sethook(L, nullptr, 0, 0);   // engine code: no instruction budget (user calls set it again)
