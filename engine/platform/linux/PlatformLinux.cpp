@@ -96,13 +96,19 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 
     EGLDisplay ed = eglGetDisplay(reinterpret_cast<EGLNativeDisplayType>(g_dpy));
     eglInitialize(ed, nullptr, nullptr);
-    eglBindAPI(EGL_OPENGL_ES_API);
-    const EGLint attrs[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+    // RTS_GL=desktop: desktop GL 3.3 core through EGL (the GL33 backend used on Windows) - for Mesa
+    // builds without GLES (dev VMs, CI images); the default stays GLES3 like Android/web.
+    const char* glEnv = std::getenv("RTS_GL");
+    const bool desktopGL = glEnv && std::strcmp(glEnv, "desktop") == 0;
+    eglBindAPI(desktopGL ? EGL_OPENGL_API : EGL_OPENGL_ES_API);
+    const EGLint attrs[] = {EGL_RENDERABLE_TYPE, desktopGL ? EGL_OPENGL_BIT : EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
                             EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_NONE};
     EGLConfig ec; EGLint n = 0;
     if (!eglChooseConfig(ed, attrs, &ec, 1, &n) || n == 0) { std::fprintf(stderr, "no EGL config\n"); return 1; }
     const EGLint ctxAttrs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
-    EGLContext ctx = eglCreateContext(ed, ec, EGL_NO_CONTEXT, ctxAttrs);
+    const EGLint glAttrs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3,
+                              EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
+    EGLContext ctx = eglCreateContext(ed, ec, EGL_NO_CONTEXT, desktopGL ? glAttrs : ctxAttrs);
     EGLSurface surf = eglCreateWindowSurface(ed, ec, static_cast<EGLNativeWindowType>(g_win), nullptr);
     eglMakeCurrent(ed, surf, surf, ctx);
     eglSwapInterval(ed, 1);
@@ -110,7 +116,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     S.winW = float(cfg.width); S.winH = float(cfg.height);
     S.fbW = cfg.width; S.fbH = cfg.height; S.scale = 1.0f;
 
-    auto device = gfx::createGLDevice(gfx::Backend::GLES3);
+    auto device = gfx::createGLDevice(desktopGL ? gfx::Backend::GL33 : gfx::Backend::GLES3);
     if (S.cb.init) S.cb.init(*device);
 
     const detail::CaptureRequest capture = detail::captureRequestFromEnv();
