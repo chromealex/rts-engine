@@ -113,19 +113,49 @@ void Model::finalize() {
     if (boundsMin.x > boundsMax.x) boundsMin = boundsMax = {0, 0, 0};
 }
 
-std::unique_ptr<Model> loadModel(const std::string& path, const FileReader& read, std::vector<std::string>* warnings) {
-    std::string bytes;
-    if (!read(path, bytes)) throw std::runtime_error(path + ": file not found");
-    std::string ext = lower(path.substr(path.find_last_of('.') == std::string::npos ? path.size() : path.find_last_of('.')));
-    std::unique_ptr<Model> m;
-    if (ext == ".gltf" || ext == ".glb") m = loadGltf(path, bytes, read, warnings);
-    else if (ext == ".obj") m = loadObj(path, bytes, read, warnings);
-#if defined(RTS_NO_FBX)
-    else if (ext == ".fbx") throw std::runtime_error(path + ": FBX import is disabled in this build (RTS_FBX=OFF); convert to .glb");
-#else
-    else if (ext == ".fbx") m = loadFbx(path, bytes, read, warnings);
+namespace {
+using Loader = std::unique_ptr<Model> (*)(const std::string&, const std::string&, const FileReader&, std::vector<std::string>*);
+struct Format { const char* ext; Loader load; };
+const Format kFormats[] = {
+    {".gltf", loadGltf}, {".glb", loadGltf}, {".obj", loadObj},
+#if !defined(RTS_NO_FBX)
+    {".fbx", loadFbx},
 #endif
-    else throw std::runtime_error(path + ": unsupported model format '" + ext + "' (use .gltf, .glb, .obj or .fbx)");
+    {".vox", loadVox}, {".vxl", loadVxl}, {".ply", loadPly}, {".stl", loadStl}, {".3ds", load3ds}, {".dae", loadDae},
+    {".mdx", loadMdx}, {".mdl", loadMdl}, {".3do", load3do}, {".w3d", loadW3d},
+};
+std::string extOf(const std::string& path) {
+    const size_t dot = path.find_last_of('.'), slash = path.find_last_of("/\\");
+    return dot == std::string::npos || (slash != std::string::npos && dot < slash) ? std::string() : lower(path.substr(dot));
+}
+Loader loaderFor(const std::string& ext) {
+    for (const auto& f : kFormats) if (ext == f.ext) return f.load;
+    return nullptr;
+}
+} // namespace
+
+bool isNativeModelFormat(const std::string& path) { return loaderFor(extOf(path)) != nullptr; }
+
+std::unique_ptr<Model> loadModel(const std::string& path, const FileReader& read, std::vector<std::string>* warnings) {
+    const std::string ext = extOf(path);
+    Loader load = loaderFor(ext);
+    std::string bytes;
+    if (!load) {
+        // converted on the host (tools/models/modelconv): "<file>.glb" next to the source
+        if (read(path + ".glb", bytes)) {
+            auto m = loadGltf(path + ".glb", bytes, read, warnings);
+            m->path = path;
+            return m;
+        }
+#if defined(RTS_NO_FBX)
+        if (ext == ".fbx") throw std::runtime_error(path + ": FBX import is disabled in this build (RTS_FBX=OFF); convert to .glb");
+#endif
+        if (!read(path, bytes)) throw std::runtime_error(path + ": file not found");
+        throw std::runtime_error(path + ": unsupported model format '" + ext + "' (convert it with tools/models/modelconv, "
+                                 "or use .gltf, .glb, .obj, .fbx, .dae, .3ds, .ply, .stl, .vox, .vxl, .mdx, .mdl, .3do, .w3d)");
+    }
+    if (!read(path, bytes)) throw std::runtime_error(path + ": file not found");
+    auto m = load(path, bytes, read, warnings);
     m->path = path;
     return m;
 }
@@ -143,6 +173,8 @@ bool decodeImage(const std::string& bytes, Image& out) {
         out.compressed = std::move(ci);
         return true;
     }
+    if (bytes.size() >= 4 && (bytes.compare(0, 4, "BLP1") == 0 || bytes.compare(0, 4, "BLP2") == 0)) return decodeBlp(bytes, out);
+    if (bytes.size() >= 4 && bytes.compare(0, 4, "DDS ") == 0) return decodeDds(bytes, out);
     int w = 0, h = 0, n = 0;
     stbi_uc* px = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()), int(bytes.size()), &w, &h, &n, 4);
     if (!px) return false;
