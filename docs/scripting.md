@@ -28,7 +28,7 @@ A game without `"scripts"` runs only the engine's standard library (below): no "
 }
 ```
 
-Sample: `games/scripted` (Iron and Gold + a war chest, veterans, a scripted chain heal and a
+Sample: `templates/scripted` (Iron and Gold + a war chest, veterans, a scripted chain heal and a
 custom defeat condition).
 
 ## A first script
@@ -284,7 +284,7 @@ in `tests/checksums/games` (seeds 1-3) with `baseline.txt`, recorded from the C+
   returned and nothing is saved; `register: true` adds it to rules `"scripts"`), `script_check
   {seconds, seed}` (compiles everything and runs a headless bot match, returns errors with
   file:line). `game_file_write` checks `.lua` files the same way.
-- Headless: `rts_headless --project games/scripted --seed 3` prints the script log (errors also with
+- Headless: `rts_headless --project templates/scripted --seed 3` prints the script log (errors also with
   `--quiet`).
 
 ## Engine side
