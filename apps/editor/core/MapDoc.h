@@ -52,7 +52,14 @@ struct DocBody {
     Json meta = Json::object();
     Json terrainExtra = Json::object(); // per-face extra keys live in faceExtra
     std::vector<Json> faceExtra;        // 6 objects (fields, material, ... per face)
+    // visual detail grid (terrain.detail, docs/terrain.md): 6 * (N*k+1)^2 int16 1/16 units, seam duplicates
+    // equal; empty = none (the view synthesises one when the style is smooth). Written to detailFile on save.
+    int detailScale = 0;
+    std::vector<int16_t> detail;
+    std::string detailFile;
     bool surface() const { return faceSize > 0; }
+    int detailSide() const { return faceSize * detailScale; }   // M
+    size_t detailIndex(int face, int i, int j) const { const size_t M1 = size_t(detailSide() + 1); return (size_t(face) * M1 + size_t(j)) * M1 + size_t(i); }
     size_t cellIndex(int face, int x, int y) const { return (size_t(face) * size_t(faceSize) + size_t(y)) * size_t(faceSize) + size_t(x); }
     size_t cornerIndex(int face, int i, int j) const { return (size_t(face) * size_t(faceSize + 1) + size_t(j)) * size_t(faceSize + 1) + size_t(i); }
 };
@@ -117,6 +124,7 @@ public:
     std::string cornersFileName() const;                                          // relative, e.g. maps/big.r16
     std::string detailFileName() const;                                           // maps/<map>.detail.r16
     std::string bodyCornersFileName(const DocBody& b) const;                      // maps/<map>.<body>.r16
+    std::string bodyDetailFileName(const DocBody& b) const;                       // maps/<map>.<body>.detail.r16
     static std::string cornersPath(const std::string& mapFile, const std::string& rel); // absolute file
     std::string toJsonText() const { return toJson().dump(); }
 
