@@ -3213,6 +3213,7 @@ TEST(audiopack_stage_game_folder) {
 // ---------------- particles (engine/fx, modules/rts/fx) ----------------
 #include <cstdlib>
 #include "engine/fx/ParticleSystem.h"
+#include "engine/fx/FxModelMesh.h"
 #include "modules/rts/fx/RtsFx.h"
 
 namespace {
@@ -5369,8 +5370,8 @@ TEST(fx_modules_parse_round_trip_and_errors) {
     const auto& e = d.emitters[0];
     CHECK(e.blend == fx::FxBlend::Premultiplied && e.align == fx::FxAlign::Upright && e.shape == fx::FxShape::Cone);
     CHECK(e.bursts.size() == 2 && e.bursts[1].cycles == 3 && e.bursts[1].count.max == 4 && e.startColorPair && e.localSpace);
-    CHECK(e.maxParticles == 40 && e.velocity.y == 2 && e.speedLimit == 4 && e.colorBySpeed.size() == 2 && e.sizeBySpeed.size() == 2);
-    CHECK(e.noise.strength == 1 && e.cycles == 2 && e.startFrame.max == 3 && e.arc == 180 && e.radial == -0.5f);
+    CHECK(e.maxParticles == 40 && e.velocity.y == 2 && e.speedLimit.max == 4 && e.colorBySpeed.size() == 2 && e.sizeBySpeed.size() == 2);
+    CHECK(e.noise.strength.max == 1 && e.cycles == 2 && e.startFrame.max == 3 && e.arc == 180 && e.radial == -0.5f);
     CHECK(e.collision.enabled && e.collision.bounce > 0.29f && e.subEmitters.size() == 1 && e.subEmitters[0].on == fx::FxSubEvent::Death);
     CHECK(e.trail.enabled && e.trail.blend == fx::FxBlend::Alpha && !e.trail.inheritColor && e.light.enabled && e.light.max == 3);
     CHECK(d.lifetime() > 0.4f && !d.looping());
@@ -5514,10 +5515,299 @@ TEST(fx_unity_importer_output_is_valid) {
     if (ex && ex->emitters.size() == 4) {
         CHECK(ex->emitters[2].trail.enabled && ex->emitters[2].light.enabled && ex->emitters[2].collision.enabled);
         CHECK(ex->emitters[2].subEmitters.size() == 1 && ex->emitters[2].align == fx::FxAlign::Velocity);
-        CHECK(ex->emitters[1].bursts.size() == 2 && ex->emitters[1].noise.strength > 0);
+        CHECK(ex->emitters[1].bursts.size() == 2 && ex->emitters[1].noise.strength.max > 0);
     }
     CHECK(std::filesystem::exists(out + "/fx/textures/smoke.png"));
     std::filesystem::remove_all(out);
+}
+
+// ---------------- particles: the rest of Unity's modules ----------------
+namespace {
+struct FxRun {
+    fx::ParticleSystem ps;
+    std::vector<fx::FxParticleInfo> parts;
+    int id = -1;
+    explicit FxRun(const char* json, fx::FxQuality q = fx::FxQuality::High) {
+        ps.setQuality(q);
+        ps.init(nullptr);
+        std::vector<std::string> errs;
+        fx::EffectDef d;
+        fx::parseEffect(Json::parse(json), "t.json", d, errs);
+        for (auto& e : errs) std::printf("    %s\n", e.c_str());
+        id = ps.define("t", d);
+    }
+    void step(float seconds, float dt = 1 / 30.0f) { for (float t = 0; t < seconds - 1e-4f; t += dt) ps.update(dt); ps.snapshot(parts); }
+};
+} // namespace
+
+TEST(fx_unity_modules_parse_and_round_trip) {
+    const char* text = R"({
+      "emitters": [{
+        "texture": "builtin:spark", "blend": "multiply", "align": "world", "loop": true, "duration": 2, "prewarm": true,
+        "delay": [0, 0.5], "life": { "curve": [[0, 1], [1, 2]] }, "speed": [-2, 3], "size": { "curve": [[0, 0.5]], "curveMin": [[0, 0.2]] },
+        "rate": { "curve": [[0, 0], [1, 50]] }, "bursts": [{ "time": 0, "count": 4, "cycles": 0, "interval": 0.25, "chance": 0.5 }],
+        "shape": "donut", "radius": 2, "donutRadius": 0.3, "emitFrom": "shell", "arcMode": "loop", "arcSpeed": 2, "arcSpread": 0.25,
+        "shapeRotation": [0, 45, 0], "randomDirection": 0.2, "sphericalDirection": 0.1, "randomPosition": 0.05, "alignToDirection": true,
+        "sizeY": [1, 2], "rotation3D": { "x": [0, 90] }, "gravityScale": 0.5, "startColor": { "gradient": [[0, "#ff0000"], [1, "#0000ff"]], "overTime": true },
+        "colorMin": [[0, "#ffffff"], [1, "#000000"]], "sizeOverLifeMin": [[0, 0.5]], "sizeOverLifeY": [[0, 1], [1, 2]],
+        "spin": { "curve": [[0, 90], [1, -90]] }, "spin3D": { "x": 30 }, "spinBySpeed": { "speed": [0, 5], "spin": [[0, 0], [1, 180]] },
+        "velocityOverLife": { "y": { "curve": [[0, 2], [1, 0]] }, "orbitalY": 90, "orbitalOffset": [0, 1, 0], "radial": 0.5, "speedModifier": [[0, 1], [1, 0.5]] },
+        "force": { "x": [-1, 1], "randomize": true }, "speedLimit": 4, "speedLimitAxes": { "y": 2 }, "limitDampen": 0.5,
+        "drag": [0.1, 0.2], "dragBySize": true, "dragBySpeed": true, "inheritVelocity": { "mode": "current", "amount": 0.5 },
+        "lifeBySpeed": { "speed": [0, 10], "factor": [[0, 1], [1, 0.5]] }, "externalForces": 1,
+        "noise": { "strength": 1, "axes": [1, 0.5, 1], "octaves": 3, "damping": true, "rotation": 45, "size": 0.2, "remap": [[0, -1], [1, 1]] },
+        "frames": [4, 2], "row": "random", "frameOverTime": { "curve": [[0, 0], [1, 1]] }, "flip": [0.5, 0],
+        "pivot": [0, 0.5, 0], "cameraStretch": 0.1, "sort": "youngest", "sortOrder": 3, "maxScreenSize": 0.3, "meshes": ["builtin:cube"],
+        "maxParticles": 50, "ringBuffer": true,
+        "collision": { "ground": false, "planes": [{ "point": [0, 0, 0], "normal": [0, 1, 0] }], "radius": 0.5, "maxKillSpeed": 20 },
+        "trigger": { "volumes": [{ "center": [0, 1, 0], "radius": 2 }], "outside": "kill", "enter": "callback" },
+        "subEmitters": [{ "on": "trigger", "effect": "t2", "inherit": ["color", "size", "duration"] }, { "on": "manual", "effect": "t2" }],
+        "trail": { "mode": "ribbon", "ribbons": 2, "lifeColor": "#ff8000", "textureMode": "tile", "dieWithParticles": false, "lifeFraction": 0.5 },
+        "light": { "radiusOverLife": [[0, 1], [1, 0]] }
+      }],
+      "forceFields": [{ "position": [0, 1, 0], "shape": "cylinder", "radius": 3, "length": 4, "gravity": 2, "rotation": 90, "rotationAttraction": 0.5 }]
+    })";
+    std::vector<std::string> errs;
+    fx::EffectDef d = fxParse(text, &errs);
+    for (auto& e : errs) std::printf("    %s\n", e.c_str());
+    CHECK(errs.empty() && d.emitters.size() == 1 && d.forceFields.size() == 1);
+    const auto& e = d.emitters[0];
+    CHECK(e.blend == fx::FxBlend::Multiply && e.align == fx::FxAlign::World && e.prewarm && e.delay.max == 0.5f);
+    CHECK(e.life.curved() && e.life.min == 1 && e.life.max == 2 && e.size.curveMin.size() == 1 && e.speed.min == -2);
+    CHECK(e.rate.curved() && e.continuous() && e.bursts[0].cycles == 0 && e.bursts[0].chance == 0.5f);
+    CHECK(e.shape == fx::FxShape::Donut && e.emitFrom == fx::FxEmitFrom::Shell && e.arcMode == fx::FxArcMode::Loop && e.shapeRotation.y == 45);
+    CHECK(e.size3D && e.rotation3D && e.startColorOverTime && e.spin.curved() && e.spin3D && e.spinBySpeed.enabled);
+    CHECK(e.velocityOverLife.enabled && e.velocityOverLife.y.curved() && e.velocityOverLife.orbitalY.max == 90 && e.force.randomize);
+    CHECK(e.speedLimitAxes.enabled && e.speedLimitAxes.x.min > 1e5f && e.inheritVelocity.current && e.lifeBySpeed.enabled && e.externalForces == 1);
+    CHECK(e.noise.octaves == 3 && e.noise.damping && e.noise.remap.size() == 2 && e.row == -2 && e.frameOverTime.curved());
+    CHECK(e.sort == fx::FxSort::Youngest && e.sortOrder == 3 && e.meshes.size() == 1 && e.ringBuffer);
+    CHECK(e.collision.planes.size() == 1 && !e.collision.ground && e.trigger.volumes.size() == 1 && e.trigger.outside == fx::FxTriggerAction::Kill);
+    CHECK(e.subEmitters.size() == 2 && e.subEmitters[0].inheritSize && e.subEmitters[0].inheritDuration && e.subEmitters[1].on == fx::FxSubEvent::Manual);
+    CHECK(e.trail.ribbon && e.trail.ribbons == 2 && !e.trail.dieWithParticles && e.trail.textureMode == fx::FxTextureMode::Tile);
+    CHECK(d.forceFields[0].cylinder && d.forceFields[0].rotation == 90);
+    // serialize -> parse -> serialize is stable
+    fx::EffectDef back;
+    std::vector<std::string> e2;
+    CHECK(fx::parseEffect(fx::effectToJson(d), "t.json", back, e2) && e2.empty());
+    CHECK(fx::effectToJson(back).dump() == fx::effectToJson(d).dump());
+    // readable errors for the new keys
+    fxParse(R"({"emitters": [{ "burst": 1, "shape": "mesh", "ringBuffer": true, "life": { "curve": "x" } }]})", &errs);
+    CHECK(errs.size() == 3);   // mesh missing, ringBuffer without maxParticles, bad curve
+}
+
+TEST(fx_curves_prewarm_bursts_ring_buffer) {
+    // rate rising linearly 0 -> 100 over 1 s: about 50 particles
+    FxRun a(R"({"emitters": [{ "rate": { "curve": [[0, 0], [1, 100]] }, "duration": 1, "life": 5, "speed": 0 }]})");
+    a.ps.play(a.id, {0, 0, 0});
+    a.step(1.0f);
+    CHECK(a.parts.size() >= 44 && a.parts.size() <= 56);
+    // life curve over the emitter time: early particles live 1 s, late ones 3 s
+    FxRun b(R"({"emitters": [{ "rate": 20, "duration": 1, "life": { "curve": [[0, 1], [1, 3]] }, "speed": 0 }]})");
+    b.ps.play(b.id, {0, 0, 0});
+    b.step(1.0f);
+    float lo = 1e9f, hi = 0;
+    for (auto& p : b.parts) { lo = std::min(lo, p.life); hi = std::max(hi, p.life); }
+    CHECK(lo < 1.3f && hi > 2.6f);
+    // prewarm: a looping effect is full right away
+    FxRun c(R"({"emitters": [{ "rate": 50, "duration": 2, "loop": true, "prewarm": true, "life": 1, "speed": 0 }]})");
+    c.ps.play(c.id, {0, 0, 0});
+    c.step(0.0f);
+    CHECK(c.parts.size() >= 40);
+    // endless burst cycles every 0.25 s for a 1 s duration, half of them by chance
+    FxRun e(R"({"emitters": [{ "bursts": [{ "time": 0, "count": 10, "cycles": 0, "interval": 0.25 }], "duration": 1, "life": 5, "speed": 0 }]})");
+    e.ps.play(e.id, {0, 0, 0});
+    e.step(1.5f);
+    CHECK(e.parts.size() == 40);
+    // ring buffer: 5 at most, they never die, new ones replace the oldest
+    FxRun r(R"({"emitters": [{ "rate": 20, "duration": 5, "life": 0.2, "speed": 0, "maxParticles": 5, "ringBuffer": true }]})");
+    r.ps.play(r.id, {0, 0, 0});
+    r.step(1.0f);
+    CHECK(r.parts.size() == 5);
+    float oldest = 0;
+    for (auto& p : r.parts) oldest = std::max(oldest, p.age);
+    CHECK(oldest < 0.4f);   // replaced, not kept from the start
+    // instances live on while their particles do; playing() only while emitting
+    FxRun l(R"({"emitters": [{ "burst": 3, "life": 1, "speed": 0 }]})");
+    fx::FxHandle h = l.ps.play(l.id, {0, 0, 0});
+    l.step(0.1f);
+    CHECK(!l.ps.playing(h) && l.ps.stats().instances == 1 && l.parts.size() == 3);
+    l.step(1.0f);
+    CHECK(l.ps.stats().instances == 0 && l.parts.empty());
+}
+
+TEST(fx_shapes_donut_box_mesh_cone_arc) {
+    auto distTorus = [](fx::float3 p, float R) { float q = std::sqrt(p.x * p.x + p.z * p.z) - R; return std::sqrt(q * q + p.y * p.y); };
+    FxRun d(R"({"emitters": [{ "burst": 200, "shape": "donut", "radius": 2, "donutRadius": 0.5, "emitFrom": "shell", "life": 5, "speed": 0 }]})");
+    d.ps.play(d.id, {0, 0, 0});
+    d.step(1 / 30.0f);
+    bool onTube = !d.parts.empty();
+    for (auto& p : d.parts) onTube = onTube && std::fabs(distTorus(p.pos, 2) - 0.5f) < 1e-3f;
+    CHECK(onTube);
+    FxRun b(R"({"emitters": [{ "burst": 200, "shape": "box", "box": [2, 2, 2], "emitFrom": "shell", "life": 5, "speed": 0 }]})");
+    b.ps.play(b.id, {0, 0, 0});
+    b.step(1 / 30.0f);
+    bool onFace = b.parts.size() == 200;
+    for (auto& p : b.parts) onFace = onFace && std::fabs(std::max({std::fabs(p.pos.x), std::fabs(p.pos.y), std::fabs(p.pos.z)}) - 1) < 1e-3f;
+    CHECK(onFace);
+    // mesh shape: the built-in cube, from triangles -> on its surface, directed along its normals
+    FxRun m(R"({"emitters": [{ "burst": 200, "shape": "mesh", "mesh": "builtin:cube", "emitFrom": "triangle", "life": 5, "speed": 1 }]})");
+    m.ps.play(m.id, {0, 0, 0});
+    m.step(1 / 30.0f);
+    bool onCube = m.parts.size() == 200;
+    for (auto& p : m.parts) {
+        fx::float3 q = p.pos - p.vel * (1 / 30.0f);
+        onCube = onCube && std::fabs(std::max({std::fabs(q.x), std::fabs(q.y), std::fabs(q.z)}) - 0.5f) < 2e-3f;
+    }
+    CHECK(onCube);
+    // cone volume: particles start anywhere along the length (not only on the base)
+    FxRun c(R"({"emitters": [{ "burst": 300, "shape": "cone", "radius": 0.5, "spread": 20, "length": 4, "life": 5, "speed": 0 }]})");
+    c.ps.play(c.id, {0, 0, 0});
+    c.step(1 / 30.0f);
+    float top = 0;
+    for (auto& p : c.parts) top = std::max(top, p.pos.y);
+    CHECK(top > 3.0f);
+    // arc spread: burst evenly over 4 directions only
+    FxRun s(R"({"emitters": [{ "burst": 40, "shape": "ring", "radius": 1, "arcMode": "spread", "arcSpread": 0.25, "life": 5, "speed": 0 }]})");
+    s.ps.play(s.id, {0, 0, 0});
+    s.step(1 / 30.0f);
+    std::vector<std::pair<int, int>> spots;
+    for (auto& p : s.parts) {
+        std::pair<int, int> k{int(std::lround(p.pos.x * 10)), int(std::lround(p.pos.z * 10))};
+        if (std::find(spots.begin(), spots.end(), k) == spots.end()) spots.push_back(k);
+    }
+    CHECK(spots.size() == 4);
+}
+
+TEST(fx_velocity_force_limit_fields_noise) {
+    // orbital velocity: particles keep their distance to the centre and go around it
+    FxRun o(R"({"emitters": [{ "burst": 20, "shape": "ring", "radius": 1, "emitFrom": "shell", "life": 5, "speed": 0,
+                 "velocityOverLife": { "orbitalY": 90 } }]})");
+    o.ps.play(o.id, {0, 0, 0});
+    o.step(1 / 30.0f);
+    std::vector<fx::float3> start;
+    for (auto& p : o.parts) start.push_back(p.pos);
+    o.step(1.0f, 1 / 60.0f);
+    bool kept = o.parts.size() == start.size();
+    float turned = 0;
+    for (size_t i = 0; kept && i < o.parts.size(); ++i) {
+        kept = std::fabs(std::sqrt(o.parts[i].pos.x * o.parts[i].pos.x + o.parts[i].pos.z * o.parts[i].pos.z) - 1) < 0.08f;
+        turned += std::acos(std::clamp(render::dot(render::normalize(o.parts[i].pos), render::normalize(start[i])), -1.0f, 1.0f));
+    }
+    CHECK(kept);
+    CHECK(o.parts.size() && std::fabs(turned / float(o.parts.size()) - 3.14159f / 2) < 0.2f);
+    // force up + hard speed limit 2
+    FxRun f(R"({"emitters": [{ "burst": 10, "life": 5, "speed": 0, "force": { "y": 20, "space": "world" }, "speedLimit": 2 }]})");
+    f.ps.play(f.id, {0, 0, 0});
+    f.step(1.0f);
+    bool limited = !f.parts.empty();
+    for (auto& p : f.parts) limited = limited && render::length(p.vel) <= 2.01f && p.vel.y > 1.5f;
+    CHECK(limited);
+    // a gravity force field pulls particles towards its centre
+    FxRun g(R"({"emitters": [{ "burst": 30, "shape": "sphere", "radius": 3, "emitFrom": "shell", "life": 5, "speed": 0, "externalForces": 1 }],
+                "forceFields": [{ "radius": 10, "gravity": 5 }]})");
+    g.ps.play(g.id, {0, 0, 0});
+    g.step(0.5f);
+    float avg = 0;
+    for (auto& p : g.parts) avg += render::length(p.pos);
+    CHECK(!g.parts.empty() && avg / float(g.parts.size()) < 2.6f);
+    // wind acts on externalForces emitters only
+    FxRun w(R"({"emitters": [{ "burst": 5, "life": 5, "speed": 0, "externalForces": 1 }, { "burst": 5, "life": 5, "speed": 0 }]})");
+    w.ps.setWind({4, 0, 0});
+    w.ps.play(w.id, {0, 0, 0});
+    w.step(1.0f);
+    int blown = 0, still = 0;
+    for (auto& p : w.parts) (p.pos.x > 1 ? blown : still) += p.emitter == 0 ? (p.pos.x > 1 ? 1 : 0) : (p.pos.x < 0.01f ? 1 : 0);
+    CHECK(blown == 5 && still == 5);
+    // noise with octaves moves particles on every tier
+    for (auto q : {fx::FxQuality::Low, fx::FxQuality::High}) {
+        FxRun n(R"({"emitters": [{ "burst": 10, "life": 5, "speed": 0, "noise": { "strength": 2, "octaves": 4, "remap": [[0, -1], [1, 1]] } }]})", q);
+        n.ps.play(n.id, {0, 0, 0});
+        n.step(1.0f);
+        float moved = 0;
+        for (auto& p : n.parts) moved += render::length(p.pos);
+        CHECK(n.parts.size() > 0 && moved > 0.1f);
+    }
+}
+
+TEST(fx_collision_planes_triggers_subemitters_inherit) {
+    // a wall at x = 1 (normal -x) sends particles back
+    FxRun c(R"({"emitters": [{ "burst": 5, "life": 5, "speed": 3, "direction": [0, 0, 1], "spread": 0,
+                 "collision": { "ground": false, "bounce": 1, "planes": [{ "point": [0, 0, 1], "normal": [0, 0, -1] }] } }]})");
+    c.ps.play(c.id, {0, 0, 0});
+    c.step(1.0f);
+    bool back = !c.parts.empty();
+    for (auto& p : c.parts) back = back && p.pos.x < 1.01f && p.vel.x < 0;   // effect z = world x for the default play direction
+    CHECK(back);
+    // trigger: particles leaving the volume die
+    FxRun t(R"({"emitters": [{ "burst": 20, "life": 5, "speed": 2, "trigger": { "volumes": [{ "radius": 1 }], "outside": "kill" } }]})");
+    t.ps.play(t.id, {0, 0, 0});
+    t.step(0.3f);
+    CHECK(t.parts.size() == 20);
+    t.step(0.5f);
+    CHECK(t.parts.empty());
+    // manual sub-emitters fire on emitManual; inherited size scales the child particles
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    int child = ps.define("child", fxParse(R"({"emitters": [{ "burst": 1, "life": 5, "speed": 0, "size": 1 }]})"));
+    int parent = ps.define("parent", fxParse(R"({"emitters": [{ "burst": 2, "life": 5, "speed": 0, "size": 3,
+        "subEmitters": [{ "on": "manual", "effect": "child", "inherit": ["size"] }] }]})"));
+    CHECK(child >= 0 && parent >= 0);
+    fx::FxHandle h = ps.play(parent, {0, 0, 0});
+    ps.update(1 / 30.0f);
+    CHECK(ps.stats().particles == 2);
+    ps.emitManual(h);
+    ps.update(1 / 30.0f);
+    ps.update(1 / 30.0f);
+    std::vector<fx::FxParticleInfo> parts;
+    ps.snapshot(parts);
+    int big = 0;
+    for (auto& p : parts) if (p.effect == child && std::fabs(p.size - 3) < 0.05f) ++big;
+    CHECK(parts.size() == 4 && big == 2);
+}
+
+TEST(fx_ribbons_orphan_trails_and_meshes_simulate) {
+    // trails that outlive their particles keep the effect instance busy until they fade
+    FxRun o(R"({"emitters": [{ "rate": 20, "duration": 0.5, "life": 0.3, "speed": 2,
+                "trail": { "time": 0.6, "dieWithParticles": false, "minQuality": "low" } }]})");
+    o.ps.play(o.id, {0, 0, 0});
+    o.step(1.0f);
+    CHECK(o.parts.empty());
+    // mesh particles and ribbons run headless (drawing is checked on screenshots)
+    FxRun m(R"({"emitters": [{ "rate": 30, "duration": 1, "life": 1, "speed": 1, "meshes": ["builtin:cube", "builtin:sphere"], "rotation3D": { "x": [0, 90] },
+                "spin3D": { "y": 90 }, "trail": { "mode": "ribbon", "ribbons": 2 } }]})");
+    m.ps.play(m.id, {0, 0, 0});
+    m.step(0.5f);
+    CHECK(m.parts.size() > 10);
+    CHECK(m.ps.errors().empty());
+}
+
+TEST(fx_mesh_particles_from_model_files) {
+    // a tetrahedron as OBJ: loaded through the model loader for mesh particles and the "mesh" shape
+    const std::string obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n";
+    auto read = [&](const std::string& p, std::string& out) { if (p != "models/shard.obj") return false; out = obj; return true; };
+    fx::FxMesh mesh;
+    CHECK(fx::meshFromModelFile("models/shard.obj", read, mesh));
+    CHECK(mesh.idx.size() == 12 && mesh.pos.size() >= 4 && mesh.nrm.size() == mesh.pos.size());
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.setMeshLoader([&](const std::string& name, fx::FxMesh& out) { return fx::meshFromModelFile(name, read, out); });
+    ps.init(nullptr);
+    int id = ps.define("m", fxParse(R"({"emitters": [{ "burst": 50, "life": 2, "speed": 0, "shape": "mesh", "mesh": "models/shard.obj",
+                                         "emitFrom": "vertex", "meshes": ["models/shard.obj"] }]})"));
+    ps.play(id, {0, 0, 0});
+    ps.update(1 / 30.0f);
+    std::vector<fx::FxParticleInfo> parts;
+    ps.snapshot(parts);
+    bool onVertex = parts.size() == 50;
+    for (auto& p : parts) {   // model space -> effect space -> world for the default play direction: unchanged
+        bool hit = false;
+        for (auto v : {fx::float3{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}}) hit = hit || render::length(p.pos - v) < 1e-3f;
+        onVertex = onVertex && hit;
+    }
+    CHECK(onVertex);
+    for (auto& e : ps.errors()) std::printf("    %s\n", e.c_str());
+    CHECK(ps.errors().empty());
 }
 
 // ---------------- Cube-sphere (RtsSphere) ----------------

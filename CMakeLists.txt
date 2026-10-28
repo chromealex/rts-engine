@@ -37,9 +37,9 @@ option(RTS_BUILD_SERVER "Build the network game server and the network bot clien
 
 # Game being built (rtsbuild overrides these).
 set(RTS_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/templates/skirmish" CACHE PATH "Game content folder (contains game.json)")
-# build folders configured before templates/ became templates/ keep the old cached path
-if(NOT EXISTS "${RTS_CONTENT_DIR}/game.json" AND RTS_CONTENT_DIR MATCHES "/templates/")
-    string(REPLACE "/templates/" "/templates/" _rts_content "${RTS_CONTENT_DIR}")
+# build folders configured before games/ became templates/ keep the old cached path
+if(NOT EXISTS "${RTS_CONTENT_DIR}/game.json" AND RTS_CONTENT_DIR MATCHES "/games/")
+    string(REPLACE "/games/" "/templates/" _rts_content "${RTS_CONTENT_DIR}")
     if(EXISTS "${_rts_content}/game.json")
         set(RTS_CONTENT_DIR "${_rts_content}" CACHE PATH "Game content folder (contains game.json)" FORCE)
     endif()
@@ -254,7 +254,7 @@ add_library(rts_game_audio STATIC modules/rts/audio/RtsAudio.cpp)
 target_link_libraries(rts_game_audio PUBLIC rts_game rts_audio)
 
 # Particles: CPU simulation + RHI rendering (presentation only), and the RTS event bridge.
-add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp)
+add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp engine/fx/FxEmit.cpp engine/fx/FxRender.cpp engine/fx/FxMeshes.cpp)
 target_link_libraries(rts_fx PUBLIC rts_engine)
 add_library(rts_game_fx STATIC modules/rts/fx/RtsFx.cpp)
 target_link_libraries(rts_game_fx PUBLIC rts_game rts_fx)
