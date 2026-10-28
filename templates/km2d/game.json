@@ -1,0 +1,21 @@
+// "Green Hills": a Knights and Merchants style sample — the 3D terrain of the engine (cliff
+// levels, ramps, fine heights) seen through a fixed-angle orthographic camera, with buildings,
+// units and trees drawn as 2D sprites standing on it. Art: tools/art2d/make_samples.py (CC0).
+{
+  "description": "2D-спрайты на 3D-рельефе (K&M).",
+  "name": "Green Hills",
+  "id": "com.rtsengine.greenhills",
+  "version": "0.1.0",
+  "build": 1,
+  "module": "rts",
+  "sourceLanguage": "ru",
+  "languages": ["ru", "en"],
+  "rules": "rules.json",
+  "maps": [
+    { "file": "maps/hills.json", "title": "Green Hills (1v1)" }
+  ],
+  "sprites": { "shadow": "cast", "lit": true },
+  "lighting": { "sunDir": [-0.7, 1.1, -0.5] },
+  "camera": { "projection": "ortho", "pitch": 50, "yaw": 0, "pixelsPerCell": 32, "zoomMin": 8, "zoomMax": 44, "rotate": false },
+  "orientation": "landscape"
+}

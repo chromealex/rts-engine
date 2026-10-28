@@ -678,6 +678,7 @@ Rules loadRules(const Json& j) {
         r.movement.rvo = av == "rvo";
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
+        r.movement.planetHpaCells = int(std::clamp<int64_t>(mv.getInt("planetHpaCells", r.movement.planetHpaCells), 0, int64_t(1) << 30));
     }
     // slope classes: types with their own move.maxSlope get a class (pathing and passability per class)
     for (auto& t : r.types) {

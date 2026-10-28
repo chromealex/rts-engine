@@ -3,7 +3,7 @@
 // cliff levels, resource fields written into the map's existing layers before the simulation
 // loads it) and, in the view/editor, which atlas tile each cell shows.
 //
-// Tileset (games/<id>/tilesets/<name>.json):
+// Tileset (templates/<id>/tilesets/<name>.json):
 //   {"name": "Desert", "atlas": "tilesets/desert.png", "tileSize": [32, 32], "columns": 8, "filter": "nearest",
 //    "terrains": [                                   // array order = draw priority (later draws over earlier)
 //      {"id": "sand", "char": "s", "cell": ".", "tiles": [0, 1, {"tile": 2, "weight": 0.2}]},
