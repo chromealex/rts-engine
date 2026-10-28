@@ -4,6 +4,7 @@
 #include "engine/platform/Plugins.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <regex>
@@ -39,8 +40,9 @@ json::Value section(const Loaded& l, const std::string& platform) { // copy: sma
     return v ? *v : json::Value();
 }
 
-// ${key} / ${a.b} from the plugin's config; unknown keys stay visible so the mistake is obvious.
-std::string expand(const std::string& s, const Loaded& l) {
+// ${key} / ${a.b} from the plugin's config, else from plugin.json "defaults"; ${env.NAME} is an
+// environment variable. Unknown keys stay visible so the mistake is obvious.
+std::string expand(const std::string& s, const Loaded& l, int depth = 0) {
     std::string out;
     for (size_t i = 0; i < s.size();) {
         size_t a = s.find("${", i);
@@ -49,17 +51,35 @@ std::string expand(const std::string& s, const Loaded& l) {
         if (b == std::string::npos) { out += s.substr(i); break; }
         out += s.substr(i, a - i);
         std::string key = s.substr(a + 2, b - a - 2);
-        const json::Value* v = &l.config;
-        std::stringstream ks(key);
-        for (std::string part; v && std::getline(ks, part, '.');) v = v->find(part);
-        if (v && !v->isNull() && !v->isObject() && !v->isArray()) out += v->str();
-        else {
+        auto lookup = [&](const json::Value& root) {
+            const json::Value* v = &root;
+            std::stringstream ks(key);
+            for (std::string part; v && std::getline(ks, part, '.');) v = v->find(part);
+            return v && !v->isNull() && !v->isObject() && !v->isArray() ? v : nullptr;
+        };
+        const json::Value* v = lookup(l.config);
+        if (!v && depth < 4) v = lookup(l.manifest["defaults"]);
+        if (key.rfind("env.", 0) == 0) {
+            const char* e = std::getenv(key.c_str() + 4);
+            if (e && *e) out += e;
+            else std::cerr << "    [plugins] " << l.name << ": environment variable " << key.substr(4) << " is not set\n";
+        } else if (v) {
+            out += depth < 4 ? expand(v->str(), l, depth + 1) : v->str();
+        } else {
             std::cerr << "    [plugins] " << l.name << ": ${" << key << "} is not set in game.json \"plugins\" → \"" << l.name << "\"\n";
             out += "${" + key + "}";
         }
         i = b + 1;
     }
     return out;
+}
+
+// Paths of SDKs installed outside the repo: a clear error instead of a compiler/linker one.
+std::string requireFile(const std::string& path, const Loaded& l) {
+    if (path.find("${") == std::string::npos && fs::exists(path)) return fs::path(path).generic_string();
+    std::cout << "ОШИБКА: плагин " << l.name << ": не найден " << path << "\n";
+    if (const json::Value* hint = l.manifest.find("sdkHint")) std::cout << "    " << hint->str() << "\n";
+    std::exit(1);
 }
 
 std::vector<std::string> strings(const json::Value& v) {
@@ -133,13 +153,19 @@ PluginSet loadPlugins(const fs::path& engine, const fs::path& project, const std
 }
 
 fs::path writePluginsCMake(const PluginSet& set, const fs::path& dir) {
-    std::vector<std::string> sources, frameworks, plist, skAdNetworks;
+    std::vector<std::string> sources, frameworks, plist, skAdNetworks, includes, libraries;
     std::string classes; // Info.plist RTSPlugins: name → Objective-C class
     for (const Loaded& l : loaded(set)) {
         std::vector<std::string> patterns = strings(l.manifest["cpp"]["sources"]);
         const json::Value native = section(l, set.platform);
-        if (set.platform == "ios" || set.platform == "macos") {
+        if (set.platform != "android" && set.platform != "web") { // native code: Apple, Windows, Linux
             for (auto& s : strings(native["sources"])) patterns.push_back(s);
+            // third-party SDKs the developer installs (e.g. Steamworks): must exist at build time
+            for (auto& d : strings(native["includeDirs"])) includes.push_back(requireFile(expand(d, l), l));
+            for (auto& d : strings(native["libraries"])) libraries.push_back(requireFile(expand(d, l), l));
+            for (auto& d : strings(native["runtime"])) requireFile(expand(d, l), l);
+        }
+        if (set.platform == "ios" || set.platform == "macos") {
             for (auto& f : strings(native["frameworks"])) frameworks.push_back(f);
             for (auto& p : strings(native["plist"])) plist.push_back(expand(p, l));
             for (auto& id : strings(native["skAdNetworks"]))
@@ -179,12 +205,26 @@ fs::path writePluginsCMake(const PluginSet& set, const fs::path& dir) {
     for (auto& s : sources) text += "\n    \"" + s + "\"";
     text += ")\nset(RTS_PLUGIN_FRAMEWORKS";
     for (auto& f : frameworks) text += " " + cmakeQuote(f);
+    text += ")\nset(RTS_PLUGIN_INCLUDE_DIRS";
+    for (auto& d : includes) text += " " + cmakeQuote(d);
+    text += ")\nset(RTS_PLUGIN_LIBRARIES";
+    for (auto& d : libraries) text += " " + cmakeQuote(d);
+    text += ")\nset(RTS_PLUGIN_RUNTIME_FILES";
+    for (auto& f : runtimeFiles(set)) text += " " + cmakeQuote(f.generic_string());
     text += ")\nset(RTS_PLUGIN_PLIST_XML " + cmakeQuote(plistXml) + ")\n";
     // desktop mocks only when the game asked for them: otherwise not even compiled into the app
     text += std::string("set(RTS_MOCK_PLUGINS ") + (set.mocks ? "ON" : "OFF") + ")\n";
     fs::path file = dir / "plugins.cmake";
     writeFile(file, text);
     return file;
+}
+
+std::vector<fs::path> runtimeFiles(const PluginSet& set) {
+    std::vector<fs::path> files;
+    if (set.platform == "android" || set.platform == "web") return files;
+    for (const Loaded& l : loaded(set))
+        for (auto& f : strings(section(l, set.platform)["runtime"])) files.push_back(requireFile(expand(f, l), l));
+    return files;
 }
 
 std::map<std::string, std::string> androidPlaceholders(const PluginSet& set) {

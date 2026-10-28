@@ -262,6 +262,15 @@ std::vector<std::string> configured() {
 
 void pump() {
     Bridge& b = Bridge::get();
+    std::vector<std::shared_ptr<NativePlugin>> cpp; // per-frame work of C++ plugins (SDK callbacks)
+    {
+        std::lock_guard<std::mutex> l(b.m);
+        for (auto& [name, p] : b.native) {
+            auto it = b.initSent.find(name);
+            if (it != b.initSent.end() && it->second) cpp.push_back(p);
+        }
+    }
+    for (auto& p : cpp) p->update();
     std::vector<Delivery> q;
     { std::lock_guard<std::mutex> l(b.m); q.swap(b.queue); }
     for (auto& d : q) {

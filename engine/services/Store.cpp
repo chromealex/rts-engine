@@ -40,7 +40,7 @@ void load() {
     const json::Value& prov = cfg["providers"];
     if (prov.isArray()) for (auto& v : prov.arr) order.push_back(v.str());
     else if (!prov.isNull()) order.push_back(prov.str());
-    if (order.empty()) order = {"appstore", "googleplay", "rustore", "yandex-games", "mock-store"};
+    if (order.empty()) order = {"appstore", "googleplay", "rustore", "yandex-games", "steam", "mock-store"};
     for (auto& name : order) if (plugins::available(name)) { s.provider = name; break; }
 }
 

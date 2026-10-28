@@ -18,6 +18,11 @@
 //                  "plist": ["<key>GADApplicationIdentifier</key><string>${appId}</string>"],
 //                  "skAdNetworks": ["cstr6suwn9"] },   // merged into one SKAdNetworkItems list
 //     "macos":   { same keys as ios },
+//     "windows" / "linux" / "macos": { "sources": ["src/*.cpp"],            // desktop C++ SDKs
+//                  "includeDirs": ["${sdk}/public"], "libraries": ["${sdk}/.../steam_api64.lib"],
+//                  "runtime": ["${sdk}/.../steam_api64.dll"] },           // copied next to the executable
+//     "defaults": { "sdk": "${env.STEAMWORKS_SDK}" },  // config fallbacks; ${env.X} = environment
+//     "sdkHint": "how to get the SDK (printed when a path above is missing)",
 //     "web":     { "scripts": ["/sdk.js"], "js": ["web/admob.js"] } }
 #pragma once
 #include <filesystem>
@@ -40,9 +45,12 @@ PluginSet loadPlugins(const std::filesystem::path& engine, const std::filesystem
                       const std::string& gameJsonText, const std::string& platform, const std::string& override);
 
 // Copies C++ (and iOS/macOS Objective-C) sources to <dir>/plugins/<name>/ and writes
-// <dir>/plugins.cmake (RTS_PLUGIN_SOURCES, RTS_PLUGIN_FRAMEWORKS, RTS_PLUGIN_PLIST_XML).
+// <dir>/plugins.cmake (RTS_PLUGIN_SOURCES, _FRAMEWORKS, _PLIST_XML, _INCLUDE_DIRS, _LIBRARIES, _RUNTIME_FILES).
 // Returns the plugins.cmake path (written even when empty, so stale plugins never leak in).
 std::filesystem::path writePluginsCMake(const PluginSet& set, const std::filesystem::path& dir);
+
+// Desktop: shared libraries the plugins need next to the executable (also in plugins.cmake).
+std::vector<std::filesystem::path> runtimeFiles(const PluginSet& set);
 
 // Android Gradle template: values for @PLUGIN_DEPENDENCIES@, @PLUGIN_REPOSITORIES@,
 // @PLUGIN_MANIFEST_ROOT@, @PLUGIN_MANIFEST_APPLICATION@, @PLUGIN_MANIFEST_ACTIVITY@.

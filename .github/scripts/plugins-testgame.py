@@ -22,6 +22,7 @@ game["plugins"] = {
     },
     "yandex-ads": {"interstitial": "demo-interstitial-yandex", "rewarded": "demo-rewarded-yandex", "banner": "demo-banner-yandex"},
     "yandex-games": {},
+    "steam": {"appId": 480, "items": {"gems_100": 100, "no_ads": 200}, "dlc": {"expansion": 1234560}},  # 480 = Spacewar
     # AppLovin has no public test key: compile-only placeholders (real keys come from the dashboard)
     "applovin": {"sdkKey": "CI_PLACEHOLDER_SDK_KEY", "interstitial": "ci000000000000a1", "rewarded": "ci000000000000a2", "banner": "ci000000000000a3"},
     # LevelPlay demo app keys / ad units (developers.is.com test suite)
