@@ -119,9 +119,17 @@ void main() {
     vec3 geoN = n;                                        // surface normal for slope tests
 #if TERRAIN_DETAIL
     // per-pixel normal of the detail surface (cheap: one fetch, every tier)
-    vec4 dn = texture(tex16, v_wpos.xz * t_detail.xy + t_detail.zw);
+    // outside the map (apron, border walls) the clamped edge texels would stretch into streaks: fade to
+    // the geometric normal and to a heavily blurred (high mip) edge material within a few cells
+    vec2 outD = max(max(-v_wpos.xz, v_wpos.xz - t_lod.zw), vec2(0.0));
+    float outF = clamp(max(outD.x, outD.y) * 0.5, 0.0, 1.0);
+    float outB = outF * 7.0;
+    vec4 dn = texture(tex16, v_wpos.xz * t_detail.xy + t_detail.zw, outB);
     vec2 nxz = dn.rg * 2.0 - 1.0;
-    n = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.0)), nxz.y));
+    vec3 dN = normalize(vec3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.0)), nxz.y));
+    bool wall = n.y < 0.3 && min(min(v_wpos.x, v_wpos.z), min(t_lod.z - v_wpos.x, t_lod.w - v_wpos.z)) < 0.02;
+    if (!wall) n = normalize(mix(dN, n, outF));   // the border walls keep their geometric normal
+    dn.b = mix(dn.b, 0.5, outF);
     geoN = n;
     float macroV = (dn.a - 0.5) * t_blend.y;
     float cavity = mix(1.0, 0.55 + 0.9 * dn.b, t_blend.z);
@@ -133,7 +141,7 @@ void main() {
 #if TERRAIN_TIER >= 1
     if (t_mode.y > 0.5) {
 #if TERRAIN_DETAIL
-        vec4 w = texture(tex17, v_wpos.xz * t_detail.xy + t_detail.zw);
+        vec4 w = texture(tex17, v_wpos.xz * t_detail.xy + t_detail.zw, outB);
 #else
         vec4 w = texture(tex4, v_wpos.xz / t_lod.zw);
 #endif
@@ -322,9 +330,15 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
     float3 albedoS = in.col;
     float3 geoN = n;
 #if TERRAIN_DETAIL
-    float4 dn = tex16.sample(s16, in.wpos.xz * u.detail.xy + u.detail.zw);
+    float2 outD = max(max(-in.wpos.xz, in.wpos.xz - u.lod.zw), float2(0.0));
+    float outF = clamp(max(outD.x, outD.y) * 0.5, 0.0, 1.0);
+    float outB = outF * 7.0;
+    float4 dn = tex16.sample(s16, in.wpos.xz * u.detail.xy + u.detail.zw, bias(outB));
     float2 nxz = dn.rg * 2.0 - 1.0;
-    n = normalize(float3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.0)), nxz.y));
+    float3 dN = normalize(float3(nxz.x, sqrt(max(1.0 - dot(nxz, nxz), 0.0)), nxz.y));
+    bool wall = n.y < 0.3 && min(min(in.wpos.x, in.wpos.z), min(u.lod.z - in.wpos.x, u.lod.w - in.wpos.z)) < 0.02;
+    if (!wall) n = normalize(mix(dN, n, outF));
+    dn.b = mix(dn.b, 0.5, outF);
     geoN = n;
     float macroV = (dn.a - 0.5) * u.blend.y;
     float cavity = mix(1.0, 0.55 + 0.9 * dn.b, u.blend.z);
@@ -335,7 +349,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant TU0& u [[buffer(1)]], con
 #if TERRAIN_TIER >= 1
     if (u.mode.y > 0.5) {
 #if TERRAIN_DETAIL
-        float4 w = tex17.sample(s17, in.wpos.xz * u.detail.xy + u.detail.zw);
+        float4 w = tex17.sample(s17, in.wpos.xz * u.detail.xy + u.detail.zw, bias(outB));
 #else
         float4 w = tex4.sample(s4, in.wpos.xz / u.lod.zw);
 #endif
