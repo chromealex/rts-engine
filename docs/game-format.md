@@ -1241,7 +1241,7 @@ A string, a list (all must hold) or an object (every key must hold). Strings: `a
 | `ghost` | the structure being placed (centre, its type for footprint / stats, `ok` = placement valid) |
 | `area` | `{"type": "area", "area": "gate"}` (map area) or `"rect": [x, z, w, h]` |
 | `point` | `{"type": "point", "at": [x, z]}` |
-| `screen` | HUD point `{"type": "screen", "at": [x, y]}` in points; negative = from the right / bottom |
+| `screen` | HUD point `{"type": "screen", "at": [x, y]}` in points; negative = from the right / bottom; text boxes hang from that corner |
 | `orders` | line through the queued order points of selected units |
 | `route` | the current path of selected moving units |
 | `rally` | from selected producers to their rally point |

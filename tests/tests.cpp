@@ -4958,6 +4958,15 @@ TEST(overlay_validation_errors) {
     try { game::validateOverlays(R, Json::parse(R"([{"id": "x", "shape": "ring"}, {"id": "x", "shape": "circle"}])")); }
     catch (const std::exception& e) { dup = hasText(e.what(), "duplicate id"); }
     CHECK(dup);
+    // partial overrides of built-ins are valid lists (checked merged over the default)
+    bool partialOk = true;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "selection", "style": {"thickness": 0.07}}, {"id": "health_bars", "enabled": false}])")); }
+    catch (const std::exception&) { partialOk = false; }
+    CHECK(partialOk);
+    bool partialBad = false;
+    try { game::validateOverlays(R, Json::parse(R"([{"id": "selection", "style": {"colr": 1}}])")); }
+    catch (const std::exception& e) { partialBad = hasText(e.what(), "unknown key 'colr'"); }
+    CHECK(partialBad);
     // a broken entry in game data is skipped with a warning; the rest still loads
     game::OverlaySet set = game::loadOverlaySet(R, Json::parse(R"([{"id": "bad", "shape": "nope"}])"), Json());
     CHECK(set.warnings.size() == 1 && set.defs.size() == 7);

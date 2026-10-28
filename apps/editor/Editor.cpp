@@ -392,6 +392,8 @@ void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) 
     r3d_.beginScene(cam, vp.w, vp.h);
     setOverlayContext(vp, cam, false);
     view_.draw(r3d_, scene_, time_, nullptr, grid_);
+    if (const auto& oc = view_.overlays().context(); overlayPreviewType >= 0 && oc.placeType >= 0)   // overlay preview ghost
+        view_.drawGhost(r3d_, uint16_t(oc.placeType), oc.placeAt, oc.placeOk, grid_, time_);
     if (editOverlays) drawEditOverlays3D();
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
@@ -413,6 +415,8 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     r3d_.beginScene(cam, vp.w, vp.h);
     setOverlayContext(vp, cam, true);
     view_.draw(r3d_, sc, time_, human_ ? &gs.vision[size_t(human_)] : nullptr, gs.grid);
+    if (const auto& oc = view_.overlays().context(); overlayPreviewType >= 0 && oc.placeType >= 0)
+        view_.drawGhost(r3d_, uint16_t(oc.placeType), oc.placeAt, oc.placeOk, gs.grid, time_);
     const float fxDt = fxTime_ < 0 || playPaused ? 0.0f : float(time_ - fxTime_) * playSpeed;
     fxTime_ = time_;
     gameFx_.setView(cam, r3d_.viewProj(), vp.w, vp.h);
