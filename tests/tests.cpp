@@ -4689,6 +4689,199 @@ TEST(models_baked_clips_match_the_pose) {
     CHECK(bakedRow(*m, walk, 1.0f) == b.clips[size_t(walk)].firstRow); // loop wraps to frame 0
 }
 
+// ---------------- fog of war modes (rules / map "fogOfWar") and the view look ----------------
+#include "modules/rts/view/RtsFog.h"
+TEST(fog_of_war_modes_and_look) {
+    auto withFog = [](const char* mode, bool inMap) {
+        Json rules = Json::parseFile(kSkirmish + "/rules.json"), map = Json::parseFile(kSkirmish + "/maps/valley.json");
+        Json f = Json::object();
+        f.set("mode", Json::string(mode));
+        (inMap ? map : rules).set("fogOfWar", f);
+        SimConfig cfg; cfg.seed = 2;
+        auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+        sim->setup(rules, map);
+        for (int i = 0; i < 40; ++i) sim->step();
+        return sim;
+    };
+    auto count = [](Simulation& s, uint8_t p, uint8_t v) {
+        auto& vis = mod(s).state(s).vision[p];
+        return std::count(vis.begin(), vis.end(), v);
+    };
+    auto full = withFog("full", false), explored = withFog("explored", false), none = withFog("none", false), mapNone = withFog("none", true);
+    const auto cells = std::ptrdiff_t(mod(*full).state(*full).grid.w * mod(*full).state(*full).grid.h);
+    CHECK(count(*full, 1, 0) > cells / 2);                 // most of the map unexplored
+    CHECK(count(*explored, 1, 0) == 0 && count(*explored, 1, 1) > cells / 2);
+    CHECK(count(*none, 1, 2) == cells && count(*mapNone, 2, 2) == cells);
+    Entity enemyHall = findType(*none, "townhall", 2);
+    CHECK(enemyHall.valid() && mod(*none).isVisible(*none, 1, none->world().get<Transform>(enemyHall).pos));
+    CHECK(!mod(*full).isVisible(*full, 1, full->world().get<Transform>(findType(*full, "townhall", 2)).pos));
+    bool threw = false;
+    try { Json r = Json::parseFile(kSkirmish + "/rules.json"); Json f = Json::object(); f.set("mode", Json::string("fuzzy")); r.set("fogOfWar", f); game::loadRules(r); }
+    catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    // view look: rules first, game.json overrides per key; colours in 0..255 or 0..1
+    game::FogLook L = game::parseFogLook(Json::parse(R"({"color": [255, 0, 0], "style": "grid", "softness": 3, "grid": {"show": "all", "alpha": 0.3}})"),
+                                         Json::parse(R"({"softness": 1, "explored": 0.2})"));
+    CHECK(L.color[0] == 1.0f && L.color[1] == 0.0f && L.style == game::FogLook::Grid && L.softness == 1 && L.gridEverywhere);
+    CHECK(std::fabs(L.explored - 0.2f) < 1e-6f && std::fabs(L.gridAlpha - 0.3f) < 1e-6f);
+    CHECK(!game::parseFogLook(Json::parse(R"({"mode": "none"})"), Json()).show);
+}
+
+// ---------------- Lighting (lighting agent): GPU-free logic ----------------
+#include "modules/rts/view/RtsLights.h"
+#include "engine/render/QualityGovernor.h"
+
+TEST(lighting_day_night_cycle) {
+    const game::Rules rules = game::loadRules(Json::parseFile(kSkirmish + "/rules.json"));
+    const render::Lighting base;
+    auto sky = [&](const char* block, double seconds, float* night = nullptr) {
+        game::RtsLights L;
+        L.init(rules);
+        L.configure(Json::parse(block), Json{}, Json{});
+        render::Lighting l = base;
+        L.updateSky(l, seconds);
+        if (night) *night = L.night();
+        return l;
+    };
+    float n = 0;
+    render::Lighting noon = sky(R"({"time": 0.5})", 0, &n);
+    CHECK(n < 0.01f);
+    CHECK(std::fabs(noon.sunIntensity - base.sunIntensity) < 0.05f);
+    render::Lighting midnight = sky(R"({"time": 0.0})", 0, &n);
+    CHECK(n > 0.95f);
+    CHECK(midnight.sunIntensity < base.sunIntensity * 0.4f);
+    CHECK(midnight.skyColor.x < base.skyColor.x * 0.5f);
+    sky(R"({"time": 0.5, "dayLength": 100})", 50, &n);          // half a day later: midnight
+    CHECK(n > 0.95f);
+    sky(R"({"time": 0.5, "dayLength": 100})", 100, &n);         // a full day: noon again
+    CHECK(n < 0.01f);
+    render::Lighting dusk = sky(R"({"time": 0.71})", 0, &n);
+    CHECK(dusk.sunColor.z < base.sunColor.z - 0.1f);            // warm evening sun
+    // no block: the renderer's lighting is left alone
+    { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 1234); CHECK(l.sunIntensity == base.sunIntensity && L.night() == 0); }
+}
+
+TEST(lighting_presets) {
+    const game::Rules rules = game::loadRules(Json::parseFile(kSkirmish + "/rules.json"));
+    const render::Lighting base;
+    auto run = [&](const char* block, std::string* preset = nullptr, float* night = nullptr) {
+        game::RtsLights L;
+        L.init(rules);
+        L.configure(Json::parse(block), Json{}, Json{});
+        render::Lighting l = base;
+        L.updateSky(l, 0);
+        if (preset) *preset = L.preset();
+        if (night) *night = L.night();
+        return l;
+    };
+    std::string id;
+    float n = 0;
+    render::Lighting cave = run(R"({"preset": "cave"})", &id, &n);
+    CHECK(id == "cave" && n > 0.95f);
+    CHECK(cave.skyColor.x < 0.06f && cave.sunIntensity < base.sunIntensity * 0.1f);
+    render::Lighting desert = run(R"({"preset": "desert"})", &id, &n);
+    CHECK(id == "desert" && n < 0.01f && desert.sunIntensity > base.sunIntensity);
+    run(R"({"preset": "cave", "time": 0.5})", nullptr, &n);       // explicit fields win over the preset
+    CHECK(n < 0.01f);
+    run(R"({"preset": "nope"})", &id);
+    CHECK(id.empty());
+    // a cave map in a daylight game stays a cave: map preset beats game fields
+    {
+        game::RtsLights L;
+        L.init(rules);
+        L.configure(Json::parse(R"({"time": 0.35, "dayLength": 480})"), Json::parse(R"({"preset": "cave"})"), Json{});
+        render::Lighting l = base;
+        L.updateSky(l, 100);
+        CHECK(L.night() > 0.95f && L.preset() == "cave");
+    }
+}
+
+TEST(lighting_lightning_deterministic) {
+    CHECK(game::RtsLights::lightningAt(10.3, 0) == 0);
+    int strikes = 0, weak = 0;
+    bool same = true, was = false, wasWeak = false;
+    for (int i = 0; i < 120000; ++i) {          // 10 minutes in 5 ms steps; count rising edges
+        const double t = i * 0.005;
+        const float a = game::RtsLights::lightningAt(t, 1.0f);
+        same &= a == game::RtsLights::lightningAt(t, 1.0f);
+        const bool on = a > 0.5f, onWeak = game::RtsLights::lightningAt(t, 0.2f) > 0.5f;
+        strikes += on && !was;
+        weak += onWeak && !wasWeak;
+        was = on; wasWeak = onWeak;
+    }
+    CHECK(same);
+    CHECK(strikes > 20 && strikes < 400);   // ~0.16 flashes per second at storm 1
+    CHECK(weak < strikes);
+}
+
+TEST(lighting_type_and_map_data) {
+    const game::Rules sk = game::loadRules(Json::parseFile(kSkirmish + "/rules.json"));
+    game::RtsLights L;
+    L.init(sk);
+    const auto& hall = L.typeLights(uint16_t(sk.findType("townhall")));
+    CHECK(hall.glow && hall.radius > 4 && hall.halo > 0);
+    const auto& archer = L.typeLights(uint16_t(sk.findType("archer")));
+    CHECK(archer.attack.on && archer.projectile.on && !archer.glow);
+    const auto& cat = L.typeLights(uint16_t(sk.findType("catapult")));
+    CHECK(!cat.projectile.on && cat.hit.on);                     // data: "projectileLight": false
+    // abilities: one light per ability, colour from what it does (artillery = damage -> orange)
+    const std::string fc = std::string(RTS_SOURCE_DIR) + "/games/frostcrown/rules.json";
+    if (std::filesystem::exists(fc)) {
+        const game::Rules fr = game::loadRules(Json::parseFile(fc));
+        game::RtsLights F;
+        F.init(fr);
+        const int t = fr.findType("demolisher");
+        CHECK(t >= 0);
+        if (t >= 0) {
+            const auto& d = F.typeLights(uint16_t(t));
+            CHECK(d.abilities.size() == fr.types[size_t(t)].abilities.size());
+            CHECK(!d.abilities.empty() && d.abilities[0].on && d.abilities[0].color.x > 0.9f && d.abilities[0].color.z < 0.5f);
+        }
+    }
+    const auto ml = game::RtsLights::parseMapLights(Json::parse(R"([{"x": 1, "z": 2}, {"pos": [3, 4], "radius": 6, "halo": false}, 7])"));
+    CHECK(ml.size() == 2);
+    CHECK(ml[0].x == 1 && ml[0].z == 2 && ml[0].radius == 4 && ml[0].halo > 0);
+    CHECK(ml[1].x == 3 && ml[1].z == 4 && ml[1].radius == 6 && ml[1].halo == 0);
+}
+
+TEST(lighting_quality_governor) {
+    using render::QualityGovernor;
+    auto feed = [](QualityGovernor& g, double ms, double seconds) {
+        int changes = 0;
+        for (double t = 0; t < seconds; t += ms / 1000.0) changes += g.update(ms / 1000.0) ? 1 : 0;
+        return changes;
+    };
+    QualityGovernor g;
+    g.reset(3, 3);
+    feed(g, 16.7, 3);                              // smooth: nothing happens
+    CHECK(g.shadows() == 3 && g.lights() == 3 && g.stepsDown() == 0);
+    feed(g, 40, 7);                                // heavy fight: first step drops per-pixel lights
+    CHECK(g.lights() == 2 && g.shadows() == 3);
+    feed(g, 60, 60);                               // still too slow: all the way down, lights last
+    CHECK(g.shadows() == 0 && g.lights() == 0);
+    // a phone capped at 30 fps from the start is not "slowing down"
+    QualityGovernor capped;
+    capped.reset(2, 2);
+    CHECK(feed(capped, 33.3, 40) == 0);
+    // the player picked a tier in the menu: hands off
+    QualityGovernor locked;
+    locked.reset(3, 3);
+    feed(locked, 16.7, 2);
+    locked.lock();
+    CHECK(feed(locked, 50, 30) == 0 && locked.shadows() == 3);
+    // after the fight one step comes back, once
+    QualityGovernor rec;
+    rec.reset(2, 2);
+    feed(rec, 16.7, 2);
+    feed(rec, 40, 9);
+    const int afterDrop = rec.shadows() + rec.lights();
+    CHECK(afterDrop < 4);
+    feed(rec, 16.7, 45);
+    CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
+    feed(rec, 16.7, 60);
+    CHECK(rec.shadows() + rec.lights() == afterDrop + 1);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

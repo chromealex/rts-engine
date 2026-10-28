@@ -1,0 +1,50 @@
+/* Flag Sectors: UI skin (linked after engine/ui/theme.rcss). Tactical map: navy, signal white, flag red.
+   Title font: fonts/title.ttf (Oswald, SIL OFL, fonts/OFL.txt). */
+
+body { color: #eef3fb; }
+h1 { font-family: title; color: #ffffff; font-size: 34dp; font-weight: normal; text-transform: uppercase; letter-spacing: 3dp; }
+h2 { color: #9fb0c8; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #9fb0c8; }
+.error { color: #ff5d5d; }
+
+.panel {
+    background-color: #0f1d33eb;
+    border: 1dp #e9eef7;
+    border-radius: 0;
+}
+
+button {
+    color: #ffffff;
+    border: 1dp #3a5379;
+    border-radius: 0;
+    decorator: vertical-gradient(#22406bff #16294aff);
+}
+button:hover { decorator: vertical-gradient(#2d5288ff #1c3459ff); border-color: #ff4d4d; }
+button:active { decorator: vertical-gradient(#16294aff #22406bff); }
+button.active { border-color: #ff4d4d; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#22406bff #16294aff); border-color: #3a5379; }
+button .cost { color: #ffc2c2; }
+button .tip { color: #ff5d5d; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #ff4d4d; }
+
+#card .title { color: #ffffff; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff5d5d; }
+.notice { color: #ffffff; }
+#selbox { border-color: #ff4d4d; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#1c3760ff #080f1cff); }
+input.text { background-color: #0a1426; border-color: #3a5379; color: #eef3fb; }
+input.text:focus { border-color: #ff4d4d; }
+#lobby .slot.mine { border-color: #ff4d4d; }
+#lobby .roomtitle { color: #ffffff; font-family: title; }
+
+#kb { background-color: #0f1d33eb; border-color: #e9eef7; }
+#kb .key { color: #ffffff; border-color: #3a5379; border-radius: 0; decorator: vertical-gradient(#22406bff #16294aff); }
+#kb .key:active { border-color: #ff4d4d; }
+#kb .key.on { border-color: #ff4d4d; color: #ffffff; }
+
+.panel { border-left-width: 6dp; border-left-color: #ff4d4d; }
+button { text-transform: uppercase; letter-spacing: 1dp; }

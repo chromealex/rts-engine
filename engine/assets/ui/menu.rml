@@ -2,11 +2,13 @@
 <head>
     <title>menu</title>
     <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="skin.rcss"/>
 </head>
 <!-- Static text: {{ 'key' | tr(lang) }}; keys in engine/assets/lang/<language>.json (a game overrides them in lang/). -->
 <body>
 <!-- the model is bound on a div: <body> is the document element itself and binds too late -->
 <div class="root" data-model="game" data-class-touch="touch">
+    <div id="menu-bg" data-if="screen == 'menu'"></div>
     <div id="menu" class="panel" data-if="screen == 'menu'">
         <h1>{{gameName}}</h1>
         <p class="error" data-if="error != ''">{{error}}</p>
