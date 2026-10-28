@@ -96,7 +96,11 @@
     "to_menu": "Main menu",
     "sound": "Sound:",
     "music": "Music:",
-    "off": "off"
+    "off": "off",
+    "particles": "Particles:",
+    "low": "low",
+    "medium": "medium",
+    "high": "high"
   },
 
   "ui": {
