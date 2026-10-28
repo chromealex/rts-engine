@@ -61,7 +61,7 @@ Fixed RtsModule::mechArmorDamage(Simulation& sim, Entity target, Fixed raw, uint
 
 Fixed RtsModule::mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg) {
     World& w = sim.world();
-    auto* sh = w.tryGet<Shield>(target);
+    auto* sh = w.tryGet<MechShield>(target);
     if (!sh) return dmg;
     sh->lastHit = sim.tick();
     if (sh->hp.raw <= 0) return dmg;
@@ -96,12 +96,12 @@ void RtsModule::mechTickCombat(Simulation& sim) {
     w.each<Unit>([&](Entity e, Unit& u) {
         const MechType& mt = rules_.types[u.type].mech;
         if (mt.shieldMax.raw <= 0 || u.hp.raw <= 0) return;
-        auto* sh = w.tryGet<Shield>(e);
+        auto* sh = w.tryGet<MechShield>(e);
         if (!sh) { add.push_back(e); return; }
         if (sim.tick() >= sh->lastHit + uint32_t((mt.shieldDelay * int64_t(sim.tickRate())).floorInt()) && sh->hp < mt.shieldMax)
             sh->hp = fxMin(mt.shieldMax, sh->hp + mt.shieldRegen * dt);
     });
-    for (Entity e : add) w.add<Shield>(e, Shield{rules_.types[w.get<Unit>(e).type].mech.shieldMax, 0});
+    for (Entity e : add) w.add<MechShield>(e, MechShield{rules_.types[w.get<Unit>(e).type].mech.shieldMax, 0});
 }
 
 } // namespace rts::game
