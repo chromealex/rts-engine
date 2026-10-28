@@ -277,6 +277,8 @@ void RtsModule::hashMechGlobal(Simulation& sim, Hasher& h) {
     for (auto& r : m.allyRequest) for (auto x : r) h.u32(x);
     for (int p : m.cyclePhase) h.i32(p);
     h.u32(m.nextGroup);
+    for (auto& o : m.objectives) { h.str(o.id); h.u32(o.state); }
+    h.i32(m.missionResult);
 }
 
 } // namespace rts::game

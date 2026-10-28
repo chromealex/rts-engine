@@ -72,9 +72,11 @@ void RtsModule::mechVeteranKill(Simulation& sim, Entity victim) {
     if (w.get<Owner>(killer).player == w.get<Owner>(victim).player) return;
     const UnitType& vt = rules_.types[w.get<Unit>(victim).type];
     const Fixed xp = vt.mech.killXp;
+    const UnitType& kt = rules_.types[w.get<Unit>(killer).type];
+    const MechType& mt = kt.mech;
+    if (mt.veterancy == 0 || kt.structure || kt.hero || (mt.veterancy != 1 && !rules_.mech.vet.set)) return;   // can't rank up
     Veteran& k = w.get<Veteran>(killer);
     k.xp += xp;
-    const MechType& mt = rules_.types[w.get<Unit>(killer).type].mech;
     const VeterancyTable& tab = mt.veterancy == 1 ? mt.vetTable : rules_.mech.vet;
     while (size_t(k.level - 1) < tab.xp.size() && k.xp >= tab.xp[size_t(k.level - 1)]) {
         ++k.level;
@@ -203,8 +205,7 @@ void RtsModule::mechTick(Simulation& sim) {
     w.each<Unit>([&](Entity e, Unit& u) {
         if (u.hp.raw <= 0) return;
         const UnitType& t = rules_.types[u.type];
-        if (rules_.mech.veterancy && t.mech.veterancy != 0 && !t.structure && !t.hero && !w.has<Veteran>(e) &&
-            (t.mech.veterancy == 1 || rules_.mech.vet.set)) addVet.push_back(e);
+        if (rules_.mech.veterancy && !w.has<Veteran>(e)) addVet.push_back(e);   // every object records its last hitter
         if (!t.mech.toggles.empty()) {
             auto* st = w.tryGet<Statuses>(e);
             if (!st) return;

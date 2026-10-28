@@ -948,6 +948,26 @@ state with fresh plans. Module side: `RtsModule::serializeState` (`modules/rts/R
 its list makes saving fail. `rts_headless --save F --save-at S` / `--load F`; MCP `match_run` with `saveCheck` (seconds).
 A skirmish match at 90 s is ~150 KB.
 
+## Campaigns (agent-mech)
+
+`campaign.json` in the game folder chains missions; see `modules/rts/RtsCampaign.h`:
+
+```json
+{"start": "m1", "missions": [
+  {"id": "m1", "name": "Raid", "map": "maps/m1.json", "briefing": "campaign.m1.briefing", "next": "m2",
+   "carry": {"resources": ["gold"], "tags": ["hero"], "types": ["knight"], "max": 12}},
+  {"id": "m2", "name": "Siege", "map": "maps/m2.json"}]}
+```
+
+Trigger actions for missions: `{"type": "objective", "id": "raze", "text": "...", "op": "add" | "done" | "fail", "primary": true}`,
+`{"type": "dialog", "speaker": "Captain", "portrait": "ui/captain.png", "voice": "vo/c1.ogg", "text": "...", "duration": 4}`,
+`{"type": "camera", "at": [x, z] | "area": "a", "zoom": 1, "duration": 2, "lock": false}`,
+`{"type": "endMission", "result": "victory" | "defeat", "next": "m2"}`. State in `GameState::mech` (`objectives`,
+`dialogs`, `nextMission`, `missionResult`, saved with the match); events `kEvObjective`, `kEvDialog`, `kEvCamera`,
+`kEvMissionEnd` for the HUD (objective list, dialog box, camera moves). Between missions `collectCarry` (survivors with
+hp, rank, hero level; resources) -> `applyCarry` (into the next map, players[0] = campaign player) -> `restoreCarry`
+after setup. MCP: `campaign_get`, `campaign_set` (validated), `campaign_run` (bots, mission chain, outcomes, carry).
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),

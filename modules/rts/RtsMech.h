@@ -1,6 +1,7 @@
 // Components of the agent-mech mechanics (RtsMech*.cpp). Optional: an object carries them only when
 // its game uses the mechanic, and they are hashed only when present.
 #pragma once
+#include <string>
 #include <vector>
 #include "../../engine/core/ECS.h"
 #include "../../engine/core/Fixed.h"
@@ -39,6 +40,13 @@ struct MechState {
     std::vector<std::vector<uint8_t>> allyRequest; // [a][b]: a asked b for an alliance
     std::vector<int> cyclePhase;                   // per cycle: current phase (-1 before the first tick)
     uint32_t nextGroup = 1;                        // formation groups
+    // campaigns (trigger actions objective / dialog / endMission)
+    struct Objective { std::string id, text; uint8_t state = 0, player = 0; bool primary = true; };   // state 0 active, 1 done, 2 failed
+    struct Dialog { std::string speaker, portrait, voice, text; Fixed duration{}; };
+    std::vector<Objective> objectives;
+    std::vector<Dialog> dialogs;                   // every dialog line shown so far (kEvDialog value = index)
+    std::string nextMission;                       // endMission "next"
+    int8_t missionResult = 0;                      // 1 victory, -1 defeat (endMission), 0 running
     std::vector<std::pair<uint32_t, Fixed>> groupSpeed;   // derived each tick (not hashed)
 };
 
