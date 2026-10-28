@@ -35,6 +35,22 @@ bool applyCornersFile(Json& map, const ContentReader& read, std::string* err);
 std::string encodeCorners(const std::vector<int16_t>& corners);  // raw int16 LE bytes
 bool decodeCorners(const Json& terrain, int w, int h, std::vector<int16_t>& out, std::string* err);
 
+// Hierarchical pathfinding (HPA*) for big maps: the map is cut into kC x kC clusters; entrances on cluster
+// borders are abstract nodes, linked by intra-cluster path costs and by the one-step border crossings.
+// Derived from the grid (never hashed); clusters touched by structures / digging are rebuilt lazily.
+struct HpaGraph {
+    static constexpr int kC = 16;
+    uint8_t layer = 0;
+    int cw = 0, ch = 0;
+    bool anyDirty = true;
+    std::vector<uint8_t> dirty;                                   // per cluster
+    std::vector<std::vector<std::pair<int32_t, int32_t>>> eastT;  // per cluster: (own cell, east neighbour cell)
+    std::vector<std::vector<std::pair<int32_t, int32_t>>> southT; // per cluster: (own cell, south neighbour cell)
+    std::vector<std::vector<int32_t>> nodes;                      // per cluster: sorted entrance cells
+    std::vector<std::vector<std::vector<int32_t>>> partners;      // per cluster, per node: cells across the border
+    std::vector<std::vector<uint32_t>> dist;                      // per cluster: k*k intra costs (UINT32_MAX: none)
+};
+
 struct MapGrid {
     int w = 0, h = 0;
     std::vector<uint8_t> flags;
@@ -76,6 +92,9 @@ struct MapGrid {
     std::vector<uint8_t> clearance; // ground cells: Chebyshev distance to the nearest non-walkable cell (capped)
     bool clearanceDirty = true;
     std::vector<uint8_t> soft;      // per cell: stationary friendly units (soft obstacles for surround paths)
+    std::vector<int32_t> softCells; // cells set in `soft` (cleared each tick without a whole-map pass)
+    void clearSoft() { for (int32_t i : softCells) soft[size_t(i)] = 0; softCells.clear(); }
+    void markSoft(int x, int y) { uint8_t& s = soft[size_t(index(x, y))]; if (!s) { s = 1; softCells.push_back(index(x, y)); } }
 
     void init(int width, int height_);
     bool inside(int x, int y) const { return x >= 0 && y >= 0 && x < w && y < h; }
@@ -88,11 +107,18 @@ struct MapGrid {
     int cellY(Fixed z) const { return int(z.floorInt()); }
     Vec3 cellCenter(int x, int y) const { return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
     void block(int x0, int y0, int fw, int fh, int delta);
+    void cellChanged(int x, int y);  // terrain of a cell changed at runtime (digging): refresh derived pathing data
     bool areaBuildable(int x0, int y0, int fw, int fh) const;  // ground, no-build-free, unblocked, flat
     // clearance: cells needed around the path for a body of that size (0 = any walkable cell); narrower
     // cells cost more instead of being forbidden. soft: also route around cells marked in `soft`.
     bool findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes = 40000, int clearance = 0, bool soft = false);
     void updateClearance();
+    bool stepAllowed(int cx, int cy, int nx, int ny, uint8_t layer) const { return stepOk(cx, cy, nx, ny, layer); }
+    void prepareHpa(uint8_t layer) { if (bigMap()) hpaRefresh(hpaFor(layer)); } // build at load, not mid-match
+    // Big maps (w*h >= hpaMinCells): long paths go through the HPA* graph and are refined with A*.
+    int hpaMinCells = 256 * 256;
+    bool bigMap() const { return w * h >= hpaMinCells; }
+    int hpaStats[2] = {};  // queries answered by HPA*, fallbacks to plain A* (diagnostics only)
     static int clearanceFor(Fixed radius);  // body radius -> cells of clearance
     bool lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const;
     bool nearestPassable(int& x, int& y, uint8_t layer, int radius = 12) const;
@@ -102,6 +128,23 @@ private:
     bool pathSoft_ = false;
     int pathEndA_ = -1, pathEndB_ = -1;
     bool lineOk(int x, int y) const;
+    bool stepOk(int cx, int cy, int nx, int ny, uint8_t layer) const { // one 8-neighbour move, no corner cutting
+        if (!canStep(cx, cy, nx, ny, layer)) return false;
+        if (nx == cx || ny == cy) return true;
+        return canStep(cx, cy, nx, cy, layer) && canStep(cx, cy, cx, ny, layer) && canStep(nx, cy, nx, ny, layer) && canStep(cx, ny, nx, ny, layer);
+    }
+    void updateClearanceRect(int x0, int y0, int x1, int y1);
+    // A* on cells from (sx,sy) towards (gx,gy); `cells` = start..goal (or the closest reached cell). True if found.
+    bool astarCells(int sx, int sy, int gx, int gy, uint8_t layer, int maxNodes, std::vector<int>& cells);
+    // HPA*: abstract route (start, entrances..., goal) refined into cells. False: no route (caller falls back).
+    bool hpaPath(int sx, int sy, int gx, int gy, uint8_t layer, std::vector<int>& cells);
+    HpaGraph& hpaFor(uint8_t layer);
+    void hpaRefresh(HpaGraph& G);
+    void hpaBorder(HpaGraph& G, int c, bool east);
+    void hpaCluster(HpaGraph& G, int c);
+    void clusterCosts(int c, int src, uint8_t layer, std::vector<uint32_t>& d) const; // Dijkstra inside cluster c
+    void clusterCostsMasked(int c, int src, const std::vector<uint8_t>& mask, std::vector<uint32_t>& d) const;
+    std::vector<HpaGraph> hpa_;
     std::vector<uint32_t> gCost_, stamp_;
     std::vector<int32_t> parent_;
     uint32_t search_ = 0;
@@ -118,6 +161,7 @@ struct RoadGraph {
 struct SpatialHash {
     int cell = 4, w = 0, h = 0;
     std::vector<std::vector<Entity>> buckets;
+    std::vector<int32_t> used;      // non-empty buckets (reset clears only these: big maps have ~65k buckets)
     void reset(int worldW, int worldH, int cellSize = 4);
     void insert(Entity e, Vec3 p);
     template <class Fn> void query(Vec3 p, Fixed radius, Fn&& fn) const {

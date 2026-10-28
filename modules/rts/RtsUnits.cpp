@@ -492,12 +492,12 @@ void RtsModule::sysOrders(Simulation& sim) {
     });
     // soft obstacles (standing ground units) and the melee slot claims of this tick
     MapGrid& g = state(sim).grid;
-    std::fill(g.soft.begin(), g.soft.end(), 0);
+    g.clearSoft();
     slotClaims_.clear();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (m.moving || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & kLayerGround)) return;
         int x = g.cellX(tr.pos.x), y = g.cellY(tr.pos.z);
-        if (g.inside(x, y)) g.soft[size_t(g.index(x, y))] = 1;
+        if (g.inside(x, y)) g.markSoft(x, y);
         (void)e;
     });
     w.each<Combat>([&](Entity e, Combat& c) {

@@ -3169,6 +3169,113 @@ TEST(fx_rts_events_keep_sim_deterministic) {
     CHECK(none == 0 && some > 20);   // first four minutes of a bot match: deaths, hits, buildings
 }
 
+TEST(terrain_hpa_path_matches_astar) {
+    // 256x256 maze-ish grid: walls with gaps; HPA* (big-map mode) vs plain unbounded A*
+    game::MapGrid g;
+    g.init(256, 256);
+    for (int x = 20; x < 256; x += 37)
+        for (int y = 0; y < 256; ++y) if ((y + x) % 90 > 6) g.flags[size_t(g.index(x, y))] = 0;
+    for (int y = 30; y < 256; y += 53)
+        for (int x = 0; x < 230; ++x) if (x % 70 > 5) g.flags[size_t(g.index(x, y))] = 0;
+    auto lengthOf = [](Vec3 from, const std::vector<Vec3>& p) { Fixed l{}; for (auto& q : p) { l += (q - from).xz().length(); from = q; } return l; };
+    Random rng(9);
+    int compared = 0;
+    for (int i = 0; i < 30; ++i) {
+        int x0 = int(rng.below(256)), y0 = int(rng.below(256)), x1 = int(rng.below(256)), y1 = int(rng.below(256));
+        if (!g.passable(x0, y0, game::kLayerGround) || !g.passable(x1, y1, game::kLayerGround)) continue;
+        std::vector<Vec3> a, b;
+        g.hpaMinCells = 1 << 30;
+        bool okA = g.findPath(g.cellCenter(x0, y0), g.cellCenter(x1, y1), game::kLayerGround, a, 256 * 256);
+        g.hpaMinCells = 0;
+        bool okB = g.findPath(g.cellCenter(x0, y0), g.cellCenter(x1, y1), game::kLayerGround, b, 40000);
+        CHECK(okA == okB);
+        if (!okA) continue;
+        Fixed la = lengthOf(g.cellCenter(x0, y0), a), lb = lengthOf(g.cellCenter(x0, y0), b);
+        CHECK(lb <= la * Fixed::fromRatio(115, 100) + Fixed::fromInt(4));   // near-optimal
+        for (size_t k = 0; k + 1 < b.size(); ++k)                           // every leg is walkable
+            CHECK(g.lineWalkable(g.cellX(b[k].x), g.cellY(b[k].z), g.cellX(b[k + 1].x), g.cellY(b[k + 1].z), game::kLayerGround));
+        ++compared;
+    }
+    CHECK(compared >= 10 && g.hpaStats[0] >= 10);
+    // a structure on the only gap (x=94, y=0..2) between two pockets: the touched clusters are rebuilt
+    std::vector<Vec3> p;
+    g.hpaMinCells = 0;
+    CHECK(g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p));
+    g.block(94, 0, 1, 3, +1);
+    CHECK(!g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p));
+    g.hpaMinCells = 1 << 30;
+    CHECK(!g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p, 256 * 256)); // truly cut off
+    g.hpaMinCells = 0;
+    g.block(94, 0, 1, 3, -1);
+    CHECK(g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p));
+}
+
+TEST(terrain_incremental_clearance_matches_full) {
+    game::MapGrid g;
+    g.init(40, 30);
+    for (int y = 5; y < 25; ++y) g.flags[size_t(g.index(20, y))] = 0;
+    g.updateClearance();
+    g.block(8, 8, 3, 2, +1);
+    g.block(30, 2, 2, 2, +1);
+    g.block(8, 8, 3, 2, -1);
+    g.block(1, 26, 4, 4, +1);
+    CHECK(!g.clearanceDirty);
+    std::vector<uint8_t> inc = g.clearance;
+    g.updateClearance();
+    CHECK(inc == g.clearance);
+}
+
+TEST(terrain_heightfield_match_is_deterministic) {
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/metaltide";
+    Json rules = Json::parseFile(dir + "/rules.json"), map = Json::parseFile(dir + "/maps/twin_craters.json");
+    CHECK(game::loadRules(rules).terrain.heightfield());
+    auto run = [&] {
+        SimConfig cfg; cfg.seed = 3;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rules, map);
+        CHECK(mod(sim).state(sim).grid.hf);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim.players()) bots.emplace_back(p.slot, 3);
+        for (int i = 0; i < 20 * 150; ++i) { for (auto& b : bots) b.update(sim); sim.step(); }
+        // units stand on the surface
+        bool onGround = true;
+        sim.world().each<game::Mobile, Transform>([&](Entity, game::Mobile&, Transform& t) {
+            if (t.pos.y != mod(sim).state(sim).grid.surfaceHeight(t.pos.x, t.pos.z)) onGround = false;
+        });
+        CHECK(onGround);
+        return sim.checksum();
+    };
+    uint64_t a = run(), b = run();
+    CHECK(a == b);
+    // the corners take part in the checksum only with model "heightfield"
+    Json flatRules = Json::parse(R"({"types": {"u": {"move": {"speed": 1}}}})");
+    std::string m = flatMap(8, 8, "");
+    Json withCorners = Json::parse(m);
+    Json cs = Json::array();
+    for (int i = 0; i < 81; ++i) cs.push(Json::number(int64_t(i % 5)));
+    withCorners.member("terrain").set("corners", cs);
+    SimConfig cfg;
+    Simulation s1(cfg, std::make_unique<game::RtsModule>()), s2(cfg, std::make_unique<game::RtsModule>());
+    s1.setup(flatRules, Json::parse(m));
+    s2.setup(flatRules, withCorners);
+    CHECK(s1.checksum() == s2.checksum());
+}
+
+TEST(terrain_corners_file_roundtrip) {
+    std::vector<int16_t> c = {0, -5, 300, 32767, -32768, 7, 1, 2, 3};
+    std::string bytes = game::encodeCorners(c);
+    CHECK(bytes.size() == 18 && uint8_t(bytes[2]) == 0xfb && uint8_t(bytes[3]) == 0xff);
+    Json map = Json::parse(R"({"size": [2, 2], "terrain": {"cornersFile": "maps/x.r16"}})");
+    bool ok = game::applyCornersFile(map, [&](const std::string& p, std::string& out) { out = bytes; return p == "maps/x.r16"; }, nullptr);
+    CHECK(ok);
+    std::vector<int16_t> back;
+    CHECK(game::decodeCorners(map["terrain"], 2, 2, back, nullptr) && back == c);
+    std::string err;
+    CHECK(!game::decodeCorners(map["terrain"], 3, 3, back, &err) && err.find("expected 32 bytes") != std::string::npos);
+    Json missing = Json::parse(R"({"terrain": {"cornersFile": "maps/none.r16"}})");
+    CHECK(!game::applyCornersFile(missing, [](const std::string&, std::string&) { return false; }, &err));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

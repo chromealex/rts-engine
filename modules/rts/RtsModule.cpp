@@ -43,6 +43,12 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("triggers", [this](Simulation& s) { sysTriggers(s); }); // last: sees every event of the tick
     sysCreep(sim);
     sysEconomy(sim); // initial supply/tech counts
+    // big maps: build the hierarchical pathing graph now (it is derived data, so this only moves the cost
+    // from the first long path of the match to the loading screen)
+    MapGrid& g = state(sim).grid;
+    if (g.bigMap())
+        for (auto& t : rules_.types)
+            if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpa(t.pathLayer);
 }
 
 void RtsModule::setupMap(Simulation& sim, const Json& map) {
