@@ -339,6 +339,22 @@ void RtsModule::visionSphere(Simulation& sim) {
     };
     const bool los = (g.hf && rules_.heights.blockVision) || rules_.fog.lineOfSight;
     std::vector<int32_t> cells;
+    // ground radius per cell (lazily filled; 0 = not yet): terrain + vision blockers (structures with
+    // vision.blocks over their footprint, undug rock)
+    std::vector<Fixed> ground(los ? g.flags.size() : 0);
+    std::vector<Fixed> blockers(los ? g.flags.size() : 0);
+    if (los) {
+        const Fixed rock = rules_.fog.rockHeight;
+        if (rock.raw > 0) for (size_t i = 0; i < g.dig.size(); ++i) if (g.dig[i]) blockers[i] = rock;
+        w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& tr) {
+            const UnitType& t = rules_.types[u.type];
+            if (t.visionBlock.raw <= 0 || u.hp.raw <= 0) return;
+            if (auto* f = w.tryGet<Footprint>(e); f && f->x >= 0) {
+                for (int y = 0; y < f->h; ++y) for (int x = 0; x < f->w; ++x) { Fixed& b = blockers[size_t((f->y + y) * g.w + f->x + x)]; b = fxMax(b, t.visionBlock); }
+            } else if (const int c = g.cellOf(tr.pos); c >= 0) blockers[size_t(c)] = fxMax(blockers[size_t(c)], t.visionBlock);
+        });
+    }
+    auto occHeight = [&](int c) { return S.cellHeight(c) + blockers[size_t(c)]; };
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || o.player >= np || (u.flags & kUnitInHand)) return;
         const UnitType& t = rules_.types[u.type];
@@ -363,17 +379,27 @@ void RtsModule::visionSphere(Simulation& sim) {
                     if (n < 0) { const int mid = S.offset(c, 0, dy); n = mid < 0 ? -1 : S.offset(mid, dx, 0); }
                     if (n >= 0) cells.push_back(n);
                 }
+        const std::vector<uint8_t>& mine = gs.vision[o.player];
         for (int32_t n : cells) {
+            if (mine[size_t(n)] == 2) continue;   // already lit for this owner (and its sharers) this pass
             const Vec3 cc = S.cellCenter(n);
             if (dist2D(cc, tr.pos) > sight) continue;
             if (los && !air && !t.seesOver) {
-                // march the 3D sight line: hidden where it dips under the ground (hills and the horizon)
-                const Vec3 tgt = cc + S.up(cc) * rules_.terrain.targetHeight;
-                const int steps = std::max(2, int((dist2D(cc, tr.pos) / cs * 2).floorInt()));
+                // march the 3D sight line in radial terms: at sample k the line's distance from the centre
+                // must stay above the ground radius of the cell under it (hills and the horizon). The cell
+                // under a sample is found with cellFromDir (table lookup, no trigonometry); ground radii are
+                // cached per cell for this pass.
+                const Vec3 tgt = cc + S.cellDir(n) * rules_.terrain.targetHeight;
+                const int steps = int((dist2D(cc, tr.pos) / cs).floorInt()) + 1;   // about one sample per cell
                 bool visible = true;
                 for (int st = 1; st < steps && visible; ++st) {
                     const Vec3 p = eye + (tgt - eye) * Fixed::fromRatio(st, steps);
-                    if ((p - o3).length() < R + S.heightAt(p)) visible = false;
+                    const Vec3 l = p - o3;
+                    const SphereCell sc = S.cubeOf(body).cell(S.cubeOf(body).cellFromDir(l));
+                    const int gc = S.gridCell(body, sc.face, sc.x, sc.y);
+                    Fixed& gr = ground[size_t(gc)];
+                    if (gr.raw == 0) gr = R + occHeight(gc) + Fixed::fromRaw(1);
+                    if (l.lengthSq() < gr * gr) visible = false;
                 }
                 if (!visible) continue;
             }

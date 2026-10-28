@@ -79,14 +79,19 @@ bool RtsModule::attackSlot(Simulation& sim, Entity e, Entity target, Fixed range
     const Vec3 tp = w.get<Transform>(target).pos, me = w.get<Transform>(e).pos;
     Fixed rT = tt.structure ? Fixed::fromInt(std::max(tt.footprintW, tt.footprintH)) / 2 : tt.radius;
     Fixed ring = rT + t.radius + range / 2 + Fixed::fromRatio(1, 20);
-    if (c->slotTarget == target && c->slot >= 0 && sim.tick() < c->slotTick + 20) { out = tp + dir32(c->slot) * ring; return true; }
+    if (c->slotTarget == target && c->slot >= 0 && sim.tick() < c->slotTick + 20) {
+        const Surface* S0 = state(sim).surface.get();
+        out = S0 ? S0->project(tp + S0->fromPlane(tp, dir32(c->slot) * ring)) : tp + dir32(c->slot) * ring;
+        return true;
+    }
     // drop the old claim
     for (auto& cl : slotClaims_) if (cl.claimer == e.packed()) cl.target = 0;
     int n = int((ring * 6283 / 1000 / (t.radius * 2 + Fixed::fromRatio(1, 10))).toInt());
     n = std::clamp(n, 4, 32);
     const int stride = 32 / n;
     n = 32 / stride;
-    Vec3 d = flat(me - tp);
+    const Surface* S = state(sim).surface.get();
+    Vec3 d = S ? S->toPlane(tp, me - tp) : flat(me - tp);
     if (d.length().raw == 0) d = {kOne, Fixed{}, Fixed{}};
     int k0 = 0;
     Fixed best{};
@@ -94,7 +99,7 @@ bool RtsModule::attackSlot(Simulation& sim, Entity e, Entity target, Fixed range
     for (int step = 0; step < n; ++step) {
         int k = ((k0 + ((step + 1) / 2) * ((step & 1) ? 1 : -1)) % n + n) % n;
         int dirIdx = k * stride;
-        Vec3 p = tp + dir32(dirIdx) * ring;
+        Vec3 p = S ? S->project(tp + S->fromPlane(tp, dir32(dirIdx) * ring)) : tp + dir32(dirIdx) * ring;
         if (!g.passableAt(p, t.pathLayer)) continue;
         bool taken = false;
         for (auto& cl : slotClaims_) if (cl.target == target.packed() && cl.slot == dirIdx && cl.claimer != e.packed()) taken = true;

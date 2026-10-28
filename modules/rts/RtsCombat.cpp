@@ -177,8 +177,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 pr.damage = dmg; pr.splash = wd.splash; pr.damageType = wd.damageType; pr.owner = o.player; pr.layers = wd.targets;
                 pr.onHit = proc ? wd.onHit : enchant; pr.sourceType = u.type;
                 if (proc && enchant >= 0) onHits.push_back({enchant, e, c.target, o.player, u.type, tp});
-                Vec3 start = tr.pos;
-                start.y = groundHeight(sim, tr.pos) + Fixed::fromRatio(6, 10);
+                Vec3 start = lift(sim, tr.pos, Fixed::fromRatio(6, 10));
                 shots.push_back({pr, start});
             }
         }
@@ -224,16 +223,15 @@ void RtsModule::sysProjectiles(Simulation& sim) {
                 pr.travel += step;
                 Fixed t = fxMin(kOne, pr.travel / pr.total);
                 Vec3 flatPos = pr.start + (pr.aim - pr.start) * t;
-                flatPos.y = groundHeight(sim, flatPos) + Fixed::fromRatio(4, 10) + e.delivery.arcHeight * 4 * t * (kOne - t);
-                tr.pos = flatPos;
+                tr.pos = lift(sim, flatPos, Fixed::fromRatio(4, 10) + e.delivery.arcHeight * 4 * t * (kOne - t));
                 if (t >= kOne) impacts.push_back(p);
                 return;
             }
-            Vec3 aim = pr.aim; aim.y = groundHeight(sim, aim) + Fixed::fromRatio(4, 10);
+            Vec3 aim = lift(sim, pr.aim, Fixed::fromRatio(4, 10));
             if (moveTowards(tr.pos, aim, step)) impacts.push_back(p);
             return;
         }
-        if (w.alive(pr.target) && w.has<Unit>(pr.target)) { pr.aim = w.get<Transform>(pr.target).pos; pr.aim.y = groundHeight(sim, pr.aim) + Fixed::fromRatio(4, 10); }
+        if (w.alive(pr.target) && w.has<Unit>(pr.target)) { pr.aim = lift(sim, w.get<Transform>(pr.target).pos, Fixed::fromRatio(4, 10)); }
         if (!moveTowards(tr.pos, pr.aim, pr.speed * dt)) return;
         if (w.alive(pr.target) && w.has<Unit>(pr.target)) dealDamage(sim, pr.target, pr.damage, pr.damageType, pr.source, pr.owner);
         if (pr.onHit >= 0 && w.alive(pr.target)) onHits.push_back({pr.onHit, pr.source, pr.target, pr.owner, pr.sourceType, pr.aim});

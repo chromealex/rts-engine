@@ -752,6 +752,7 @@ Entity RtsModule::findNearestFieldCell(Simulation& sim, Vec3 p, int res, Vec3& o
             for (int dx = -r; dx <= r; ++dx) {
                 if (std::abs(dx) != r && std::abs(dy) != r) continue;
                 int x = cx + dx, y = cy + dy;
+                if (g.surf) { const int c = g.offsetCell(g.cellOf(p), dx, dy); if (c < 0) continue; x = c % g.w; y = c / g.w; }
                 if (!g.inside(x, y)) continue;
                 size_t i = size_t(g.index(x, y));
                 if (g.fieldAmt[i] >= kOne && (res < 0 || g.fieldRes[i] == res) && !g.blocked[i]) { // skip regrowth crumbs
@@ -784,6 +785,25 @@ Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer) {
     World& w = sim.world();
     GameState& gs = state(sim);
     Vec3 c = w.get<Transform>(s).pos;
+    if (gs.surface) {   // planets: rings of cells around the structure, across face seams
+        const int c0 = gs.grid.cellOf(c);
+        int half = 1;
+        if (auto* f = w.tryGet<Footprint>(s)) half = (std::max(f->w, f->h) + 1) / 2;
+        for (int ring = half; ring < half + 10; ++ring)
+            for (int dy = -ring; dy <= ring; ++dy)
+                for (int dx = -ring; dx <= ring; ++dx) {
+                    if (std::abs(dx) != ring && std::abs(dy) != ring) continue;
+                    const int n = gs.grid.offsetCell(c0, dx, dy);
+                    if (n < 0 || !gs.grid.passable(n % gs.grid.w, n / gs.grid.w, layer)) continue;
+                    const Vec3 cc = gs.grid.centerOf(n);
+                    bool occupied = false;
+                    gs.hash.query(cc, kOne, [&](Entity o) {
+                        if (auto* t = w.tryGet<Transform>(o); t && dist2D(t->pos, cc) < Fixed::fromRatio(6, 10) && w.has<Mobile>(o)) occupied = true;
+                    });
+                    if (!occupied) return cc;
+                }
+        return c;
+    }
     int x0, y0; state(sim).grid.cellXY(c, x0, y0);
     int fw = 1, fh = 1;
     if (auto* f = w.tryGet<Footprint>(s)) { x0 = f->x; y0 = f->y; fw = f->w; fh = f->h; }
@@ -1212,22 +1232,30 @@ bool RtsModule::findAutoSpot(Simulation& sim, uint8_t player, uint16_t type, Vec
         Fixed d = dist2D(tr.pos, c);
         if (d < best) { best = d; enemy = tr.pos; }
     });
-    Vec2 away = (c - enemy).xz();
+    Vec2 away = state(sim).surface ? (bodyOf(sim, enemy) == bodyOf(sim, c) ? state(sim).surface->toPlane(c, c - enemy).xz() : Vec2{}) : (c - enemy).xz();
     Fixed al = away.length();
     if (al.raw > 0) away = away / al;
     const int R = std::max(6, rules_.buildRadius > 0 ? rules_.buildRadius : 12);
     Fixed bestScore = Fixed::fromInt(1 << 20);
     bool found = false;
     int cx, cy; state(sim).grid.cellXY(c, cx, cy);
+    const Surface* S = state(sim).surface.get();
+    const int c0 = state(sim).grid.cellOf(c);
     for (int dy = -R; dy <= R; ++dy)
         for (int dx = -R; dx <= R; ++dx) {
-            Vec3 p = snapToFootprint(t, {Fixed::fromInt(cx + dx) + kHalf, Fixed{}, Fixed::fromInt(cy + dy) + kHalf});
+            Vec3 p;
+            if (S) {
+                const int n = S->offset(c0, dx, dy);
+                if (n < 0) continue;
+                p = snapToFootprint(t, S->cellCenter(n), S);
+            } else p = snapToFootprint(t, {Fixed::fromInt(cx + dx) + kHalf, Fixed{}, Fixed::fromInt(cy + dy) + kHalf});
             int x0, y0;
-            footprintAt(t, p, x0, y0);
+            footprintAt(t, p, x0, y0, S);
+            if (x0 < 0 && S) continue;
             // keep a one-cell gap around structures so units can walk between them
             if (!state(sim).grid.areaBuildable(x0 - 1, y0 - 1, t.footprintW + 2, t.footprintH + 2) && t.placeOn == kNoType) continue;
             if (!canPlace(sim, player, type, p)) continue;
-            Vec2 d = (p - c).xz();
+            Vec2 d = S ? S->toPlane(c, p - c).xz() : (p - c).xz();
             Fixed score = d.length() - d.dot(away) / 2;     // close to the core, behind it
             if (score < bestScore) { bestScore = score; out = p; found = true; }
         }
