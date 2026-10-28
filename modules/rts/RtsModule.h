@@ -7,6 +7,7 @@
 //   RtsWorld.cpp     vision (with heights), creep, control points, regions, waves, neutrals, victory
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../../engine/sim/CommonComponents.h"
@@ -14,6 +15,7 @@
 #include "RtsData.h"
 #include "RtsMap.h"
 #include "RtsTriggers.h"
+#include "RtsScript.h"
 
 namespace rts::game {
 
@@ -375,6 +377,8 @@ struct GameState {
 // ---------------------------------------------------------------- module
 class RtsModule final : public GameModule {
 public:
+    RtsModule();
+    ~RtsModule() override;
     std::string name() const override { return "rts"; }
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
@@ -383,6 +387,7 @@ public:
 
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
+    ScriptEngine* scripts() const { return script_.get(); }   // null: the game has no simulation scripts
     GameState& state(Simulation& sim) { return *sim.world().resource<GameState>(); }
 
     // ---- queries shared with AI, client and editor
@@ -534,6 +539,7 @@ private:
     TriggerSet triggers_;
     struct SlotClaim { uint64_t target = 0; int slot = 0; uint64_t claimer = 0; };
     std::vector<SlotClaim> slotClaims_;   // rebuilt every tick from Combat slots (derived, not state)
+    std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
 };
 
 } // namespace rts::game

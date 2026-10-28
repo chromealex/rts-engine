@@ -130,6 +130,7 @@ enum class EffectKind : uint8_t {
     SendBack, Clone, Formation, Convert,
     // players
     PlayerStatus, EqualizeResource, Sacrifice, StealSkill, Cooldown,
+    Script,     // {"type": "script", "fn": "name", ...}: a Lua function (RtsScript.h), runs in the tick's scripts phase
 };
 
 struct EffectDef {
@@ -164,6 +165,8 @@ struct EffectDef {
     bool fake = false;         // Clone: illusions
     bool ofLost = false;       // GarrisonAdd: percent of units lost (resurrection)
     bool fromCaster = false;   // Knockback / Area origin: from the caster instead of the point
+    std::string scriptFn;      // Script: global function of the simulation scripts
+    Json scriptArgs;           // Script: the effect's JSON (ctx.args)
 };
 
 // What autocast / the AI aims a skill at.

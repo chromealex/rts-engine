@@ -17,6 +17,11 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.world().setResource<GameState>();
     setupMap(sim, map);
     loadTriggers(rules_, rulesJson, map, triggers_);
+    script_.reset();
+    if (!scriptFiles(rulesJson, map).empty()) {   // zero cost for games without scripts: no VM, no system
+        script_ = std::make_unique<ScriptEngine>(*this);
+        script_->load(sim, rulesJson, map);
+    }
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
@@ -42,6 +47,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
     sim.addSystem("victory", [this](Simulation& s) { sysVictory(s); });
     sim.addSystem("triggers", [this](Simulation& s) { sysTriggers(s); }); // last: sees every event of the tick
+    if (script_) sim.addSystem("scripts", [this](Simulation& s) { script_->tick(s); }); // after triggers: same events
     sysCreep(sim);
     sysEconomy(sim); // initial supply/tech counts
     // big maps: build the hierarchical pathing graph now (it is derived data, so this only moves the cost
@@ -1219,6 +1225,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);

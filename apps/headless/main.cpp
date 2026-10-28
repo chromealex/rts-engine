@@ -18,6 +18,7 @@
 #include "modules/rts/RtsAI.h"
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
+#include "modules/rts/RtsScript.h"
 
 using namespace rts;
 namespace fs = std::filesystem;
@@ -41,6 +42,30 @@ static Json loadMap(const std::string& mapPath, const std::string& projectDir) {
     return map;
 }
 
+// rules.json with the game's scripts embedded (RtsScript.h)
+static Json loadRules(const std::string& rulesPath, const Json& map, const std::string& projectDir) {
+    Json rules = Json::parseFile(rulesPath);
+    std::string err;
+    auto read = [&](const std::string& p, std::string& out) {
+        std::ifstream f(projectDir + "/" + p, std::ios::binary);
+        if (!f) return false;
+        out.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    if (!game::embedScripts(rules, map, read, &err)) throw std::runtime_error(err);
+    return rules;
+}
+
+// Script log lines (errors always, prints unless --quiet).
+static void attachScriptLog(Simulation& sim, bool quiet) {
+    auto* m = sim.module().name() == "rts" ? static_cast<game::RtsModule*>(&sim.module()) : nullptr;
+    if (!m || !m->scripts()) return;
+    for (auto& e : m->scripts()->log()) if (e.error || !quiet) std::printf("[script%s] %s\n", e.error ? " error" : "", e.text.c_str());
+    m->scripts()->onLog = [quiet](const game::ScriptLogEntry& e) {
+        if (e.error || !quiet) std::printf("[script%s t=%u] %s\n", e.error ? " error" : "", e.tick, e.text.c_str());
+    };
+}
+
 struct Args {
     std::string project = "games/skirmish", map, replay, record;
     uint64_t seed = 1;
@@ -50,7 +75,7 @@ struct Args {
 };
 
 static void status(Simulation& sim) {
-    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
+    auto* m = sim.module().name() == "rts" ? static_cast<game::RtsModule*>(&sim.module()) : nullptr;
     auto& gs = m->state(sim);
     std::printf("  t=%4us", sim.tick() / sim.tickRate());
     for (auto& p : sim.players()) {
@@ -73,7 +98,7 @@ static void status(Simulation& sim) {
 // Path query benchmark: random start/goal pairs on passable ground cells (fixed seed), the same queries with
 // the map's pathing mode (HPA* on big maps) and with plain A* (any length, node limit as in the game).
 static int benchPaths(Simulation& sim, const Args& a) {
-    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
+    auto* m = sim.module().name() == "rts" ? static_cast<game::RtsModule*>(&sim.module()) : nullptr;
     game::MapGrid& g = m->state(sim).grid;
     const uint8_t layer = game::kLayerGround;
     Random rng(a.seed);
@@ -122,7 +147,11 @@ static int play(const Args& a) {
     SimConfig cfg;
     cfg.seed = a.seed;
     Simulation sim(cfg, makeModule(module));
-    sim.setup(Json::parseFile(rulesPath), loadMap(mapPath, a.project));
+    {
+        Json map = loadMap(mapPath, a.project);
+        sim.setup(loadRules(rulesPath, map, a.project), map);
+    }
+    attachScriptLog(sim, a.quiet);
 
     if (a.benchPaths > 0) return benchPaths(sim, a);
     std::vector<game::RtsAI> bots;
@@ -173,7 +202,11 @@ static int replay(const Args& a) {
     SimConfig cfg;
     cfg.seed = rep.seed; cfg.tickRate = rep.tickRate; cfg.inputDelayTicks = rep.inputDelay;
     Simulation sim(cfg, makeModule(rep.module));
-    sim.setup(Json::parseFile(rep.rulesPath), loadMap(rep.mapPath, fs::path(rep.rulesPath).parent_path().string()));
+    {
+        const std::string dir = fs::path(rep.rulesPath).parent_path().string();
+        Json map = loadMap(rep.mapPath, dir);
+        sim.setup(loadRules(rep.rulesPath, map, dir), map);
+    }
     for (auto& c : rep.commands) sim.submit(c);
     size_t ci = 0;
     while (sim.tick() < rep.endTick) {

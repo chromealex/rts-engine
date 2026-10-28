@@ -552,6 +552,9 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
         }
         break;
     }
+    case EffectKind::Script:   // deferred to the scripts phase of this tick (never runs inside a system's loop)
+        if (script_) script_->queueEffect(e, ctx, targets());
+        break;
     case EffectKind::Area:
     case EffectKind::Reveal: {
         if (list < 0) break;

@@ -41,15 +41,17 @@ struct TrigFilter {                // unit filter
 };
 
 struct TrigCondition {
-    enum Kind : uint8_t { Count, Resource, Variable, Researched, Random, Time, Alive, RegionsOwned } kind = Count;
+    enum Kind : uint8_t { Count, Resource, Variable, Researched, Random, Time, Alive, RegionsOwned,
+                          Script /* {"type": "script", "fn": ...}: a Lua function's result (RtsScript.h) */ } kind = Count;
     TrigPlayer player;
     TrigFilter filter;
     int area = -1;
     int16_t index = -1;            // resource / tech
-    std::string name;              // variable
+    std::string name;              // variable / script function
     TrigCmp cmp = TrigCmp::Ge;
     Fixed value{};
     bool negate = false;
+    Json args;                     // script: the condition's JSON (ctx.args)
 };
 
 struct TrigAction {
@@ -58,6 +60,7 @@ struct TrigAction {
         Research, EnableType, DisableType, Victory, Defeat, EnableTrigger, DisableTrigger, AddScore,
         SetRegionOwner, AttackMove, MoveUnits, SetTickets,
         CastAbility,       // a player ability (map / timer skills): "ability", "at" / "area" (free: "free": true)
+        Script,            // {"type": "script", "fn": "name", ...}: calls a Lua function of the game's scripts
     } kind = Message;
     TrigPlayer player;
     TrigFilter filter;
@@ -72,7 +75,8 @@ struct TrigAction {
     Vec3 at{};
     bool hasAt = false;
     bool attackMove = false;
-    std::string text, name;        // message / variable / trigger id
+    std::string text, name;        // message / variable / trigger id / script function
+    Json args;                     // script: the action's JSON (ctx.args)
 };
 
 struct TriggerDef {
