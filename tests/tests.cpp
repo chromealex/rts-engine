@@ -5083,6 +5083,152 @@ TEST(sphere_great_circle_steps) {
     CHECK(fxAbs(e.length() - Fixed::fromInt(1)) < Fixed::fromRatio(1, 100));
 }
 
+// ---------------- Sound groups and steal modes ----------------
+
+TEST(audio_groups_share_a_limit) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"reverb":false},
+        "groups":{"melee":{"max":3}},
+        "sounds":{"swing":{"synth":{"duration":2},"group":"melee","maxInstances":0},
+                  "clang":{"synth":{"duration":2},"group":"melee","maxInstances":0},
+                  "other":{"synth":{"duration":2},"maxInstances":0}}})"));
+    CHECK(a->groupCount() == 1 && a->findGroup("melee") == 0 && a->group(0)->max == 3);
+    CHECK(a->sound(a->find("swing"))->groups.size() == 1 && a->sound(a->find("other"))->groups.empty());
+    for (int i = 0; i < 3; ++i) { a->play("swing"); a->play("clang"); }
+    a->play("other");
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 4);           // 3 from the group (both sounds together) + the ungrouped one
+}
+
+TEST(audio_group_takes_a_whole_bus) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"groups":{"ui":{"max":2,"bus":"ui"}},
+        "sounds":{"a":{"synth":{"duration":2},"bus":"ui","maxInstances":0},"b":{"synth":{"duration":2},"bus":"ui","maxInstances":0},
+                  "c":{"synth":{"duration":2},"maxInstances":0}}})"));
+    CHECK(a->sound(a->find("a"))->groups.size() == 1 && a->sound(a->find("c"))->groups.empty());
+    for (int i = 0; i < 3; ++i) { a->play("a"); a->play("b"); a->play("c"); }
+    renderRms(*a, 0.05f);
+    CHECK(a->activeVoices() == 2 + 3);
+}
+
+TEST(audio_group_cooldown) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"groups":{"shots":{"cooldown":0.1}},
+        "sounds":{"bow":{"synth":{"duration":0.05},"group":"shots"},"gun":{"synth":{"duration":0.05},"group":"shots"}}})"));
+    CHECK(a->play("bow") != audio::kNoVoice);
+    CHECK(a->play("gun") == audio::kNoVoice);   // another sound, same group: still in its cooldown
+    a->update(0.12);
+    CHECK(a->play("gun") != audio::kNoVoice);
+}
+
+namespace {
+// Plays `name` at x (listener at the origin, looking down -z) and reports whether it started.
+audio::VoiceId playAtX(audio::AudioEngine& a, const char* name, float x) {
+    audio::PlayParams p;
+    p.positional = true;
+    p.x = x;
+    return a.play(name, p);
+}
+// Which of the probe tones (1000 + 100 * i Hz) are audible in the next 0.2 s.
+std::vector<bool> tonesPlaying(audio::AudioEngine& a, int n) {
+    renderBuf(a, 0.05f);   // let stolen voices fade out
+    auto b = renderBuf(a, 0.2f);
+    std::vector<bool> on;
+    for (int i = 0; i < n; ++i) on.push_back(level(b, 1000 + 100 * i, 0.0, 0.2) > 0.005);
+    return on;
+}
+std::string probeBank(const char* steal) {
+    std::string s = R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":200,"airAbsorption":false,"reverb":false},
+        "groups":{"g":{"max":2,"steal":")" + std::string(steal) + R"("}},"sounds":{)";
+    for (int i = 0; i < 4; ++i) {
+        if (i) s += ",";
+        s += "\"t" + std::to_string(i) + "\":{\"synth\":{\"wave\":\"sine\",\"freq\":" + std::to_string(1000 + 100 * i) +
+             ",\"duration\":3,\"volume\":" + (i == 1 ? "0.2" : "1") + "},\"group\":\"g\",\"maxInstances\":0}";
+    }
+    return s + "}}";
+}
+} // namespace
+
+TEST(audio_steal_farthest) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, probeBank("farthest")));
+    a->setListener(audio::ListenerPose{});
+    playAtX(*a, "t0", 10);           // near
+    playAtX(*a, "t1", 60);           // far
+    renderBuf(*a, 0.02f);
+    playAtX(*a, "t2", 30);           // full: the far one (t1) makes room
+    CHECK((tonesPlaying(*a, 4) == std::vector<bool>{true, false, true, false}));
+    CHECK(playAtX(*a, "t3", 100) != audio::kNoVoice);   // accepted by the engine...
+    CHECK((tonesPlaying(*a, 4) == std::vector<bool>{true, false, true, false}));  // ...but farther than all: dropped, nothing cut off
+}
+
+TEST(audio_steal_oldest_quietest_none) {
+    {
+        auto a = offlineAudio();
+        CHECK(loadBank(*a, probeBank("oldest")));
+        a->setListener(audio::ListenerPose{});
+        playAtX(*a, "t0", 10); renderBuf(*a, 0.02f);
+        playAtX(*a, "t1", 60); renderBuf(*a, 0.02f);
+        playAtX(*a, "t3", 100);                                       // oldest goes, even though the new one is far
+        CHECK((tonesPlaying(*a, 4) == std::vector<bool>{false, true, false, true}));
+    }
+    {
+        auto a = offlineAudio();
+        CHECK(loadBank(*a, probeBank("quietest")));
+        a->setListener(audio::ListenerPose{});
+        playAtX(*a, "t0", 10);
+        playAtX(*a, "t1", 10);                                        // volume 0.2: the quietest
+        renderBuf(*a, 0.02f);
+        playAtX(*a, "t2", 10);
+        CHECK((tonesPlaying(*a, 4) == std::vector<bool>{true, false, true, false}));
+        playAtX(*a, "t1", 10);                                        // quieter than everything playing: dropped
+        CHECK((tonesPlaying(*a, 4) == std::vector<bool>{true, false, true, false}));
+    }
+    {
+        auto a = offlineAudio();
+        CHECK(loadBank(*a, probeBank("none")));
+        a->setListener(audio::ListenerPose{});
+        playAtX(*a, "t0", 50); playAtX(*a, "t1", 50); renderBuf(*a, 0.02f);
+        playAtX(*a, "t2", 1);                                         // even a close one: nothing is cut off
+        CHECK((tonesPlaying(*a, 4) == std::vector<bool>{true, true, false, false}));
+    }
+}
+
+TEST(audio_group_respects_priority_and_far_pairs) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":200,"airAbsorption":false,"reverb":false},
+        "groups":{"g":{"max":2,"steal":"oldest"}},
+        "sounds":{"vip":{"synth":{"wave":"sine","freq":1000,"duration":3},"group":"g","priority":5,"maxInstances":0},
+                  "low":{"synth":{"wave":"sine","freq":1100,"duration":3},"group":"g","maxInstances":0},
+                  "boom":{"synth":{"wave":"sine","freq":1200,"duration":3},"group":"g","maxInstances":0,"far":{"sound":"boomFar","from":0.0}},
+                  "boomFar":{"synth":{"wave":"sine","freq":1300,"duration":3},"maxInstances":0,"maxDistance":300}}})"));
+    a->setListener(audio::ListenerPose{});
+    playAtX(*a, "vip", 10); renderBuf(*a, 0.02f);
+    playAtX(*a, "vip", 10); renderBuf(*a, 0.02f);
+    playAtX(*a, "low", 10);                                           // group full of higher priority: dropped
+    CHECK((tonesPlaying(*a, 4) == std::vector<bool>{true, false, false, false}));
+    a->stopAll(0.01f);
+    renderBuf(*a, 0.1f);
+    playAtX(*a, "boom", 100);                                         // a near/far pair counts once
+    playAtX(*a, "low", 10);
+    renderBuf(*a, 0.05f);
+    CHECK(a->activeVoices() == 3);                                    // boom + boomFar + low: the pair did not fill the group
+    playAtX(*a, "low", 10);                                           // full: the oldest (boom) goes, with its far half
+    CHECK((tonesPlaying(*a, 4) == std::vector<bool>{false, true, false, false}));
+    CHECK(a->activeVoices() == 2);
+}
+
+TEST(audio_group_errors) {
+    auto a = offlineAudio();
+    std::string err;
+    CHECK(!loadBank(*a, R"({"groups":{"g":{"max":2,"steal":"random"}}})", &err) && err.find("group 'g': unknown steal 'random'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"groups":{"g":{"max":2,"bus":"drums"}}})", &err) && err.find("unknown bus 'drums'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"steal":"later"}}})", &err) && err.find("sound 'x': unknown steal 'later'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"group":3}}})", &err) && err.find("\"group\" must be") != std::string::npos);
+    CHECK(loadBank(*a, R"({"groups":{"g":{"maxx":2}},"sounds":{"x":{"synth":{},"group":["g","nope"]}}})", &err));
+    CHECK(a->warnings().size() == 3);   // unknown key 'maxx', a group that limits nothing, unknown group 'nope'
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
