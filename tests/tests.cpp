@@ -5941,6 +5941,7 @@ TEST(sphere_great_circle_steps) {
 #define GEN_GOLD_LANES 0x6010e5d33a6a8fdbull
 #define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
 #define GEN_GOLD_METAL 0x5e11afce218433b2ull
+#define GEN_GOLD_PLANET_WORLD 0x8101a56ab8e6f0c6ull
 #define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
 
 // ---------------- terrain / map generator (agent-terrain-gen) ----------------
@@ -8868,6 +8869,84 @@ TEST(postfx_neutral_lut_png) {
     CHECK(px[(0 * 256 + 15) * 4 + 0] == 255 && px[(0 * 256 + 16) * 4 + 2] == 17 && px[(15 * 256 + 0) * 4 + 1] == 255);
 }
 #endif
+
+
+TEST(gen_planet_world_players) {
+    // a whole planet map from a planet preset: players, kit, objects, moons, engine-path fairness, determinism
+    const std::string rules = R"({"victory": "keyUnits", "terrain": {"model": "heightfield", "maxSlope": {"ground": 0.8}},
+      "resources": {"metal": {"start": 500}},
+      "types": {"boss": {"key": true, "move": {"speed": 2, "radius": 0.5}, "builds": ["lab"], "weapons": [{"range": 2, "damage": 5, "cooldown": 1}]},
+                "lab": {"structure": {"footprint": [3, 3]}, "produces": ["ship"]},
+                "ship": {"move": {"speed": 3, "radius": 0.5, "layer": "orbit"}},
+                "spot": {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+                "drill": {"structure": {"footprint": [2, 2], "on": "spot"}, "income": {"metal": 2}},
+                "rock": {"structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "metal", "amount": 100}}}})";
+    Json rj = Json::parse(rules);
+    game::Rules R = game::loadRules(rj);
+    auto make = [&](int players, uint64_t seed, const std::string& layout, Json& out) {
+        gen::GenRequest req;
+        req.preset = "rocky"; req.seed = seed; req.players = players;
+        req.params = Json::object();
+        req.params.set("layout", Json::string(layout));
+        out = Json::parse(R"({"name": "w", "players": []})");
+        std::string err;
+        const bool ok = gen::generateMap(req, R, rj, out, &err);
+        if (!ok) std::printf("  planet gen error: %s\n", err.c_str());
+        return ok;
+    };
+    for (int np : {2, 3, 4}) {
+        Json m;
+        CHECK(make(np, 5, "shared", m));
+        const Json& g = m["generated"];
+        CHECK(g.getBool("connected"));
+        CHECK(int(m["players"].size()) == np);
+        int own[9] = {}, moon = 0;
+        for (auto& e : m["entities"].items()) {
+            const int o = int(e.getInt("owner"));
+            if (o >= 1 && o <= 8) own[o]++;
+            if (e["at"].getStr("body") == "luna") moon++;
+            CHECK(e["at"].isObject());
+        }
+        for (int p = 2; p <= np; ++p) CHECK(own[p] == own[1]);
+        CHECK(own[1] >= 1 && moon > 0);
+        const Json& nr = g["nearResources"];
+        for (size_t p = 1; p < nr.size(); ++p) CHECK(nr[p].integer() == nr[size_t(0)].integer());
+        if (np == 2 || np == 4) CHECK(g.getInt("pathSpread", 99) <= 2);     // exact quarter / half turn symmetry
+        else CHECK(g.getInt("pathSpread", 999) <= 150);
+        // the generated map loads and plays deterministically
+        auto run = [&]() {
+            SimConfig cfg; cfg.seed = 3;
+            Simulation sim(cfg, std::make_unique<game::RtsModule>());
+            sim.setup(rj, m);
+            for (int i = 0; i < 60; ++i) sim.step();
+            return sim.checksum();
+        };
+        CHECK(run() == run());
+        if (np == 2) {
+            std::printf("  planet world 2p %016llx\n", (unsigned long long)gen::mapHash(m));
+            CHECK(gen::mapHash(m) == GEN_GOLD_PLANET_WORLD);
+        }
+    }
+    Json a, b;
+    CHECK(make(3, 9, "separate", a) && make(3, 9, "separate", b));
+    CHECK(gen::mapHash(a) == gen::mapHash(b));
+    CHECK(a["world"]["bodies"].size() >= 4);                      // star + 3 worlds (+ moon)
+    CHECK(a["generated"]["nearResources"][size_t(0)].integer() == a["generated"]["nearResources"][size_t(2)].integer());
+    // match-time: "generate" with a planet preset regenerates from the match seed
+    Json mm = Json::parse(R"({"name": "m", "players": [{}, {}], "generate": {"preset": "moon", "seed": "match", "players": 2}})");
+    CHECK(gen::prepareGenerate(mm, [](const std::string&, std::string&) { return false; }, nullptr));
+    auto runMatch = [&](uint64_t seed) {
+        SimConfig cfg; cfg.seed = seed;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rj, mm);
+        auto* mod = dynamic_cast<game::RtsModule*>(&sim.module());
+        CHECK(mod->surface(sim) != nullptr && mod->generatedMap() != nullptr);
+        for (int i = 0; i < 40; ++i) sim.step();
+        return sim.checksum();
+    };
+    CHECK(runMatch(4) == runMatch(4));
+    CHECK(runMatch(4) != runMatch(5));
+}
 
 int main() {
     for (auto& [name, fn] : registry()) {
