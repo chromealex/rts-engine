@@ -2708,6 +2708,7 @@ TEST(terrain_line_of_sight_behind_ridge) {
 // ------------------------------------------------------------------ split packs (downloadable chunks)
 
 #include "engine/pack/Chunks.h"
+#include "engine/pack/FileCopy.h"
 #include "engine/pack/Sha256.h"
 
 TEST(pack_sha256_vectors) {
@@ -6026,6 +6027,31 @@ TEST(icons_generate_platform_sets) {
     branding::Image strip = branding::splashStrip(splash::parseSpec(game["splash"]), (dir / "game").string(), {0, 0.5f}, 160, 90, &pw);
     CHECK(strip.width > 320 && strip.height > 90);
     fs::remove_all(dir);
+}
+
+TEST(pack_file_copy_into_existing) {
+    // fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists;
+    // rtsbuild re-stages into the same folders, the editor copies a template over dst/maps.
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "rts_filecopy_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "src" / "maps" / "sub");
+    std::ofstream(dir / "src" / "a.txt") << "new";
+    std::ofstream(dir / "src" / "maps" / "sub" / "b.txt") << "b";
+    fs::create_directories(dir / "dst" / "maps");
+    std::ofstream(dir / "dst" / "a.txt") << "old-and-longer";
+    CHECK(rts::pack::copyTree(dir / "src", dir / "dst", ec));
+    CHECK(rts::pack::copyTree(dir / "src", dir / "dst", ec));   // twice: every file exists now
+    std::ifstream a(dir / "dst" / "a.txt");
+    std::string av((std::istreambuf_iterator<char>(a)), {});
+    a.close();
+    CHECK(av == "new" && fs::exists(dir / "dst" / "maps" / "sub" / "b.txt"));
+    CHECK(rts::pack::copyFileReplace(dir / "src" / "a.txt", dir / "dst" / "maps" / "a2.txt", ec));
+    CHECK(rts::pack::copyFileReplace(dir / "src" / "a.txt", dir / "dst" / "maps" / "a2.txt", ec));
+    CHECK(!rts::pack::copyFileReplace(dir / "src" / "a.txt", dir / "src" / "." / "a.txt", ec));   // never onto itself
+    CHECK(fs::file_size(dir / "src" / "a.txt", ec) == 3);
+    fs::remove_all(dir, ec);
 }
 
 int main() {
