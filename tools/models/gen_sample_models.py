@@ -9,8 +9,14 @@ They exercise every path of the model pipeline:
                  wheel spin, KHR_materials_variants (desert, winter)
   windmill.gltf  .gltf + external .bin + external .png: alpha-masked double-sided sails on a
                  "Sails" node (procedural spin), emissive windows, KHR_texture_transform
-  crystal.obj    OBJ + MTL: translucent emissive crystals (blend) on a textured rock
+  crystal.obj    OBJ + MTL: translucent emissive crystals (blend) on a rock textured with a KTX2
+                 file (ETC2 blocks + mips, stays compressed on GPUs with ETC2, CPU-decoded elsewhere)
   tank_team.png  team mask for the tank hull (materials override "teamMask")
+  golem_lod.glb  far LOD of the golem (same skeleton and clips, fewer parts); golem also has Run
+                 (blend space) and Breathe (additive) clips
+  sword.glb, sack.glb, logs.glb   socket attachments (weapon, carried gold / wood)
+  scaffold.glb   construction stage of the windmill; windmill.gltf has a "burnt" material variant
+  slime.glb      morph targets (Squash, Stretch) animated by a weights channel (Wobble)
 
 Usage: python3 tools/models/gen_sample_models.py games/showcase/models   (needs Pillow)
 """
@@ -204,7 +210,7 @@ def noise(x, y, seed):
 
 # ------------------------------------------------------------------ golem (skinned)
 
-def golem():
+def golem(lod=False):
     g = Gltf()
     g.ext("KHR_materials_emissive_strength")
     S = 64
@@ -239,6 +245,8 @@ def golem():
         ((0, 1.3, 0.2), (0.44, 0.56, 0.03), 2, cloth), ((0, 1.3, -0.2), (0.44, 0.56, 0.03), 2, cloth),
         ((0.08, 1.9, 0.172), (0.06, 0.04, 0.01), 3, eyes), ((-0.08, 1.9, 0.172), (0.06, 0.04, 0.01), 3, eyes),
     ]
+    if lod:  # far LOD: no fists, back cloth or eyes (same skeleton and clips)
+        parts = [p for i, p in enumerate(parts) if i not in (5, 6, 10, 11, 12)]
     prims = {}
     for c, s, j, mat in parts:
         V, I = box(c, s)
@@ -279,6 +287,16 @@ def golem():
                   (1, "translation", t, [[0, 0.9, 0], [0, 0.95, 0], [0, 0.9, 0], [0, 0.95, 0], [0, 0.9, 0]], "LINEAR"),
                   (2, "rotation", t, [quat_x(6)] * 5, "STEP")])
     t = [0, 0.3, 0.45, 0.8]
+    sw = [0, 45, 0, -45, 0]
+    t = [0, 0.15, 0.3, 0.45, 0.6]
+    clip("Run", [(6, "rotation", t, [quat_x(a) for a in sw], "LINEAR"), (7, "rotation", t, [quat_x(-a) for a in sw], "LINEAR"),
+                 (4, "rotation", t, [quat_x(-a) for a in sw], "LINEAR"), (5, "rotation", t, [quat_x(a) for a in sw], "LINEAR"),
+                 (1, "translation", t, [[0, 0.9, 0], [0, 1.0, 0], [0, 0.9, 0], [0, 1.0, 0], [0, 0.9, 0]], "LINEAR"),
+                 (2, "rotation", t, [quat_x(14)] * 5, "STEP")])
+    t = [0, 1.0, 2.0]   # additive: chest heaves (applied on top of any action)
+    clip("Breathe", [(2, "scale", t, [[1, 1, 1], [1.06, 1.03, 1.08], [1, 1, 1]], "LINEAR"),
+                     (3, "rotation", t, [quat_x(0), quat_x(-6), quat_x(0)], "LINEAR")])
+    t = [0, 0.3, 0.45, 0.8]
     clip("Attack", [(5, "rotation", t, [quat_x(0), quat_x(-150), quat_x(20), quat_x(0)], "LINEAR"),
                     (2, "rotation", t, [quat_x(0), quat_x(-10), quat_x(18), quat_x(0)], "LINEAR")])
     # Death uses CUBICSPLINE (in-tangent, value, out-tangent per key)
@@ -289,7 +307,7 @@ def golem():
     clip("Death", [(1, "rotation", t, [v for r in rot for v in (zero4, r, zero4)], "CUBICSPLINE"),
                    (1, "translation", t, [v for p in pos for v in (zero3, p, zero3)], "CUBICSPLINE")])
     g.doc["animations"] = anims
-    g.write_glb(os.path.join(OUT, "golem.glb"))
+    g.write_glb(os.path.join(OUT, "golem_lod.glb" if lod else "golem.glb"))
 
 # ------------------------------------------------------------------ tank (rigid hierarchy, variants)
 
@@ -332,6 +350,8 @@ def tank():
 def windmill():
     g = Gltf()
     g.ext("KHR_texture_transform")
+    g.ext("KHR_materials_variants")
+    g.doc["extensions"] = {"KHR_materials_variants": {"variants": [{"name": "burnt"}]}}
     # sail lattice: alpha 0 holes in a wooden frame
     S = 64
     sail = Image.new("RGBA", (S, S), (0, 0, 0, 0))
@@ -357,7 +377,11 @@ def windmill():
         W.append((Vw, Iw))
     Vw = [v for w in W for v in w[0]]
     Iw = W[0][1] + [i + len(W[0][0]) for i in W[1][1]]
-    body = g.mesh("Body", [(V, I, wall, None, None), (V2, I2, roof, None, None), (Vw, Iw, window, None, None)])
+    wall_b = g.material({"name": "WallBurnt", "pbrMetallicRoughness": {"baseColorFactor": [0.18, 0.16, 0.15, 1], "metallicFactor": 0, "roughnessFactor": 1}})
+    roof_b = g.material({"name": "RoofBurnt", "pbrMetallicRoughness": {"baseColorFactor": [0.12, 0.1, 0.1, 1], "metallicFactor": 0, "roughnessFactor": 1},
+                         "emissiveFactor": [0.35, 0.08, 0.0]})
+    vb = lambda m: {"extensions": {"KHR_materials_variants": {"mappings": [{"material": m, "variants": [0]}]}}}
+    body = g.mesh("Body", [(V, I, wall, None, vb(wall_b)), (V2, I2, roof, None, vb(roof_b)), (Vw, Iw, window, None, None)])
     # four sails as quads in the XY plane, around the hub
     SV, SI = [], []
     for k in range(4):
@@ -376,14 +400,48 @@ def windmill():
 
 # ------------------------------------------------------------------ crystal (OBJ + MTL)
 
+def etc1_block(rgb):
+    """Flat 4x4 ETC1/ETC2 block (individual mode, table 0, all pixels +2)."""
+    q = [max(0, min(15, int(round((c - 2) / 17.0)))) for c in rgb]
+    hi = (q[0] << 28) | (q[0] << 24) | (q[1] << 20) | (q[1] << 16) | (q[2] << 12) | (q[2] << 8)  # tables 0, individual, no flip
+    return struct.pack(">II", hi, 0)
+
+def write_ktx2_etc2(img, path):
+    levels = []
+    im = img.convert("RGB")
+    while True:
+        w, h = im.size
+        data = bytearray()
+        for by in range(0, h, 4):
+            for bx in range(0, w, 4):
+                px = [im.getpixel((min(bx + i, w - 1), min(by + j, h - 1))) for j in range(4) for i in range(4)]
+                data += etc1_block([sum(p[k] for p in px) // 16 for k in range(3)])
+        levels.append(bytes(data))
+        if w == 1 and h == 1: break
+        im = im.resize((max(1, w // 2), max(1, h // 2)), Image.BOX)
+    header = bytes([0xAB, 0x4B, 0x54, 0x58, 0x20, 0x32, 0x30, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A])
+    W, H = img.size
+    header += struct.pack("<9I", 147, 1, W, H, 0, 0, 1, len(levels), 0)   # VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK
+    index_end = 80 + 24 * len(levels)
+    header += struct.pack("<4I2Q", 0, 0, 0, 0, 0, 0)                       # no DFD / KVD / SGD (readers here ignore them)
+    offsets, at = [], index_end
+    for l in levels:
+        at = (at + 7) & ~7
+        offsets.append(at); at += len(l)
+    for o, l in zip(offsets, levels): header += struct.pack("<3Q", o, len(l), len(l))
+    out = bytearray(header)
+    for o, l in zip(offsets, levels):
+        out += b"\0" * (o - len(out)); out += l
+    with open(path, "wb") as f: f.write(out)
+
 def crystal():
     S = 32
     rock = Image.new("RGB", (S, S))
     for y in range(S):
         for x in range(S):
-            v = 0.45 + 0.4 * noise(x // 2, y // 2, 5)
+            v = 0.45 + 0.4 * noise(x // 4, y // 4, 5)
             rock.putpixel((x, y), (int(110 * v), int(104 * v), int(112 * v)))
-    rock.save(os.path.join(OUT, "crystal_rock.png"))
+    write_ktx2_etc2(rock, os.path.join(OUT, "crystal_rock.ktx2"))
     lines = ["# crystal cluster (CC0), generated by tools/models/gen_sample_models.py", "mtllib crystal.mtl"]
     vi = vt = vn = 0
     def octa(cx, cz, r, h, tilt):
@@ -427,8 +485,81 @@ def crystal():
         lines += ["f %d %d %d" % t for t in f]   # no normals: flat shading
     with open(os.path.join(OUT, "crystal.obj"), "w") as fh: fh.write("\n".join(lines) + "\n")
     with open(os.path.join(OUT, "crystal.mtl"), "w") as fh:
-        fh.write("newmtl Rock\nKd 1 1 1\nNs 10\nmap_Kd crystal_rock.png\n\n"
+        fh.write("newmtl Rock\nKd 1 1 1\nNs 10\nmap_Kd crystal_rock.ktx2\n\n"
                  "newmtl Crystal\nKd 0.45 0.75 1.0\nd 0.7\nNs 400\nKe 0.15 0.35 0.6\n")
 
-golem(); tank(); windmill(); crystal()
+# ------------------------------------------------------------------ props: sword, cargo, scaffold
+
+def simple(name, parts, materials, out):
+    """Rigid single-node model from boxes / cylinders: parts = [(kind, args, material name)]."""
+    g = Gltf()
+    mats = {n: g.material(m) for n, m in materials.items()}
+    prims = {}
+    for kind, args, mat in parts:
+        V, I = box(*args) if kind == "box" else cylinder(*args) if kind == "cyl" else pyramid(*args)
+        P = prims.setdefault(mat, [[], []])
+        base = len(P[0]); P[0] += V; P[1] += [i + base for i in I]
+    mesh = g.mesh(name, [(V, I, mats[m], None, None) for m, (V, I) in prims.items()])
+    g.node({"name": name, "mesh": mesh}, root=True)
+    g.write_glb(os.path.join(OUT, out))
+
+def props():
+    steel = {"pbrMetallicRoughness": {"baseColorFactor": [0.75, 0.76, 0.8, 1], "metallicFactor": 1, "roughnessFactor": 0.25}}
+    wood = {"pbrMetallicRoughness": {"baseColorFactor": [0.42, 0.27, 0.15, 1], "metallicFactor": 0, "roughnessFactor": 0.8}}
+    gold = {"pbrMetallicRoughness": {"baseColorFactor": [1.0, 0.75, 0.2, 1], "metallicFactor": 1, "roughnessFactor": 0.35}}
+    cloth = {"pbrMetallicRoughness": {"baseColorFactor": [0.55, 0.45, 0.3, 1], "metallicFactor": 0, "roughnessFactor": 0.95}}
+    gem = {"pbrMetallicRoughness": {"baseColorFactor": [1, 1, 1, 1]}, "emissiveFactor": [0.3, 0.3, 0.3]}
+    # sword hangs along -Y from the hand (socket origin)
+    simple("Sword", [("box", ((0, -0.55, 0), (0.05, 0.75, 0.02)), "Blade"), ("box", ((0, -0.14, 0), (0.22, 0.04, 0.05)), "Hilt"),
+                     ("cyl", ((0, -0.05, 0), 0.025, 0.14, "y", 8), "Hilt"), ("box", ((0, -0.14, 0.03), (0.05, 0.05, 0.02)), "TeamGem")],
+           {"Blade": steel, "Hilt": wood, "TeamGem": gem}, "sword.glb")
+    simple("Sack", [("cyl", ((0, 0.12, 0), 0.13, 0.24, "y", 10), "Cloth"), ("pyr", ((0, 0.24, 0), 0.08, 0.1), "Cloth"),
+                    ("box", ((0, 0.27, 0), (0.08, 0.05, 0.08)), "Gold")], {"Cloth": cloth, "Gold": gold}, "sack.glb")
+    simple("Logs", [("cyl", ((0, 0.06, z), 0.05, 0.42, "x", 8), "Wood") for z in (-0.06, 0.06)] + [("cyl", ((0, 0.15, 0), 0.05, 0.42, "x", 8), "Wood")],
+           {"Wood": wood}, "logs.glb")
+    poles = []
+    for x in (-0.45, 0.45):
+        for z in (-0.45, 0.45):
+            poles.append(("box", ((x, 0.7, z), (0.06, 1.4, 0.06)), "Wood"))
+    for y in (0.35, 0.8, 1.25):
+        poles += [("box", ((0, y, z), (0.96, 0.05, 0.05)), "Wood") for z in (-0.45, 0.45)]
+        poles += [("box", ((x, y, 0), (0.05, 0.05, 0.96)), "Wood") for x in (-0.45, 0.45)]
+    poles += [("box", ((0, 0.05, 0), (0.9, 0.1, 0.9)), "Stone")]
+    simple("Scaffold", poles, {"Wood": wood, "Stone": {"pbrMetallicRoughness": {"baseColorFactor": [0.6, 0.58, 0.55, 1], "metallicFactor": 0, "roughnessFactor": 0.9}}},
+           "scaffold.glb")
+
+# ------------------------------------------------------------------ slime (morph targets + weights animation)
+
+def slime():
+    g = Gltf()
+    rings, seg, R = 10, 16, 0.4
+    V, I, sq, st = [], [], [], []
+    for y in range(rings + 1):
+        phi = y / rings * math.pi
+        for x in range(seg + 1):
+            th = x / seg * 2 * math.pi
+            n = [math.sin(phi) * math.cos(th), math.cos(phi), math.sin(phi) * math.sin(th)]
+            p = [n[0] * R, n[1] * R * 0.8 + R * 0.8, n[2] * R]
+            V.append((p, n, [x / seg, y / rings]))
+            sq.append([n[0] * R * 0.35, -(p[1]) * 0.45, n[2] * R * 0.35])        # squash: wider and flatter
+            st.append([-n[0] * R * 0.2, p[1] * 0.4, -n[2] * R * 0.2])           # stretch: taller and thinner
+    for y in range(rings):
+        for x in range(seg):
+            a = y * (seg + 1) + x; b = a + seg + 1
+            I += [a, a + 1, b, a + 1, b + 1, b]
+    V, I = fix_winding(V, I)
+    goo = g.material({"name": "TeamGoo", "pbrMetallicRoughness": {"baseColorFactor": [0.9, 0.95, 0.9, 1], "metallicFactor": 0, "roughnessFactor": 0.15}})
+    targets = [{"POSITION": g.accessor(sq, 3, minmax=True)}, {"POSITION": g.accessor(st, 3, minmax=True)}]
+    mesh = g.mesh("Slime", [(V, I, goo, None, {"targets": targets})])
+    g.doc["meshes"][mesh]["weights"] = [0, 0]
+    g.doc["meshes"][mesh]["extras"] = {"targetNames": ["Squash", "Stretch"]}
+    node = g.node({"name": "Slime", "mesh": mesh}, root=True)
+    t = [0, 0.25, 0.5, 0.75, 1.0]
+    w = [0.0, 0.0, 0.8, 0.0, 0.0, 0.6, 0.5, 0.0, 0.0, 0.0]   # Squash, Stretch per key (scalar output)
+    samp = {"input": g.accessor(t, 1), "output": g.accessor(w, 1), "interpolation": "LINEAR"}
+    g.doc["accessors"][samp["input"]]["min"] = [0]; g.doc["accessors"][samp["input"]]["max"] = [1]
+    g.doc["animations"] = [{"name": "Wobble", "samplers": [samp], "channels": [{"sampler": 0, "target": {"node": node, "path": "weights"}}]}]
+    g.write_glb(os.path.join(OUT, "slime.glb"))
+
+golem(); golem(lod=True); tank(); windmill(); crystal(); props(); slime()
 print("models written to", OUT)

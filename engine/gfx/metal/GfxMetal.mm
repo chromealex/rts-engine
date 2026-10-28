@@ -3,6 +3,7 @@
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <TargetConditionals.h>
 
 #include <algorithm>
 #include <atomic>
@@ -65,6 +66,34 @@ public:
     }
 
     const DeviceInfo& info() const override { return info_; }
+    bool supports(PixelFormat f) const override {
+        bool apple = false, bc = false;
+#if TARGET_OS_IPHONE
+        apple = true;
+#else
+        if (@available(macOS 11.0, *)) apple = [device_ supportsFamily:MTLGPUFamilyApple2];
+        bc = true;
+#endif
+        if (@available(macOS 11.0, iOS 16.4, *)) bc = bc || device_.supportsBCTextureCompression;
+        switch (f) {
+            case PixelFormat::ETC2_RGB8: case PixelFormat::ETC2_RGBA8: case PixelFormat::ASTC_4x4: return apple;
+            case PixelFormat::BC1: case PixelFormat::BC3: case PixelFormat::BC7: return bc;
+            default: return true;
+        }
+    }
+    static MTLPixelFormat compressedFormat(PixelFormat f) {
+        switch (f) {
+            case PixelFormat::ETC2_RGB8: return MTLPixelFormatETC2_RGB8;
+            case PixelFormat::ETC2_RGBA8: return MTLPixelFormatEAC_RGBA8;
+            case PixelFormat::ASTC_4x4: return MTLPixelFormatASTC_4x4_LDR;
+#if !TARGET_OS_IPHONE
+            case PixelFormat::BC1: return MTLPixelFormatBC1_RGBA;
+            case PixelFormat::BC3: return MTLPixelFormatBC3_RGBA;
+            case PixelFormat::BC7: return MTLPixelFormatBC7_RGBAUnorm;
+#endif
+            default: return MTLPixelFormatInvalid;
+        }
+    }
     const std::string& lastError() const override { return error_; }
 
     // ---------- buffers ----------
@@ -98,11 +127,36 @@ public:
 
     // ---------- textures ----------
     TextureHandle createTexture(const TextureDesc& d) override {
+        if (MTLPixelFormat cf = compressedFormat(d.format); cf != MTLPixelFormatInvalid) {
+            MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:cf
+                width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:d.levelCount > 1 ? YES : NO];
+            td.mipmapLevelCount = NSUInteger(std::max(1, d.levelCount));
+            td.usage = MTLTextureUsageShaderRead;
+            MTTexture t;
+            t.fmt = d.format;
+            t.tex = [device_ newTextureWithDescriptor:td];
+            if (!t.tex) { error_ = "compressed texture not supported by this GPU"; return {}; }
+            const bool bc = d.format == PixelFormat::BC1 || d.format == PixelFormat::BC3 || d.format == PixelFormat::BC7;
+            const NSUInteger blockBytes = d.format == PixelFormat::ETC2_RGB8 || d.format == PixelFormat::BC1 ? 8 : 16;
+            for (int l = 0; l < d.levelCount; ++l) {
+                const NSUInteger w = NSUInteger(std::max(1, d.width >> l)), h = NSUInteger(std::max(1, d.height >> l));
+                [t.tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:NSUInteger(l)
+                           withBytes:d.levelData[l] bytesPerRow:((w + 3) / 4) * blockBytes];
+            }
+            (void)bc;
+            MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
+            sd.minFilter = sd.magFilter = d.filter == Filter::Linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+            if (d.levelCount > 1) sd.mipFilter = MTLSamplerMipFilterLinear;
+            sd.sAddressMode = sd.tAddressMode = d.repeat ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
+            t.sampler = [device_ newSamplerStateWithDescriptor:sd];
+            return {textures_.add(t)};
+        }
         MTLPixelFormat pf = d.format == PixelFormat::R8 ? MTLPixelFormatR8Unorm
+                          : d.format == PixelFormat::RGBA32F ? MTLPixelFormatRGBA32Float
                           : d.format == PixelFormat::Depth ? MTLPixelFormatDepth32Float
                           : d.renderTarget ? MTLPixelFormatBGRA8Unorm   // same format as the screen: pipelines are shared
                           : MTLPixelFormatRGBA8Unorm;
-        const bool mips = d.mipmaps && d.format != PixelFormat::Depth && !d.renderTarget;
+        const bool mips = d.mipmaps && d.format != PixelFormat::Depth && d.format != PixelFormat::RGBA32F && !d.renderTarget;
         MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
             width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:mips ? YES : NO];
         td.usage = MTLTextureUsageShaderRead | (d.renderTarget || d.format == PixelFormat::Depth ? MTLTextureUsageRenderTarget : 0);
@@ -111,14 +165,14 @@ public:
         t.fmt = d.format;
         t.tex = [device_ newTextureWithDescriptor:td];
         if (d.data && d.format != PixelFormat::Depth) {
-            int bpp = d.format == PixelFormat::R8 ? 1 : 4;
+            int bpp = d.format == PixelFormat::R8 ? 1 : d.format == PixelFormat::RGBA32F ? 16 : 4;
             [t.tex replaceRegion:MTLRegionMake2D(0, 0, NSUInteger(d.width), NSUInteger(d.height)) mipmapLevel:0
                        withBytes:d.data bytesPerRow:NSUInteger(d.width * bpp)];
             if (mips) generateMips(t.tex);
         }
         t.mips = mips;
         MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
-        sd.minFilter = sd.magFilter = d.filter == Filter::Linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+        sd.minFilter = sd.magFilter = d.filter == Filter::Linear && d.format != PixelFormat::RGBA32F ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
         if (mips) sd.mipFilter = d.filter == Filter::Linear ? MTLSamplerMipFilterLinear : MTLSamplerMipFilterNearest;
         sd.sAddressMode = sd.tAddressMode = d.repeat ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
         if (d.compare) sd.compareFunction = MTLCompareFunctionLessEqual;
@@ -338,7 +392,8 @@ public:
         if (!enc_ || !t) return;
         [enc_ setFragmentTexture:t->tex atIndex:NSUInteger(slot)];
         [enc_ setFragmentSamplerState:t->sampler atIndex:NSUInteger(slot)];
-        [enc_ setVertexTexture:t->tex atIndex:NSUInteger(slot)];   // vertex texture fetch (terrain tint)
+        [enc_ setVertexTexture:t->tex atIndex:NSUInteger(slot)];   // bone / morph data textures are read in the vertex stage
+        [enc_ setVertexSamplerState:t->sampler atIndex:NSUInteger(slot)];
     }
     void setUniforms(int slot, const void* data, size_t size) override {
         if (!enc_) return;
@@ -353,14 +408,14 @@ public:
         if (!enc_ || !pipelines_.get(pipelineId_)) return;
         [enc_ drawPrimitives:prim() vertexStart:first vertexCount:count];
     }
-    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex) override {
+    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
         auto* p = pipelines_.get(pipelineId_);
         auto* ib = buffers_.get(ibId_);
         if (!enc_ || !p || !ib) return;
         const bool u32 = p->desc.indexType == IndexType::UInt32;
         [enc_ drawIndexedPrimitives:prim() indexCount:count indexType:u32 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16
                         indexBuffer:current(*ib) indexBufferOffset:ibOffset_ + size_t(firstIndex) * (u32 ? 4 : 2)
-                      instanceCount:1 baseVertex:baseVertex baseInstance:0];
+                      instanceCount:std::max<uint32_t>(instances, 1) baseVertex:baseVertex baseInstance:0];
     }
 
 private:

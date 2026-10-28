@@ -12,7 +12,8 @@
 //   * uniform data is pushed per draw with setUniforms(slot, ptr, size) (<= 4 KB, std140 layout);
 //     GLSL: uniform block "U<slot>", MSL: [[buffer(1 + slot)]] in both stages;
 //   * textures: GLSL sampler2D "tex<slot>" (sampler2DShadow for compare textures), MSL texture(slot) +
-//     sampler(slot) (depth2d + sample_compare for compare textures);
+//     sampler(slot) (depth2d + sample_compare for compare textures); bound for both stages;
+//   * instancing: drawIndexed(..., instanceCount); GLSL gl_InstanceID, MSL [[instance_id]];
 //   * render-to-texture: when sampling a target in a shader, Metal needs v flipped (DeviceInfo::renderTargetFlipY);
 //   * vertex buffer: one interleaved stream; GLSL attribute location = VertexAttr::location,
 //     MSL [[attribute(location)]] via [[stage_in]] at buffer(0).
@@ -39,7 +40,9 @@ using PipelineHandle = Handle<struct PipelineTag>;
 enum class Backend { Metal, GLES3, GL33 };
 enum class BufferType { Vertex, Index };
 enum class Usage { Immutable, Dynamic };          // Dynamic: updated (whole or partially) every frame
-enum class PixelFormat { RGBA8, R8, Depth };   // Depth: 24/32-bit depth render target
+enum class PixelFormat { RGBA8, R8, Depth, RGBA32F,
+                         ETC2_RGB8, ETC2_RGBA8, BC1, BC3, BC7, ASTC_4x4 };  // block-compressed: upload levels, check supports()   // Depth: 24/32-bit depth render target; RGBA32F: data textures
+                                                        // (bone matrices, morph deltas), nearest only, read with texelFetch / read()
 enum class Filter { Nearest, Linear };
 enum class VertexFormat { Float2, Float3, Float4, UByte4N, UByte4 }; // UByte4: integers 0..255 (GLSL float / MSL uchar4)
 enum class IndexType { None, UInt16, UInt32 };
@@ -64,6 +67,10 @@ struct TextureDesc {
     bool compare = false;       // depth textures: sampled with hardware depth comparison (shadow maps)
     bool mipmaps = false;       // RGBA8/R8: full mip chain generated from level 0 (trilinear when Linear)
     const void* data = nullptr; // may be null (contents undefined until updated)
+    // Block-compressed formats: every mip level as given (no generation); level i is levelSize[i] bytes.
+    int levelCount = 0;
+    const void* const* levelData = nullptr;
+    const size_t* levelSize = nullptr;
     const char* label = nullptr;
 };
 
@@ -137,6 +144,8 @@ public:
     virtual PipelineHandle createPipeline(const PipelineDesc& d) = 0;
     virtual void destroyPipeline(PipelineHandle h) = 0;
     virtual const std::string& lastError() const = 0;
+    // Formats the GPU samples natively (block-compressed ones vary by GPU and API).
+    virtual bool supports(PixelFormat f) const { return f == PixelFormat::RGBA8 || f == PixelFormat::R8 || f == PixelFormat::Depth || f == PixelFormat::RGBA32F; }
 
     // Frame (driven by the platform layer)
     virtual void beginFrame(int framebufferWidth, int framebufferHeight) = 0;
@@ -159,7 +168,7 @@ public:
     virtual void setTexture(int slot, TextureHandle t) = 0;
     virtual void setUniforms(int slot, const void* data, size_t size) = 0;
     virtual void draw(uint32_t vertexCount, uint32_t firstVertex = 0) = 0;
-    virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t baseVertex = 0) = 0;
+    virtual void drawIndexed(uint32_t indexCount, uint32_t firstIndex = 0, int32_t baseVertex = 0, uint32_t instanceCount = 1) = 0;
 
 protected:
     int fbW_ = 0, fbH_ = 0;

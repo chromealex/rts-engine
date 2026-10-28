@@ -243,7 +243,23 @@ add_library(rts_models STATIC
     engine/render/Model.cpp
     engine/render/ModelGltf.cpp
     engine/render/ModelObj.cpp
-    engine/render/Animation.cpp)
+    engine/render/Animation.cpp
+    engine/render/TextureCodec.cpp)
+# ufbx (MIT / public domain): FBX parser, compiled as its own C library without warnings.
+# RTS_FBX=OFF keeps it out of size-sensitive builds (FBX files then fail with a readable error).
+option(RTS_FBX "FBX import in the runtime (ufbx, ~0.5 MB of code)" ON)
+if(RTS_FBX)
+    add_library(rts_ufbx STATIC third_party/ufbx/ufbx.c)
+    if(NOT MSVC)
+        target_compile_options(rts_ufbx PRIVATE -w)
+    endif()
+    target_sources(rts_models PRIVATE engine/render/ModelFbx.cpp)
+    target_link_libraries(rts_models PUBLIC rts_ufbx)
+else()
+    target_compile_definitions(rts_models PRIVATE RTS_NO_FBX=1)
+endif()
+# KTX2 zstd supercompression: the decoder comes with rts_runtime (rts_zstd_dec) or, in host tools,
+# with rts_pack_writer (full zstd); linking rts_zstd_dec here would pull both into tests and tools.
 target_link_libraries(rts_models PUBLIC rts_engine)
 
 set(RTS_RUNTIME_SRC
@@ -296,6 +312,7 @@ endif()
 
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
+    modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 

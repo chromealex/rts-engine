@@ -120,12 +120,29 @@ std::unique_ptr<Model> loadModel(const std::string& path, const FileReader& read
     std::unique_ptr<Model> m;
     if (ext == ".gltf" || ext == ".glb") m = loadGltf(path, bytes, read, warnings);
     else if (ext == ".obj") m = loadObj(path, bytes, read, warnings);
-    else throw std::runtime_error(path + ": unsupported model format '" + ext + "' (use .gltf, .glb or .obj)");
+#if defined(RTS_NO_FBX)
+    else if (ext == ".fbx") throw std::runtime_error(path + ": FBX import is disabled in this build (RTS_FBX=OFF); convert to .glb");
+#else
+    else if (ext == ".fbx") m = loadFbx(path, bytes, read, warnings);
+#endif
+    else throw std::runtime_error(path + ": unsupported model format '" + ext + "' (use .gltf, .glb, .obj or .fbx)");
     m->path = path;
     return m;
 }
 
 bool decodeImage(const std::string& bytes, Image& out) {
+    if (isKtx2(bytes)) {
+        auto ci = std::make_shared<CompressedImage>();
+        std::string err;
+        std::vector<uint8_t> rgba;
+        if (!parseKtx2(bytes, *ci, err)) return false;
+        // no CPU decoder (ASTC): usable only where the GPU samples it natively (uploadModel)
+        if (!decodeBlocks(*ci, 0, rgba) && ci->format != BlockFormat::ASTC_4x4) return false;
+        out.width = ci->width; out.height = ci->height;
+        out.rgba = std::move(rgba);
+        out.compressed = std::move(ci);
+        return true;
+    }
     int w = 0, h = 0, n = 0;
     stbi_uc* px = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()), int(bytes.size()), &w, &h, &n, 4);
     if (!px) return false;
@@ -200,8 +217,43 @@ void generateTangents(std::vector<ModelVertex>& v, const std::vector<uint32_t>& 
 }
 
 namespace {
+gfx::PixelFormat gpuFormat(const CompressedImage& c) {
+    switch (c.format) {
+        case BlockFormat::ETC2_RGB8: return gfx::PixelFormat::ETC2_RGB8;
+        case BlockFormat::ETC2_RGBA8: return gfx::PixelFormat::ETC2_RGBA8;
+        case BlockFormat::BC1: return c.vkFormat == 131 || c.vkFormat == 132 ? gfx::PixelFormat::RGBA8 : gfx::PixelFormat::BC1;
+        case BlockFormat::BC3: return gfx::PixelFormat::BC3;
+        case BlockFormat::BC7: return gfx::PixelFormat::BC7;
+        case BlockFormat::ASTC_4x4: return gfx::PixelFormat::ASTC_4x4;
+        default: return gfx::PixelFormat::RGBA8; // EAC R11 / BC4 / RGBA8: the decoded copy
+    }
+}
+
 void uploadImage(gfx::Device& dev, Image& img) {
-    if (img.tex.valid() || img.rgba.empty()) return;
+    if (img.tex.valid()) return;
+    if (img.compressed && !img.compressed->levels.empty()) {
+        // keep KTX2 blocks compressed in VRAM when the GPU samples them (shaders decode sRGB themselves)
+        const CompressedImage& c = *img.compressed;
+        const gfx::PixelFormat pf = gpuFormat(c);
+        if (pf != gfx::PixelFormat::RGBA8 && dev.supports(pf)) {
+            std::vector<const void*> data;
+            std::vector<size_t> sizes;
+            for (const auto& l : c.levels) { data.push_back(l.data()); sizes.push_back(l.size()); }
+            gfx::TextureDesc td;
+            td.width = c.width; td.height = c.height;
+            td.format = pf;
+            td.filter = img.nearest ? gfx::Filter::Nearest : gfx::Filter::Linear;
+            td.repeat = img.repeat;
+            td.levelCount = int(c.levels.size());
+            td.levelData = data.data();
+            td.levelSize = sizes.data();
+            td.label = img.name.c_str();
+            img.tex = dev.createTexture(td);
+            img.gpuCompressed = img.tex.valid();
+            if (img.tex.valid()) return;
+        }
+    }
+    if (img.rgba.empty()) return;
     gfx::TextureDesc td;
     td.width = img.width; td.height = img.height;
     td.format = gfx::PixelFormat::RGBA8;
@@ -223,7 +275,32 @@ bool uploadModel(gfx::Device& dev, Model& m, bool keepCpu) {
     }
     for (auto& img : m.images) {
         uploadImage(dev, img);
-        if (!keepCpu) { img.rgba.clear(); img.rgba.shrink_to_fit(); }
+        if (!keepCpu) { img.rgba.clear(); img.rgba.shrink_to_fit(); img.compressed.reset(); }
+    }
+    // morph deltas of every primitive in one float texture: 2 texels (position, normal) per vertex and target
+    size_t texels = 0;
+    for (auto& mesh : m.meshes)
+        for (auto& p : mesh.primitives) if (p.morphTargets > 0 && !p.morphDeltas.empty()) texels += p.morphDeltas.size() / 3;
+    if (texels > 0 && !m.morphTex.valid()) {
+        const int width = 2048, height = int((texels + width - 1) / width);
+        std::vector<float> data(size_t(width) * size_t(height) * 4, 0.0f);
+        size_t at = 0;
+        for (auto& mesh : m.meshes)
+            for (auto& p : mesh.primitives) {
+                if (p.morphTargets <= 0 || p.morphDeltas.empty()) continue;
+                p.morphTexel = uint32_t(at);
+                for (size_t i = 0; i + 2 < p.morphDeltas.size(); i += 3, ++at)
+                    for (int k = 0; k < 3; ++k) data[at * 4 + size_t(k)] = p.morphDeltas[i + size_t(k)];
+                if (!keepCpu) { p.morphDeltas.clear(); p.morphDeltas.shrink_to_fit(); }
+            }
+        gfx::TextureDesc td;
+        td.width = width; td.height = height;
+        td.format = gfx::PixelFormat::RGBA32F;
+        td.filter = gfx::Filter::Nearest;
+        td.data = data.data();
+        td.label = "morph targets";
+        m.morphTex = dev.createTexture(td);
+        m.morphTexWidth = width;
     }
     if (!keepCpu) {
         m.vertices.clear(); m.vertices.shrink_to_fit();
@@ -245,6 +322,9 @@ void releaseModel(gfx::Device& dev, Model& m) {
     if (m.ib.valid()) dev.destroyBuffer(m.ib);
     m.vb = {}; m.ib = {};
     for (auto& img : m.images) if (img.tex.valid()) { dev.destroyTexture(img.tex); img.tex = {}; }
+    if (m.morphTex.valid()) dev.destroyTexture(m.morphTex);
+    if (m.baked.tex.valid()) dev.destroyTexture(m.baked.tex);
+    m.morphTex = {}; m.baked = Model::Baked{};
 }
 
 } // namespace rts::render
