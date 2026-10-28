@@ -158,7 +158,9 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
         }
         if (const Json& s = tj["structure"]; s.isObject() && s.has("needsField")) { any = true; t.needsField = int16_t(s.getInt("needsField", 0)); }
         t.queueSlots = std::max<int>(1, int(tj.getInt("queueSlots", 1)));
-        if (const Json& c = tj["crew"]; !c.isNull()) {
+        // "crew": "type" / {"unit": type} = the crew this vehicle carries (originals); {"accepts": tags} / true
+        // is agent-mech's crewable vehicle (RtsMechData.cpp)
+        if (const Json& c = tj["crew"]; c.isString() || (c.isObject() && c.has("unit"))) {
             any = true;
             t.crew = typeId(r, where + " crew", c.isString() ? c.str() : c.getStr("unit"));
         }
