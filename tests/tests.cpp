@@ -5338,6 +5338,136 @@ TEST(fx_unity_importer_output_is_valid) {
     std::filesystem::remove_all(out);
 }
 
+// ---------------- Native plugins bridge, store and ads services (platforms agent) ----------------
+#include "engine/platform/PluginJson.h"
+#include "engine/platform/Plugins.h"
+#include "engine/services/Ads.h"
+#include "engine/services/Store.h"
+#include <cstdlib>
+#include <thread>
+
+static void setEnvVar(const char* k, const char* v) {
+#if defined(_WIN32)
+    _putenv_s(k, v);
+#else
+    setenv(k, v, 1);
+#endif
+}
+
+TEST(plugin_json_keeps_numbers_and_unicode) {
+    namespace json = plugins::json;
+    json::Value v;
+    std::string err;
+    CHECK(json::parse(R"({"price":0.99,"micros":1990000000,"t":"Привет 🙂","a":[true,null]})", v, &err));
+    CHECK(v["price"].s == "0.99" && v["micros"].i64() == 1990000000);
+    CHECK(v["t"].str() == "Привет 🙂");
+    CHECK(json::dump(v) == "{\"price\":0.99,\"micros\":1990000000,\"t\":\"Привет 🙂\",\"a\":[true,null]}");
+    CHECK(!json::parse("{\"a\":}", v, &err) && !err.empty());
+    CHECK(json::parseOr(json::stripComments("// head\n{ \"u\": \"http://x\" /* c */ }"))["u"].str() == "http://x");
+    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","ios":"I","default":"D"},"n":{"web":1}})", "ios") == R"({"id":"I","n":null})");
+    CHECK(plugins::detail::resolvePlatformValues(R"({"id":{"android":"A","desktop":"PC"}})", "linux") == R"({"id":"PC"})");
+}
+
+namespace {
+struct EchoPlugin : plugins::NativePlugin {
+    std::vector<std::string> calls;
+    void call(const std::string& method, const std::string& args, plugins::Reply r) override {
+        calls.push_back(method + " " + args);
+        if (method == "fail") { r.fail("nope"); return; }
+        if (method == "later") { std::thread([r] { r.ok(R"({"from":"thread"})"); }).join(); return; }
+        if (method == "event") plugins::emit("echo", "ping", R"({"n":1})");
+        r.ok(args);
+    }
+};
+} // namespace
+
+TEST(plugin_bridge_calls_replies_events) {
+    plugins::configure(R"({"echo":{"key":{"linux":"L","windows":"L","macos":"L","default":"L"}}})");
+    auto echo = std::make_shared<EchoPlugin>();
+    plugins::registerPlugin("echo", echo);
+    CHECK(plugins::available("echo") && !plugins::available("no-such-plugin"));
+    std::vector<std::string> got;
+    plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
+    CHECK(got.empty()); // replies never arrive inside call()
+    plugins::pump();
+    CHECK(got.size() == 1 && got[0] == R"({"x":1})");
+    CHECK(echo->calls.size() == 2 && echo->calls[0] == R"(init {"key":"L"})"); // config first, resolved
+    plugins::call("echo", "again", "{}", {});
+    plugins::call("echo", "fail", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "ERR " + r.error); });
+    plugins::call("echo", "later", "{}", [&](const plugins::Result& r) { got.push_back(r.data); });
+    plugins::call("no-such-plugin", "x", "{}", [&](const plugins::Result& r) { got.push_back(r.ok ? "ok" : "missing"); });
+    std::vector<std::string> events;
+    int id = plugins::addListener("echo", [&](const std::string& ev, const std::string& d) { events.push_back(ev + d); });
+    plugins::call("echo", "event", "{}", {});
+    plugins::pump();
+    CHECK(echo->calls.size() == 6); // init went out only once
+    CHECK(got.size() == 4 && got[1] == "ERR nope" && got[2] == R"({"from":"thread"})" && got[3] == "missing");
+    CHECK(events.size() == 1 && events[0] == R"(ping{"n":1})");
+    plugins::removeListener(id);
+    plugins::unregisterPlugin("echo");
+}
+
+TEST(store_and_ads_through_mock_plugins) {
+    plugins::configureGame(R"(// comments allowed, like every game.json
+    {
+      "plugins": { "mock-store": {}, "mock-ads": {} },
+      "store": { "providers": ["no-such-store", "mock-store"],
+                 "products": [ { "id": "gems", "type": "consumable" },
+                               { "id": "noads", "type": "nonConsumable", "ids": { "default": "com.game.noads" } } ] },
+      "ads": { "providers": { "default": ["mock-ads"] } }
+    })");
+    CHECK(store::available() && store::provider() == "mock-store");
+    CHECK(store::typeOf("noads") == store::ProductType::NonConsumable);
+    std::vector<store::Product> prods;
+    store::products([&](bool ok, const std::vector<store::Product>& p, const std::string&) { if (ok) prods = p; });
+    plugins::pump();
+    CHECK(prods.size() == 2 && prods[1].id == "noads" && prods[0].price == "$0.99" && prods[0].priceMicros == 990000);
+
+    std::vector<store::Purchase> done, async;
+    store::onPurchase([&](const store::Purchase& p) { async.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "purchased");
+    store::purchase("noads", [&](const store::Purchase& p) { done.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "cancelled");
+    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
+    setEnvVar("RTS_MOCK_STORE", "pending");
+    store::purchase("gems", [&](const store::Purchase& p) { done.push_back(p); });
+    plugins::pump();
+    setEnvVar("RTS_MOCK_STORE", "purchased");
+    CHECK(done.size() == 3);
+    CHECK(done[0].state == store::PurchaseState::Purchased && done[0].productId == "noads" && !done[0].token.empty());
+    CHECK(done[1].state == store::PurchaseState::Cancelled);
+    CHECK(done[2].state == store::PurchaseState::Pending);
+    CHECK(async.size() == 1 && async[0].state == store::PurchaseState::Purchased && async[0].productId == "gems");
+
+    std::vector<store::Purchase> restored;
+    store::finish(async[0]); // consumable granted → consumed, no longer restored
+    store::restore([&](bool ok, const std::vector<store::Purchase>& p, const std::string&) { if (ok) restored = p; });
+    plugins::pump();
+    CHECK(restored.size() == 1 && restored[0].productId == "noads" && restored[0].restored);
+
+    CHECK(ads::available() && ads::provider() == "mock-ads");
+    ads::preload(ads::Format::Rewarded);
+    plugins::pump();
+    CHECK(ads::ready(ads::Format::Rewarded));
+    std::vector<ads::ShowResult> shown;
+    int pauses = 0;
+    int l = plugins::addListener("*", [&](const std::string& ev, const std::string&) { pauses += ev == "app.pause"; });
+    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); }, "double_reward");
+    setEnvVar("RTS_MOCK_ADS", "noreward");
+    ads::show(ads::Format::Rewarded, [&](const ads::ShowResult& r) { shown.push_back(r); });
+    setEnvVar("RTS_MOCK_ADS", "ok");
+    ads::setEnabled(false);
+    ads::show(ads::Format::Interstitial, [&](const ads::ShowResult& r) { shown.push_back(r); });
+    ads::setEnabled(true);
+    plugins::pump();
+    CHECK(shown.size() == 3);
+    CHECK(shown[0].shown == false && shown[0].error == "ads disabled"); // answered at once, no plugin call
+    CHECK(shown[1].shown && shown[1].rewarded);
+    CHECK(shown[2].shown && !shown[2].rewarded);
+    CHECK(pauses == 2 && !ads::ready(ads::Format::Interstitial));
+    plugins::removeListener(l);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;
@@ -5352,7 +5482,8 @@ TEST(sphere_cells_and_dirs_round_trip) {
             if (s.cellFromDir(d) != id) ++bad;
             int f; Fixed a, b;
             s.faceFromDir(d * Fixed::fromInt(37), f, a, b);          // any length works
-            if (f != c.face || fxAbs(a - (Fixed::fromInt(c.x) + Fixed::fromRatio(1, 2))) > Fixed::fromRatio(1, 50)) ++bad;
+            // stage 1: the inverse warp is linear inside a cell (exact at cell edges), up to ~0.07 cell off at the centre
+            if (f != c.face || fxAbs(a - (Fixed::fromInt(c.x) + Fixed::fromRatio(1, 2))) > Fixed::fromRatio(1, 10)) ++bad;
         }
         CHECK(bad == 0);
     }
@@ -5456,6 +5587,260 @@ TEST(sphere_great_circle_steps) {
     CubeSphere::faceTangents(2, s.cellCenterDir(s.cellId(2, 5, 5)), e, so);
     CHECK(fxAbs(e.dot(s.cellCenterDir(s.cellId(2, 5, 5)))) < Fixed::fromRatio(1, 100));
     CHECK(fxAbs(e.length() - Fixed::fromInt(1)) < Fixed::fromRatio(1, 100));
+}
+
+// golden generator hashes (pure integer pipeline: identical on every platform / compiler)
+#define GEN_GOLD_NOISE 0xb63f6f508d85105full
+#define GEN_GOLD_CLASSIC 0xbca2c83d9c0791c8ull
+#define GEN_GOLD_CONTINENTS 0x169af2ca325ff112ull
+#define GEN_GOLD_ISLANDS 0x954d027fe4f6f9f7ull
+#define GEN_GOLD_HIGHLANDS 0x9e9e30de7fecd4e7ull
+#define GEN_GOLD_CANYONS 0x7fcf37e9490ffb17ull
+#define GEN_GOLD_LANES 0x6010e5d33a6a8fdbull
+#define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
+#define GEN_GOLD_METAL 0x5e11afce218433b2ull
+#define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
+
+// ---------------- terrain / map generator (agent-terrain-gen) ----------------
+#include "modules/rts/gen/MapGen.h"
+#include "modules/rts/gen/GenNoise.h"
+#include "modules/rts/gen/GenField.h"
+#include "modules/rts/RtsSphere.h"
+
+static const char* kGenRules = R"({
+  "resources": {"gold": {"start": 500}, "wood": {"start": 200}, "ore": {"field": true, "cellMax": 100}},
+  "types": {
+    "hall":   {"structure": {"footprint": [4, 4]}, "health": {"max": 1500}, "produces": ["worker"], "dropoff": ["gold", "wood", "ore"]},
+    "worker": {"move": {"speed": 2.4, "radius": 0.35}, "gather": {"gold": {}, "wood": {}, "ore": {}}, "builds": ["hall"], "cost": {"gold": 50, "time": 10}},
+    "mine":   {"structure": {"footprint": [3, 3]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 10000}},
+    "tree":   {"structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 80}},
+    "ogre":   {"health": {"max": 300}, "move": {"speed": 2}, "neutral": {"leash": 8}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}]},
+    "spot":   {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+    "drill":  {"structure": {"footprint": [2, 2], "on": "spot"}, "income": {"gold": 1}}
+  }
+})";
+
+static uint64_t genHash(const std::string& preset, uint64_t seed, int players, const std::string& rulesText = kGenRules,
+                        const std::string& sym = "auto", Json* out = nullptr) {
+    Json rj = Json::parse(rulesText);
+    game::Rules rules = game::loadRules(rj);
+    gen::GenRequest req;
+    req.preset = preset; req.seed = seed; req.players = players; req.symmetry = sym;
+    Json map = Json::parse(R"({"name": "g", "size": [48, 48], "players": []})");
+    std::string err;
+    if (!gen::generateMap(req, rules, rj, map, &err)) { std::printf("  gen error: %s\n", err.c_str()); return 0; }
+    if (out) *out = map;
+    return gen::mapHash(map);
+}
+
+TEST(gen_noise_deterministic) {
+    // fixed sample values: bit-identical on every platform (pure integer maths)
+    uint64_t h = 1469598103934665603ull;
+    gen::Fbm f; f.octaves = 5; f.warp = 32768; f.ridged = 16384;
+    for (int i = 0; i < 64; ++i) {
+        h = (h ^ uint64_t(uint32_t(gen::fbm2(int64_t(i) * 40503, int64_t(i) * 91233 - 400000, 7, f)))) * 1099511628211ull;
+        h = (h ^ uint64_t(uint32_t(gen::gradNoise3(int64_t(i) * 30011, -int64_t(i) * 12345, int64_t(i) * 777, 9)))) * 1099511628211ull;
+        h = (h ^ uint64_t(uint32_t(gen::valueNoise2(int64_t(i) * 70001, int64_t(i) * 3, 3)))) * 1099511628211ull;
+    }
+    std::printf("  noise hash %016llx\n", (unsigned long long)h);
+    CHECK(h == GEN_GOLD_NOISE);
+    // ranges
+    int lo = 0, hi = 0;
+    for (int i = 0; i < 2000; ++i) { int v = gen::gradNoise2(int64_t(i) * 9973, int64_t(i) * 5003, 1); lo = std::min(lo, v); hi = std::max(hi, v); }
+    CHECK(lo >= -65536 && hi <= 65536 && lo < -20000 && hi > 20000);
+}
+
+TEST(gen_symmetry_images) {
+    std::string err;
+    gen::Sym s;
+    CHECK(gen::Sym::make("auto", 4, 40, 40, s, &err) && s.kind == gen::Sym::Rot4);
+    CHECK(gen::Sym::make("auto", 4, 48, 32, s, &err) && s.kind == gen::Sym::Mirror4);
+    CHECK(!gen::Sym::make("mirror", 3, 40, 40, s, &err) && err.find("needs 2 players") != std::string::npos);
+    for (const char* k : {"point", "mirror", "mirror-y", "rot4", "mirror4"}) {
+        const int n = std::string(k) == "rot4" || std::string(k) == "mirror4" ? 4 : 2;
+        CHECK(gen::Sym::make(k, n, 40, 40, s, &err));
+        bool ok = true;
+        for (int y = 0; y < 40; ++y)
+            for (int x = 0; x < 40; ++x) {   // folding then imaging returns the cell
+                int fx, fy, ix, iy;
+                const int kk = s.foldCell(x, y, fx, fy);
+                s.imageCell(kk, fx, fy, ix, iy);
+                if (ix != x || iy != y || s.foldCell(fx, fy, ix, iy) != 0) ok = false;
+            }
+        CHECK(ok);
+    }
+}
+
+TEST(gen_golden_maps) {
+    // same request -> identical map; golden hashes pin the output (change them only on purpose)
+    const uint64_t a = genHash("classic", 7, 2), b = genHash("classic", 7, 2), c = genHash("classic", 8, 2);
+    CHECK(a == b && a != c);
+    struct G { const char* preset; int players; uint64_t gold; };
+    const G gold[] = {{"classic", 2, GEN_GOLD_CLASSIC}, {"continents", 4, GEN_GOLD_CONTINENTS}, {"islands", 2, GEN_GOLD_ISLANDS},
+                      {"highlands", 3, GEN_GOLD_HIGHLANDS}, {"canyons", 2, GEN_GOLD_CANYONS}, {"lanes", 2, GEN_GOLD_LANES}};
+    for (auto& g : gold) {
+        const uint64_t h = genHash(g.preset, 7, g.players);
+        std::printf("  %s/%d %016llx\n", g.preset, g.players, (unsigned long long)h);
+        CHECK(h == g.gold);
+    }
+}
+
+TEST(gen_fair_and_connected) {
+    for (const char* preset : {"classic", "continents", "highlands", "canyons"})
+        for (uint64_t seed = 1; seed <= 3; ++seed)
+            for (int np : {2, 4}) {
+                Json m;
+                genHash(preset, seed, np, kGenRules, "auto", &m);
+                const Json& g = m["generated"];
+                CHECK(g.getBool("connected"));
+                if (!g.getBool("connected")) {
+                    std::printf("  not connected: %s seed %d players %d %s\n", preset, int(seed), np, g["warnings"].dump(-1).c_str());
+                    if (const char* dbg = std::getenv("RTS_GEN_DUMP")) { FILE* f = std::fopen(dbg, "w"); if (f) { std::fputs(m.dump().c_str(), f); std::fclose(f); } }
+                }
+                CHECK(int(m["players"].size()) == np);
+                // symmetric layouts: every start is an image of player 1's start, objects per owner equal
+                int own[9] = {};
+                for (auto& e : m["entities"].items()) { const int o = int(e.getInt("owner")); if (o >= 1 && o <= 8) own[o]++; }
+                for (int p = 2; p <= np; ++p) CHECK(own[p] == own[1]);
+                CHECK(own[1] > 0);
+                if (np == 2) CHECK(g.getInt("pathSpread", 0) <= 1);
+            }
+}
+
+TEST(gen_match_hook_and_replay) {
+    // a map with "generate": every loader regenerates the same map from the match seed
+    Json rj = Json::parse(kGenRules);
+    auto run = [&](uint64_t seed) {
+        Json map = Json::parse(R"({"name": "m", "size": [40, 40], "players": [{"name": "A"}],
+                                   "generate": {"preset": "classic", "seed": "match", "players": 2}})");
+        CHECK(gen::prepareGenerate(map, [](const std::string&, std::string&) { return false; }, nullptr));
+        CHECK(map["players"].size() == 2);
+        SimConfig cfg; cfg.seed = seed;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rj, map);
+        for (int i = 0; i < 40; ++i) sim.step();
+        return sim.checksum();
+    };
+    CHECK(run(11) == run(11));
+    CHECK(run(11) != run(12));
+    // readable errors
+    Json bad = Json::parse(R"({"size": [40, 40], "players": [{}, {}], "generate": {"preset": "nope"}})");
+    SimConfig cfg;
+    Simulation sim(cfg, std::make_unique<game::RtsModule>());
+    std::string what;
+    try { sim.setup(rj, bad); } catch (const std::exception& e) { what = e.what(); }
+    CHECK(what.find("unknown preset 'nope'") != std::string::npos);
+}
+
+TEST(gen_caves_and_heightfield) {
+    const std::string caveRules = R"({"resources": {"gold": {"start": 100}},
+      "diggable": {"D": {"hardness": 3}, "G": {"hardness": 5, "yields": {"gold": 100}}, "J": {"hardness": 8, "yields": {"gold": 20}, "infinite": true}},
+      "types": {"heart": {"key": true, "structure": {"footprint": [3, 3]}, "produces": ["imp"]},
+                "imp": {"move": {"speed": 3}, "digs": {"rate": 1}, "cost": {"gold": 10}}}})";
+    Json m;
+    const uint64_t h = genHash("caves", 5, 2, caveRules, "auto", &m);
+    std::printf("  caves %016llx\n", (unsigned long long)h);
+    CHECK(h == GEN_GOLD_CAVES);
+    std::string rows;
+    for (auto& r : m["terrain"]["rows"].items()) rows += r.str();
+    CHECK(rows.find('D') != std::string::npos && rows.find('G') != std::string::npos);
+    CHECK(m["generated"].getBool("connected"));
+    const std::string hfRules = std::string(kGenRules).substr(0, std::string(kGenRules).size() - 2) + R"(, "terrain": {"model": "heightfield", "maxSlope": 0.8}})";
+    Json hm;
+    const uint64_t hh = genHash("metal", 5, 2, hfRules, "auto", &hm);
+    std::printf("  metal %016llx\n", (unsigned long long)hh);
+    CHECK(hh == GEN_GOLD_METAL);
+    CHECK(hm["terrain"]["corners"].size() == size_t(49 * 49));   // the map's own size wins over the preset size
+    CHECK(hm["generated"].getBool("connected"));
+}
+
+TEST(gen_planet_seams) {
+    Json rj = Json::parse(kGenRules);
+    game::Rules rules = game::loadRules(rj);
+    Json map = Json::parse(R"({"size": [16, 16], "players": [{}, {}, {}],
+        "world": {"bodies": [{"id": "terra", "kind": "planet", "radius": 64, "faceSize": 12,
+                              "generate": {"preset": "rocky", "seed": 3, "players": 3}}]}})");
+    std::string err;
+    CHECK(gen::applyGenerate(map, rules, rj, 1, 3, &err));
+    const Json& body = map["world"]["bodies"][size_t(0)];
+    const Json& cs = body["terrain"]["corners"];
+    CHECK(cs.size() == size_t(6 * 13 * 13));
+    CHECK(body["terrain"]["faces"].size() == 6);
+    game::CubeSphere S(12);
+    bool seams = true;
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= 12; ++j)
+            for (int i = 0; i <= 12; ++i) {
+                int ids[3]; const int n = S.cornerDuplicates(f, i, j, ids);
+                for (int q = 1; q < n; ++q) if (cs[size_t(ids[q])].integer() != cs[size_t(ids[0])].integer()) seams = false;
+            }
+    CHECK(seams);
+    CHECK(body["generated"]["starts"].size() == 3);
+    // three sites on a sphere: maximally separated means well over a quarter turn apart
+    CHECK(body["generated"]["minStartArc"].fx() > Fixed::fromRatio(25, 100));
+    Json again = Json::parse(R"({"size": [16, 16], "players": [{}, {}, {}],
+        "world": {"bodies": [{"id": "terra", "kind": "planet", "radius": 64, "faceSize": 12,
+                              "generate": {"preset": "rocky", "seed": 3, "players": 3}}]}})");
+    CHECK(gen::applyGenerate(again, rules, rj, 99, 3, &err));
+    CHECK(gen::mapHash(again) == gen::mapHash(map));
+    std::printf("  planet %016llx\n", (unsigned long long)gen::mapHash(map));
+    CHECK(gen::mapHash(map) == GEN_GOLD_PLANET);
+}
+
+// ---- planet view (agent-planet-render): float cube-sphere surface of RtsPlanet.h
+#include "modules/rts/view/RtsPlanet.h"
+TEST(planet_view_surface_seams_and_picking) {
+    using namespace rts::render;
+    rts::game::PlanetBody b;
+    b.radius = 40; b.faceSize = 16;
+    const int N = 16, S = (N + 1) * (N + 1);
+    b.corners.assign(size_t(6 * S), 0);
+    rts::game::CubeSphere cs(N);
+    // heights as a function of the corner direction: duplicates on seams get equal values
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                const Vec3 d = cs.cornerDir(f, i, j);
+                b.corners[size_t(cs.cornerId(f, i, j))] = int16_t((d.x.toDouble() * 3 + d.y.toDouble() * 2) * 16);
+            }
+    rts::game::PlanetSurface s;
+    s.init(b);
+    bool seamsShared = true;   // every duplicated corner has the same position on all its faces
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                int dup[3];
+                const int n = cs.cornerDuplicates(f, i, j, dup);
+                for (int k = 0; k < n; ++k) {
+                    const int g = dup[k] / S, jj = (dup[k] % S) / (N + 1), ii = dup[k] % (N + 1);
+                    const float3 a = s.cornerPos(f, i, j), c = s.cornerPos(g, ii, jj);
+                    if (a.x != c.x || a.y != c.y || a.z != c.z) seamsShared = false;
+                }
+            }
+    CHECK(seamsShared);
+    // float face mapping round-trips and agrees with the corner table
+    int f; float fa, fb;
+    s.faceFromDir(s.dirFromFace(4, 3.25f, 11.5f), f, fa, fb);
+    CHECK(f == 4 && std::fabs(fa - 3.25f) < 1e-3f && std::fabs(fb - 11.5f) < 1e-3f);
+    const float3 cd = s.cornerDir(2, 5, 7), fd = s.dirFromFace(2, 5, 7);
+    CHECK(length(cd - fd) < 1e-4f);   // Q16 vs float
+    // height at a corner direction = that corner's height; ray from outside hits the surface there
+    CHECK(std::fabs(s.heightAt(cd) - s.cornerHeight(2, 5, 7)) < 1e-3f);
+    float3 hit;
+    const float3 target = s.surfacePoint(cd);
+    CHECK(s.raycast(cd * 200.0f, cd * -1.0f, hit));
+    CHECK(length(hit - target) < 0.05f);
+    CHECK(!s.raycast(cd * 200.0f, cd, hit));   // pointing away: no hit
+    // map world block: bodies, orbit parents, start
+    Json map = Json::parse(R"({"world": {"bodies": [{"id": "sun", "kind": "star", "radius": 10},
+        {"id": "p", "kind": "planet", "radius": 20, "faceSize": 4, "orbit": {"around": "sun", "radius": 100, "period": 10, "phase": 0.25}}],
+        "start": "p"}})");
+    std::vector<std::string> warn;
+    rts::game::PlanetWorld w = rts::game::loadPlanetWorld(map, &warn);
+    CHECK(w.bodies.size() == 2 && w.start == 1 && w.bodies[1].parent == 0 && warn.empty()); // no corners: a smooth sphere
+    const float3 c0 = w.center(1, 0), c5 = w.center(1, 5);   // quarter turn, then half a period later
+    CHECK(std::fabs(c0.x) < 1e-3f && std::fabs(c0.z - 100) < 1e-3f && std::fabs(c5.z + 100) < 1e-2f);
+    CHECK(rts::game::loadPlanetWorld(Json::parse("{}")).empty());
 }
 
 // ---------------- Sound groups and steal modes ----------------

@@ -150,6 +150,7 @@ int MapGrid::clearanceFor(Fixed radius) {
 }
 
 void MapGrid::updateClearance() {
+    if (surf) { updateClearanceSphere(); return; }
     clearanceDirty = false;
     const size_t n = size_t(w * h);
     clearance.assign(n, 3);
@@ -206,7 +207,8 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
     // clearance is capped at 3, so only cells within 3 of the footprint change: patch them (same values as a
     // full recompute) instead of a whole-map pass on the next path query
-    if (!clearanceDirty && clearance.size() == flags.size()) updateClearanceRect(x0 - 3, y0 - 3, x0 + fw + 2, y0 + fh + 2);
+    if (surf) clearanceDirty = true; // planet cells: rows are not geometric neighbours across seams
+    else if (!clearanceDirty && clearance.size() == flags.size()) updateClearanceRect(x0 - 3, y0 - 3, x0 + fw + 2, y0 + fh + 2);
     else clearanceDirty = true;
     for (auto& G : hpa_)
         for (int cy = std::max(0, y0) / HpaGraph::kC; cy <= std::min(h - 1, y0 + fh - 1) / HpaGraph::kC && cy < G.ch; ++cy)
@@ -287,6 +289,7 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
 
 bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes, int clear, bool useSoft) {
     out.clear();
+    if (surf) return findPathSphere(from, to, layer, out, maxNodes, clear, useSoft);
     if (layer & 2) { out.push_back(to); return true; } // air: straight line
     int sx = cellX(from.x), sy = cellY(from.z), gx = cellX(to.x), gy = cellY(to.z);
     if (!inside(sx, sy) || w == 0) return false;
@@ -417,6 +420,13 @@ std::vector<uint16_t> RoadGraph::path(World& w, int from, int to) const {
 }
 
 void SpatialHash::reset(int worldW, int worldH, int cellSize) {
+    if (surf) {
+        const size_t n = size_t(surf->bucketCount());
+        if (buckets.size() != n) { buckets.assign(n, {}); used.clear(); }
+        for (int32_t i : used) buckets[size_t(i)].clear();
+        used.clear();
+        return;
+    }
     cell = cellSize;
     w = (worldW + cell - 1) / cell + 1;
     h = (worldH + cell - 1) / cell + 1;
@@ -426,6 +436,13 @@ void SpatialHash::reset(int worldW, int worldH, int cellSize) {
 }
 
 void SpatialHash::insert(Entity e, Vec3 p) {
+    if (surf) {
+        const int i = surf->bucketOf(p);
+        auto& b = buckets[size_t(i)];
+        if (b.empty()) used.push_back(i);
+        b.push_back(e);
+        return;
+    }
     int x = std::clamp(int(p.x.floorInt()) / cell, 0, w - 1), y = std::clamp(int(p.z.floorInt()) / cell, 0, h - 1);
     auto& b = buckets[size_t(y * w + x)];
     if (b.empty()) used.push_back(y * w + x);
