@@ -156,8 +156,8 @@ R"({
   "emitters": [
     { "comment": "drops", "texture": "builtin:spark", "blend": "additive", "align": "velocity", "stretch": 0.02, "aspect": 2,
       "rate": 220, "loop": true, "duration": 1, "life": 0.9, "speed": [14, 16], "direction": [0.1, -1, 0], "spread": 2,
-      "shape": "box", "box": [16, 0, 16], "offset": [0, 12, 0], "size": [0.03, 0.04],
-      "collision": { "bounce": 0, "dampen": 1, "minKillSpeed": 100 }, "color": "#a0b8d080" },
+      "shape": "box", "box": [16, 0, 16], "offset": [0, 12, 0], "size": [0.04, 0.06],
+      "collision": { "bounce": 0, "dampen": 1, "minKillSpeed": 100 }, "color": "#b8cce0b0" },
     { "comment": "splashes", "texture": "builtin:ring", "blend": "additive", "align": "ground", "rate": 60, "loop": true,
       "duration": 1, "life": 0.25, "speed": 0, "shape": "box", "box": [16, 0, 16], "offset": [0, 0.02, 0], "size": 0.25,
       "sizeOverLife": [[0, 0.3], [1, 1]], "color": [[0, "#c0d8f060"], [1, "#c0d8f000"]], "minQuality": "medium" }

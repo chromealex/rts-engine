@@ -9,6 +9,14 @@
 
 namespace rts::editor {
 
+namespace {
+constexpr float kOrbit = 2.0f, kOrbitSpeed = 1.6f;   // fx_preview {moving}: like the Effects window's "movement"
+void orbit(fx::ParticleSystem& ps, fx::FxHandle h, fx::float3 c, float t) {
+    ps.move(h, {c.x + std::cos(t * kOrbitSpeed) * kOrbit, c.y, c.z + std::sin(t * kOrbitSpeed) * kOrbit},
+            {-std::sin(t * kOrbitSpeed), 0, std::cos(t * kOrbitSpeed)});
+}
+} // namespace
+
 void Editor::tickFx(const render::RTSCamera& cam, int w, int h, const std::vector<game::SceneObject>* objects) {
     const bool active = playing() || !fxPreview_.name.empty() || gameFx_.stats().particles > 0 || gameFx_.stats().instances > 0;
     if (!active) { fxTime_ = time_; return; }
@@ -24,6 +32,7 @@ void Editor::tickFx(const render::RTSCamera& cam, int w, int h, const std::vecto
         const fx::EffectDef* d = gameFx_.def(id);
         fxPreview_.next = time_ + (d && !d->looping() ? std::min(8.0, double(d->lifetime()) + 0.5) : 0.5);
     }
+    if (fxPreview_.moving && dt > 0) { fxPreview_.moveT += dt; orbit(gameFx_, fxPreview_.h, fxPreview_.pos, fxPreview_.moveT); }
     gameFx_.update(dt);
     std::vector<fx::FxPointLight> lights;
     gameFx_.collectLights(lights);
@@ -35,11 +44,12 @@ void Editor::registerFxPreviewOps() {
         "Play a particle effect in the editor so you can look at it: spawns fx/<effect>.json at x, z (default: the view's centre; y = "
         "height above the ground) in the Scene view, or in the Game view during a play-test, and moves that view's camera there "
         "('distance' optional). 'advance' pre-runs it (seconds) and 'freeze' holds it still: then view_screenshot {window: 'scene'} "
-        "shows that moment. 'loop' replays one-shots; 'scale', 'color' (\"#rrggbbaa\" tint), 'quality' (low | medium | high: how weak "
-        "GPUs see it, also affects the play-test). {stop: true} removes the preview.",
+        "shows that moment. 'loop' replays one-shots; 'moving' circles it 2 m around the point (trails, per-metre emitters); 'pitch' "
+        "camera angle in degrees (90 = from above, 25 = from the side); 'scale', 'color' (\"#rrggbbaa\" tint), 'quality' (low | medium | "
+        "high: how weak GPUs see it, also affects the play-test). {stop: true} removes the preview.",
         Json::parse(R"({"properties": {"effect": {"type": "string"}, "x": {"type": "number"}, "z": {"type": "number"}, "y": {"type": "number"},
             "scale": {"type": "number"}, "color": {"type": "string"}, "advance": {"type": "number"}, "freeze": {"type": "boolean"},
-            "loop": {"type": "boolean"}, "distance": {"type": "number"}, "quality": {"type": "string", "enum": ["low", "medium", "high"]},
+            "loop": {"type": "boolean"}, "moving": {"type": "boolean"}, "pitch": {"type": "number"}, "distance": {"type": "number"}, "quality": {"type": "string", "enum": ["low", "medium", "high"]},
             "stop": {"type": "boolean"}}})"),
         [this](const Json& p) -> Json {
             Json r = Json::object();
@@ -77,6 +87,7 @@ void Editor::registerFxPreviewOps() {
             cam.target = {x, ground, z};
             if (p.has("distance")) cam.distance = std::clamp(float(p["distance"].toDouble()), cam.minDistance, cam.maxDistance);
             else if (cam.distance > 22) cam.distance = std::max(cam.minDistance, 14.0f);
+            if (p.has("pitch")) cam.pitch = std::clamp(float(p["pitch"].toDouble()), 10.0f, 89.0f) * 3.14159265f / 180.0f;
             if (!playing()) sceneFlying_ = false;
             // culling uses the camera of the last frame: give it the new one before play()
             Viewport* vp = playing() ? gameViewport : sceneViewport;
@@ -89,9 +100,15 @@ void Editor::registerFxPreviewOps() {
                 throw std::runtime_error(gameFx_.quality() == fx::FxQuality::Off ? "particles are switched off (quality off)" : "the effect was not started (instance budget full)");
             const fx::EffectDef* d = gameFx_.def(id);
             const float advance = std::clamp(float(p["advance"].toDouble(0)), 0.0f, 10.0f);
-            for (int i = 0, n = int(std::lround(advance * 60)); i < n; ++i) gameFx_.update(1.0f / 60.0f);
+            const bool moving = p.getBool("moving");
+            float moveT = 0;
+            for (int i = 0, n = int(std::lround(advance * 60)); i < n; ++i) {
+                if (moving) orbit(gameFx_, hnd, pos, moveT += 1.0f / 60.0f);
+                gameFx_.update(1.0f / 60.0f);
+            }
             fxFrozen_ = p.getBool("freeze");
-            fxPreview_ = {name, pos, scale, tint, p.getBool("loop"), hnd, time_ + (d && !d->looping() ? std::min(8.0, double(d->lifetime()) + 0.5) : 0.5)};
+            fxPreview_ = {name, pos, scale, tint, p.getBool("loop"), hnd, time_ + (d && !d->looping() ? std::min(8.0, double(d->lifetime()) + 0.5) : 0.5),
+                          moving, moveT};
             fxTime_ = time_;
             r.set("ok", Json::fromBool(true));
             r.set("effect", Json::string(name));
