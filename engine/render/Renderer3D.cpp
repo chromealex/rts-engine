@@ -395,12 +395,6 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         ++drawCalls_;
     };
     for (auto& it : items_) if (it.color.w >= 0.99f) drawItem(it);
-    if (!custom_.empty()) {
-        for (auto& fn : custom_) fn(*dev_);
-        dev_->setPipeline(litPipe_);   // custom renderers bind their own state; restore ours
-        uploadFrameUniforms(false);
-        dev_->setTexture(0, shadowMap_);
-    }
     // translucent meshes (water, ghosts) before overlays so that overlays (fog of war, markers) stay on top
     bool any = false;
     for (auto& it : items_) {
@@ -408,6 +402,9 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         if (!any) { dev_->setPipeline(litBlendPipe_); uploadFrameUniforms(false); dev_->setTexture(0, shadowMap_); any = true; }
         drawItem(it);
     }
+    // custom renderers (sprites) after translucent meshes: they don't write depth, so water drawn
+    // later would tint them; overlays (fog of war, markers) still come on top
+    for (auto& fn : custom_) fn(*dev_);
     if (!tris_.empty()) {
         dev_->updateBuffer(triVB_, tris_.data(), tris_.size() * sizeof(ColorVertex));
         dev_->setPipeline(triPipe_);

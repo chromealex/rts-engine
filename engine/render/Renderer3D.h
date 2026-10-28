@@ -94,7 +94,7 @@ public:
     void circleXZ(float3 c, float radius, uint32_t color, int segments = 40, float y = 0.03f);
     void render(const gfx::PassDesc& screenPass); // shadow pass + opens the main pass and draws everything
     // Extra renderers (sprites, tiles) that draw with their own pipelines inside the main pass: run
-    // after opaque meshes, before translucent meshes and overlays (fog of war stays on top).
+    // after opaque and translucent meshes, before overlays (fog of war stays on top).
     // Cleared by beginScene.
     using CustomDraw = std::function<void(gfx::Device&)>;
     void drawCustom(CustomDraw fn) { custom_.push_back(std::move(fn)); }
