@@ -1,0 +1,55 @@
+// "Shroom Wars" — Mushroom Wars 2. Villages grow mushrooms (level 1-4 by upgrade, level 5 only placed on maps: more
+// room, faster growth, better defence), towers shoot passing enemies (level 1-4), forges make every mushroom hit harder
+// and every building hold better (up to four forges count). Upgrades are paid with the mushrooms inside (towers 20 a
+// level); turning a building into another kind costs 30 and starts it at level 1; a captured village or tower drops a
+// level. Send a share of a building along the lanes; enemy groups that meet on the way fight. An attack kills
+// defenders by attack / defence. Morale (0-5 suns) rises with captures, upgrades and good defence, falls when you lose
+// buildings and decays over time; every sun adds attack, defence and speed. Energy (up to 500) regenerates and grows
+// with mushrooms lost in attacks; it pays the four skills of the hero chosen for the match (map loadout).
+// Numbers per level are approximate (Mushroom Wars 2 does not publish its tables).
+{
+  "victory": "noEntities",
+  "lanes": {"left": 2, "right": 2, "spacing": 0.35},
+  "resources": {
+    "energy": {"name": "Энергия", "start": 100, "regen": 2.5, "capped": true, "storage": 500, "gain": {"lost": 0.45}},
+    "morale": {"name": "Боевой дух", "start": 0, "regen": -0.01, "capped": true, "storage": 5, "gain": {"capture": 0.35, "upgrade": 0.25, "defended": 0.01, "captured": -0.4}, "perUnit": [{"tags": ["shroom"], "stat": "damage", "mul": 1.06}, {"tags": ["shroom"], "stat": "speed", "mul": 1.03}, {"tags": ["village", "tower", "forge"], "stat": "defense", "mul": 1.06}]}
+  },
+  "statuses": {
+    "shells": {"name": "Разрывные снаряды", "tags": ["buff"], "onHit": [{"type": "kill", "radius": 0.8, "kind": "unit"}]},
+    "close_ranks": {"name": "Сомкнутые ряды", "tags": ["buff"], "mods": [{"stat": "speed", "mul": 1.4}]},
+    "energy_shield": {"name": "Энергетический щит", "tags": ["buff", "magic"], "shield": 20, "view": {"color": [0.4, 0.7, 1.0]}},
+    "growth": {"name": "Быстрый рост", "tags": ["buff"], "mods": [{"stat": "productionSpeed", "mul": 1.5}]},
+    "frozen": {"name": "Заморозка", "tags": ["debuff", "magic"], "flags": ["stun"], "view": {"color": [0.6, 0.85, 1.0]}},
+    "charge": {"name": "Рывок", "tags": ["buff"], "mods": [{"stat": "speed", "mul": 1.3}, {"stat": "damage", "mul": 1.3}]},
+    "slowed": {"name": "Замедление", "tags": ["debuff", "magic"], "mods": [{"stat": "speed", "mul": 0.4}]},
+    "plague": {"name": "Чума", "tags": ["debuff", "magic"], "flags": ["spreads"], "garrisonPerSecond": -0.6, "view": {"color": [0.5, 0.8, 0.2]}}
+  },
+  "loadoutSlots": 4,
+  "playerAbilities": [
+    {"id": "tower_defense", "name": "Защита башней", "target": "structure", "cost": {"energy": 80}, "cooldown": 25, "effects": [{"type": "transform", "to": "tower2", "duration": 7, "affects": "own"}], "smart": "ownStructureUnderAttack"},
+    {"id": "explosive_shells", "name": "Разрывные снаряды", "target": "structure", "cost": {"energy": 120}, "cooldown": 50, "effects": [{"type": "status", "status": "shells", "duration": 6, "affects": "own"}], "smart": "ownStructureUnderAttack"},
+    {"id": "close_ranks", "name": "Сомкнуть ряды", "target": "group", "cost": {"energy": 150}, "cooldown": 85, "effects": [{"type": "status", "status": "close_ranks", "duration": 12, "shape": "group", "affects": "own"}]},
+    {"id": "bomb", "name": "Бомба", "target": "structure", "cost": {"energy": 300}, "cooldown": 120, "effects": [{"type": "garrisonKill", "percent": 0.85}, {"type": "kill", "radius": 2, "kind": "unit"}], "smart": "strongestEnemyStructure"},
+    {"id": "energy_shield", "name": "Энергетический щит", "target": "structure", "cost": {"energy": 100}, "cooldown": 35, "effects": [{"type": "status", "status": "energy_shield", "duration": 10, "affects": "own"}], "smart": "ownStructureUnderAttack"},
+    {"id": "fast_growth", "name": "Быстрый рост", "target": "structure", "cost": {"energy": 150}, "cooldown": 60, "effects": [{"type": "status", "status": "growth", "duration": 8, "affects": "own"}], "smart": "weakestOwnStructure"},
+    {"id": "freeze", "name": "Заморозка", "target": "group", "cost": {"energy": 180}, "cooldown": 70, "effects": [{"type": "status", "status": "frozen", "duration": 3, "shape": "group"}], "smart": "largestEnemyGroup"},
+    {"id": "ultimate_charge", "name": "Последний рывок", "target": "group", "cost": {"energy": 300}, "cooldown": 120, "effects": [{"type": "status", "status": "charge", "duration": 10, "shape": "group", "affects": "own"}]},
+    {"id": "slow_mo", "name": "Кольцо замедления", "target": "point", "cost": {"energy": 120}, "cooldown": 40, "effects": [{"type": "status", "status": "slowed", "duration": 6, "radius": 3, "kind": "unit"}], "smart": "densestEnemy"},
+    {"id": "send_home", "name": "Домой!", "target": "group", "cost": {"energy": 150}, "cooldown": 50, "effects": [{"type": "sendBack", "mode": "home", "shape": "group"}], "smart": "largestEnemyGroup"},
+    {"id": "plague", "name": "Чума", "target": "structure", "cost": {"energy": 180}, "cooldown": 70, "effects": [{"type": "status", "status": "plague", "duration": 15}], "smart": "strongestEnemyStructure"},
+    {"id": "treason", "name": "Измена", "target": "structure", "cost": {"energy": 300}, "cooldown": 120, "effects": [{"type": "capture", "duration": 15, "keepChance": 0.5}], "smart": "strongestEnemyStructure"}
+  ],
+  "types": {
+    "shroom": {"name": "Гриб", "tags": ["shroom"], "health": {"max": 1}, "move": {"speed": 2.4, "radius": 0.15}, "sight": 3, "entersGarrison": true, "clash": true, "view": {"shape": "mushroom", "scale": 0.5}},
+    "village1": {"name": "Деревня 1", "tags": ["village"], "level": 1, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5, "garrison": {"max": 20, "unit": "shroom", "capturable": true, "defense": 1.0, "keep": 0, "interval": 1.3}, "upgrades": ["village2", "tower1", "forge"], "view": {"shape": "mushroomhouse", "scale": 1.1}, "cost": {"garrison": 30, "time": 3}},
+    "village2": {"name": "Деревня 2", "tags": ["village"], "level": 2, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5, "garrison": {"max": 30, "unit": "shroom", "capturable": true, "defense": 1.1, "keep": 0, "interval": 1.05, "onCapture": "village1"}, "upgrades": ["village3", "tower1", "forge"], "view": {"shape": "mushroomhouse", "scale": 1.2}, "cost": {"garrison": 10, "time": 4}},
+    "village3": {"name": "Деревня 3", "tags": ["village"], "level": 3, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5, "garrison": {"max": 40, "unit": "shroom", "capturable": true, "defense": 1.2, "keep": 0, "interval": 0.85, "onCapture": "village2"}, "upgrades": ["village4", "tower1", "forge"], "view": {"shape": "mushroomhouse", "scale": 1.3}, "cost": {"garrison": 20, "time": 5}},
+    "village4": {"name": "Деревня 4", "tags": ["village"], "level": 4, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5, "garrison": {"max": 50, "unit": "shroom", "capturable": true, "defense": 1.3, "keep": 0, "interval": 0.7, "onCapture": "village3"}, "upgrades": ["tower1", "forge"], "view": {"shape": "mushroomhouse", "scale": 1.4}, "cost": {"garrison": 30, "time": 6}},
+    "village5": {"name": "Деревня 5", "tags": ["village"], "level": 5, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5, "garrison": {"max": 60, "unit": "shroom", "capturable": true, "defense": 1.4, "keep": 0, "interval": 0.55, "onCapture": "village4"}, "upgrades": ["tower1", "forge"], "view": {"shape": "mushroomhouse", "scale": 1.5}},
+    "tower1": {"name": "Башня 1", "tags": ["tower"], "level": 1, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5.0, "garrison": {"max": 15, "unit": "shroom", "capturable": true, "defense": 1.5, "keep": 0}, "weapons": [{"range": 4.0, "damage": 1, "cooldown": 0.9, "projectileSpeed": 12}], "upgrades": ["tower2", "village1", "forge"], "cost": {"garrison": 30, "time": 3}, "view": {"shape": "tower", "scale": 0.98}},
+    "tower2": {"name": "Башня 2", "tags": ["tower"], "level": 2, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5.5, "garrison": {"max": 20, "unit": "shroom", "capturable": true, "defense": 1.75, "keep": 0, "onCapture": "tower1"}, "weapons": [{"range": 4.5, "damage": 1, "cooldown": 0.75, "projectileSpeed": 12}], "upgrades": ["tower3", "village1", "forge"], "cost": {"garrison": 20, "time": 4}, "view": {"shape": "tower", "scale": 1.06}},
+    "tower3": {"name": "Башня 3", "tags": ["tower"], "level": 3, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 6.0, "garrison": {"max": 25, "unit": "shroom", "capturable": true, "defense": 2.0, "keep": 0, "onCapture": "tower2"}, "weapons": [{"range": 5.0, "damage": 1, "cooldown": 0.6, "projectileSpeed": 12}], "upgrades": ["tower4", "village1", "forge"], "cost": {"garrison": 20, "time": 5}, "view": {"shape": "tower", "scale": 1.1400000000000001}},
+    "tower4": {"name": "Башня 4", "tags": ["tower"], "level": 4, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 6.5, "garrison": {"max": 30, "unit": "shroom", "capturable": true, "defense": 2.3, "keep": 0, "onCapture": "tower3"}, "weapons": [{"range": 5.5, "damage": 1, "cooldown": 0.5, "projectileSpeed": 12}], "upgrades": ["village1", "forge"], "cost": {"garrison": 20, "time": 6}, "view": {"shape": "tower", "scale": 1.22}},
+    "forge": {"name": "Кузница", "tags": ["forge"], "level": 1, "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5, "garrison": {"max": 20, "unit": "shroom", "capturable": true, "defense": 1.0, "keep": 0}, "upgrades": ["village1", "tower1"], "cost": {"garrison": 30, "time": 3}, "playerMods": {"max": 4, "mods": [{"tags": ["shroom"], "stat": "damage", "mul": 1.08}, {"tags": ["village", "tower", "forge"], "stat": "defense", "mul": 1.08}]}, "view": {"shape": "barracks", "scale": 0.8}}
+  }
+}
