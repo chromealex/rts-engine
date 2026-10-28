@@ -288,7 +288,7 @@ endif()
 
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
-    modules/rts/view/RtsLights.cpp modules/rts/view/RtsGroundFx.cpp)
+    modules/rts/view/RtsLights.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
@@ -520,6 +520,7 @@ target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts
 target_link_libraries(rts_game_view PUBLIC rts_render2d)
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/TileOps.cpp)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/TerrainOps.cpp)   # terrain agent: sculpt, materials, heightmaps
 endif()
 
 # ---------------------------------------------------------------------------

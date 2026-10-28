@@ -338,6 +338,7 @@ public:
         if (!enc_ || !t) return;
         [enc_ setFragmentTexture:t->tex atIndex:NSUInteger(slot)];
         [enc_ setFragmentSamplerState:t->sampler atIndex:NSUInteger(slot)];
+        [enc_ setVertexTexture:t->tex atIndex:NSUInteger(slot)];   // vertex texture fetch (terrain tint)
     }
     void setUniforms(int slot, const void* data, size_t size) override {
         if (!enc_) return;
