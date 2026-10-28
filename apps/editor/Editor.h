@@ -236,6 +236,7 @@ private:
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;
     int human_ = 0;
+    std::map<std::string, Entity> playIds_;   // map entity "id" -> live entity of the play-test (play_command names)
     float lastSimMs_ = 0;
 
     net::LineServer server_;
