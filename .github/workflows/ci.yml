@@ -187,6 +187,67 @@ jobs:
         if: always()
         with: { name: game-web, path: "build/web/index.*\nweb-smoke/" }
 
+  # ---------------------------------------------------------------- Native plugins (docs/plugins.md)
+  # Compiles every plugin against the real SDKs: Gradle (Play Billing, RuStore Pay, AdMob, Yandex Ads,
+  # AppLovin MAX, ironSource LevelPlay) and CocoaPods + Xcode (StoreKit, AdMob, Yandex Ads, AppLovin,
+  # ironSource). Test ad ids only. Then checks that unselected plugins never get into a build.
+  plugins-android:
+    name: Plugins (Android SDKs)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.10.2' }
+      - name: Build APK with all Android plugins
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build
+          cmake -S . -B build/host -G Ninja -DCMAKE_BUILD_TYPE=Release -DRTS_BUILD_CLIENT=OFF -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF
+          cmake --build build/host --target rtsbuild
+          python3 .github/scripts/plugins-testgame.py build/plugins-game
+          build/host/rtsbuild --project build/plugins-game --target android --out build/plugins-dist --config Debug
+          ls -la build/plugins-dist/android/*.apk
+      - name: Only selected plugins get into a build
+        run: python3 .github/scripts/check-plugin-isolation.py build/host/rtsbuild build/isolation
+      - name: Yandex Games plugin protocol
+        run: node plugins/yandex-games/web/test.mjs
+
+  # Steamworks SDK is behind a partner login; CI takes the same SDK headers and redistributables
+  # from the steamworks-sys crate (crates.io) to compile, link and test the steam plugin.
+  plugins-steam:
+    name: Plugins (Steam, Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Steamworks SDK (from the steamworks-sys crate)
+        run: |
+          curl -sSfL https://static.crates.io/crates/steamworks-sys/steamworks-sys-0.12.0.crate | tar xz -C "$RUNNER_TEMP"
+          echo "STEAMWORKS_SDK=$RUNNER_TEMP/steamworks-sys-0.12.0/lib/steam" >> "$GITHUB_ENV"
+      - name: Plugin against a fake Steam client
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libx11-dev libegl-dev libgles-dev
+          cmake --preset linux-release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          cmake --build build/linux-release --target rts_plugins rtsbuild
+          plugins/steam/test/run.sh
+      - name: Packaged Linux game with the steam plugin
+        run: |
+          python3 .github/scripts/plugins-testgame.py build/plugins-game
+          build/linux-release/rtsbuild --project build/plugins-game --target linux --out build/plugins-dist --plugins steam
+          for d in build/plugins-dist/linux/*/; do ldd "$d$(basename "$d")" | grep "libsteam_api.so => .*$(basename "$d")/libsteam_api.so"; done
+
+  plugins-ios:
+    name: Plugins (iOS SDKs)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode project + CocoaPods + simulator build with all iOS plugins
+        run: |
+          cmake -S . -B build/host -DCMAKE_BUILD_TYPE=Release -DRTS_BUILD_CLIENT=OFF -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF
+          cmake --build build/host --target rtsbuild
+          python3 .github/scripts/plugins-testgame.py build/plugins-game
+          build/host/rtsbuild --project build/plugins-game --target ios --out build/plugins-dist --plugins appstore,admob,yandex-ads,applovin,ironsource
+
   # ---------------------------------------------------------------- Cross-platform determinism
   determinism:
     name: Determinism across platforms

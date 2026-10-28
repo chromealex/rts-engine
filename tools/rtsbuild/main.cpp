@@ -50,6 +50,7 @@
 #include "tools/audiopack/AudioPack.h"
 #include "tools/rtsbuild/Branding.h"
 #include "tools/rtsbuild/FileRules.h"
+#include "tools/rtsbuild/Plugins.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -88,6 +89,7 @@ struct Options {
     // Split builds: command-line overrides of game.json "packaging" (-1 / empty = not given).
     int split = -1, fillBase = -1;
     std::string chunkSize, baseSize, totalSize;
+    std::string plugins;      // --plugins a,b: native plugins instead of game.json "plugins" (tools/rtsbuild/Plugins.h)
     unsigned jobs = std::max(2u, std::thread::hardware_concurrency());
 };
 
@@ -149,10 +151,17 @@ std::string replaceAll(std::string s, const std::string& a, const std::string& b
     for (size_t pos = 0; (pos = s.find(a, pos)) != std::string::npos; pos += b.size()) s.replace(pos, a.size(), b);
     return s;
 }
-void copyDir(const fs::path& from, const fs::path& to) {
+// Recursive copy that also works into an existing folder on every standard library
+// (MinGW's fs::copy(recursive | overwrite_existing) fails when the target directory exists).
+void copyTree(const fs::path& from, const fs::path& to) {
     fs::create_directories(to);
-    fs::copy(from, to, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
+        const fs::path dst = to / fs::relative(it->path(), from);
+        if (it->is_directory()) fs::create_directories(dst);
+        else fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing);
+    }
 }
+void copyDir(const fs::path& from, const fs::path& to) { copyTree(from, to); }
 std::string sanitize(const std::string& s) {
     std::string o;
     for (char c : s) o += (std::isalnum(static_cast<unsigned char>(c)) ? c : (c == ' ' || c == '-' || c == '_') ? '_' : '_');
@@ -588,6 +597,23 @@ void exportSources(const Options& o, const fs::path& dst) {
     fs::copy_file(o.engine / "CMakeLists.txt", dst / "CMakeLists.txt", fs::copy_options::overwrite_existing);
 }
 
+// Native plugins for a target: report what goes in and write plugins.cmake into `dir`.
+rts::build::PluginSet pluginsFor(const Options& o, const std::string& platform) {
+    rts::build::PluginSet set = rts::build::loadPlugins(o.engine, o.project, readText(o.project / "game.json"), platform, o.plugins);
+    for (auto& n : set.notes) info("плагин: " + n);
+    return set;
+}
+std::string pluginsVar(const Options& o, const std::string& platform, const fs::path& dir) {
+    return " -DRTS_PLUGINS_FILE=" + quote(rts::build::writePluginsCMake(pluginsFor(o, platform), dir));
+}
+
+// Shared libraries of desktop SDK plugins (steam_api64.dll, libsteam_api.so) next to the executable.
+void copyPluginRuntime(const Options& o, const std::string& platform, const fs::path& dir) {
+    rts::build::PluginSet set = rts::build::loadPlugins(o.engine, o.project, readText(o.project / "game.json"), platform, o.plugins);
+    for (const fs::path& f : rts::build::runtimeFiles(set))
+        fs::copy_file(f, dir / f.filename(), fs::copy_options::overwrite_existing);
+}
+
 // ------------------------------------------------------------------ targets
 void buildMac(const Game& g, Options& o) {
     if (std::string(kHost) != "macos") {
@@ -603,7 +629,7 @@ void buildMac(const Game& g, Options& o) {
 
     step("macOS: конфигурация CMake");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), gen) + packVar(o) + " -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
+    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), gen) + packVar(o) + pluginsVar(o, "macos", gen) + " -DCMAKE_OSX_ARCHITECTURES=\"arm64;x86_64\" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0");
     step("macOS: сборка");
     mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config + " -j " + std::to_string(o.jobs));
     fs::path app = bdir / (g.exe + ".app");
@@ -630,6 +656,8 @@ void buildIOS(const Game& g, Options& o) {
     fs::remove_all(src);
     exportSources(o, src);
     placeContent(o, src / "content");
+    rts::build::PluginSet plugins = pluginsFor(o, "ios");
+    rts::build::writePluginsCMake(plugins, src); // src/plugins.cmake travels with the exported project
     step("iOS: иконки (asset catalog) и экран запуска");
     fs::remove_all(gen);
     rts::build::brandIOS(branding(g, o), gen, info);
@@ -640,10 +668,23 @@ void buildIOS(const Game& g, Options& o) {
     if (!o.team.empty()) vars += " -DRTS_APPLE_TEAM_ID=" + o.team;
     mustRun("cmake -S " + quote(src) + " -B " + quote(xc) + " -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0" + vars);
     fs::path proj = xc / "RTSEngine.xcodeproj";
+    std::string xcodeTarget = "-project " + quote(proj);
+    if (std::string pods = rts::build::podfile(plugins, "15.0"); !pods.empty()) {
+        writeText(xc / "Podfile", pods);
+        if (!findTool("pod").empty()) {
+            step("iOS: CocoaPods (SDK плагинов)");
+            mustRun("cd " + quote(xc) + " && pod install --repo-update");
+            xcodeTarget = "-workspace " + quote(xc / "RTSEngine.xcworkspace");
+            info("Открывайте RTSEngine.xcworkspace (не .xcodeproj): в нём SDK плагинов.");
+        } else {
+            info("Нужен CocoaPods для SDK плагинов: brew install cocoapods, затем pod install в " + xc.string());
+            if (!o.generateOnly) { info("Проверочная сборка пропущена (нет pod)"); return; }
+        }
+    }
     info("Проект: " + proj.string());
     if (o.generateOnly) return;
     step("iOS: проверочная сборка для симулятора (без подписи)");
-    int rc = run("xcodebuild -project " + quote(proj) + " -scheme rts_client -configuration " + o.config +
+    int rc = run("xcodebuild " + xcodeTarget + " -scheme rts_client -configuration " + o.config +
                  " -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath " + quote(out / "derived") +
                  " CODE_SIGNING_ALLOWED=NO -quiet build");
     if (rc != 0) die("сборка для симулятора не прошла");
@@ -690,6 +731,8 @@ void buildAndroid(const Game& g, Options& o) {
         info("Android SDK не найден (ANDROID_HOME) — будет только проект");
     }
     std::string orientation = g.orientation == "portrait" ? "sensorPortrait" : g.orientation == "any" ? "fullUser" : "sensorLandscape";
+    rts::build::PluginSet plugins = pluginsFor(o, "android");
+    const auto pluginText = rts::build::androidPlaceholders(plugins);
     for (auto& e : fs::recursive_directory_iterator(tpl)) {
         if (!e.is_regular_file()) continue;
         fs::path rel = fs::relative(e.path(), tpl);
@@ -703,9 +746,12 @@ void buildAndroid(const Game& g, Options& o) {
         t = replaceAll(t, "@AGP_VERSION@", "8.7.3");
         t = replaceAll(t, "@NDK_VERSION_LINE@", ndkLine);
         t = replaceAll(t, "@CMAKE_VERSION_LINE@", cmakeLine);
+        for (auto& [key, value] : pluginText) t = replaceAll(t, key, value);
         writeText(proj / rel, t);
     }
     exportSources(o, proj / "app" / "src" / "main" / "cpp");
+    rts::build::writePluginsCMake(plugins, proj / "app" / "src" / "main" / "cpp");
+    rts::build::copyAndroidJava(plugins, proj / "app" / "src" / "main" / "java");
     placeContent(o, proj / "app" / "src" / "main" / "assets" / "content");
     step("Android: иконки и экран запуска");
     rts::build::brandAndroid(branding(g, o), proj, info);
@@ -758,7 +804,9 @@ void buildWeb(const Game& g, Options& o) {
     if (emcmake.empty()) { info("Emscripten не найден (emsdk). Установите: https://emscripten.org/docs/getting_started — пропускаю сборку"); return; }
     step("Web: конфигурация (Emscripten)");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun(quote(emcmake) + " cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), {}) + packVar(o));
+    rts::build::PluginSet plugins = pluginsFor(o, "web");
+    std::string pvar = " -DRTS_PLUGINS_FILE=" + quote(rts::build::writePluginsCMake(plugins, bdir / "gen"));
+    mustRun(quote(emcmake) + " cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), {}) + packVar(o) + pvar);
     step("Web: сборка");
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::create_directories(out);
@@ -768,6 +816,7 @@ void buildWeb(const Game& g, Options& o) {
     std::string html = readText(out / "index.html");
     writeText(out / "index.html", replaceAll(html, "<title>RTSEngine</title>", "<title>" + g.name + "</title>"));
     rts::build::brandWeb(branding(g, o), out, info);   // favicon / manifest links + splash colours into the fresh index.html
+    rts::build::installWebPlugins(plugins, out);
     info("Готово: " + out.string() + "  (проверка: python3 -m http.server -d " + quote(out) + ")");
     reportSize(o, "web", out);
 }
@@ -779,7 +828,7 @@ void buildWindows(const Game& g, Options& o) {
         step("Windows: иконка");
         rts::build::brandWindows(branding(g, o), bdir / "gen", info);
         step("Windows: конфигурация (Visual Studio)");
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, gameContent(o), bdir / "gen") + packVar(o));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, gameContent(o), bdir / "gen") + packVar(o) + pluginsVar(o, "windows", bdir / "gen"));
         step("Windows: сборка");
         mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config);
         fs::path dir = bdir / o.config;
@@ -803,11 +852,12 @@ void buildWindows(const Game& g, Options& o) {
         rts::build::brandWindows(branding(g, o), bdir / "gen", info);
         step("Windows: кросс-компиляция (" + cxx + ")");
         std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, gameContent(o), bdir / "gen") + packVar(o));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, gameContent(o), bdir / "gen") + packVar(o) + pluginsVar(o, "windows", bdir / "gen"));
         mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
         fs::remove_all(out / g.exe);
         fs::create_directories(out / g.exe);
         fs::copy_file(bdir / (g.exe + ".exe"), out / g.exe / (g.exe + ".exe"), fs::copy_options::overwrite_existing);
+        copyPluginRuntime(o, "windows", out / g.exe);
         placeContent(o, out / g.exe / "content");
         info("Готово: " + (out / g.exe / (g.exe + ".exe")).string());
         reportSize(o, "windows", out / g.exe);
@@ -817,6 +867,7 @@ void buildWindows(const Game& g, Options& o) {
     fs::path src = out / (g.exe + "-src");
     fs::remove_all(src);
     exportSources(o, src);
+    rts::build::writePluginsCMake(pluginsFor(o, "windows"), src);
     placeContent(o, src / "content");
     rts::build::brandWindows(branding(g, o), src / "gen", info);
     std::string splashBg = rts::build::splashBackgroundHex(o.gameJson);
@@ -837,11 +888,12 @@ void buildLinux(const Game& g, Options& o) {
     fs::path out = o.out / "linux", bdir = o.out / "_build" / "linux";
     step("Linux: сборка");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), {}) + packVar(o));
+    mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + cmakeVars(g, o, gameContent(o), {}) + packVar(o) + pluginsVar(o, "linux", bdir / "gen"));
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::remove_all(out / g.exe);
     fs::create_directories(out / g.exe);
     fs::copy_file(bdir / g.exe, out / g.exe / g.exe, fs::copy_options::overwrite_existing);
+    copyPluginRuntime(o, "linux", out / g.exe);
     placeContent(o, out / g.exe / "content");
     rts::build::brandLinux(branding(g, o), out / g.exe, info);   // share/icons/hicolor + share/applications/<exe>.desktop
     info("Готово: " + (out / g.exe / g.exe).string());
@@ -852,6 +904,7 @@ void usage() {
     std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
                  "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
                  "                [--no-pack] [--pack-level 1..22] [--no-atlas] [--audio auto|off|desktop|mobile|web]\n"
+              "                [--plugins name,name]   (native plugins; default: game.json \"plugins\")\n"
                  "                [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]\n"
                  "                [--estimate]  (content pack + size-report.json per target only, for the editor)\n";
 }
@@ -876,6 +929,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-pack") o.pack = false;
         else if (a == "--pack-level") o.packLevel = std::atoi(next().c_str());
         else if (a == "--no-atlas") o.atlas = false;
+        else if (a == "--plugins") o.plugins = next();
         else if (a == "--split") o.split = 1;
         else if (a == "--no-split") o.split = 0;
         else if (a == "--chunk-size") o.chunkSize = next();

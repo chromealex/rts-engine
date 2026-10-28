@@ -60,6 +60,8 @@ public:
         std::string engineDir;    // engine checkout (games/, docs/, rtsbuild)
         std::string buildTool;    // path to rtsbuild
         std::string gameExe;      // path to the game client (device runs)
+        std::string mcpTool;      // path to rtsmcp (one-click agent setup in the Agent window)
+        std::string editorExe;    // this executable (rtsmcp launches it when the editor isn't running)
         std::string openMap;
         int listenPort = net::kDefaultPort; // 0 = no agent link
     };
@@ -98,6 +100,10 @@ public:
     // camera of the Scene window (agents fly it with view_focus)
     render::RTSCamera sceneCam;
     void focusScene(float x, float z, float distance = -1);
+    // planet maps (world block): the Scene camera is the view's orbit camera; picking returns a body point
+    bool planetMap() const { return view_.planetMode(); }
+    bool planetAt(const Viewport& vp, float sx, float sy, int& body, render::float3& local) const;
+    std::string planetBodyId(int body) const;
     void fitScene();
 
     // play-test (Game window)
@@ -206,6 +212,7 @@ private:
 
     game::MapGrid grid_;
     uint64_t gridRevision_ = ~0ull;
+    uint64_t worldHash_ = 0;   // map world block as last given to the view (planets)
     double gridRebuildAt_ = 0;
     bool playTerrainBuilt_ = false;
     game::RtsScene scene_;

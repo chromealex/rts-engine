@@ -30,7 +30,8 @@ struct State {
     bool textInput = false;   // startTextInput() called and not stopped
     TextInputArea textArea;
     float keyboardH = 0;      // logical points covered by the on-screen keyboard
-    Insets safe;              // safe area insets, logical points
+    Insets safe;              // safe area insets from the OS, logical points
+    float bannerTop = 0, bannerBottom = 0; // ad banner shown by a plugin ("app.banner"), logical points
     bool fullscreen = false;
 };
 State& state();
@@ -51,6 +52,8 @@ void ensurePacks(const PackOpener& open);
 bool mountPackWith(const PackOpener& open, const std::string& path);
 // Queues the download of the pack chunk holding `rel`, if it isn't here yet.
 void requestChunkFor(const std::string& rel);
+// Once per frame on the game thread: delivers plugin replies/events, tells plugins the game is ready.
+void pluginFrame();
 // Per-platform on-screen keyboard (PlatformCommon.cpp has the no-op for desktops).
 void showSoftKeyboard(bool show, const TextInputArea& area);
 // Called by the platform when the OS keyboard changes (any thread on Android: queued, see there).
@@ -75,6 +78,7 @@ public:
     explicit FrameClock(bool fixedStep = false) : fixed_(fixedStep) {}
     double tick(double nowSeconds) {
         pollContent();   // pack chunk downloads progress between frames
+        pluginFrame();   // native plugin replies/events reach the game thread
         double dt = started_ ? nowSeconds - last_ : 1.0 / 60.0;
         last_ = nowSeconds; started_ = true;
         if (fixed_) return 1.0 / 60.0;
