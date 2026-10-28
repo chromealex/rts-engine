@@ -72,10 +72,13 @@ bool readCommands(ByteReader& r, std::vector<Command>& cmds) {
 
 Bytes encode(const HelloMsg& m) {
     Writer w(Msg::Hello); w.u32(m.protocol); w.str(m.name); w.str(m.gameId); w.u64(m.clientKey); w.u64(m.reconnectToken);
+    w.u64(m.resumeSeed); w.u32(m.resumeTick);
     return w.buf;
 }
 bool decode(ByteReader& r, HelloMsg& m) {
     m.protocol = r.u32(); m.name = r.str(); m.gameId = r.str(); m.clientKey = r.u64(); m.reconnectToken = r.u64();
+    if (m.protocol != kProtocolVersion) return r.ok();   // older layout: the server answers with a version error
+    m.resumeSeed = r.u64(); m.resumeTick = r.u32();
     return r.ok();
 }
 

@@ -9,7 +9,9 @@
 #include <thread>
 
 #include "engine/data/Json.h"
+#include "apps/server/GameData.h"
 #include "engine/net/server/Server.h"
+#include "modules/rts/RtsModule.h"
 
 using namespace rts;
 
@@ -27,6 +29,10 @@ int main(int argc, char** argv) {
         return 2;
     }
     if (cfg.queues.empty()) cfg.queues.push_back({});   // a default 1v1 queue
+    // This build knows the RTS module: leaving = surrender, and the server can decide unsettled matches
+    // by re-simulating them on the game data listed under "games".
+    if (!cfg.surrenderCommand) cfg.surrenderCommand = game::kCmdSurrender;
+    cfg.arbiter = netgame::makeArbiter(cfg.gameDirs);
     for (int i = 1; i < argc; ++i) {
         std::string k = argv[i];
         auto next = [&]() -> std::string { if (i + 1 >= argc) { std::fprintf(stderr, "missing value for %s\n", k.c_str()); std::exit(2); } return argv[++i]; };

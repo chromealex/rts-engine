@@ -56,6 +56,8 @@ public:
     int update(double seconds, uint64_t nowMs);
 
     void setControlled(std::vector<uint8_t> slots) { controlled_ = std::move(slots); }
+    // After a reconnect: frames sent on the dead connection may never have arrived.
+    void resendUnconfirmed() { for (auto& [tick, cmds] : local_) sendFrame_(tick, cmds); }
     const std::vector<uint8_t>& controlled() const { return controlled_; }
     uint32_t confirmedNext() const { return confirmedNext_; }
     uint32_t tick() const { return sim_.tick(); }
