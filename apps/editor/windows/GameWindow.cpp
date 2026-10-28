@@ -2,9 +2,12 @@
 // resolution and aspect of the device, notch and safe area, orientation, touch-sized feedback.
 // When the user plays a side, LMB selects (click / box), RMB gives smart orders, WASD/arrows pan.
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <cmath>
 #include "../Devices.h"
 #include "../Editor.h"
+#include "../EditorUtil.h"
 
 namespace rts::editor {
 
@@ -53,16 +56,24 @@ public:
         vp_.ensure(ed.device(), int(sw * dpi), int(sh * dpi));
         ImGui::SetCursorScreenPos(ImVec2(sx, sy));
         vp_.originX = sx; vp_.originY = sy; vp_.pointsW = sw; vp_.pointsH = sh;
-        ed.renderGame(vp_, ed.gameCam);
+        // the image command goes first so the overlays drawn by renderGame (health bars, markers) end up on
+        // top of it; the GPU pass itself runs now, before ImGui renders the frame
         vp_.image(ed.device(), sw, sh);
+        dl->PushClipRect(ImVec2(sx, sy), ImVec2(sx + sw, sy + sh), true); // overlays of off-screen units stay inside
+        ed.renderGame(vp_, ed.gameCam);
+        dl->PopClipRect();
         ed.gameViewport = &vp_;
-        if (dev && dev->w > 0) deviceChrome(dl, *dev, ed.gameLandscape, sx, sy, sw, sh, k);
-        hud(ed, dl, sx, sy, sw);
+        if (dev && dev->w > 0) deviceChrome(dl, *dev, ed.gameLandscape, ed.gameSafeArea, sx, sy, sw, sh, k);
+        // the HUD keeps to the safe area like a game should
+        Insets4 safe = dev && dev->w > 0 ? deviceInsets(*dev, ed.gameLandscape) : Insets4{};
+        hud(ed, dl, sx + safe.left * k, sy + safe.top * k, sw - (safe.left + safe.right) * k);
         input(ed);
         ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + avail.y));
+        ImGui::Dummy(ImVec2(0, 0));
     }
 
 private:
+    std::string filter_;
     void toolbar(Editor& ed) {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6, 3));
         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 6, ImGui::GetCursorPosY() + 3));
@@ -83,42 +94,84 @@ private:
         }
         ImGui::SameLine(0, 16);
         const DeviceProfile* cur = findDevice(ed.gameDevice);
-        ImGui::SetNextItemWidth(170);
-        if (ImGui::BeginCombo("##device", cur ? cur->name : "Свободный размер")) {
-            for (auto& d : kDevices) if (ImGui::Selectable(d.name, ed.gameDevice == d.id)) ed.gameDevice = d.id;
+        ImGui::SetNextItemWidth(220);
+        if (ImGui::BeginCombo("##device", cur ? cur->name : "Свободный размер", ImGuiComboFlags_HeightLarge)) {
+            if (ImGui::IsWindowAppearing()) { filter_.clear(); ImGui::SetKeyboardFocusHere(); }
+            ui::inputString("##devfilter", filter_);
+            if (filter_.empty()) { ImGui::SameLine(14); ImGui::TextDisabled("поиск устройства"); }
+            auto lower = [](std::string v) { for (auto& c : v) c = char(std::tolower((unsigned char)c)); return v; };
+            const std::string f = lower(filter_);
+            const char* group = nullptr;
+            for (auto& d : kDevices) {
+                if (!f.empty() && lower(d.name).find(f) == std::string::npos && lower(d.id).find(f) == std::string::npos) continue;
+                if (d.group[0] && (!group || std::string(group) != d.group)) { group = d.group; ImGui::SeparatorText(group); }
+                char label[160];
+                if (d.w > 0) std::snprintf(label, sizeof label, "%s##%s", d.name, d.id); else std::snprintf(label, sizeof label, "%s", d.name);
+                if (ImGui::Selectable(label, ed.gameDevice == d.id)) ed.gameDevice = d.id;
+                if (d.w > 0) {
+                    ImGui::SameLine(250);
+                    ImGui::TextDisabled("%d×%d @%.3gx", d.w, d.h, d.scale);
+                }
+            }
             ImGui::EndCombo();
         }
         ImGui::SameLine(0, 4);
         if (ImGui::SmallButton(ed.gameLandscape ? "Альбомная" : "Портретная")) ed.gameLandscape = !ed.gameLandscape;
+        ImGui::SameLine(0, 4);
+        if (cur && cur->w > 0) {
+            ImGui::Checkbox("Safe area", &ed.gameSafeArea);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Показать безопасную зону: вырез, статус-бар, полоску «домой». HUD должен быть внутри рамки.");
+        }
         ImGui::PopStyleVar();
     }
 
-    void deviceChrome(ImDrawList* dl, const DeviceProfile& d, bool landscape, float sx, float sy, float sw, float sh, float k) {
-        // rounded screen corners
-        float r = d.corner * k;
-        if (r > 0) {
-            dl->PathClear();
-            dl->AddRect(ImVec2(sx - r * 0.4f, sy - r * 0.4f), ImVec2(sx + sw + r * 0.4f, sy + sh + r * 0.4f), IM_COL32(12, 12, 14, 255), r * 1.4f, 0, r * 0.8f);
-        }
-        // notch / dynamic island and safe-area guides
-        float top = d.safeTop * k, bottom = d.safeBottom * k;
-        ImU32 guide = IM_COL32(255, 200, 80, 120);
-        if (!landscape) {
-            if (d.notchW > 0) {
-                float nw = d.notchW * k, nh = d.notchH * k;
-                dl->AddRectFilled(ImVec2(sx + (sw - nw) * 0.5f, sy + 11 * k), ImVec2(sx + (sw + nw) * 0.5f, sy + 11 * k + nh), IM_COL32(0, 0, 0, 255), nh * 0.5f);
+    // Device frame: rounded corners, the camera cut-out and (on demand) the safe area. Cut-outs are
+    // described in the natural orientation; rotated devices map natural (x, y) to screen (y, W - x)
+    // so the cut-out ends up on the left in landscape.
+    void deviceChrome(ImDrawList* dl, const DeviceProfile& d, bool landscape, bool showSafe, float sx, float sy, float sw, float sh, float k) {
+        const float r = d.corner * k;
+        if (r > 0) { // mask the four screen corners outside the rounded display
+            const float pi = 3.14159265f;
+            struct C { float cx, cy, x, y, a0; } cs[] = {{sx + r, sy + r, sx, sy, pi}, {sx + sw - r, sy + r, sx + sw, sy, 1.5f * pi},
+                                                       {sx + sw - r, sy + sh - r, sx + sw, sy + sh, 0}, {sx + r, sy + sh - r, sx, sy + sh, 0.5f * pi}};
+            for (auto& c : cs) { // a ring from radius r outwards covers the corner (at most 0.42 r away)
+                (void)c.x; (void)c.y;
+                dl->PathArcTo(ImVec2(c.cx, c.cy), r * 1.22f, c.a0, c.a0 + 0.5f * pi, 16);
+                dl->PathStroke(IM_COL32(12, 12, 14, 255), 0, r * 0.44f + 1.0f);
             }
-            if (top > 0) dl->AddLine(ImVec2(sx, sy + top), ImVec2(sx + sw, sy + top), guide);
-            if (bottom > 0) dl->AddLine(ImVec2(sx, sy + sh - bottom), ImVec2(sx + sw, sy + sh - bottom), guide);
-        } else {
-            if (d.notchW > 0) {
-                float nw = d.notchW * k, nh = d.notchH * k;
-                dl->AddRectFilled(ImVec2(sx + 11 * k, sy + (sh - nw) * 0.5f), ImVec2(sx + 11 * k + nh, sy + (sh + nw) * 0.5f), IM_COL32(0, 0, 0, 255), nh * 0.5f);
-            }
-            if (top > 0) dl->AddLine(ImVec2(sx + top, sy), ImVec2(sx + top, sy + sh), guide);
-            if (top > 0) dl->AddLine(ImVec2(sx + sw - top, sy), ImVec2(sx + sw - top, sy + sh), guide);
-            if (bottom > 0) dl->AddLine(ImVec2(sx, sy + sh - bottom * 0.6f), ImVec2(sx + sw, sy + sh - bottom * 0.6f), guide);
         }
+        const bool naturalPortrait = d.w < d.h;
+        const bool rotated = naturalPortrait == landscape;
+        const float W = float(d.w);
+        auto box = [&](float x0, float y0, float x1, float y1, float round) {
+            ImVec2 a, b;
+            if (!rotated) { a = ImVec2(sx + x0 * k, sy + y0 * k); b = ImVec2(sx + x1 * k, sy + y1 * k); }
+            else { a = ImVec2(sx + y0 * k, sy + (W - x1) * k); b = ImVec2(sx + y1 * k, sy + (W - x0) * k); }
+            dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 255), round * k);
+        };
+        const float cx = W * 0.5f;
+        switch (d.cutout) {
+        case Cutout::None: break;
+        case Cutout::Notch: box(cx - d.cutW * 0.5f, 0, cx + d.cutW * 0.5f, d.cutH, d.cutH * 0.45f); break;
+        case Cutout::Island: box(cx - d.cutW * 0.5f, d.cutY, cx + d.cutW * 0.5f, d.cutY + d.cutH, d.cutH * 0.5f); break;
+        case Cutout::PunchCenter: box(cx - d.cutW * 0.5f, d.cutY, cx + d.cutW * 0.5f, d.cutY + d.cutH, d.cutW * 0.5f); break;
+        case Cutout::PunchLeft: box(d.cutY + 6, d.cutY, d.cutY + 6 + d.cutW, d.cutY + d.cutH, d.cutW * 0.5f); break;
+        case Cutout::Waterdrop: box(cx - d.cutW * 0.5f, 0, cx + d.cutW * 0.5f, d.cutH, d.cutW * 0.5f); break;
+        }
+        if (!showSafe) return;
+        const Insets4 in = deviceInsets(d, landscape);
+        const float l = in.left * k, t = in.top * k, rr = in.right * k, bb = in.bottom * k;
+        const ImU32 shade = IM_COL32(255, 70, 60, 70), edge = IM_COL32(255, 210, 80, 230);
+        if (t > 0) dl->AddRectFilled(ImVec2(sx, sy), ImVec2(sx + sw, sy + t), shade);
+        if (bb > 0) dl->AddRectFilled(ImVec2(sx, sy + sh - bb), ImVec2(sx + sw, sy + sh), shade);
+        if (l > 0) dl->AddRectFilled(ImVec2(sx, sy + t), ImVec2(sx + l, sy + sh - bb), shade);
+        if (rr > 0) dl->AddRectFilled(ImVec2(sx + sw - rr, sy + t), ImVec2(sx + sw, sy + sh - bb), shade);
+        dl->AddRect(ImVec2(sx + l, sy + t), ImVec2(sx + sw - rr, sy + sh - bb), edge, 0, 0, 1.5f);
+        char lbl[96];
+        std::snprintf(lbl, sizeof lbl, "safe area  L%.0f T%.0f R%.0f B%.0f pt", in.left, in.top, in.right, in.bottom);
+        ImVec2 ts = ImGui::CalcTextSize(lbl);
+        dl->AddRectFilled(ImVec2(sx + l + 4, sy + sh - bb - ts.y - 8), ImVec2(sx + l + ts.x + 12, sy + sh - bb - 4), IM_COL32(0, 0, 0, 170), 4);
+        dl->AddText(ImVec2(sx + l + 8, sy + sh - bb - ts.y - 6), edge, lbl);
     }
 
     void hud(Editor& ed, ImDrawList* dl, float sx, float sy, float sw) {
