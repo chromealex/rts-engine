@@ -193,6 +193,7 @@ static void updateSizes(NSView* view) {
         double dt = std::chrono::duration<double>(now - g_last).count();
         if (dt > rts::platform::detail::FrameClock::kMaxDt) dt = rts::platform::detail::FrameClock::kMaxDt; // after sleep/background
         rts::platform::pollContent(); // pack chunk downloads
+        rts::platform::detail::pluginFrame(); // plugin replies and events
         if (capture.active()) dt = 1.0 / 60.0;
         g_last = now;
         if (capture.active() && !armed && ++frameNo >= capture.frames) {
