@@ -446,9 +446,8 @@ std::vector<uint8_t> reachable(const Ctx& c, const game::MapGrid& g, int sx, int
     return seen;
 }
 
-namespace {
-// cheapest cell path from a to b where every non-walkable step costs `penalty`
-std::vector<int> repairPath(const Ctx& c, const game::MapGrid& g, int ax, int ay, int bx, int by, bool dig) {
+// cheapest cell path from a to b where every non-walkable step costs extra (GenInternal.h)
+std::vector<int> repairPath(const Ctx& c, const game::MapGrid& g, int ax, int ay, int bx, int by, bool dig, const std::vector<uint8_t>* objects) {
     const int N = c.w * c.h;
     std::vector<int32_t> dist(static_cast<size_t>(N), INT32_MAX), par(static_cast<size_t>(N), -1);
     using It = std::pair<int32_t, int32_t>;
@@ -462,11 +461,12 @@ std::vector<int> repairPath(const Ctx& c, const game::MapGrid& g, int ax, int ay
         const int x = i % c.w, y = i / c.w;
         for (auto [dx, dy] : {std::pair{1, 0}, std::pair{-1, 0}, std::pair{0, 1}, std::pair{0, -1}}) {
             const int nx = x + dx, ny = y + dy;
-            if (!c.inside(nx, ny) || nx == 0 || ny == 0 || nx == c.w - 1 || ny == c.h - 1) continue;
+            if (!c.inside(nx, ny) || (!objects && (nx == 0 || ny == 0 || nx == c.w - 1 || ny == c.h - 1))) continue;   // never carve the rim
             const int j = c.ci(nx, ny);
             int cost = 10;
             const bool walk = (dig && g.dig[size_t(j)]) || g.stepAllowed(x, y, nx, ny, game::kLayerGround);
-            if (!walk) cost = c.cell[size_t(j)] == '~' ? 60 : 90;
+            if (!walk) cost = objects ? 1000000 : c.cell[size_t(j)] == '~' ? 60 : 90;   // objects mode: terrain is already connected
+            else if (objects && (*objects)[size_t(j)]) cost = (*objects)[size_t(j)] == 2 ? 5000 : 25;
             if (dist[size_t(i)] + cost < dist[size_t(j)]) { dist[size_t(j)] = dist[size_t(i)] + cost; par[size_t(j)] = i; pq.push({dist[size_t(j)], j}); }
         }
     }
@@ -476,7 +476,6 @@ std::vector<int> repairPath(const Ctx& c, const game::MapGrid& g, int ax, int ay
     std::reverse(path.begin(), path.end());
     return path;
 }
-} // namespace
 
 void ensureConnectivity(Ctx& c) {
     if (c.connect == "none" || c.starts.size() < 2) return;

@@ -91,6 +91,10 @@ void buildGrid(const Ctx& c, game::MapGrid& g, bool withObjects);
 // reachable cells from (sx, sy) on the ground layer (diggable cells count as passable when `dig`)
 std::vector<uint8_t> reachable(const Ctx& c, const game::MapGrid& g, int sx, int sy, bool dig = false);
 std::vector<int16_t> cornersOut(const Ctx& c);
+// cheapest 4-connected cell path a -> b; cells the grid does not let a ground unit step into cost extra (water less)
+// objects: per-cell object mask; then `g` is the terrain-only grid and object cells cost extra (unblocking)
+std::vector<int> repairPath(const Ctx& c, const game::MapGrid& g, int ax, int ay, int bx, int by, bool dig,
+                            const std::vector<uint8_t>* objects = nullptr);
 Json materialRows(const Ctx& c);          // terrainMaterial rows (Null when no layer matches)
 Json heightsOut(const Ctx& c);            // levels model: fine visual heights per cell (Null when flat)
 
