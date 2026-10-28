@@ -87,6 +87,11 @@ struct UiState {
     std::string modeHint, hintStyle, boxStyle, minimapStyle;
     std::vector<std::string> lines;   // send-drag lines as inline styles of rotated bars
     bool touch = false, showCard = true;
+    std::vector<UiAction> tools;      // skills bar: player abilities, dig / room / road tools, hand, possession
+    // "How to play" (game lang keys howto.like / goal / step1.. / tip)
+    bool hasHowto = false, howtoOpen = false;
+    std::string howtoLike, howtoGoal, howtoTip;
+    std::vector<std::string> howtoSteps;
 };
 
 class Minimap {
@@ -116,13 +121,14 @@ public:
     void autostart(size_t i) { startMatch(i); }
     void forceLanguage(std::string tag) { forcedLanguage_ = std::move(tag); }
     void spectate() { spectator_ = true; }
+    void showHowto() { howtoOpen_ = true; }   // --howto: open "How to play" over the menu
 
     // called from UI event listeners
     void minimapPointer(float u, float v);   // u, v in [0, 1] of the minimap image
 
 private:
     enum class Screen { Menu, Lobby, Playing, Paused, Over };
-    enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim };
+    enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim, Skill, Dig, Undig, Room, Road, Unroad, Drop };
 
     void startMatch(size_t idx);
     void fitCamera();
@@ -159,6 +165,18 @@ private:
     void buildCommandCard(UiState& s);
     void buildOverlays(UiState& s);
     void loadDocuments();
+    // ClientActions.cpp: player abilities, rect tools, hand, possession, "How to play"
+    void buildTools(UiState& s);
+    void buildToolCard(UiState& s);
+    void buildHowto(UiState& s);
+    std::string toolHint() const;
+    bool rectMode() const;
+    Entity possessedUnit() const;
+    bool cellAt(float sx, float sy, int& x, int& y) const;
+    bool toolMouseDown(const platform::Event& e);
+    bool toolMouseUp(const platform::Event& e);
+    void steerPossessed();
+    void drawToolPreview();
     // localization (presentation only: rules_ is the display copy, the sim loads its own rules)
     void applyLanguage(const std::string& tag, bool save);
     std::string tr(std::string_view key, const i18n::Args& a = {}) const { return loc_.tr(key, a); }
@@ -183,6 +201,7 @@ private:
     Rml::ElementDocument* menuDoc_ = nullptr;
     Rml::ElementDocument* hudDoc_ = nullptr;
     Rml::ElementDocument* lobbyDoc_ = nullptr;
+    Rml::ElementDocument* howtoDoc_ = nullptr;
     std::unique_ptr<Rml::EventListener> minimapListener_;
     Rml::Element* minimapEl_ = nullptr;
     UiState ui_state_, bound_;
@@ -238,6 +257,15 @@ private:
     Entity placeProducer_;   // sidebar placement: structure comes from this producer
     int abilityIndex_ = -1;
     int placeType_ = -1;
+    int roomIndex_ = -1;          // Mode::Room: rules.rooms index, -1 = erase
+    bool rectDrag_ = false;       // rect tools: dragging from (rectX_, rectY_)
+    float rectX_ = 0, rectY_ = 0;
+    bool fireHeld_ = false, walkHeld_ = false;   // possession: mouse buttons held
+    float steerX_ = 0, steerZ_ = 0;
+    bool steerFire_ = false;
+    Entity steerTarget_;
+    uint32_t lastSteerTick_ = 0;
+    bool howtoOpen_ = false;
     int sendPercent_ = 50;
     bool boxing_ = false, panning_ = false, sendDrag_ = false;
     float downX_ = 0, downY_ = 0, mouseX_ = -1, mouseY_ = -1;

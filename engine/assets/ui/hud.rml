@@ -8,9 +8,10 @@
      top[] {text, sub, style, warn}, topActions[], clock, notices[], minimapStyle,
      hasSelection, ownSelection, selTitle, selInfo[], emptyHint, showCard,
      card[] {header, kind, label, cost, hotkey, tip, enabled, active, progress, id} (header = section start),
+     tools[] (skills bar: player abilities, dig / room / road tools, hand, possession; same fields as card),
      boxStyle, lines[], modeHint, hintStyle, screen, overTitle, overTime, shadows, materials (0..2: terrain / model material tier), particles (0..3), volume, music (0..100).
      netMatch (online match: no restart, "leave match" instead of "main menu").
-     Events: act(id), pause(), resume(), restart(), tomenu(). Static text: {{ 'key' | tr(lang) }}, keys in engine/assets/lang (engine/i18n/README.md). -->
+     Events: act(id), howto() (toggles the "How to play" panel, howto.rml), pause(), resume(), restart(), tomenu(). Static text: {{ 'key' | tr(lang) }}, keys in engine/assets/lang (engine/i18n/README.md). -->
 <body>
 <!-- the model is bound on a div: <body> is the document element itself and binds too late -->
 <div class="root" data-model="game" data-class-touch="touch">
@@ -51,6 +52,14 @@
         </div>
     </div>
 
+    <div id="tools" class="panel" data-if="tools.size > 0">
+        <button data-for="a : tools" data-class-disabled="!a.enabled" data-class-active="a.active" data-event-click="act(a.id)" data-event-dblclick="act(a.id)">
+            <span class="label">{{a.label}}</span><span class="cost" data-if="a.cost != ''">{{a.cost}}</span>
+            <progress data-if="a.progress >= 0" data-attr-value="a.progress" max="1"></progress>
+            <span class="tip" data-if="a.tip != ''">{{a.tip}}</span>
+        </button>
+    </div>
+
     <div id="modehint" data-if="modeHint != ''" data-attr-style="hintStyle">{{modeHint}}</div>
 
     <div id="modal-bg" data-if="screen == 'paused' || screen == 'over'">
@@ -59,6 +68,7 @@
             <p class="dim" data-if="screen == 'over'">{{overTime}}</p>
             <h1 data-if="screen == 'paused'">{{ 'pause.title' | tr(lang) }}</h1>
             <button class="wide" data-if="screen == 'paused'" data-event-click="resume()">{{ 'pause.resume' | tr(lang) }}</button>
+            <button class="wide" data-if="screen == 'paused' &amp;&amp; hasHowto" data-event-click="howto()">{{ 'ui.howto' | tr(lang) }}</button>
             <div class="choice shadows">
                 <button data-class-active="shadows == 0" data-event-click="shadows = 0">{{ 'pause.shadows_off' | tr(lang) }}</button>
                 <button data-class-active="shadows == 1" data-event-click="shadows = 1">{{ 'pause.shadows_low' | tr(lang) }}</button>

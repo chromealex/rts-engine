@@ -186,6 +186,12 @@ const char* kInstructions =
     "Visual effects: fx_templates (explosion, fire, smoke, magic, weather, ...) or fx_import_unity {source: a Unity .prefab / folder} "
     "to make the same effect as a Unity one, tune with fx_get / fx_set, look with fx_preview {effect, advance, freeze} + view_screenshot, "
     "attach to events with fx_bind (died, hit, attack, ability, spawned per type / weapon / ability). "
+    "Look of the game: own meshes / textures via asset_import, then the type's \"view\" block with rules_merge "
+    "(model, materials overrides per material name, team colour, clips: docs/models.md; model_info lists nodes, clips, materials); "
+    "lighting: lighting_set (sun, sky, day/night, presets), light_add / light_update (point lights on the map); "
+    "fog of war: rules_merge {path: \"fogOfWar\"} (mode, colour, style, softness, grid, lineOfSight for 3D visibility by heights, "
+    "vision.blocks on wall types, delivery.blocksVision on smoke skills); "
+    "game UI: ui_contract (documents, data bindings, events) -> game_file_write ui/hud.rml, ui/skin.rcss ... (the game's ui/ overrides the engine's). "
     "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";
 

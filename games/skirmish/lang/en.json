@@ -1,0 +1,14 @@
+// skirmish — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Warcraft II: a classic fantasy RTS — base, peasants, gold and lumber.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "Catapults wreck buildings but are helpless up close — escort them with footmen, and put a tower next to your mine.",
+  "howto.step1": "Box-select peasants and right-click a gold mine or trees — they carry the goods to the town hall by themselves.",
+  "howto.step2": "Train peasants at the town hall until you have 8–10.",
+  "howto.step3": "Farms raise the supply limit: watch the Supply counter at the top.",
+  "howto.step4": "Barracks train footmen and archers, the workshop builds catapults and gryphons. To build: select a peasant → building button → spot on the ground.",
+  "howto.step5": "Gather an army, press A and click the enemy base: the army attack-moves, fighting on the way."
+}
