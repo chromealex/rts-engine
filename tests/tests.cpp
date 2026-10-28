@@ -9889,3 +9889,5 @@ TEST(planet_fog_blur_seams_and_speed) {
     std::printf("  fog blur faceSize 256 (%zu cells), radius 2: old %.2f ms, new %.2f ms per update\n", n, tOld, tNew);
     CHECK(tNew < tOld);
 }
+
+#include "tests_fields.inc"   // grid fields (G5)
