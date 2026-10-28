@@ -187,6 +187,7 @@ struct Order {
     int32_t param = 0;
     uint8_t state = 0;
     Fixed timer{};
+    bool flow = false;           // move along a shared flow field (rules movement.flowField)
 };
 
 struct Mobile {
@@ -201,6 +202,10 @@ struct Mobile {
     Vec3 yieldHome{};            // stepped aside for a passing unit; walks back here
     uint32_t yieldUntil = 0;
     bool yielded = false;
+    // flow field following (RtsFlowField.cpp): the field is keyed by (goal cell, radius, path layer, clearance)
+    bool flow = false;
+    uint8_t flowRadius = 0;
+    uint8_t flowStuck = 0;       // stuck events while on the field: the first re-samples it, the second falls back to A*
 };
 
 struct Orders { std::vector<Order> queue; };
@@ -519,6 +524,9 @@ public:
     // ---- internals (used across implementation files)
     void issue(Simulation& sim, Entity e, const Order& o, bool queue);
     void moveTo(Simulation& sim, Entity e, Vec3 goal, Fixed radius);
+    // Shared flow field toward a goal area of `radius` world units (falls back to moveTo when no field applies).
+    void moveToFlow(Simulation& sim, Entity e, Vec3 goal, Fixed radius);
+    void sysFlowFields(Simulation& sim);   // refreshes the waypoints of units following fields (start of movement)
     void stopMoving(Simulation& sim, Entity e);
     void dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t dmgType, Entity source, uint8_t sourceOwner, const WeaponDef* wd = nullptr);
     Fixed contactDistance(Simulation& sim, Entity a, Entity b);

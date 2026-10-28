@@ -161,10 +161,12 @@ int rOrder(lua_State* L, Vm& vm) {
     o.point = {fxArg(L, 3), Fixed{}, fxArg(L, 4)};
     o.param = int32_t(intArg(L, 5));
     if (!lua_isnoneornil(L, 6)) o.target = entArg(L, 6);
+    o.flow = lua_toboolean(L, 8);   // shared flow fields (movement.flowField)
     m.issue(sim, e, o, lua_toboolean(L, 7));
     lua_pushboolean(L, 1);
     return 1;
 }
+int rWaveFlow(lua_State* L, Vm& vm) { CTX; (void)sim; (void)w; lua_pushboolean(L, m.rules().movement.flow.waves); return 1; }
 int rHasOrders(lua_State* L, Vm& vm) { Entity e = entArg(L, 1); lua_pushboolean(L, vm.sim->world().has<Orders>(e)); return 1; }
 int rPos(lua_State* L, Vm& vm) {
     Entity e = entArg(L, 1);
@@ -827,7 +829,7 @@ void openStdApi(Vm& vm) {
         {"spawn_on_cell", bind<rSpawnOnCell>}, {"free_spot", bind<rFreeSpot>}, {"order", bind<rOrder>}, {"has_orders", bind<rHasOrders>},
         {"pos", bind<rPos>}, {"owner", bind<rOwner>},
         {"waves", bind<rWaves>}, {"wave_done", bind<rWaveDone>}, {"lane_wave_sources", bind<rLaneWaveSources>},
-        {"wave_clock_ticks", bind<rWaveClock>}, {"next_wave_tick", bind<rNextWaveTick>}, {"wave_objective", bind<rWaveObjective>},
+        {"wave_clock_ticks", bind<rWaveClock>}, {"next_wave_tick", bind<rNextWaveTick>}, {"wave_objective", bind<rWaveObjective>}, {"wave_flow", bind<rWaveFlow>},
         {"trigger_defs", bind<rTriggerDefs>}, {"trigger_areas", bind<rTriggerAreas>}, {"type_flags", bind<rTypeFlags>},
         {"trig_init", bind<rTrigInit>}, {"trig_enabled", bind<rTrigEnabled>}, {"trig_fired", bind<rTrigFired>}, {"trig_edge", bind<rTrigEdge>},
         {"trig_started", bind<rTrigStarted>}, {"trig_events", bind<rTrigEvents>}, {"trig_players", bind<rResolvePlayers>},

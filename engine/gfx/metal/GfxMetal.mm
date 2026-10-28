@@ -406,9 +406,11 @@ public:
         auto* t = textures_.get(h.id);
         if (!enc_ || !t) return;
         [enc_ setFragmentTexture:t->tex atIndex:NSUInteger(slot)];
-        [enc_ setFragmentSamplerState:t->sampler atIndex:NSUInteger(slot)];
         [enc_ setVertexTexture:t->tex atIndex:NSUInteger(slot)];   // bone / morph data textures are read in the vertex stage
-        [enc_ setVertexSamplerState:t->sampler atIndex:NSUInteger(slot)];
+        if (slot < 16) {   // sampler slots 0..15 per stage; shaders use constexpr samplers above that
+            [enc_ setFragmentSamplerState:t->sampler atIndex:NSUInteger(slot)];
+            [enc_ setVertexSamplerState:t->sampler atIndex:NSUInteger(slot)];
+        }
     }
     void setUniforms(int slot, const void* data, size_t size) override {
         if (!enc_) return;

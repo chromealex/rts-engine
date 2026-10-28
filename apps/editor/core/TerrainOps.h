@@ -12,8 +12,9 @@
 namespace rts::editor {
 
 void registerTerrainOps(Workspace& ws);
+void registerTerrainDetailOps(Workspace& ws);   // TerrainDetailOps.cpp (called by registerTerrainOps)
 
-enum class Sculpt { Raise, Lower, Smooth, Flatten, Noise, Set };
+enum class Sculpt { Raise, Lower, Smooth, Flatten, Noise, Set, Erode, Stamp };
 bool parseSculpt(const std::string& s, Sculpt& out);
 const char* sculptName(Sculpt s);
 
@@ -30,7 +31,25 @@ std::vector<uint8_t> materialLayer(const MapData& d);
 void paintMaterial(MapDoc& doc, int cx, int cy, int radius, int layer);
 // 16-bit grayscale PNG <-> corners. scale: world units of the full 0..65535 range; offset: world
 // height of value 0. Import resamples to (w+1)x(h+1).
+// 16-bit PNG of any height grid (int16, 1/16 units), W x H samples; read resamples to W x H.
+bool writeHeightPng(const std::vector<int16_t>& grid, int W, int H, const std::string& file, float& scale, float& offset, std::string* err);
+bool readHeightPng(const std::string& file, int W, int H, float scale, float offset, std::vector<int16_t>& out, std::string* err);
 bool exportHeightmap(const MapData& d, const std::string& file, float& scale, float& offset, std::string* err);
 bool importHeightmap(MapDoc& doc, const std::string& file, float scale, float offset, std::string* err);
+
+// ---- detail resolution (TerrainDetailOps.cpp)
+// Creates the map's detail heightmap (k samples per cell) from the surface drawn now; false = already there.
+bool ensureDetail(Workspace& ws, int scale);
+// Brush dabs at detail resolution (x, z, radius in world units; hardness 0..1 = flat core of the
+// falloff; stamp: builtin "crater" / "mesa" / "dunes" / "rocks" or a grayscale PNG in the game folder).
+// Returns the touched cell rect. Heightfield maps: corners follow the detail.
+bool detailSculpt(Workspace& ws, Sculpt op, const std::vector<std::pair<float, float>>& pts, float radius, float strength, float hardness,
+                  uint32_t seed, const std::string& stamp, float angle, int& x0, int& y0, int& x1, int& y1, std::string* err);
+// Material layer (0..3) painted into the detail splat weights (soft brush, world units).
+void paintDetailMaterial(Workspace& ws, float x, float z, float radius, int layer, float strength, float hardness);
+// Visual vs simulated ground on walkable cells: largest difference and cells above the threshold.
+struct DetailDeviation { float maxDev = 0; int cellsOver = 0, x = -1, y = -1; };
+DetailDeviation detailDeviation(const Workspace& ws, float threshold);
+DetailDeviation detailDeviation(const MapData& d, const game::Rules& rules, float threshold);
 
 } // namespace rts::editor

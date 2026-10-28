@@ -213,6 +213,8 @@ bool MapGrid::canStep(int x0, int y0, int x1, int y1, uint8_t layer) const {
 }
 
 void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
+    ++flowStamp_;   // flow fields revalidate (RtsFlowField.cpp)
+    for (int y = y0; y < y0 + fh; ++y) for (int x = x0; x < x0 + fw; ++x) if (inside(x, y)) flowTouch(index(x, y));
     for (int y = y0; y < y0 + fh; ++y)
         for (int x = x0; x < x0 + fw; ++x)
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
@@ -233,6 +235,8 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
 
 void MapGrid::cellChanged(int x, int y) {
     clearanceDirty = true;
+    ++flowStamp_;
+    if (inside(x, y)) flowTouch(index(x, y));
     if (surf && inside(x, y)) markSphereDirty(index(x, y));
     for (auto& G : hpa_)
         if (inside(x, y)) { G.dirty[size_t((y / HpaGraph::kC) * G.cw + x / HpaGraph::kC)] = 1; G.anyDirty = true; }
@@ -315,6 +319,7 @@ bool MapGrid::lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const 
 }
 
 bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes, int clear, bool useSoft) {
+    struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{*this, clockNs ? clockNs() : 0};
     out.clear();
     if (surf) return findPathSphere(from, to, layer, out, maxNodes, clear, useSoft);
     if (layer & 2) { out.push_back(to); return true; } // air: straight line

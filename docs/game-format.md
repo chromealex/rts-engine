@@ -100,6 +100,18 @@ any tag in `deficitDisables`).
 - Melee units (range < 2) attacking a target pick a free slot on a ring around it (slots by angle, claimed
   per target, ties by entity index) and path around allies already fighting instead of pushing into the front
   rank; ranged units stop and shoot. A group given an attack-move spreads into an arc whose flanks run ahead.
+- **Flow fields** (`movement.flowField`, off unless a game or map opts in; docs/pathfinding.md): big groups and
+  hordes share one integration field per goal area instead of one path search per unit.
+
+  ```jsonc
+  "movement": {"flowField": {"minGroup": 12,     // move / attack-move / patrol / right-click orders of >= 12 units (0 = never)
+                             "waves": true,      // units released by map waves and lane waves march on fields
+                             "spread": 0.4,      // goal area radius = 0.3 + spread * sqrt(units) (they arrive spread out)
+                             "maxFields": 64, "budgetMB": 32}}   // cache: LRU of unreferenced fields beyond these
+  ```
+  A map may carry the same block (`"movement": {"flowField": {...}}` at the map's top level) to switch fields on for
+  itself only (e.g. `templates/lastcolony/maps/horde_plain.json`, `templates/planets/maps/big_planet.json`).
+  Fliers keep flying straight; units pushed off the field or stuck repeatedly fall back to their own A* path.
 
 ## types — blocks
 
@@ -1375,6 +1387,17 @@ creates corners from the visible surface: cliff levels, ramps, fine heights), `t
 `terrain_material {layer, x, y, radius}`, `heightmap_export {file, scale?}` / `heightmap_import {file, scale, offset}`
 (16-bit grayscale PNG, `(w+1) x (h+1)` pixels, height = offset + value / 65535 * scale). Corners are visual unless
 rules `terrain.model` is `heightfield` (see below).
+
+### Detail surface (sub-cell relief)
+
+`"terrain": {"style": "smooth"}` in rules.json / game.json draws the terrain from a visual heightmap with several
+samples per cell instead of one height per cell corner: bevelled cliffs with organic outlines, rounded plateaus and
+ramps on cliff-level maps, bicubic relief with fine noise on heightfield maps, per-pixel lighting, materials blended at
+sub-cell resolution with automatic rock on steep slopes. Default `"classic"` keeps the old look. A map can carry its
+own painted detail: `terrain.detail` = `{"scale": 4, "file": "maps/<name>.detail.r16", "splat": "..."}` (int16 LE,
+1/16 units, `(w*k+1) x (h*k+1)`). Tuning keys `terrain.detailLook`. Editor / MCP: `terrain_detail`, `terrain_sculpt`
+(sub-cell, erode, stamp), `terrain_paint_material`, `heightmap_import/export {detail: true}`. Full description and
+numbers: `docs/terrain.md` § Detail surface. Samples: `starfall` (cliffs), `metaltide` (relief), `frostcrown`.
 
 ## Heightfield terrain
 
