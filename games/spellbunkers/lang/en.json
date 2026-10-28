@@ -1,0 +1,13 @@
+// spellbunkers — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Bunker Wars on Mushroom Wars 2 lanes: garrisons grow by themselves, the spell deck decides the game.",
+  "howto.goal": "Capture every enemy building.",
+  "howto.tip": "Freeze a big enemy squad on a lane and meet it with your own — it never arrives.",
+  "howto.step1": "The hive, huts and towers grow spores. Drag from your building to a target: the squad marches along a lane.",
+  "howto.step2": "The share sent is on the card, or keys 1–4. More attackers than defenders and the building is yours.",
+  "howto.step3": "Your spell deck is at the bottom. Mana refills by itself, morale more slowly; cost and cooldown are on each button.",
+  "howto.step4": "Press a spell and click a target: Freeze and Tornado hit a marching squad, Shield and Plague a building, Mines and BFG9000 a spot. The rest fire at once."
+}

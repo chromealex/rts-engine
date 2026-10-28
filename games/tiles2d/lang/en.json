@@ -1,0 +1,13 @@
+// tiles2d — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Dune II in 2D: a tiled desert, crystal fields, harvesters and a construction yard.",
+  "howto.goal": "Destroy every enemy building.",
+  "howto.tip": "A couple of turrets at a field keep raiders off your harvesters.",
+  "howto.step1": "Harvesters collect crystal from the fields (right-click a field) — that is your money.",
+  "howto.step2": "Harvesters also build: windtraps, refinery, barracks, heavy factory and turrets.",
+  "howto.step3": "Barracks train troopers, the heavy factory builds combat tanks.",
+  "howto.step4": "Crystal fields regrow slowly — do not strip one field bare."
+}

@@ -25,6 +25,7 @@
 #include "RtsLights.h"
 #include "RtsFog.h"
 #include "RtsPlanetRender.h"
+#include "RtsOverlays.h"
 #include "RtsTerrainRender.h"
 
 namespace rts::game {
@@ -172,6 +173,13 @@ public:
     // Object frame in the view world (columns: east, up, south, ground point); false when not on a body.
     bool planetPlacement(const SceneObject& o, render::mat4& out) const;
     void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }
+    // Overlays (RtsOverlays): selection rings, bars, markers and every game-defined helper element.
+    // The client / editor pass the local input state once per frame, before draw().
+    void setOverlayContext(const OverlayContext& c) { overlays_.setContext(c); }
+    RtsOverlays& overlays() { return overlays_; }
+    const RtsOverlays& overlays() const { return overlays_; }
+    // Screen point above an object where its bars / labels go (false: behind the camera).
+    bool overlayTop(const render::RTSCamera& cam, const SceneObject& o, size_t index, float w, float h, render::float2& out) const;
 
 private:
     struct ClipSpec {
@@ -306,6 +314,7 @@ private:
     RtsLights lights_;
     RtsGroundFx groundFx_;   // territory, diggable rock, lanes, roads (RtsGroundFx.cpp)
     FogOfWar fog_;           // fog of war look + sheet (RtsFog.cpp)
+    RtsOverlays overlays_;   // data-driven overlays (RtsOverlays.cpp)
     bool fogMeshDirty_ = false;
     render::mat4 viewProj_;
     render::float3 camPos_;

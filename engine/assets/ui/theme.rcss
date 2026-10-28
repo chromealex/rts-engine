@@ -183,3 +183,42 @@ input.text selection { background-color: #e8c26a66; color: #ffffff; }
     #lobby .cols { display: block; }
     #lobby .col { margin-right: 0; }
 }
+
+/* ---------------------------------------------------------------- skills bar (player abilities, tools) */
+#tools {
+    position: absolute; left: 230dp; right: 336dp; bottom: 8dp;
+    text-align: center; padding: 5dp 6dp;
+}
+#tools button { display: inline-block; margin: 2dp 2dp; padding: 3dp 7dp; font-size: 13dp; vertical-align: top; }
+#tools button .cost { display: block; margin-left: 0; font-size: 10dp; }
+#tools button .tip { font-size: 10dp; }
+#tools progress { height: 3dp; margin-top: 2dp; }
+.touch #tools button { padding: 6dp 10dp; font-size: 14dp; }
+#tools button .tip { color: #9aa6b5; }
+.touch #tools { left: 180dp; right: 360dp; }
+
+/* ---------------------------------------------------------------- "How to play" (howto.rml) */
+#menu button.howto-open { margin: -2dp 0 6dp 0; }
+#howto-bg { position: absolute; left: 0; top: 0; right: 0; bottom: 0; background-color: #000000d8; pointer-events: auto; }
+#howto {
+    position: absolute; top: 6%; left: 0; right: 0;
+    width: 560dp; max-width: 94%; max-height: 86%; margin: 0 auto;
+    padding: 18dp 22dp; overflow-y: auto;
+}
+/* text colours follow the skin (body / h2): light and dark skins both work */
+#howto .howto-like { padding: 8dp 10dp; border-radius: 5dp; background-color: #8080801c; }
+#howto .howto-label { font-weight: bold; }
+#howto .howto-step { display: flex; margin: 5dp 0; }
+#howto .howto-num {
+    display: block; flex: 0 0 22dp; width: 22dp; height: 22dp; margin-right: 10dp;
+    border-radius: 11dp; background-color: #e8c26a; color: #1a1f26;
+    text-align: center; line-height: 22dp; font-size: 13dp; font-weight: bold;
+}
+#howto .howto-text { display: block; flex: 1; }
+#howto .howto-tip { border-left: 3dp #e8c26a; padding-left: 8dp; }
+#howto button.howto-close { margin-top: 14dp; }
+@media (orientation: portrait) {
+    #tools { left: 6dp; right: 6dp; bottom: 39%; }
+    .touch #tools { left: 6dp; right: 6dp; }
+    #howto { top: 3%; max-height: 94%; padding: 14dp 14dp; }
+}

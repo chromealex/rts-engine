@@ -99,6 +99,8 @@ void GameClient::initUi() {
     c.Bind("modeHint", &b.modeHint); c.Bind("hintStyle", &b.hintStyle); c.Bind("boxStyle", &b.boxStyle);
     c.Bind("minimapStyle", &b.minimapStyle); c.Bind("lines", &b.lines); c.Bind("touch", &b.touch); c.Bind("showCard", &b.showCard);
     c.Bind("languages", &b.languages); c.Bind("lang", &b.lang);
+    c.Bind("tools", &b.tools); c.Bind("hasHowto", &b.hasHowto); c.Bind("howtoOpen", &b.howtoOpen);
+    c.Bind("howtoLike", &b.howtoLike); c.Bind("howtoGoal", &b.howtoGoal); c.Bind("howtoTip", &b.howtoTip); c.Bind("howtoSteps", &b.howtoSteps);
     // Static text in documents:  {{ 'menu.map' | tr(lang) }}. The `lang` argument is unused by the
     // function but makes each expression depend on that variable, so all text follows a language
     // switch in place (no document reload: open screens keep their state).
@@ -132,6 +134,7 @@ void GameClient::initUi() {
     });
     c.BindEventCallback("pause", [this](Rml::DataModelHandle, Rml::Event&, VArgs) { if (screen_ == Screen::Playing) setScreen(Screen::Paused); });
     c.BindEventCallback("resume", [this](Rml::DataModelHandle, Rml::Event&, VArgs) { if (screen_ == Screen::Paused) setScreen(Screen::Playing); });
+    c.BindEventCallback("howto", [this](Rml::DataModelHandle, Rml::Event&, VArgs) { howtoOpen_ = !howtoOpen_; });
     c.BindEventCallback("restart", [this](Rml::DataModelHandle, Rml::Event&, VArgs) { startMatch(mapIndex_); });
     c.BindEventCallback("tomenu", [this](Rml::DataModelHandle, Rml::Event&, VArgs) {
         if (netMatch_) { leaveNetMatch(); return; }
@@ -159,10 +162,11 @@ void GameClient::loadDocuments() {
         minimapEl_->RemoveEventListener(Rml::EventId::Drag, minimapListener_.get());
         minimapEl_ = nullptr;
     }
-    for (Rml::ElementDocument* d : {menuDoc_, hudDoc_, lobbyDoc_}) if (d) d->Close();
+    for (Rml::ElementDocument* d : {menuDoc_, hudDoc_, lobbyDoc_, howtoDoc_}) if (d) d->Close();
     menuDoc_ = ui_.loadDocument("menu.rml");
     lobbyDoc_ = ui_.loadDocument("lobby.rml");
     hudDoc_ = ui_.loadDocument("hud.rml");
+    howtoDoc_ = ui_.loadDocument("howto.rml");   // last: above the menu and the pause modal
     if (!menuDoc_ || !hudDoc_ || !lobbyDoc_) error_ = "ui: documents not found (engine/ui/menu.rml, hud.rml, lobby.rml)";
     if (hudDoc_) minimapEl_ = hudDoc_->GetElementById("minimap-img");
     if (minimapEl_) {
@@ -177,7 +181,7 @@ void GameClient::shutdownUi() {
         minimapEl_->RemoveEventListener(Rml::EventId::Drag, minimapListener_.get());
     }
     minimapEl_ = nullptr;
-    menuDoc_ = hudDoc_ = lobbyDoc_ = nullptr;
+    menuDoc_ = hudDoc_ = lobbyDoc_ = howtoDoc_ = nullptr;
     ui_.shutdown();
     minimapListener_.reset();
 }
@@ -218,11 +222,13 @@ void GameClient::updateUi() {
             s.languages.push_back(a);
         }
     if (screen_ == Screen::Lobby || net_) buildLobby(s);
+    if (screen_ == Screen::Playing || screen_ == Screen::Lobby || screen_ == Screen::Over) howtoOpen_ = false;  // menu and pause only
+    buildHowto(s);
 
     if (sim_) {
         cleanSelection();
         buildTopBar(s);
-        if (!spectator_) buildCommandCard(s);
+        if (!spectator_) { buildCommandCard(s); buildTools(s); }
         buildOverlays(s);
         for (auto& n : notices_) if (n.until >= time_) s.notices.push_back(n.text);
         if (screen_ == Screen::Over) {
@@ -239,7 +245,7 @@ void GameClient::updateUi() {
         if (planet()) minimap_.updatePlanet(*dev_, view_, scene_, rules_, !spectator_);
         else {
         const bool haveQuad = groundAt(0, 0, q[0]) && groundAt(W, 0, q[1]) && groundAt(W, H, q[2]) && groundAt(0, H, q[3]);
-        minimap_.update(*dev_, gs, rules_, scene_, spectator_ ? nullptr : &gs.vision[human_], q, haveQuad);
+        minimap_.update(*dev_, gs, rules_, scene_, spectator_ ? nullptr : &gs.vision[human_], q, haveQuad, &view_.overlays().minimapMarks());
         }
         const float side = s.touch ? 150.0f : 190.0f;
         const float k = side / float(std::max(gs.grid.w, gs.grid.h));
@@ -258,7 +264,8 @@ void GameClient::updateUi() {
         RTS_SYNC(top) RTS_SYNC(topActions) RTS_SYNC(clock) RTS_SYNC(notices) RTS_SYNC(hasSelection) RTS_SYNC(ownSelection)
         RTS_SYNC(selTitle) RTS_SYNC(emptyHint) RTS_SYNC(selInfo) RTS_SYNC(card) RTS_SYNC(overTitle) RTS_SYNC(overTime)
         RTS_SYNC(modeHint) RTS_SYNC(hintStyle) RTS_SYNC(boxStyle) RTS_SYNC(minimapStyle) RTS_SYNC(lines) RTS_SYNC(touch) RTS_SYNC(showCard)
-        RTS_SYNC(languages) RTS_SYNC(lang) RTS_SYNC(lobby) RTS_SYNC(netStatus) RTS_SYNC(netError) RTS_SYNC(roomTitle) RTS_SYNC(roomInfo)
+        RTS_SYNC(languages) RTS_SYNC(lang) RTS_SYNC(tools) RTS_SYNC(hasHowto) RTS_SYNC(howtoOpen)
+        RTS_SYNC(howtoLike) RTS_SYNC(howtoGoal) RTS_SYNC(howtoTip) RTS_SYNC(howtoSteps) RTS_SYNC(lobby) RTS_SYNC(netStatus) RTS_SYNC(netError) RTS_SYNC(roomTitle) RTS_SYNC(roomInfo)
         RTS_SYNC(spectators) RTS_SYNC(waitHint) RTS_SYNC(queues) RTS_SYNC(rooms) RTS_SYNC(createMaps) RTS_SYNC(slots) RTS_SYNC(chat)
         RTS_SYNC(isHost) RTS_SYNC(myReady) RTS_SYNC(canStart) RTS_SYNC(netMatch) RTS_SYNC(searching)
         if (shadowQuality_ != boundShadowQuality_) { // changed from the pause menu
@@ -529,6 +536,7 @@ void GameClient::buildCommandCard(UiState& s) {
     if (t0.maxEnergy.raw > 0) s.selInfo.push_back(tr("card.energy", Args().num("energy", w.get<Unit>(e0).energy.toInt()).num("max", t0.maxEnergy.toInt())));
     if (w.has<Construction>(e0)) addSpecial(tr("card.cancel_build"), simple(kCmdCancelTrain, {e0}));
     if (!special.actions.empty()) pushSection(s, special);
+    buildToolCard(s);
 }
 
 void GameClient::buildOverlays(UiState& s) {
@@ -549,8 +557,13 @@ void GameClient::buildOverlays(UiState& s) {
                                   std::hypot(dx, dy), std::atan2(dy, dx) * 57.29578f));
         }
     }
+    if (screen_ == Screen::Playing && possessedUnit().valid() && mode_ == Mode::Normal) {
+        s.modeHint = tr("mode.possessed");
+        s.hintStyle = fmt("left: %.0fpx; top: %.0fpx;", (mouseX_ + 16) * k, (mouseY_ + 8) * k);
+    }
     if (mode_ != Mode::Normal && screen_ == Screen::Playing) {
-        s.modeHint = tr(mode_ == Mode::AttackMove ? "mode.attack" : mode_ == Mode::Patrol ? "mode.patrol"
+        const std::string th = toolHint();
+        s.modeHint = !th.empty() ? th : tr(mode_ == Mode::AttackMove ? "mode.attack" : mode_ == Mode::Patrol ? "mode.patrol"
                       : mode_ == Mode::Rally ? "mode.rally" : mode_ == Mode::Ability ? "mode.ability"
                       : mode_ == Mode::Claim ? "mode.claim" : "mode.place");
         s.hintStyle = fmt("left: %.0fpx; top: %.0fpx;", (mouseX_ + 16) * k, (mouseY_ + 8) * k);

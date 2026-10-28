@@ -1,0 +1,13 @@
+// holdtheline — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Company of Heroes: victory points, team tickets, manpower, fuel and munitions.",
+  "howto.goal": "Run the enemy out of tickets: each team has 300 and loses them while the other side holds more victory points.",
+  "howto.tip": "Holding one point more than the enemy is already a win — just a slow one.",
+  "howto.step1": "Capture points by standing next to them: victory points drain enemy tickets, fuel and munition depots give income.",
+  "howto.step2": "The HQ trains engineers and riflemen; engineers build barracks, a motor pool and MG nests.",
+  "howto.step3": "Barracks train MG teams and AT guns, the motor pool builds light tanks (costs fuel).",
+  "howto.step4": "MGs pin infantry, AT guns stop tanks — hold the line with both."
+}

@@ -68,7 +68,7 @@ float distanceGain(const DistanceDef& d, float distance, float hearing);
 float farWeight(float t, float from);   // 0 = all near variant, 1 = all far variant
 
 struct MixCmd {
-    enum Kind : uint8_t { Play, Stop, StopAll, SetPos, SetListener, SetEnv, SetGains, Music, StopMusic, SetIntensity };
+    enum Kind : uint8_t { Play, Stop, StopAll, SetPos, SetListener, SetEnv, SetGains, Music, StopMusic, SetIntensity, SetGroups };
     enum Role : uint8_t { Single, Near, Far };   // near/far: the two halves of a "far" pair
     Kind kind = Play;
     VoiceId id = kNoVoice;
@@ -78,6 +78,9 @@ struct MixCmd {
     float volume = 1, pitch = 1, x = 0, y = 0, z = 0, fade = 0;
     Bus bus = Bus::Sfx;
     int priority = 0, maxInstances = 0;
+    Steal steal = Steal::Farthest;
+    int8_t groups[kMaxSoundGroups] = {-1, -1, -1, -1};
+    std::shared_ptr<const std::vector<SoundGroupDef>> groupDefs;   // SetGroups
     bool loop = false, spatial = false;
     DistanceDef distance;
     Role role = Single;
@@ -116,6 +119,7 @@ private:
         MixCmd::Role role = MixCmd::Single;
         float pairFrom = 0.3f;
         uint32_t delay = 0;            // frames of silence before the sound starts
+        int8_t groups[kMaxSoundGroups] = {-1, -1, -1, -1};
         float duck = 0;
         float gl = 0, gr = 0;          // gains applied at the end of the last block
         float lp = 1, send = 0;        // low-pass coefficient and reverb send at the end of the last block
@@ -140,6 +144,12 @@ private:
 
     void apply(MixCmd& c);
     void startVoice(MixCmd& c);
+    // Makes room among the playing voices that `match` (a limit of `max`), or returns false: the
+    // new sound must be dropped. Counts logical sounds: the far half of a near/far pair is ignored
+    // and stopped together with its near half.
+    template <class Match> bool makeRoom(const MixCmd& c, int max, Steal steal, Match match);
+    float distanceTo(float x, float y, float z) const;
+    void stopVoices(VoiceId id, float fadeStep);
     bool openTrack(Stream& s);
     bool openLayers(Stream& s, const std::vector<MusicTrack>& defs, float loopStart, float loopEnd);
     bool loopBack(Stream& s);
@@ -173,6 +183,7 @@ private:
     float duck_ = 0;                          // current music ducking (0 = none)
     uint32_t rng_ = 0x2545F491u;
     std::atomic<int> active_{0};
+    std::shared_ptr<const std::vector<SoundGroupDef>> groupDefs_;
 };
 
 } // namespace rts::audio

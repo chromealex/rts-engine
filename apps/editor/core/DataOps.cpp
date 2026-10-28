@@ -183,6 +183,55 @@ void registerDataOps(Workspace& ws) {
             r.set("summary", str("Оценка " + target + ": пак " + std::to_string(rep["pack"]["packBytes"].integer() / 1024) + " КБ"));
             return r;
         }});
+    // The contract between the game client and its RmlUi documents: an agent that rewrites the UI
+    // (game_file_write ui/hud.rml ...) needs the names the client binds. Kept next to
+    // apps/client/ClientUi.cpp — update both together.
+    ws.registerOp({"ui_contract",
+        "How to replace or restyle the game UI: documents the client loads (the game's ui/<name> overrides "
+        "engine/ui/<name>, also for linked .rcss / images / fonts), the data model \"game\" (variables, item fields), "
+        "event callbacks and required element ids. Write files with game_file_write, images with asset_import.",
+        Json::parse(R"({"properties": {}})"),
+        [&ws](const Json&) {
+            Json r = Json::parse(R"J({
+  "documents": {"menu.rml": "main menu, settings, map list", "lobby.rml": "network lobby", "hud.rml": "in-game HUD, pause, game over",
+                "keyboard.rml": "on-screen keyboard (phones)", "theme.rcss": "shared engine styles", "skin.rcss": "per-game skin (colours, fonts, frames): the usual file to override"},
+  "override": "games/<id>/ui/<file> replaces engine/ui/<file>; a document may link its own .rcss. Fonts: fonts/*.ttf of the game, @font-face via font-family in rcss.",
+  "dataModel": "game",
+  "variables": {
+    "screen": "menu | lobby | playing | paused | over", "gameName": "string", "error": "string", "platformInfo": "string",
+    "maps": "[string] map names (index = argument of start)", "languages": "[string]", "lang": "string",
+    "top": "[item] resource bar", "topActions": "[action]", "clock": "string", "notices": "[item]",
+    "hasSelection": "bool", "ownSelection": "bool", "selTitle": "string", "emptyHint": "string", "selInfo": "[string]",
+    "card": "[action] command card (sections: header + kind list|row|grid|queue)", "showCard": "bool",
+    "overTitle": "string", "overTime": "string", "modeHint": "string", "hintStyle": "css", "boxStyle": "css", "minimapStyle": "css",
+    "lines": "[string]", "touch": "bool",
+    "difficulty": "int 0..2 (two-way)", "spectator": "bool (two-way)", "shadows": "int 0..3", "materials": "int 0..2", "particles": "int 0..3",
+    "volume": "int 0..100", "music": "int 0..100",
+    "lobby": "lobby state", "netStatus": "string", "netError": "string", "roomTitle": "string", "roomInfo": "string", "spectators": "[string]",
+    "waitHint": "string", "queues": "[action]", "rooms": "[action]", "createMaps": "[action]", "slots": "[action]", "chat": "[string]",
+    "isHost": "bool", "myReady": "bool", "canStart": "bool", "netMatch": "bool", "searching": "bool",
+    "netAddress": "string (two-way)", "netName": "string (two-way)", "chatInput": "string (two-way)", "roomName": "string (two-way)"},
+  "item": {"text": "string", "sub": "string", "style": "inline css (player colour)", "warn": "bool"},
+  "action": {"id": "int: argument of act", "label": "", "cost": "", "hotkey": "", "tip": "", "enabled": "bool", "active": "bool",
+             "progress": "float, < 0 = none", "kind": "list | row | grid | queue", "header": "bool: section title", "alt": "int: second button id (-1 none)", "altLabel": ""},
+  "events": {"start(i)": "start map i", "act(id)": "press a command-card / top action", "pause()": "", "resume()": "", "restart()": "", "tomenu()": "",
+             "net(name, arg?)": "lobby: connect, disconnect, open, back, leave, ready, start, spectate, refresh, unqueue, chatkey, id"},
+  "transforms": {"tr": "{{ 'key' | tr }} — localized text from lang/*.json"},
+  "elements": {"minimap-img": "img element the client draws the minimap into (keep it in hud.rml)"},
+  "example": "<button data-for=\"a : card\" data-if=\"!a.header\" data-event-click=\"act(a.id)\" data-class-off=\"!a.enabled\">{{a.label}}</button>"
+})J");
+            r.set("gameUiFiles", Json::array());
+            if (!ws.project.dir.empty()) {
+                fs::path ui = fs::path(ws.project.dir) / "ui";
+                Json files = Json::array();
+                if (fs::is_directory(ui))
+                    for (auto& e : fs::recursive_directory_iterator(ui))
+                        if (e.is_regular_file()) files.push(str(e.path().lexically_relative(ws.project.dir).generic_string()));
+                r.set("gameUiFiles", files);
+            }
+            r.set("summary", str("UI: menu/lobby/hud.rml + skin.rcss; переопределяются файлами ui/ игры"));
+            return r;
+        }});
 }
 
 } // namespace rts::editor
