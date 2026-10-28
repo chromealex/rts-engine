@@ -20,6 +20,15 @@
   #rts-splash-bar div { width: 0; height: 100%; background: var(--rts-splash-bar, #e0b040); transition: width .2s; }
   @keyframes rts-pulse { 50% { transform: scale(1.04); } }
 </style>
+<script>
+  // Native-plugin registry stub: plugin scripts may load before the engine; the engine takes over
+  // RTSPlugins.emit at startup and replays queued events.
+  window.RTSPlugins = window.RTSPlugins || { plugins: {}, queue: [],
+    register: function (name, impl) { this.plugins[name] = impl; },
+    emit: function (plugin, event, data) { this.queue.push([plugin, event, data]); } };
+</script>
+<!-- rtsbuild inserts the plugins' <script> tags right after this marker (comments don't survive minification) -->
+<meta name="rts-plugin-scripts" content="">
 </head>
 <body>
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>

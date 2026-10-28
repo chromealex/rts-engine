@@ -8,6 +8,9 @@ import android.app.NativeActivity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ApplicationInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.Bundle;
@@ -24,6 +27,11 @@ import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.view.inputmethod.InputMethodManager;
 
+import org.json.JSONObject;
+
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
 public class RtsActivity extends NativeActivity {
     static final int KEY_BACKSPACE = 0, KEY_ENTER = 1;
 
@@ -36,6 +44,12 @@ public class RtsActivity extends NativeActivity {
     static native void nativeKeyboard(int heightPx);
     static native void nativeTextInputEnded();
     static native void nativeSafeArea(int left, int top, int right, int bottom);
+    static native void nativePluginReply(long callId, boolean ok, String dataOrError);
+    static native void nativePluginEvent(String plugin, String event, String data);
+
+    // ---- plugins: name → class from <meta-data android:name="rts.plugin.NAME" android:value="CLASS"/>
+    private final Map<String, String> pluginClasses = new ConcurrentHashMap<>();
+    private final Map<String, RtsPlugin> plugins = new ConcurrentHashMap<>();
 
     private TextSink sink;
     private boolean active;     // the game asked for text input
@@ -43,6 +57,7 @@ public class RtsActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle state) {
+        readPluginManifest(); // before super.onCreate: the game thread may ask about plugins right away
         super.onCreate(state);
         sink = new TextSink(this);
         addContentView(sink, new ViewGroup.LayoutParams(1, 1));
@@ -66,6 +81,60 @@ public class RtsActivity extends NativeActivity {
                 onKeyboardHeight(h > decor.getRootView().getHeight() / 8 ? h : 0); // ignore nav bar
             });
         }
+    }
+
+    private void readPluginManifest() {
+        try {
+            ApplicationInfo ai = getPackageManager().getApplicationInfo(getPackageName(), PackageManager.GET_META_DATA);
+            if (ai.metaData == null) return;
+            for (String key : ai.metaData.keySet())
+                if (key.startsWith("rts.plugin.")) pluginClasses.put(key.substring("rts.plugin.".length()), String.valueOf(ai.metaData.get(key)));
+        } catch (Exception e) {
+            android.util.Log.e("rts", "plugin manifest", e);
+        }
+    }
+
+    // Game thread (JNI).
+    public boolean pluginAvailable(String name) { return pluginClasses.containsKey(name); }
+
+    // Game thread (JNI): runs the call on the UI thread, where SDKs expect to be used.
+    public void pluginCall(final String name, final String method, final String args, final long callId) {
+        runOnUiThread(() -> {
+            RtsPlugin.Reply reply = new RtsPlugin.Reply(callId);
+            try {
+                RtsPlugin p = plugin(name);
+                if (p == null) { reply.fail("plugin '" + name + "' is not in this build"); return; }
+                p.call(method, args == null || args.isEmpty() ? new JSONObject() : new JSONObject(args), reply);
+            } catch (Throwable t) {
+                android.util.Log.e("rts", "plugin " + name + "." + method, t);
+                reply.fail(name + "." + method + ": " + t);
+            }
+        });
+    }
+
+    private RtsPlugin plugin(String name) throws Exception {
+        RtsPlugin p = plugins.get(name);
+        if (p != null) return p;
+        String cls = pluginClasses.get(name);
+        if (cls == null) return null;
+        p = (RtsPlugin) Class.forName(cls).getDeclaredConstructor().newInstance();
+        p.activity = this;
+        p.name = name;
+        plugins.put(name, p);
+        return p;
+    }
+
+    @Override protected void onResume() { super.onResume(); for (RtsPlugin p : plugins.values()) p.onResume(); }
+    @Override protected void onPause() { for (RtsPlugin p : plugins.values()) p.onPause(); super.onPause(); }
+    @Override protected void onDestroy() { for (RtsPlugin p : plugins.values()) p.onDestroy(); super.onDestroy(); }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        for (RtsPlugin p : plugins.values()) p.onNewIntent(intent); // payment deep links (RuStore)
+    }
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        for (RtsPlugin p : plugins.values()) p.onActivityResult(requestCode, resultCode, data);
     }
 
     // Immersive: system bars hidden, a swipe from the edge shows them for a moment (games standard).
