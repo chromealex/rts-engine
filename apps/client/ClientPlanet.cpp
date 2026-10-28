@@ -23,21 +23,34 @@ bool GameClient::objectScreen(const SceneObject& o, float lift, float2& sp) cons
 
 // Start over the player's base on the start body. RTS_PLANET_CAM="distance[,pitch deg[,body id]]"
 // overrides the start view (screenshots of the planet / system zoom levels).
+Vec3 GameClient::simPoint(float3 g) {
+    auto q = [](float v) { return Fixed::fromInt(int64_t(std::lround(double(v) * 256.0))) / 256; };
+    return {q(g.x), q(g.y), q(g.z)};
+}
+
 void GameClient::fitPlanetCamera() {
     PlanetCamera& pc = view_.planetCamera();
     const PlanetWorld& W = view_.planets().world();
     int body = W.start;
     float3 dir{0, 0, 0};
-    for (auto& o : scene_.objects) if (o.owner == human_ && rules_.types[o.type].structure) {
-        int b; float3 local;
-        if (view_.flatToBody(o.pos, b, local)) { body = b; dir = local; }
-        break;
-    }
+    // own structure first, else any own unit (spectators: player 1)
+    const uint8_t me = spectator_ ? 1 : human_;
+    for (int pass = 0; pass < 2 && dot(dir, dir) == 0; ++pass)
+        for (auto& o : scene_.objects)
+            if (o.owner == me && o.body >= 0 && (pass == 1 || rules_.types[o.type].structure)) { body = o.body; dir = o.pos; break; }
     float dist = -1, pitchDeg = -1;
     char id[64] = {};
     if (const char* e = std::getenv("RTS_PLANET_CAM")) {
         std::sscanf(e, "%f,%f,%63s", &dist, &pitchDeg, id);
-        if (id[0] && W.find(id) >= 0) { body = W.find(id); dir = {0, 0, 0}; }
+        if (id[0] && W.find(id) >= 0) { // look at the first unit on that body (or the face 2 centre)
+            body = W.find(id); dir = {0, 0, 0};
+            int bestScore = -1;   // own units first, orbit units preferred
+            for (auto& o : scene_.objects) {
+                if (o.body != body || o.isProjectile || !o.visible) continue;
+                const int score = (o.owner == me ? 2 : 0) + ((rules_.types[o.type].layer & kLayerOrbit) ? 1 : 0);
+                if (score > bestScore) { bestScore = score; dir = o.pos; }
+            }
+        }
     }
     pc.reset(W, body, view_.planets().surface(body), scene_.seconds, dir);
     if (dist > 0) pc.distance = dist;
