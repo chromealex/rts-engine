@@ -114,6 +114,7 @@ void GameClient::initUi() {
     c.Bind("difficulty", &difficulty_);
     c.Bind("spectator", &spectator_);
     c.Bind("shadows", &shadowQuality_);
+    c.Bind("materials", &matQuality_);
     c.Bind("particles", &fxQuality_);
     c.Bind("volume", &volume_);
     c.Bind("music", &musicVolume_);
@@ -144,6 +145,7 @@ void GameClient::initUi() {
 
     shadowQuality_ = boundShadowQuality_ = int(r3d_.shadowQuality());
     fxQuality_ = boundFxQuality_ = fx_.quality();
+    matQuality_ = boundMatQuality_ = int(r3d_.materialQuality());
     ui_.setTranslator([this](const std::string& key) { return tr(key); });
     minimapListener_ = std::make_unique<MinimapListener>(*this);
     loadDocuments();
@@ -258,6 +260,10 @@ void GameClient::updateUi() {
         if (shadowQuality_ != boundShadowQuality_) { // changed from the pause menu
             r3d_.setShadowQuality(ShadowQuality(std::clamp(shadowQuality_, 0, 3)));
             boundShadowQuality_ = shadowQuality_;
+        }
+        if (matQuality_ != boundMatQuality_) { // changed from the pause menu
+            r3d_.setMaterialQuality(rts::render::MaterialQuality(std::clamp(matQuality_, 0, 2)));
+            boundMatQuality_ = matQuality_;
         }
         if (fxQuality_ != boundFxQuality_) { // changed from the pause menu
             fx_.setQuality(fxQuality_);
