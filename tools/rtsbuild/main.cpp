@@ -34,6 +34,7 @@
 
 #include "engine/data/Json.h"
 #include "engine/pack/PackWriter.h"
+#include "engine/pack/Unpacker.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -138,13 +139,66 @@ std::string sanitize(const std::string& s) {
 
 // ------------------------------------------------------------------ content pack
 // Builds <out>/_pack/content.rpak from the game folder and engine assets (once per run).
+// "~/x", "${HOME}/x" and paths relative to the project.
+fs::path expandPath(const std::string& p, const fs::path& base) {
+    std::string s = p;
+    for (size_t a; (a = s.find("${")) != std::string::npos;) {
+        size_t b = s.find('}', a);
+        if (b == std::string::npos) break;
+        const char* v = std::getenv(s.substr(a + 2, b - a - 2).c_str());
+        s.replace(a, b - a + 1, v ? v : "");
+    }
+    if (!s.empty() && s[0] == '~') if (const char* h = std::getenv("HOME")) s = h + s.substr(1);
+    fs::path r(s);
+    return r.is_relative() ? base / r : r;
+}
+
+// game.json "imports": third-party archives unpacked into the pack at build time, e.g.
+//   {"source": "~/Games/war2/DATA/MAINDAT.WAR", "prefix": "imported/war2", "optional": true}
+// Optional sources may be missing (CI, other machines); the build then goes without them.
+void addImports(const Options& o, rts::pack::PackWriter& w, rts::pack::IgnoreRules& rules, std::vector<std::string>& notes) {
+    Json m;
+    try { m = Json::parseFile((o.project / "game.json").string()); } catch (const std::exception&) { return; }
+    const Json& imports = m["imports"];
+    if (imports.size() == 0) return;
+    rts::pack::UnpackerRegistry reg;
+    reg.addDefaultDirs(o.engine.string(), o.project.string());
+    for (auto& e : reg.errors()) info("предупреждение: плагин пропущен: " + e);
+    for (auto& im : imports.items()) {
+        std::string src = im.getStr("source");
+        if (src.empty()) die("game.json: imports: у элемента нет \"source\"");
+        fs::path path = expandPath(src, o.project);
+        std::error_code ec;
+        if (!fs::exists(path, ec)) {
+            if (im.getBool("optional")) { info("импорт пропущен (нет файла): " + path.string()); notes.push_back("пропущен импорт: " + src); continue; }
+            die("game.json: imports: не найден " + path.string() + " (добавьте \"optional\": true, если его может не быть)");
+        }
+        // An archive kept inside the game folder must not also land in the pack as a raw file.
+        fs::path rel = fs::relative(path, o.project, ec);
+        if (!ec && !rel.empty() && rel.native()[0] != '.') rules.add(rel.generic_string());
+        rts::pack::ImportOptions io;
+        io.format = im.getStr("format");
+        io.prefix = im.getStr("prefix");
+        io.external = im.getBool("external");
+        for (auto& g : im["include"].items()) io.include.push_back(g.str());
+        rts::pack::ImportResult r;
+        std::string err;
+        if (!rts::pack::importArchive(reg, path.string(), io, w, &r, &err)) die("импорт " + src + ": " + err);
+        info("импорт: " + src + " (" + r.format + ") -> " + (io.prefix.empty() ? "/" : io.prefix + "/") + ", файлов " + std::to_string(r.files) +
+             (r.external ? ", внешний контент" : ""));
+    }
+}
+
 fs::path contentPack(Options& o) {
     if (!o.packFile.empty()) return o.packFile;
     step("Контент: сборка ресурс-пака");
     rts::pack::PackWriter w;
     rts::pack::IgnoreRules rules;
+    rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
+    std::vector<std::string> notes;
+    addImports(o, w, rules, notes);
     std::string err;
-    if (w.addDirectory(o.project.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rules, &err) < 0)
+    if (w.addDirectory(o.project.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
         die(err);
     rts::pack::WriteOptions wo;
     wo.level = o.packLevel ? o.packLevel : (o.config == "Debug" ? 3 : 19);
@@ -154,6 +208,9 @@ fs::path contentPack(Options& o) {
     if (!w.write(out.string(), wo, &st, &err)) die(err);
     for (auto& m : st.warnings) info("предупреждение: " + m);
     std::string report = rts::pack::sizeReport(st, 15);
+    for (auto& n : notes) report += n + "\n";
+    if (w.external())
+        report += "ВНИМАНИЕ: сборка содержит внешний контент (импорт из сторонних архивов) — только для личного использования, не распространять.\n";
     std::stringstream ss(report);
     for (std::string line; std::getline(ss, line);) info(line);
     writeText(o.out / "_pack" / "size-report.txt", report);

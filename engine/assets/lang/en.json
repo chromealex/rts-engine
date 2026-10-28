@@ -93,7 +93,10 @@
     "shadows_medium": "Shadows: medium",
     "shadows_high": "Shadows: high",
     "restart": "Restart",
-    "to_menu": "Main menu"
+    "to_menu": "Main menu",
+    "sound": "Sound:",
+    "music": "Music:",
+    "off": "off"
   },
 
   "ui": {
@@ -152,5 +155,48 @@
     "send": "Send",
     "no_maps": "This game has no maps",
     "map_missing": "Map not found: {map}"
+  },
+
+  // Network play (engine/net). The server sends these keys; the client translates.
+  "net": {
+    "connected": "Connected to {server}",
+    "disconnected": "Lost connection to the server",
+    "chat_line": "{name}: {text}",
+    "desync": "Desync at tick {tick}",
+    "rating_up": "Rating +{delta}",
+    "rating_down": "Rating −{delta}",
+    "bot": "Bot {slot}",
+    "player": {
+      "back": "{name} is back",
+      "dropped": "{name} lost connection",
+      "left": "{name} left the game",
+      "unnamed": "Player {slot}"
+    },
+    "end": {
+      "opponents_left": "Your opponents left the game",
+      "everyone_left": "All players left the match",
+      "result_mismatch": "Desync: players see different results"
+    },
+    "error": {
+      "version": "Your game version does not match the server — please update",
+      "bad_request": "Invalid request",
+      "no_such_room": "Room not found",
+      "data_mismatch": "Different version of the game or map",
+      "in_game": "The match has already started — you can only watch",
+      "no_spectators": "Spectators are not allowed",
+      "not_host": "Only the room host can do that",
+      "slot_taken": "That slot is taken",
+      "not_ready": "Not all players are ready",
+      "no_such_queue": "No such game mode",
+      "no_maps_for_queue": "No suitable maps for “{queue}”"
+    },
+    "queue": {
+      "default": "1 vs 1",
+      "1v1": "1 vs 1",
+      "1v1_bots": "1 vs 1 (bots if nobody is around)",
+      "2v2": "2 vs 2",
+      "ffa4": "Free for all (4)",
+      "1v1_low_end": "1 vs 1 (low-end devices)"
+    }
   }
 }

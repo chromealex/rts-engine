@@ -209,6 +209,7 @@ void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
     wb.quad({-float(apron), -0.12f, -float(apron)}, {-float(apron), -0.12f, float(H + apron)}, {float(W + apron), -0.12f, float(H + apron)}, {float(W + apron), -0.12f, -float(apron)});
     water_ = wb.upload(dev);
     hasTerrain_ = true;
+    if (twoD_) twoD_->buildTiles(dev, g, lh);
 }
 
 } // namespace rts::game

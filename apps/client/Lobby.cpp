@@ -1,6 +1,7 @@
 // Online play: connection, lobby (quick match queues, rooms), room screen and network matches.
 // The match itself is the same client as offline: NetClient drives the Simulation (attach / advance),
 // the UI keeps submitting Commands as the local slot. Layout: engine/assets/ui/lobby.rml.
+#include "engine/net/NetLocalize.h"
 #include <algorithm>
 #include <cstdio>
 #include <fstream>
@@ -118,24 +119,25 @@ void GameClient::updateNet(double dt, bool& advanced) {
     if (!net_) return;
     net_->update(net::nowMs());
     for (auto& e : net_->takeEvents()) {
+        const std::string text = net::translate(loc_, e.text); // the server sends keys (protocol v2)
         using K = net::NetEvent::Kind;
         switch (e.kind) {
         case K::Connected: net_->refreshRooms(); break;
         case K::Disconnected:
-            netError_ = e.text;
+            netError_ = text;
             if (netMatch_) leaveNetMatch();
             break;
-        case K::Error: netError_ = e.text; break;
+        case K::Error: netError_ = text; break;
         case K::Chat:
-            chat_.push_back(e.text);
+            chat_.push_back(text);
             if (chat_.size() > 50) chat_.erase(chat_.begin());
-            if (netMatch_) notice(e.text);
+            if (netMatch_) notice(text);
             break;
         case K::PlayerStatus: case K::Desync:
-            if (netMatch_) notice(e.text);
+            if (netMatch_) notice(text);
             break;
         case K::MatchEnded:
-            if (!e.text.empty()) { chat_.push_back(e.text); if (netMatch_) notice(e.text); }
+            if (!text.empty()) { chat_.push_back(text); if (netMatch_) notice(text); }
             if (netMatch_ && screen_ != Screen::Over) setScreen(Screen::Over);
             break;
         case K::ControlChanged:
