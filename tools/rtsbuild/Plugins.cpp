@@ -189,7 +189,14 @@ void copyAndroidJava(const PluginSet& set, const fs::path& javaRoot) {
     for (const Loaded& l : loaded(set)) {
         std::string src = section(l, "android")["java"].str();
         if (src.empty() || !fs::exists(l.dir / src)) continue;
-        fs::copy(l.dir / src, javaRoot, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+        // per file: MinGW's recursive fs::copy fails into an existing folder
+        const fs::path from = l.dir / src;
+        fs::create_directories(javaRoot);
+        for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
+            const fs::path to = javaRoot / fs::relative(it->path(), from);
+            if (it->is_directory()) fs::create_directories(to);
+            else fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing);
+        }
     }
 }
 

@@ -58,6 +58,8 @@ void Editor::drawMenuBar() {
             if (ws_.project.load(ws_.project.dir, &err)) { reloadRules(); status = "Правила перечитаны"; } else status = "Ошибка: " + err;
         }
         ImGui::Separator();
+        if (item(ICON_PLUG, "Подключить ИИ-агента (MCP)…")) focusWindow("agent");
+        ImGui::Separator();
         if (item(ICON_EXIT, "Выход")) quit_ = true;
         ImGui::EndMenu();
     }

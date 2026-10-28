@@ -151,10 +151,17 @@ std::string replaceAll(std::string s, const std::string& a, const std::string& b
     for (size_t pos = 0; (pos = s.find(a, pos)) != std::string::npos; pos += b.size()) s.replace(pos, a.size(), b);
     return s;
 }
-void copyDir(const fs::path& from, const fs::path& to) {
+// Recursive copy that also works into an existing folder on every standard library
+// (MinGW's fs::copy(recursive | overwrite_existing) fails when the target directory exists).
+void copyTree(const fs::path& from, const fs::path& to) {
     fs::create_directories(to);
-    fs::copy(from, to, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
+        const fs::path dst = to / fs::relative(it->path(), from);
+        if (it->is_directory()) fs::create_directories(dst);
+        else fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing);
+    }
 }
+void copyDir(const fs::path& from, const fs::path& to) { copyTree(from, to); }
 std::string sanitize(const std::string& s) {
     std::string o;
     for (char c : s) o += (std::isalnum(static_cast<unsigned char>(c)) ? c : (c == ' ' || c == '-' || c == '_') ? '_' : '_');

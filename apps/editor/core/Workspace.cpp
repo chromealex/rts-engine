@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -183,6 +184,8 @@ std::string shellQuote(const std::string& s) {
 }
 } // namespace
 
+static std::string stamp(const char* fmt);
+
 void Workspace::startBuild(const std::string& target, const std::string& config, const std::string& extraArgs) {
     if (building_) throw std::runtime_error("a build is already running");
     if (project.dir.empty()) throw std::runtime_error("no game is open");
@@ -192,7 +195,11 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
     std::string cmd = shellQuote(buildTool) + " --project " + shellQuote(project.dir) + " --engine " + shellQuote(engineDir) +
                       " --target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs) + " 2>&1";
     { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ = "$ rtsbuild --target " + target + " --config " + config + (extraArgs.empty() ? "" : " " + extraArgs) + "\n"; buildRc_ = 0; }
-    buildThread_ = std::thread([this, cmd] {
+    const bool estimate = extraArgs.find("--estimate") != std::string::npos;   // the Build window's size estimate: one file, overwritten
+    const fs::path logFile = fs::path(logsDir()) / (estimate ? "build-estimate.log" : "build-" + target + "-" + stamp("%Y%m%d-%H%M%S") + ".log");
+    buildThread_ = std::thread([this, cmd, logFile, estimate] {
+        std::ofstream lf(logFile);
+        { std::lock_guard<std::mutex> lk(buildMutex_); lf << buildLog_; }
 #if defined(_WIN32)
         FILE* p = _popen(cmd.c_str(), "r");
 #else
@@ -201,7 +208,7 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
         if (!p) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += "cannot start rtsbuild\n"; buildRc_ = -1; }
         else {
             char buf[512];
-            while (std::fgets(buf, sizeof buf, p)) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += buf; }
+            while (std::fgets(buf, sizeof buf, p)) { std::lock_guard<std::mutex> lk(buildMutex_); buildLog_ += buf; lf << buf; lf.flush(); }
 #if defined(_WIN32)
             int rc = _pclose(p);
 #else
@@ -210,7 +217,11 @@ void Workspace::startBuild(const std::string& target, const std::string& config,
             std::lock_guard<std::mutex> lk(buildMutex_);
             buildRc_ = rc;
             buildLog_ += rc == 0 ? "\n=== OK ===\n" : "\n=== FAILED ===\n";
+            lf << (rc == 0 ? "\n=== OK ===\n" : "\n=== FAILED ===\n");
         }
+        lf.close();
+        std::error_code ec;
+        if (!estimate) fs::copy_file(logFile, logFile.parent_path() / "build-last.log", fs::copy_options::overwrite_existing, ec);
         building_ = false;
     });
 }
@@ -220,8 +231,32 @@ void Workspace::registerOp(Op op) {
     ops_.push_back(std::move(op));
 }
 
+// Every log of the editor and its tools goes to <engine>/logs (git-ignored): editor.log (agent and
+// editor actions), build-<target>-<time>.log + build-last.log (rtsbuild output).
+std::string Workspace::logsDir() const {
+    std::error_code ec;
+    fs::path d = (engineDir.empty() ? fs::current_path(ec) : fs::path(engineDir)) / "logs";
+    fs::create_directories(d, ec);
+    return d.string();
+}
+
+static std::string stamp(const char* fmt) {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof buf, fmt, &tm);
+    return buf;
+}
+
 void Workspace::log(const std::string& source, const std::string& text, bool error) {
     activity.push_back({clock(), source, text, error});
+    if (std::ofstream f(fs::path(logsDir()) / "editor.log", std::ios::app); f)
+        f << stamp("%Y-%m-%d %H:%M:%S") << ' ' << source << (error ? " ERROR " : " ") << text << '\n';
     if (activity.size() > 500) activity.erase(activity.begin(), activity.begin() + 100);
 }
 
@@ -365,7 +400,12 @@ void Workspace::registerCoreOps() {
             if (tpl != "empty") {
                 fs::path src = fs::path(gamesDir()) / tpl;
                 if (!fs::exists(src / "game.json")) throw std::runtime_error("template game '" + tpl + "' not found");
-                fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+                // per file: MinGW's recursive fs::copy fails into an existing folder
+                for (auto it = fs::recursive_directory_iterator(src); it != fs::recursive_directory_iterator(); ++it) {
+                    const fs::path to = dst / fs::relative(it->path(), src);
+                    if (it->is_directory()) fs::create_directories(to);
+                    else fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing);
+                }
             } else {
                 writeText((dst / "rules.json").string(), R"({
   "resources": {"gold": {"name": "Золото", "start": 500}},
