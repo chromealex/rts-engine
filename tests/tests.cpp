@@ -8925,6 +8925,31 @@ TEST(flow_field_group_reaches_goal_deterministic) {
     CHECK(a1 >= 54);
 }
 
+TEST(flow_field_cache_lru_and_sharing) {
+    game::MapGrid g;
+    g.init(80, 80);
+    flatObstacles(g, 6);
+    g.flowMaxFields = 4;
+    std::vector<int> goals;
+    Random rng(6, 1);
+    while (goals.size() < 6) { int c = int(rng.below(6400)); if (g.passable(c % 80, c / 80, game::kLayerGround)) goals.push_back(c); }
+    // same goal + radius + layer: one shared field
+    const int a = g.flowAcquire(g.centerOf(goals[0]), 2, game::kLayerGround, 0, 1);
+    CHECK(g.flowAcquire(g.centerOf(goals[0]), 2, game::kLayerGround, 0, 1) == a && g.flowCount() == 1);
+    CHECK(g.flowAcquire(g.centerOf(goals[0]), 3, game::kLayerGround, 0, 1) != a);   // other goal area: other field
+    // more fields than the budget: the least recently used unreferenced ones go, a referenced one stays
+    for (size_t i = 1; i < goals.size(); ++i) g.flowAcquire(g.centerOf(goals[i]), 2, game::kLayerGround, 0, uint32_t(10 + i));
+    g.flowResetRefs();
+    const int keep = g.flowFind(goals[1], 2, game::kLayerGround, 0);
+    CHECK(keep >= 0);
+    g.flowRef(keep, 1);   // oldest use, but referenced
+    g.flowHousekeeping();
+    CHECK(int(g.flowCount()) <= 4);
+    CHECK(g.flowFind(goals[1], 2, game::kLayerGround, 0) >= 0);
+    CHECK(g.flowFind(goals[0], 2, game::kLayerGround, 0) < 0);   // LRU, unreferenced: evicted
+    CHECK(g.flowBytes() > 0);
+}
+
 TEST(pack_file_copy_into_existing) {
     // fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists;
     // rtsbuild re-stages into the same folders, the editor copies a template over dst/maps.
