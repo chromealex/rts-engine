@@ -198,17 +198,22 @@ layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec4 a_col;
 layout(location = 3) in vec4 a_dir;
 layout(location = 4) in vec4 a_cone;
+layout(location = 5) in vec4 a_src;
 out vec2 v_uv;
 out vec3 v_col;
 out vec4 v_dir;
 out vec4 v_cone;
-void main() { v_uv = a_uv; v_col = a_col.rgb; v_dir = a_dir; v_cone = a_cone; gl_Position = vec4(a_pos, 0.0, 1.0); }
+out vec4 v_src;
+void main() { v_uv = a_uv; v_col = a_col.rgb; v_dir = a_dir; v_cone = a_cone; v_src = a_src; gl_Position = vec4(a_pos, 0.0, 1.0); }
 )";
 inline const char* kLightMapFS = R"(
+layout(std140) uniform U0 { mat4 u_spotVP; vec4 u_spotInfo; };   // depth scale, offset, flipY, texel
+uniform highp sampler2DShadow tex0;
 in vec2 v_uv;
 in vec3 v_col;
 in vec4 v_dir;
 in vec4 v_cone;
+in vec4 v_src;
 out vec4 o_color;
 void main() {
     float f = clamp(1.0 - dot(v_uv, v_uv), 0.0, 1.0);
@@ -217,6 +222,17 @@ void main() {
         float k = clamp(1.0 - length(p) / v_cone.z, 0.0, 1.0);
         float edge = smoothstep(v_cone.x, v_cone.y, dot(normalize(p), v_dir.xyz));
         f = k * sqrt(k) * edge * edge;
+        if (v_src.w > 0.5 && f > 0.0) {   // the shadowed spot: ground point seen from the lamp
+            vec4 lp = u_spotVP * vec4(v_src.x + v_uv.x * v_cone.z, v_src.z + 0.05, v_src.y + v_uv.y * v_cone.z, 1.0);
+            vec3 q = lp.xyz / lp.w;
+            vec2 uv = q.xy * 0.5 + 0.5;
+            if (u_spotInfo.z > 0.5) uv.y = 1.0 - uv.y;
+            float d = q.z * u_spotInfo.x + u_spotInfo.y - 0.0015;
+            float t = u_spotInfo.w * 1.5;
+            float s = texture(tex0, vec3(uv + vec2(-t, -t), d)) + texture(tex0, vec3(uv + vec2(t, -t), d))
+                    + texture(tex0, vec3(uv + vec2(-t, t), d)) + texture(tex0, vec3(uv + vec2(t, t), d));
+            f *= s * 0.25;
+        }
     } else {
         f *= f;
     }
@@ -225,18 +241,30 @@ void main() {
 )";
 inline const char* kLightMapMSL = R"(#include <metal_stdlib>
 using namespace metal;
-struct VIn { float2 pos [[attribute(0)]]; float2 uv [[attribute(1)]]; float4 col [[attribute(2)]]; float4 dir [[attribute(3)]]; float4 cone [[attribute(4)]]; };
-struct VOut { float4 pos [[position]]; float2 uv; float3 col; float4 dir; float4 cone; };
+struct MapU { float4x4 spotVP; float4 spotInfo; };
+struct VIn { float2 pos [[attribute(0)]]; float2 uv [[attribute(1)]]; float4 col [[attribute(2)]]; float4 dir [[attribute(3)]]; float4 cone [[attribute(4)]]; float4 src [[attribute(5)]]; };
+struct VOut { float4 pos [[position]]; float2 uv; float3 col; float4 dir; float4 cone; float4 src; };
 vertex VOut vs_main(VIn in [[stage_in]]) {
-    VOut o; o.pos = float4(in.pos, 0.0, 1.0); o.uv = in.uv; o.col = in.col.rgb; o.dir = in.dir; o.cone = in.cone; return o;
+    VOut o; o.pos = float4(in.pos, 0.0, 1.0); o.uv = in.uv; o.col = in.col.rgb; o.dir = in.dir; o.cone = in.cone; o.src = in.src; return o;
 }
-fragment float4 fs_main(VOut in [[stage_in]]) {
+fragment float4 fs_main(VOut in [[stage_in]], constant MapU& u [[buffer(1)]], depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]]) {
     float f = clamp(1.0 - dot(in.uv, in.uv), 0.0, 1.0);
     if (in.cone.x > -1.5) {
         float3 p = float3(in.uv.x * in.cone.z, -in.dir.w, in.uv.y * in.cone.z);
         float k = clamp(1.0 - length(p) / in.cone.z, 0.0, 1.0);
         float edge = smoothstep(in.cone.x, in.cone.y, dot(normalize(p), in.dir.xyz));
         f = k * sqrt(k) * edge * edge;
+        if (in.src.w > 0.5 && f > 0.0) {
+            float4 lp = u.spotVP * float4(in.src.x + in.uv.x * in.cone.z, in.src.z + 0.05, in.src.y + in.uv.y * in.cone.z, 1.0);
+            float3 q = lp.xyz / lp.w;
+            float2 uv = q.xy * 0.5 + 0.5;
+            if (u.spotInfo.z > 0.5) uv.y = 1.0 - uv.y;
+            float d = q.z * u.spotInfo.x + u.spotInfo.y - 0.0015;
+            float t = u.spotInfo.w * 1.5;
+            float s = tex0.sample_compare(s0, uv + float2(-t, -t), d) + tex0.sample_compare(s0, uv + float2(t, -t), d)
+                    + tex0.sample_compare(s0, uv + float2(-t, t), d) + tex0.sample_compare(s0, uv + float2(t, t), d);
+            f *= s * 0.25;
+        }
     } else {
         f *= f;
     }

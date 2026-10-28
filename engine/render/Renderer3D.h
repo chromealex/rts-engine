@@ -170,6 +170,7 @@ private:
     void drawModelBatch(const uint32_t* items, uint32_t count, int phase);
     void renderModels(int phase);   // 0 shadow, 1 opaque, 2 blended, 3 outlines
     void renderReflection();        // water planar reflection (Renderer3DReflect.cpp, lighting agent)
+    void renderSpotShadow();        // depth of the casters seen from the main spot light (same file)
     void computeShadowMatrix(const RTSCamera& cam, float aspect);
     void uploadFrameUniforms(bool forShadow);
 
