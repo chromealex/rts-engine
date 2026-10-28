@@ -739,6 +739,7 @@ Rules loadRules(const Json& j) {
     r.dungeon = anyDungeonType || r.territory.enabled || !r.diggables.empty() || !r.rooms.empty() || r.hand.max > 0 ||
                 r.possession.enabled || !r.playerAbilities.empty();
     loadMechRules(r, j);
+    r.armor.plainFloor = !r.originals && !r.mech.any && !j.has("armor") && !j.has("armorModel");   // old games: damage - armor, at least raw / 5
     return r;
 }
 

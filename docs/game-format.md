@@ -879,12 +879,15 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
   them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
 - **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
 
-### Combat and economy models (agent-mech)
+### Combat and economy models (agent-mech keys = aliases of the fidelity blocks)
+
+These keys come from agent-mech; they are parsed into the single implementation of each mechanic described in
+[Fidelity mechanics](#fidelity-mechanics-play-like-the-original) and mean the same there.
 
 ```json
-"armorModel": "percent",                                               // Warcraft III: armor a cuts a*0.06/(1+a*0.06); "factor" changes 0.06
-"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // default (StarCraft): damage - armor, at least 20%
-"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // Age of Empires II
+"armorModel": "percent",                                               // = "armor": {"model": "percent", "negative": "exponential"}; "factor" = perPoint
+"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // = "armor": {"model": "subtract", "minShare": 0.2, "minDamage": 0}
+"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // = "armor": {"model": "classes", "base": [...], "minDamage": 1}
 "upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
 "types": {
   "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
@@ -894,14 +897,16 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
 }
 ```
 
-- **classes**: damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that class)); `base`
-  classes always count (a missing armor is 0, armor upgrades raise them), other classes only against types that list
-  them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first base class
-  with its `damage`. The damage table is not used in this model.
+- **classes** (Age of Empires II): damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that
+  class)); `base` classes always count (a missing armor is 0, armor upgrades raise them), other classes only against
+  types that list them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first
+  base class with its `damage`. The damage table is not used in this model. Without `min` / `minFraction` the classes
+  model floors at 1 and has no share floor.
+- `armorModel` percent uses the exact Warcraft III curve for negative armor (`2 - (1 - k)^-a`); `"armor"` keeps the
+  linear `1 + min(-a·k, 0.71)` unless it says `"negative": "exponential"`.
 - **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
   regenerate `regen`/s after `delay` seconds without hits.
 - **maxWorkers**: further workers wait next to the node until a place is free.
-
 ### Genre mechanics (agent-mech stage 2)
 
 ```json
@@ -1538,7 +1543,7 @@ uses none of them keeps its exact checksums.
 
 | block | where | meaning |
 |---|---|---|
-| `armor` | rules | `{"model": "subtract" \| "percent", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2}` — `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `subtract`: StarCraft / AoE with a floor |
+| `armor` (alias `armorModel`) | rules | `{"model": "subtract" \| "percent" \| "classes", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2, "negative": "linear" \| "exponential", "base": ["melee", "pierce"]}` — the one damage pipeline of every game: weapon `bonus`, shields, then the model. `subtract`: StarCraft / AoE with a floor (no block at all: damage - armor, at least damage / 5); `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `classes`: AoE II class attacks / armors (type `armors`, weapon `attacks`, see the agent-mech aliases above) |
 | `health.armor` object | type | `{"melee": 1, "pierce": 2}` (or `health.pierceArmor`): two armors; weapons pick one with `"armorClass": "pierce"`; stat `pierceArmor` / `armor2` for techs |
 | weapon `bonus` | type | `{"cavalry": 15, "armored": 10}` extra damage vs types with the tag, added before armor (AoE / SC2 bonuses) |
 | `health.shields` | type | shields soak damage first (`shieldArmor`), recharge `shieldRegen` per second after `shieldDelay` seconds without hits (StarCraft) |

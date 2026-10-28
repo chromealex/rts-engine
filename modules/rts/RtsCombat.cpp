@@ -68,15 +68,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     if (t.invulnerable) return;
     if (rules_.mech.shields) { dmg = mechShieldAbsorb(sim, target, dmg); if (dmg.raw <= 0) { sim.emit({kEvHit, sourceOwner, target, source, 0, w.get<Transform>(target).pos}); return; } }
     const Fixed raw = dmgType == kDamagePure ? dmg : dmg * rules_.damageMult(dmgType, t.armorType);
-    Fixed fin;
-    if (rules_.originals) {
-        // bonuses, armor classes, percent armor, shields (RtsOriginals.cpp)
-        fin = mitigate(sim, target, raw, wd, source);
-        u = &w.get<Unit>(target);
-    } else {
-        Fixed armor = stat(sim, target, Stat::Armor);
-        fin = rules_.mech.any ? mechArmorDamage(sim, target, raw, dmgType) : fxMax(raw - armor, raw / 5);   // agent-mech armor models
-    }
+    Fixed fin = mitigate(sim, target, raw, wd, dmgType);   // bonuses, shields, armor model (RtsOriginals.cpp)
     if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target, source);   // agent-mech (retreat, cover, armor arcs)
     if (rules_.advancedEffects) {
         uint32_t fl = statusFlags(sim, target);
@@ -173,7 +165,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
             }
             Fixed dmg = wd.damage * mult;
             uint16_t dtype = wd.damageType;
-            if (rules_.mech.armorModel == ArmorModel::Classes) mechClassDamage(sim, e, i, c.target, dmg, dtype);   // agent-mech
+            if (rules_.armor.model == ArmorModel::Classes) classDamage(sim, e, i, c.target, dmg, dtype);   // AoE II class attacks
             const int16_t enchant = statusOnHit(e);
             const bool proc = wd.onHit >= 0 && (wd.onHitChance >= kOne || sim.rng().unit() < wd.onHitChance);
             if (wd.projectileSpeed.raw <= 0) {

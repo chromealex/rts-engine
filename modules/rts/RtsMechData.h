@@ -36,11 +36,6 @@ struct VeterancyTable {
     bool set = false;
 };
 
-enum class ArmorModel : uint8_t { Subtract = 0, Percent = 1, Classes = 2 };
-constexpr uint16_t kDamagePure = 0xFFFF;   // damage type: armor already applied (class model), no table / armor
-
-struct ClassAttack { uint16_t cls = 0; Fixed amount{}; };
-
 struct ItemDef {
     std::string id, name;
     std::vector<Amount> cost;
@@ -70,10 +65,6 @@ struct MechType {
     int veterancy = -1;                    // -1: rules table, 0: none, 1: own table below
     VeterancyTable vetTable;
     Fixed killXp{};                        // xp its killer gets: explicit "xp", else its cost x veterancy.fromCost
-    // combat models
-    std::vector<std::vector<ClassAttack>> attacks;   // per weapon: class attacks (AoE: melee 6, cavalry +15)
-    std::vector<Fixed> armors;             // per armor class (class model); size = classes, missing = 0
-    uint64_t armorClassMask = 0;           // classes it has (bonus classes apply only when present)
     Fixed shieldMax{}, shieldRegen{}, shieldDelay = Fixed::fromInt(10), shieldArmor{};   // StarCraft shields
     int maxWorkers = 0;                    // resource node: at most N gathering at once (WC3 mine, SC saturation)
     // stage 2
@@ -125,13 +116,6 @@ struct MechRules {
     VeterancyTable vet;                    // rules "veterancy"
     bool vetHeal = true;                   // rank up heals fully
     Fixed vetFromCost = Fixed::fromInt(1); // xp for a kill without "xp": victim cost x this
-    // combat / economy models (templates audit)
-    ArmorModel armorModel = ArmorModel::Subtract;
-    Fixed minDamageFraction = Fixed::fromRatio(1, 5);   // subtract: at least this share of the raw damage
-    Fixed minDamage{};                     // ... and at least this much (AoE: 1)
-    Fixed percentFactor = Fixed::fromRatio(6, 100);    // percent: reduction = a*f / (1 + a*f) (Warcraft III)
-    std::vector<std::string> armorClasses; // class model: names; the first `baseClasses` always apply
-    int baseClasses = 0;
     bool shields = false;
     uint32_t upkeepMask = 0;               // resources upkeep applies to (0 = all gathering)
     bool workerCaps = false;

@@ -586,8 +586,6 @@ public:
     void mechTick(Simulation& sim);                                  // veterans, toggles
     void mechVeteranKill(Simulation& sim, Entity victim);
     // combat / economy models (RtsMechCombat.cpp)
-    void mechClassDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;
-    Fixed mechArmorDamage(Simulation& sim, Entity target, Fixed raw, uint16_t dmgType) const;   // armor model
     Fixed mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg);                          // what is left for hp
     bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
     void mechTickCombat(Simulation& sim);                                                       // shields
@@ -704,7 +702,8 @@ private:
     void sysOriginals(Simulation& sim);
     void hashOriginals(Simulation& sim, Hasher& h);
     void economyOriginals(Simulation& sim);                         // fields, upkeep per resource, territory income
-    Fixed mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, Entity source);
+    Fixed mitigate(Simulation& sim, Entity target, Fixed raw, const WeaponDef* wd, uint16_t dmgType);   // the damage pipeline
+    void classDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;   // classes model
     void afterHit(Simulation& sim, Entity target, Entity source, const WeaponDef* wd, bool killed);
     void onDeathOriginals(Simulation& sim, Entity e, uint8_t owner, Vec3 pos, bool silent);
     void onHeroSpawn(Simulation& sim, Entity e, uint8_t owner);
