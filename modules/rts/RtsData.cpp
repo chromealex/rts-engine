@@ -5,6 +5,7 @@
 namespace rts::game {
 
 namespace {
+const Fixed kFxOne = Fixed::fromInt(1);
 [[noreturn]] void fail(const std::string& where, const std::string& what) { throw std::runtime_error(where + ": " + what); }
 
 int indexOf(const std::vector<std::string>& v, const std::string& s) {
@@ -32,6 +33,7 @@ Stat parseStat(const std::string& s, bool* ok) {
     static const struct { const char* n; Stat s; } t[] = {
         {"maxHp", Stat::MaxHp}, {"hp", Stat::MaxHp}, {"armor", Stat::Armor}, {"damage", Stat::Damage}, {"range", Stat::Range},
         {"speed", Stat::Speed}, {"sight", Stat::Sight}, {"gatherRate", Stat::GatherRate}, {"attackSpeed", Stat::AttackSpeed},
+        {"productionSpeed", Stat::ProductionSpeed}, {"workRate", Stat::GatherRate},
     };
     for (auto& e : t) if (s == e.n) { if (ok) *ok = true; return e.s; }
     if (ok) *ok = false;
@@ -44,6 +46,14 @@ int Rules::findType(const std::string& id) const {
 }
 int Rules::findResource(const std::string& id) const {
     for (size_t i = 0; i < resources.size(); ++i) if (resources[i].id == id) return int(i);
+    return -1;
+}
+int Rules::findRoom(const std::string& id) const {
+    for (size_t i = 0; i < rooms.size(); ++i) if (rooms[i].id == id) return int(i);
+    return -1;
+}
+int Rules::findDiggable(char c) const {
+    for (size_t i = 0; i < diggables.size(); ++i) if (diggables[i].ch == c) return int(i);
     return -1;
 }
 int Rules::findTech(const std::string& id) const {
@@ -78,12 +88,14 @@ VictoryRules loadVictory(const Json& j, const VictoryRules& def) {
     else if (mode == "tickets") v.mode = VictoryMode::Tickets;
     else if (mode == "survive") v.mode = VictoryMode::Survive;
     else if (mode == "score") v.mode = VictoryMode::Score;
+    else if (mode == "territory") v.mode = VictoryMode::Territory;
     else if (!mode.empty()) throw std::runtime_error("victory: unknown mode '" + mode + "'");
     if (j.isObject()) {
         v.tickets = j.getFx("tickets", v.tickets);
         v.ticketDrain = j.getFx("drain", v.ticketDrain);
         v.surviveSeconds = j.getFx("seconds", v.surviveSeconds);
         v.keyLoses = j.getBool("keyLoses", v.keyLoses);
+        v.share = j.getFx("share", v.share);
     }
     return v;
 }
@@ -118,6 +130,7 @@ Rules loadRules(const Json& j) {
         d.field = rj.getBool("field", false);
         d.fieldRegrow = rj.getFx("regrow");
         d.fieldCellMax = rj.getFx("cellMax", d.fieldCellMax);
+        d.global = rj.getBool("global", false);
         r.resources.push_back(d);
     }
     if (r.resources.size() > 32) fail("resources", "at most 32 resources are supported");
@@ -126,6 +139,17 @@ Rules loadRules(const Json& j) {
         if (ri < 0) fail(where, "unknown resource '" + id + "'");
         return uint16_t(ri);
     };
+    for (auto& rd : r.resources) {
+        const Json& cv = j["resources"][rd.id]["convertsTo"];
+        if (!cv.isObject()) continue;
+        for (auto& [to, rate] : cv.members()) {
+            int ti = r.findResource(to);
+            if (ti < 0) fail("resource '" + rd.id + "' convertsTo", "unknown resource '" + to + "'");
+            if (r.resources[size_t(ti)].convertTo >= 0) fail("resource '" + rd.id + "' convertsTo", "'" + to + "' converts itself");
+            rd.convertTo = int16_t(ti);
+            rd.convertRate = rate.fx();
+        }
+    }
     auto amounts = [&](const std::string& where, const Json& obj, std::vector<Amount>& out, std::initializer_list<const char*> skip) {
         for (auto& [k, v] : obj.members()) {
             bool skipped = false;
@@ -174,6 +198,7 @@ Rules loadRules(const Json& j) {
         for (auto& w : tj["weapons"].items()) damageIdx(w.getStr("damageType", "normal"));
         for (auto& a : tj["abilities"].items()) for (auto& e : a["effects"].items()) damageIdx(e.getStr("damageType", "normal"));
     }
+    for (auto& pa : j["playerAbilities"].items()) for (auto& e : pa["effects"].items()) damageIdx(e.getStr("damageType", "normal"));
     r.damageTable.assign(r.damageTypes.size(), std::vector<Fixed>(r.armorTypes.size(), Fixed::fromInt(1)));
     for (auto& [dt, row] : j["damageTable"].members())
         for (auto& [at, v] : row.members()) r.damageTable[size_t(indexOf(r.damageTypes, dt))][size_t(indexOf(r.armorTypes, at))] = v.fx();
@@ -203,10 +228,66 @@ Rules loadRules(const Json& j) {
         m.mul = e.getFx("mul", Fixed::fromInt(1));
         return m;
     };
+    auto effect = [&](const std::string& where, const Json& ej) {
+        EffectDef e;
+        std::string k = ej.getStr("type", "damage");
+        e.kind = k == "heal" ? EffectKind::Heal : k == "stun" ? EffectKind::Stun : k == "buff" ? EffectKind::Buff
+               : k == "spawn" ? EffectKind::Spawn : k == "blink" ? EffectKind::Blink : EffectKind::Damage;
+        if (k != "damage" && k != "heal" && k != "stun" && k != "buff" && k != "spawn" && k != "blink") fail(where, "unknown effect type '" + k + "'");
+        e.amount = ej.getFx("amount");
+        e.radius = ej.getFx("radius");
+        e.duration = ej.getFx("duration");
+        e.damageType = damageIdx(ej.getStr("damageType", "normal"));
+        if (e.kind == EffectKind::Buff) e.mod = statMod(where, ej);
+        if (e.kind == EffectKind::Spawn) e.spawnType = typeRef(where, ej.getStr("unit"));
+        e.count = int(ej.getInt("count", 1));
+        std::string aff = ej.getStr("affects", e.kind == EffectKind::Heal || (e.kind == EffectKind::Buff && e.mod.mul >= Fixed::fromInt(1) && e.mod.add.raw >= 0) ? "allies" : "enemies");
+        e.enemies = aff == "enemies" || aff == "all";
+        e.allies = aff == "allies" || aff == "all";
+        return e;
+    };
     auto tagsOf = [&](const Json& arr) {
         uint64_t m = 0;
         for (auto& t : arr.items()) m |= r.tagMask(t.str());
         return m;
+    };
+
+    // ---- dungeon: diggable terrain and rooms (types reference rooms)
+    for (auto& [ch, dj] : j["diggable"].members()) {
+        const std::string where = "diggable '" + ch + "'";
+        if (ch.size() != 1 || std::string(".~#,=/R ").find(ch[0]) != std::string::npos || (ch[0] >= '0' && ch[0] <= '9'))
+            fail(where, "key must be one character not used by built-in terrain (. ~ # , = / R digits)");
+        DiggableDef d;
+        d.ch = ch[0];
+        d.hardness = dj.getFx("hardness", d.hardness);
+        if (d.hardness.raw <= 0) fail(where, "hardness must be positive");
+        amounts(where + " yields", dj["yields"], d.yields, {});
+        d.infinite = dj.getBool("infinite", false);
+        r.diggables.push_back(d);
+    }
+    for (auto& [id, rj] : j["rooms"].members()) {
+        const std::string where = "room '" + id + "'";
+        RoomDef d;
+        d.id = id;
+        d.name = rj.getStr("name", id);
+        amounts(where + " cost", rj["cost"], d.cost, {});
+        d.supply = rj.getFx("supply");
+        amounts(where + " income", rj["income"], d.income, {});
+        amounts(where + " storage", rj["storage"], d.storage, {});
+        amounts(where + " provides", rj["provides"], d.provides, {});
+        if (const Json& wk = rj["work"]; wk.isObject()) {
+            amounts(where + " work.yields", wk["yields"], d.workYield, {});
+            amounts(where + " work.cost", wk["cost"], d.workCost, {});
+            d.workXp = wk.getFx("xp");
+        }
+        d.view = rj["view"];
+        r.rooms.push_back(d);
+    }
+    if (r.rooms.size() > 250) fail("rooms", "at most 250 room types");
+    auto roomRef = [&](const std::string& where, const std::string& id) -> int16_t {
+        int k = r.findRoom(id);
+        if (k < 0) fail(where, "unknown room '" + id + "'");
+        return int16_t(k);
     };
 
     // ---- types
@@ -227,6 +308,8 @@ Rules loadRules(const Json& j) {
             t.speed = m.getFx("speed", Fixed::fromInt(2));
             t.layer = parseLayers(m["layer"], kLayerGround);
             t.radius = m.getFx("radius", t.radius);
+            t.mass = m.getFx("mass", t.radius * t.radius * 4);
+            if (t.radius.raw <= 0 || t.mass.raw <= 0) fail(where + " move", "radius and mass must be positive");
         }
         if (const Json& s = tj["structure"]; s.isObject()) {
             t.structure = true;
@@ -274,23 +357,7 @@ Rules loadRules(const Json& j) {
             a.autocast = aj.getBool("autocast", true);
             a.aura = aj.getBool("aura", false);
             a.auraRadius = aj.getFx("radius", Fixed::fromInt(6));
-            for (auto& ej : aj["effects"].items()) {
-                EffectDef e;
-                std::string k = ej.getStr("type", "damage");
-                e.kind = k == "heal" ? EffectKind::Heal : k == "stun" ? EffectKind::Stun : k == "buff" ? EffectKind::Buff
-                       : k == "spawn" ? EffectKind::Spawn : k == "blink" ? EffectKind::Blink : EffectKind::Damage;
-                e.amount = ej.getFx("amount");
-                e.radius = ej.getFx("radius");
-                e.duration = ej.getFx("duration");
-                e.damageType = damageIdx(ej.getStr("damageType", "normal"));
-                if (e.kind == EffectKind::Buff) e.mod = statMod(where + " ability " + a.id, ej);
-                if (e.kind == EffectKind::Spawn) e.spawnType = typeRef(where + " ability " + a.id, ej.getStr("unit"));
-                e.count = int(ej.getInt("count", 1));
-                std::string aff = ej.getStr("affects", e.kind == EffectKind::Heal || (e.kind == EffectKind::Buff && e.mod.mul >= Fixed::fromInt(1) && e.mod.add.raw >= 0) ? "allies" : "enemies");
-                e.enemies = aff == "enemies" || aff == "all";
-                e.allies = aff == "allies" || aff == "all";
-                a.effects.push_back(e);
-            }
+            for (auto& ej : aj["effects"].items()) a.effects.push_back(effect(where + " ability " + a.id, ej));
             t.abilities.push_back(a);
         }
         if (const Json& h = tj["hero"]; h.isObject()) {
@@ -380,6 +447,77 @@ Rules loadRules(const Json& j) {
             t.waveCount = std::max<int>(1, int(ws.getInt("count", 1)));
         }
         for (auto& u : tj["upgrades"].items()) t.upgrades.push_back(typeRef(where + " upgrades", u.str()));
+        t.capturable = tj.getBool("capturable", t.capturable);
+        if (const Json& d = tj["digs"]; d.isObject()) t.digRate = d.getFx("rate", kFxOne);
+        if (const Json& c = tj["claimer"]; c.isObject()) t.claimerTime = c.getFx("time", Fixed::fromInt(2));
+        if (const Json& c = tj["claim"]; c.isObject()) {
+            t.claimRadius = c.getFx("radius", Fixed::fromInt(1));
+            t.claimRate = c.getFx("rate", kFxOne);
+        }
+        t.claimedByTerritory = tj.getBool("claimedByTerritory", false);
+        if (const Json& n = tj["needs"]; n.isObject()) {
+            t.hasNeeds = true;
+            NeedsDef& nd = t.needs;
+            auto need = [&](const char* key, NeedDef& out) {
+                const Json& q = n[key];
+                if (!q.isObject()) return;
+                out.enabled = true;
+                out.interval = q.getFx("interval", out.interval);
+                if (q.has("room")) out.room = roomRef(where + " needs." + key, q.getStr("room"));
+                if (q.has("at")) out.structure = typeRef(where + " needs." + key + ".at", q.getStr("at"));
+                out.starve = q.getFx("starve");
+                out.time = q.getFx("time", out.time);
+                amounts(where + " needs." + key + ".cost", q["cost"], out.cost, {});
+                if (out.interval.raw <= 0) fail(where + " needs." + key, "interval must be positive");
+            };
+            need("hunger", nd.hunger);
+            need("sleep", nd.sleep);
+            if (const Json& py = n["pay"]; py.isObject()) {
+                nd.payInterval = py.getFx("interval", Fixed::fromInt(120));
+                amounts(where + " needs.pay.amount", py["amount"], nd.pay, {});
+            }
+            for (auto& wr : n["works"].items()) nd.works.push_back(uint16_t(roomRef(where + " needs.works", wr.str())));
+            nd.workTime = n.getFx("workTime", nd.workTime);
+            if (const Json& h = n["happiness"]; h.isObject()) {
+                nd.happyStart = h.getFx("start", nd.happyStart);
+                nd.unmetRate = h.getFx("unmetPerSecond", nd.unmetRate);
+                nd.recovery = h.getFx("recovery", nd.recovery);
+                nd.slapLoss = h.getFx("slap", nd.slapLoss);
+                nd.unpaidLoss = h.getFx("unpaid", nd.unpaidLoss);
+                nd.leaveBelow = h.getFx("leaveBelow", nd.leaveBelow);
+                nd.leaveAfter = h.getFx("leaveAfter", nd.leaveAfter);
+            }
+        }
+        if (const Json& a = tj["attractedBy"]; a.isObject()) {
+            t.attractable = true;
+            for (auto& [room, cells] : a["rooms"].members()) t.attract.rooms.push_back({uint16_t(roomRef(where + " attractedBy.rooms", room)), int(cells.integer(1))});
+            amounts(where + " attractedBy.resources", a["resources"], t.attract.resources, {});
+            t.attract.weight = a.getFx("weight", t.attract.weight);
+        }
+        if (const Json& p = tj["portal"]; p.isObject()) {
+            t.portalInterval = p.getFx("interval", Fixed::fromInt(20));
+            for (auto& u : p["pool"].items()) t.portalPool.push_back(typeRef(where + " portal.pool", u.str()));
+            if (t.portalInterval.raw <= 0) fail(where + " portal", "interval must be positive");
+        }
+        if (const Json& sh = tj["storehouse"]; sh.isObject()) t.storeCapacity = sh.getFx("capacity", Fixed::fromInt(1000));
+        if (const Json& rc = tj["recipe"]; rc.isObject()) {
+            t.recipe.enabled = true;
+            amounts(where + " recipe.in", rc["in"], t.recipe.in, {});
+            amounts(where + " recipe.out", rc["out"], t.recipe.out, {});
+            t.recipe.time = rc.getFx("time", t.recipe.time);
+            if (rc.has("from")) t.recipe.fromRes = int16_t(resRef(where + " recipe.from", rc.getStr("from")));
+            t.recipe.radius = rc.getFx("radius", t.recipe.radius);
+            t.recipe.buffer = std::max<int>(1, int(rc.getInt("buffer", 2)));
+            if (t.recipe.out.empty()) fail(where + " recipe", "needs 'out'");
+            if (t.recipe.time.raw <= 0) fail(where + " recipe", "time must be positive");
+        }
+        if (const Json& cr = tj["carrier"]; cr.isObject()) t.carrierCapacity = cr.getFx("capacity", kFxOne);
+        if (tj.has("trainFrom")) t.trainFrom = typeRef(where + " trainFrom", tj.getStr("trainFrom"));
+        if (const Json& at = tj["autoTrain"]; at.isObject()) {
+            t.autoTrainUnit = typeRef(where + " autoTrain.unit", at.getStr("unit"));
+            t.autoTrainInterval = at.getFx("interval", t.autoTrainInterval);
+            if (t.autoTrainInterval.raw <= 0) fail(where + " autoTrain", "interval must be positive");
+        }
         t.score = tj.getFx("score", t.structure ? Fixed::fromInt(5) : Fixed::fromInt(1));
         t.view = tj["view"];
     }
@@ -400,6 +538,9 @@ Rules loadRules(const Json& j) {
             t.time = c.getFx("time", t.time);
         }
         for (auto& rq : kj["requires"].items()) t.requires_.push_back(requirement(where + " requires", rq.str()));
+        t.levels = int(kj.getInt("levels", 1));
+        if (t.levels < 1 || t.levels > 250) fail(where, "levels must be 1..250");
+        t.costGrowth = kj.getFx("costGrowth");
         for (auto& e : kj["effects"].items()) {
             ModTarget mt;
             if (e.has("type")) mt.type = typeRef(where + " effect", e.getStr("type"));
@@ -433,6 +574,86 @@ Rules loadRules(const Json& j) {
         r.regions.buildOnlyOwned = rg.getBool("buildOnlyOwned", true);
         r.regions.productionPerRegion = rg.getFx("productionPerRegion");
     }
+    if (const Json& tr = j["territory"]; tr.isObject()) {
+        r.territory.enabled = true;
+        std::string by = tr.getStr("claimBy", "both");
+        if (by != "both" && by != "units" && by != "workers") fail("territory.claimBy", "expected units, workers or both, got '" + by + "'");
+        r.territory.claimBy = by == "units" ? ClaimBy::Units : by == "workers" ? ClaimBy::Workers : ClaimBy::Both;
+        r.territory.startFromRegions = tr.getBool("startFromRegions", false);
+        r.territory.startRadius = int(tr.getInt("startRadius", 0));
+        r.territory.buildOnlyOwned = tr.getBool("buildOnlyOwned", false);
+    }
+    if (const Json& h = j["hand"]; h.isObject()) {
+        r.hand.max = int(h.getInt("max", 8));
+        r.hand.ownTerritoryOnly = h.getBool("ownTerritoryOnly", true);
+        r.hand.slapDamage = h.getFx("slapDamage", r.hand.slapDamage);
+        r.hand.slapDuration = h.getFx("slapDuration", r.hand.slapDuration);
+        r.hand.slapSpeed = h.getFx("slapSpeed", r.hand.slapSpeed);
+        r.hand.slapWork = h.getFx("slapWork", r.hand.slapWork);
+    }
+    if (const Json& ps = j["possession"]; ps.isObject()) {
+        r.possession.enabled = true;
+        amounts("possession.cost", ps["cost"], r.possession.cost, {});
+        amounts("possession.drain", ps["drain"], r.possession.drain, {});
+    }
+    for (auto& pj : j["playerAbilities"].items()) {
+        PlayerAbilityDef a;
+        a.id = pj.getStr("id", "ability" + std::to_string(r.playerAbilities.size()));
+        const std::string where = "playerAbility '" + a.id + "'";
+        a.name = pj.getStr("name", a.id);
+        amounts(where + " cost", pj["cost"], a.cost, {});
+        a.cooldown = pj.getFx("cooldown");
+        if (const Json& c = pj["charges"]; c.isObject()) {
+            a.chargesMax = int(c.getInt("max", 1));
+            amounts(where + " charges.rearmCost", c["rearmCost"], a.rearmCost, {});
+            a.rearmTime = c.getFx("rearmTime", a.rearmTime);
+        }
+        std::string tg = pj.getStr("target", "point");
+        if (tg != "point" && tg != "none") fail(where, "target must be point or none");
+        a.target = tg == "none" ? TargetKind::None : TargetKind::Point;
+        for (auto& ej : pj["effects"].items()) {
+            a.effects.push_back(effect(where, ej));
+            if (a.effects.back().kind == EffectKind::Blink) fail(where, "blink needs a caster");
+        }
+        r.playerAbilities.push_back(a);
+    }
+    if (r.playerAbilities.size() > 16) fail("playerAbilities", "at most 16");
+    std::string storage = j.getStr("storage", "player");
+    if (storage != "player" && storage != "buildings") fail("storage", "expected 'player' or 'buildings', got '" + storage + "'");
+    r.buildingStorage = storage == "buildings";
+    if (const Json& rn = j["roadNetwork"]; rn.isObject()) {
+        r.roadNetwork.enabled = true;
+        amounts("roadNetwork.cost", rn["cost"], r.roadNetwork.cost, {});
+        r.roadNetwork.speed = rn.getFx("speed", r.roadNetwork.speed);
+        r.roadNetwork.required = rn.getBool("required", true);
+    }
+    if (const Json& ln = j["lanes"]; ln.isObject()) {
+        r.lanes.enabled = true;
+        r.lanes.left = std::clamp<int>(int(ln.getInt("left", 0)), 0, 8);
+        r.lanes.right = std::clamp<int>(int(ln.getInt("right", 0)), 0, 8);
+        r.lanes.spacing = ln.getFx("spacing", r.lanes.spacing);
+    }
+    if (const Json& mv = j["movement"]; mv.isObject()) {
+        std::string av = mv.getStr("avoidance", "rvo");
+        if (av != "rvo" && av != "simple") fail("movement.avoidance", "expected 'rvo' or 'simple', got '" + av + "'");
+        r.movement.rvo = av == "rvo";
+        r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
+        r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
+    }
+    bool anySettlers = r.buildingStorage || r.roadNetwork.enabled;
+    for (auto& t : r.types) if (t.storeCapacity.raw > 0 || t.recipe.enabled || t.carrierCapacity.raw > 0 || t.trainFrom != kNoType) anySettlers = true;
+    r.settlers = anySettlers;
+    bool anyDungeonType = false;
+    for (auto& t : r.types)
+        if (t.digRate.raw > 0 || t.claimerTime.raw > 0 || t.claimRate.raw > 0 || t.hasNeeds || t.portalInterval.raw > 0 ||
+            t.autoTrainUnit != kNoType || t.claimedByTerritory) anyDungeonType = true;
+    for (auto& t : r.types) if (t.hasNeeds) anyDungeonType = true;
+    if (anyDungeonType && !r.territory.enabled) {
+        // claimers / portals imply a territory layer
+        for (auto& t : r.types) if (t.claimerTime.raw > 0 || t.claimRate.raw > 0 || t.claimedByTerritory) r.territory.enabled = true;
+    }
+    r.dungeon = anyDungeonType || r.territory.enabled || !r.diggables.empty() || !r.rooms.empty() || r.hand.max > 0 ||
+                r.possession.enabled || !r.playerAbilities.empty();
     return r;
 }
 

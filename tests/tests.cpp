@@ -1335,6 +1335,494 @@ TEST(unpacker_westwood_pak) {
     tfs::remove_all(d, ec);
 }
 
+TEST(mech_surrender_ends_match_and_replays) {
+    auto play = [](std::vector<Command>* cmds, uint32_t* end, bool* surrenderEvent) {
+        auto sim = makeSim(kSkirmish, "maps/valley.json", 9);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, 9);
+        for (uint32_t t = 0; t < 20 * 60 && sim->result() == 0; ++t) {
+            for (auto& b : bots) b.update(*sim);
+            if (sim->tick() == 20 * 30) { Command c; c.player = 2; c.type = game::kCmdSurrender; sim->submit(c); }
+            sim->step();
+            for (auto& ev : sim->events())
+                if (ev.type == game::kEvPlayerDefeated && ev.player == 2 && ev.value == game::kDefeatSurrendered) *surrenderEvent = true;
+        }
+        *cmds = sim->executedCommands();
+        *end = sim->tick();
+        return std::pair{sim->checksum(), sim->result()};
+    };
+    std::vector<Command> cmds;
+    uint32_t end = 0;
+    bool ev = false;
+    auto live = play(&cmds, &end, &ev);
+    CHECK(ev);
+    CHECK(live.second == 1);                                   // team of player 1 wins by surrender
+    CHECK(end > 20 * 30 && end < 20 * 32);
+    auto sim = makeSim(kSkirmish, "maps/valley.json", 9);
+    for (auto& c : cmds) sim->submit(c);
+    while (sim->tick() < end) sim->step();
+    CHECK(sim->checksum() == live.first && sim->result() == 1);
+}
+
+// ------------------------------------------------------------------ dungeon management (Dungeon Keeper class)
+
+static const char* kDungeonRules = R"({
+  "resources": {"gold": {"start": 1000}, "food": {"start": 0}, "research": {"start": 0}},
+  "diggable": {"D": {"hardness": 2}, "G": {"hardness": 2, "yields": {"gold": 150}}},
+  "territory": {"startRadius": 2, "buildOnlyOwned": true},
+  "hand": {"max": 4, "slapDamage": 5},
+  "possession": {"cost": {"gold": 10}},
+  "victory": "keyUnits",
+  "rooms": {
+    "lair": {"cost": {"gold": 10}, "supply": 1},
+    "hatchery": {"cost": {"gold": 10}, "income": {"food": 0.5}},
+    "library": {"cost": {"gold": 20}, "work": {"yields": {"research": 1}}}
+  },
+  "types": {
+    "heart": {"structure": {"footprint": [2, 2]}, "health": {"max": 3000}, "key": true, "sight": 12, "produces": ["imp"]},
+    "shrine": {"structure": {"footprint": [1, 1]}},
+    "imp": {"move": {"speed": 4}, "digs": {"rate": 2}, "claimer": {"time": 0.5}, "health": {"max": 60}, "sight": 6},
+    "portal": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "claimedByTerritory": true, "portal": {"interval": 3}},
+    "goblin": {"move": {"speed": 3}, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 8}], "cost": {"supply": 1}, "sight": 6,
+               "attractedBy": {"rooms": {"lair": 1}},
+               "needs": {"hunger": {"interval": 5, "room": "hatchery", "time": 1, "cost": {"food": 1}},
+                         "pay": {"interval": 4, "amount": {"gold": 30}}, "works": ["library"],
+                         "happiness": {"unpaid": 0.5, "leaveBelow": 0.3, "leaveAfter": 2}}}
+  }})";
+
+// 24x12: own pocket on the left (x 1..9), dirt wall with a gold vein at x 10..13, open ground on the right.
+static std::string dungeonMap(const std::string& entities) {
+    std::string rows;
+    for (int y = 0; y < 12; ++y) {
+        std::string r(24, '.');
+        r[0] = r[23] = '#';
+        if (y == 0 || y == 11) r = std::string(24, '#');
+        else for (int x = 10; x <= 13; ++x) r[size_t(x)] = (x == 10 && y == 6) ? 'G' : 'D';
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+    }
+    return R"({"size":[24,12],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":[)" + rows + "]},\"entities\":[" +
+           R"({"type":"heart","owner":1,"pos":[4,6]},{"type":"heart","owner":2,"pos":[20,6]})" + entities + "]}";
+}
+static Command rectCmd(uint8_t player, uint16_t type, int x, int y, int w, int h, int extra) {
+    Command c; c.player = player; c.type = type;
+    c.point = {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)};
+    c.param = game::rectParam(w, h, extra);
+    return c;
+}
+
+TEST(mech_dungeon_dig_and_claim) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"imp","owner":1,"pos":[7,6]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    auto& g = gs.grid;
+    CHECK(g.dig[size_t(g.index(10, 6))] == 2 && !g.passable(10, 6, game::kLayerGround));   // gold vein, solid
+    CHECK(g.territory[size_t(g.index(4, 6))] == 1 && g.territory[size_t(g.index(8, 6))] == 0); // start radius around the heart
+    int before = m.territoryOf(*sim, 1);
+    Fixed gold = stockOf(*sim, 1, "gold");
+    sim->submit(rectCmd(1, game::kCmdDig, 10, 5, 2, 3, 0));
+    sim->submit(rectCmd(2, game::kCmdDig, 12, 5, 1, 1, 0));                                   // B's mark is not A's job
+    run(*sim, 60);
+    CHECK(g.dig[size_t(g.index(10, 6))] == 0 && g.passable(10, 6, game::kLayerGround));      // dug out
+    CHECK(g.dig[size_t(g.index(11, 5))] == 0 && g.dig[size_t(g.index(11, 7))] == 0);
+    CHECK(g.dig[size_t(g.index(12, 5))] != 0);                                                // only own marks
+    CHECK(stockOf(*sim, 1, "gold") == gold + Fixed::fromInt(150));                            // vein yield
+    CHECK(m.territoryOf(*sim, 1) > before + 10);                                              // claimed the pocket and the tunnel
+    CHECK(g.territory[size_t(g.index(9, 6))] == 1 && g.territory[size_t(g.index(11, 6))] == 1);
+    std::vector<Vec3> path;                                                                   // pathfinding sees the tunnel
+    CHECK(g.findPath(g.cellCenter(7, 6), g.cellCenter(11, 7), game::kLayerGround, path));
+    // build only on own territory
+    std::string why;
+    bool ok = m.canPlace(*sim, 1, uint16_t(m.rules().findType("shrine")), g.cellCenter(8, 3), kNullEntity, &why);
+    if (!ok) std::printf("    canPlace: %s (territory %d)\n", why.c_str(), g.territory[size_t(g.index(8, 3))]);
+    CHECK(ok);
+    CHECK(!m.canPlace(*sim, 1, uint16_t(m.rules().findType("shrine")), g.cellCenter(16, 3)));
+}
+
+TEST(mech_dungeon_rooms_portal_recruit) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"portal","owner":0,"pos":[8,9]},{"type":"imp","owner":1,"pos":[7,6]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    run(*sim, 6);
+    Entity portal = findType(*sim, "portal", 1);
+    CHECK(portal.valid());                                    // claimed when the imp claimed the floor next to it
+    CHECK(countType(*sim, "goblin", 1) == 0);                 // no lair: nothing is attracted
+    Fixed gold = stockOf(*sim, 1, "gold");
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, m.rules().findRoom("lair")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 15, 3, 2, 2, m.rules().findRoom("lair"))); // not own floor: ignored
+    run(*sim, 0.5);
+    CHECK(m.roomCellsOf(*sim, 1, m.rules().findRoom("lair")) == 4);
+    CHECK(stockOf(*sim, 1, "gold") == gold - Fixed::fromInt(40));
+    CHECK(gs.players[1].supplyCap == Fixed::fromInt(4));       // lair capacity per cell
+    run(*sim, 12);
+    int goblins = countType(*sim, "goblin", 1);
+    CHECK(goblins >= 1 && goblins <= 4);                       // recruited up to the lair capacity
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, -1)); // erase: refunds half
+    run(*sim, 0.5);
+    CHECK(m.roomCellsOf(*sim, 1, m.rules().findRoom("lair")) == 0);
+    CHECK(gs.roomZones.empty());
+}
+
+TEST(mech_dungeon_needs_work_and_leaving) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"portal","owner":1,"pos":[8,9]},{"type":"goblin","owner":1,"pos":[6,4]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 3, 2, 2, m.rules().findRoom("lair")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 1, 7, 2, 2, m.rules().findRoom("hatchery")));
+    sim->submit(rectCmd(1, game::kCmdPaintRoom, 5, 3, 2, 2, m.rules().findRoom("library")));
+    run(*sim, 4);
+    CHECK(stockOf(*sim, 1, "research") > Fixed{});            // works in the library when idle
+    CHECK(stockOf(*sim, 1, "food") > Fixed{});                // hatchery produces food per cell
+    Fixed gold = stockOf(*sim, 1, "gold");
+    run(*sim, 6);
+    Entity gob = findType(*sim, "goblin", 1);
+    CHECK(gob.valid());
+    CHECK(stockOf(*sim, 1, "gold") <= gold - Fixed::fromInt(30)); // payday
+    auto& nd = sim->world().get<game::Needs>(gob);
+    CHECK(nd.hunger < Fixed::fromInt(1));                      // ate in the hatchery
+    CHECK(nd.happiness > Fixed::fromRatio(9, 10));
+    // unpaid wages make it unhappy; it walks out through the portal
+    gs.players[1].stock[size_t(m.rules().findResource("gold"))] = Fixed{};
+    bool left = false;
+    for (int i = 0; i < 20 * 20 && !left; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvCreatureLeft && ev.a == gob) left = true; }
+    CHECK(left);
+    run(*sim, 0.2);
+    CHECK(!sim->world().alive(gob));
+}
+
+TEST(mech_dungeon_hand_slap_possess) {
+    auto sim = makeSimJson(kDungeonRules, dungeonMap(R"(,{"type":"goblin","owner":1,"pos":[6,4]},{"type":"goblin","owner":2,"pos":[18,4]})"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    World& w = sim->world();
+    Entity gob = findType(*sim, "goblin", 1), enemy = findType(*sim, "goblin", 2);
+    run(*sim, 0.5);
+    Command pick; pick.player = 1; pick.type = game::kCmdPickUp; pick.units = {gob, enemy};
+    sim->submit(pick);
+    run(*sim, 0.2);
+    CHECK(gs.hand[1].size() == 1 && (w.get<game::Unit>(gob).flags & game::kUnitInHand));
+    CHECK(!(w.get<game::Unit>(enemy).flags & game::kUnitInHand));
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {gob}; mv.point = {Fixed::fromInt(2), Fixed{}, Fixed::fromInt(8)};
+    sim->submit(mv);                                           // units in the hand ignore orders
+    sim->submit(rectCmd(1, game::kCmdDrop, 16, 4, 1, 1, 0));    // not own floor: refused
+    run(*sim, 0.5);
+    CHECK(gs.hand[1].size() == 1);
+    sim->submit(rectCmd(1, game::kCmdDrop, 2, 8, 1, 1, 0));
+    run(*sim, 0.2);
+    CHECK(gs.hand[1].empty() && !(w.get<game::Unit>(gob).flags & game::kUnitInHand));
+    CHECK((w.get<Transform>(gob).pos - Vec3{Fixed::fromRatio(5, 2), Fixed{}, Fixed::fromRatio(17, 2)}).xz().length() < Fixed::fromInt(1));
+    Fixed speed = m.stat(*sim, gob, game::Stat::Speed);
+    Command slap; slap.player = 1; slap.type = game::kCmdSlap; slap.units = {gob};
+    sim->submit(slap);
+    run(*sim, 0.2);
+    CHECK(w.get<game::Unit>(gob).hp == Fixed::fromInt(95));
+    CHECK(m.stat(*sim, gob, game::Stat::Speed) > speed);
+    CHECK(w.get<game::Needs>(gob).happiness < Fixed::fromInt(1));
+    // possession: direct steering, AI-style orders ignored
+    Command pos; pos.player = 1; pos.type = game::kCmdPossess; pos.units = {gob};
+    sim->submit(pos);
+    run(*sim, 0.2);
+    CHECK(gs.possessed[1] == gob && (w.get<game::Unit>(gob).flags & game::kUnitPossessed));
+    Fixed x0 = w.get<Transform>(gob).pos.x;
+    for (int i = 0; i < 20; ++i) {
+        Command d; d.player = 1; d.type = game::kCmdDirect; d.point = {Fixed::fromInt(1), Fixed{}, Fixed{}};
+        sim->submit(d);
+        sim->step();
+    }
+    CHECK(w.get<Transform>(gob).pos.x > x0 + Fixed::fromInt(2));
+    Command rel; rel.player = 1; rel.type = game::kCmdPossess;
+    sim->submit(rel);
+    run(*sim, 0.2);
+    CHECK(!gs.possessed[1].valid() && !(w.get<game::Unit>(gob).flags & game::kUnitPossessed));
+}
+
+// ------------------------------------------------------------------ territory war (State.io style)
+
+static const char* kTerritoryRules = R"({
+  "resources": {"money": {"start": 300}},
+  "territory": {"claimBy": "units", "startFromRegions": true},
+  "victory": {"mode": "territory", "share": 0.8},
+  "playerAbilities": [{"id": "strike", "cost": {"money": 50}, "cooldown": 2, "charges": {"max": 1, "rearmCost": {"money": 20}, "rearmTime": 3},
+                       "effects": [{"type": "damage", "amount": 500, "radius": 2}]}],
+  "techs": {"drill": {"cost": {"money": 10, "time": 0.5}, "levels": 3, "costGrowth": 1, "effects": [{"type": "soldier", "stat": "damage", "mul": 1.5}]}},
+  "types": {
+    "barracks": {"structure": {"footprint": [2, 2]}, "capturable": true, "health": {"max": 800}, "supply": 10,
+                 "autoTrain": {"unit": "soldier", "interval": 1}, "researches": ["drill"]},
+    "town": {"structure": {"footprint": [2, 2]}, "capturable": true, "invulnerable": true},
+    "soldier": {"move": {"speed": 3}, "health": {"max": 50}, "weapons": [{"range": 1.5, "damage": 6}], "cost": {"supply": 1}, "claim": {"radius": 1.5, "rate": 4}},
+    "ghost": {"move": {"speed": 1}, "invulnerable": true}
+  }})";
+
+static std::string territoryMap(const std::string& entities, const std::string& regionRow) {
+    std::string regions;
+    for (int y = 0; y < 8; ++y) regions += std::string(y ? "," : "") + "\"" + regionRow + "\"";
+    return flatMap(24, 8, ",\"regions\":{\"rows\":[" + regions + "]},\"entities\":[" + entities + "]");
+}
+
+TEST(mech_territory_front_line_and_contested_cells) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"town","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[21,4]},{"type":"soldier","owner":1,"pos":[8.5,4.5]},{"type":"ghost","owner":2,"pos":[11.5,1.5]})",
+        "AAAAAAAANNNNNNNNNNNNBBBB"));
+    auto& m = mod(*sim);
+    auto& g = m.state(*sim).grid;
+    CHECK(m.territoryOf(*sim, 1) == 64 && m.territoryOf(*sim, 2) == 32 && m.state(*sim).territoryTotal == 192);
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {findType(*sim, "soldier", 1)}; mv.point = {Fixed::fromRatio(23, 2), Fixed{}, Fixed::fromRatio(7, 2)};
+    sim->submit(mv);
+    run(*sim, 8);
+    CHECK(g.territory[size_t(g.index(8, 4))] == 1 && g.territory[size_t(g.index(10, 4))] == 1 && g.territory[size_t(g.index(11, 3))] == 1);
+    CHECK(g.territory[size_t(g.index(11, 1))] == 0);           // contested: an enemy stands there
+    CHECK(g.territory[size_t(g.index(16, 4))] == 0);           // only cells touching own territory near the unit
+    CHECK(m.territoryOf(*sim, 1) > 64);
+}
+
+TEST(mech_territory_autotrain_capture_victory) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"barracks","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[16,4]})", "AAAAAAAAAAAABBBBBBBBBBBB"));
+    auto& m = mod(*sim);
+    run(*sim, 5);
+    int soldiers = countType(*sim, "soldier", 1);
+    CHECK(soldiers >= 3 && soldiers <= 10);
+    bool captured = false;
+    for (int i = 0; i < 20 * 120 && sim->result() == 0; ++i) {
+        sim->step();
+        for (auto& ev : sim->events()) if (ev.type == game::kEvCaptured && ev.player == 1) captured = true;
+    }
+    CHECK(countType(*sim, "soldier", 1) <= 10);                // population cap
+    CHECK(captured && sim->world().get<Owner>(findType(*sim, "town", 1)).player == 1);
+    CHECK(sim->result() == 1);                                 // 80% share
+    CHECK(m.territoryOf(*sim, 1) * 10 >= m.state(*sim).territoryTotal * 8);
+}
+
+TEST(mech_player_abilities_and_tech_levels) {
+    auto sim = makeSimJson(kTerritoryRules, territoryMap(
+        R"({"type":"town","owner":1,"pos":[3,4]},{"type":"town","owner":2,"pos":[21,4]},{"type":"soldier","owner":2,"pos":[12,4]},{"type":"soldier","owner":2,"pos":[12.5,5]},{"type":"barracks","owner":1,"pos":[6,4]})",
+        "AAAAAAAAAAAABBBBBBBBBBBB"));
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    gs.players[1].stock[0] = Fixed::fromInt(300);
+    Command a; a.player = 1; a.type = game::kCmdPlayerAbility; a.param = 0; a.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromRatio(9, 2)};
+    CHECK(m.canUsePlayerAbility(*sim, 1, 0));
+    sim->submit(a);
+    run(*sim, 0.2);
+    CHECK(countType(*sim, "soldier", 2) == 0);
+    CHECK(gs.playerAbilities[1][0].charges == 0 && !m.canUsePlayerAbility(*sim, 1, 0));
+    Fixed money = stockOf(*sim, 1, "money");
+    run(*sim, 3.5);
+    CHECK(gs.playerAbilities[1][0].charges == 1 && stockOf(*sim, 1, "money") == money - Fixed::fromInt(20)); // rearmed for a cost
+    // repeatable tech: 3 levels, cost 10, 20, 30, effects compound
+    Entity br = findType(*sim, "barracks", 1);
+    int drill = m.rules().findTech("drill");
+    for (int lv = 0; lv < 4; ++lv) {
+        Command r; r.player = 1; r.type = game::kCmdResearch; r.units = {br}; r.param = drill;
+        sim->submit(r);
+        run(*sim, 1);
+    }
+    CHECK(gs.players[1].researched[size_t(drill)] == 3);
+    CHECK(stockOf(*sim, 1, "money") == money - Fixed::fromInt(20 + 60));
+    Entity sol = findType(*sim, "soldier", 1);
+    CHECK(sol.valid() && m.stat(*sim, sol, game::Stat::Damage) == Fixed::parse("3.375"));
+}
+
+// ------------------------------------------------------------------ settlers economy (Knights and Merchants style)
+
+static const char* kSettlersRules = R"({
+  "storage": "buildings",
+  "roadNetwork": {"cost": {"stone": 0.1}, "speed": 1.5},
+  "resources": {"wood": {}, "planks": {"start": 10}, "stone": {"start": 20}, "food": {}, "sword": {"start": 2}, "gold": {"global": true, "start": 100}},
+  "types": {
+    "store": {"structure": {"footprint": [2, 2]}, "storehouse": {"capacity": 500}, "health": {"max": 1000}},
+    "tree": {"invulnerable": true, "structure": {"footprint": [1, 1]}, "resourceNode": {"resource": "wood", "amount": 50}},
+    "woodcutter": {"structure": {"footprint": [2, 2]}, "recipe": {"out": {"wood": 1}, "time": 2, "from": "wood", "radius": 8}, "cost": {"planks": 2, "gold": 10, "time": 2}},
+    "sawmill": {"structure": {"footprint": [2, 2]}, "recipe": {"in": {"wood": 1}, "out": {"planks": 2}, "time": 2}},
+    "inn": {"structure": {"footprint": [2, 2]}},
+    "barracks": {"structure": {"footprint": [2, 2]}, "produces": ["soldier"]},
+    "serf": {"move": {"speed": 4}, "carrier": {"capacity": 1}},
+    "builder": {"move": {"speed": 3}, "builds": ["woodcutter"]},
+    "recruit": {"move": {"speed": 3}},
+    "soldier": {"move": {"speed": 3}, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 5}], "trainFrom": "recruit", "cost": {"sword": 1, "time": 1},
+                "needs": {"hunger": {"interval": 3, "at": "inn", "time": 0.5, "cost": {"food": 1}, "starve": 10}}}
+  }})";
+
+static Command connectCmd(Simulation& sim, std::vector<Entity> units) {
+    (void)sim;
+    Command c; c.player = 1; c.type = game::kCmdConnectRoad; c.units = std::move(units);
+    return c;
+}
+
+TEST(mech_settlers_chain_carriers_roads) {
+    auto sim = makeSimJson(kSettlersRules, flatMap(32, 14, R"(,"entities":[
+        {"type":"store","owner":1,"pos":[4,6]},{"type":"woodcutter","owner":1,"pos":[14,6]},{"type":"sawmill","owner":1,"pos":[9,11]},
+        {"type":"tree","owner":0,"pos":[18.5,4.5]},{"type":"tree","owner":0,"pos":[18.5,8.5]},
+        {"type":"serf","owner":1,"pos":[6,9]},{"type":"serf","owner":1,"pos":[7,9]},{"type":"store","owner":2,"pos":[29,2]}])"));
+    auto& m = mod(*sim);
+    World& w = sim->world();
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(10));           // starting goods are in the storehouse
+    CHECK(w.get<game::Inventory>(findType(*sim, "store", 1)).have[size_t(m.rules().findResource("planks"))] == Fixed::fromInt(10));
+    Entity wc = findType(*sim, "woodcutter", 1), saw = findType(*sim, "sawmill", 1), store = findType(*sim, "store", 1);
+    sim->submit(connectCmd(*sim, {wc}));                                 // the sawmill stays off the road network
+    run(*sim, 20);
+    CHECK(m.roadConnected(*sim, wc, store) && !m.roadConnected(*sim, saw, store));
+    CHECK(stockOf(*sim, 1, "stone") < Fixed::fromInt(20));               // roads cost stone
+    CHECK(stockOf(*sim, 1, "wood") >= Fixed::fromInt(2));                 // wood hauled to the store
+    CHECK(w.get<game::Inventory>(saw).have[size_t(m.rules().findResource("wood"))] == Fixed{}); // unconnected: no deliveries
+    sim->submit(connectCmd(*sim, {saw}));
+    Fixed planks = stockOf(*sim, 1, "planks");
+    run(*sim, 30);
+    CHECK(m.roadConnected(*sim, saw, store));
+    CHECK(stockOf(*sim, 1, "planks") > planks);                          // wood -> planks -> store
+    int trees = countType(*sim, "tree", 0);
+    CHECK(trees == 2);
+    Fixed left{};
+    w.each<game::ResourceStock>([&](Entity, game::ResourceStock& rs) { left += rs.amount; });
+    CHECK(left < Fixed::fromInt(100));                                    // raw producer depletes the trees
+}
+
+TEST(mech_settlers_construction_materials_and_recruits) {
+    auto sim = makeSimJson(kSettlersRules, flatMap(32, 14, R"(,"entities":[
+        {"type":"store","owner":1,"pos":[4,6]},{"type":"barracks","owner":1,"pos":[4,11]},{"type":"inn","owner":1,"pos":[9,3]},
+        {"type":"builder","owner":1,"pos":[7,7]},{"type":"serf","owner":1,"pos":[6,9]},{"type":"recruit","owner":1,"pos":[6,12]},
+        {"type":"store","owner":2,"pos":[29,2]}])"));
+    auto& m = mod(*sim);
+    World& w = sim->world();
+    Command b; b.player = 1; b.type = game::kCmdBuild; b.units = {findType(*sim, "builder", 1)}; b.param = m.rules().findType("woodcutter");
+    b.point = {Fixed::fromInt(12), Fixed{}, Fixed::fromInt(7)};
+    sim->submit(b);
+    run(*sim, 2);
+    Entity site = findType(*sim, "woodcutter", 1);
+    CHECK(site.valid() && w.has<game::Construction>(site));
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(90));               // coins paid at once, planks delivered
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(10));
+    run(*sim, 3);
+    CHECK(w.has<game::Construction>(site));                              // no road yet: nothing delivered, no progress past 0
+    sim->submit(connectCmd(*sim, {site}));
+    run(*sim, 25);
+    CHECK(countType(*sim, "woodcutter", 1) == 1);                         // built once the planks arrived
+    CHECK(stockOf(*sim, 1, "planks") == Fixed::fromInt(8));
+    // soldiers are made from a recruit plus a sword
+    Entity br = findType(*sim, "barracks", 1);
+    Command t; t.player = 1; t.type = game::kCmdTrain; t.units = {br}; t.param = m.rules().findType("soldier");
+    sim->submit(t);
+    sim->submit(t);                                                      // second one: no recruit left
+    run(*sim, 2);
+    CHECK(countType(*sim, "soldier", 1) == 1 && countType(*sim, "recruit", 1) == 0);
+    CHECK(stockOf(*sim, 1, "sword") == Fixed::fromInt(1));
+    // food: no food in the store -> the soldier starves
+    Entity sol = findType(*sim, "soldier", 1);
+    run(*sim, 5);
+    CHECK(w.get<game::Unit>(sol).hp < Fixed::fromInt(100));
+    m.addResource(*sim, 1, uint16_t(m.rules().findResource("food")), Fixed::fromInt(5));
+    CHECK(stockOf(*sim, 1, "food") == Fixed::fromInt(5));
+    run(*sim, 4);
+    CHECK(stockOf(*sim, 1, "food") < Fixed::fromInt(5));                  // ate at the inn
+}
+
+// ------------------------------------------------------------------ Mushroom Wars 2 lanes
+
+TEST(mech_lanes_generated_and_followed) {
+    const char* rules = R"({
+      "lanes": {"left": 2, "right": 1, "spacing": 0.4},
+      "types": {
+        "village": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "garrison": {"max": 30, "unit": "shroom", "interval": 1}},
+        "shroom": {"move": {"speed": 3}, "entersGarrison": true}
+      }})";
+    std::string rows;
+    for (int y = 0; y < 16; ++y) {
+        std::string r(32, '.');
+        if (y >= 4 && y <= 11) for (int x = 15; x <= 16; ++x) r[size_t(x)] = '#';   // a rock between the villages
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+    }
+    std::string map = R"({"size":[32,16],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":[)" + rows + R"(]},
+        "entities":[{"type":"village","owner":1,"pos":[5,8],"garrison":20},{"type":"village","owner":0,"pos":[27,8],"garrison":0},{"type":"village","owner":2,"pos":[16,1],"garrison":5}]})";
+    auto sim = makeSimJson(rules, map);
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    World& w = sim->world();
+    run(*sim, 0.1);
+    CHECK(gs.lanes.size() == 3 * 4);                                     // 3 pairs x (1 main + 2 left + 1 right)
+    Entity a, b;
+    w.each<game::Garrison, Owner, Transform>([&](Entity e, game::Garrison&, Owner& o, Transform& t) {
+        if (o.player == 1) a = e;
+        if (o.player == 0 && t.pos.x > Fixed::fromInt(20)) b = e;
+    });
+    auto lanes = m.lanesBetween(*sim, a, b);
+    CHECK(lanes.size() == 4 && gs.lanes[size_t(lanes[0])].offset == 0);
+    bool clear = true, apart = false;
+    for (int li : lanes) {
+        const auto& L = gs.lanes[size_t(li)];
+        for (auto& p : L.points) {
+            int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+            if (cx >= 15 && cx <= 16 && cy >= 4 && cy <= 11) clear = false;  // never through the rock
+        }
+        if (L.offset != 0 && (L.points[L.points.size() / 2] - gs.lanes[size_t(lanes[0])].points[gs.lanes[size_t(lanes[0])].points.size() / 2]).xz().length() > Fixed::fromRatio(3, 10)) apart = true;
+    }
+    CHECK(clear && apart);
+    Command c; c.player = 1; c.type = game::kCmdSend; c.units = {a}; c.target = b; c.param = 50;
+    sim->submit(c);
+    run(*sim, 1.5);
+    std::vector<int> used(gs.lanes.size(), 0);
+    int walkers = 0;
+    w.each<game::LaneWalker>([&](Entity, game::LaneWalker& lw) { used[size_t(lw.lane)]++; ++walkers; });
+    int lanesUsed = 0;
+    for (int li : lanes) if (used[size_t(li)]) ++lanesUsed;
+    CHECK(walkers > 4 && lanesUsed == 4);                               // round-robin over all lanes
+    run(*sim, 15);
+    CHECK(w.get<Owner>(b).player == 1);                                  // arrived and captured the empty village
+}
+
+// ------------------------------------------------------------------ movement: bodies, surround, avoidance
+
+TEST(mech_melee_surround_big_target) {
+    const char* rules = R"({
+      "victory": "noUnits",
+      "types": {
+        "grunt": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 100}, "weapons": [{"range": 0.5, "damage": 1, "cooldown": 0.5}]},
+        "titan": {"move": {"speed": 0.01, "radius": 1.5, "mass": 50}, "health": {"max": 100000}}
+      }})";
+    std::string ents;
+    for (int i = 0; i < 10; ++i) ents += std::string(",") + R"({"type":"grunt","owner":1,"pos":[)" + std::to_string(3 + (i / 3)) + "." + "5," + std::to_string(9 + (i % 3)) + R"(.5]})";
+    auto play = [&](bool print) {
+        auto sim = makeSimJson(rules, flatMap(32, 20, ",\"entities\":[{\"type\":\"titan\",\"owner\":2,\"pos\":[16,10]}" + ents + "]"));
+        Command c; c.player = 1; c.type = game::kCmdAttack; c.target = findType(*sim, "titan", 2);
+        sim->world().each<game::Unit, Owner>([&](Entity e, game::Unit&, Owner& o) { if (o.player == 1) c.units.push_back(e); });
+        sim->submit(c);
+        run(*sim, 6);
+        std::vector<uint64_t> hitters;
+        for (int i = 0; i < 40; ++i) {
+            sim->step();
+            for (auto& ev : sim->events())
+                if (ev.type == game::kEvAttack && ev.player == 1 && std::find(hitters.begin(), hitters.end(), ev.a.packed()) == hitters.end()) hitters.push_back(ev.a.packed());
+        }
+        if (print) std::printf("    %zu of 10 attackers hitting\n", hitters.size());
+        return std::pair{hitters.size(), sim->checksum()};
+    };
+    auto a = play(true), b = play(false);
+    CHECK(a.first >= 6);                                        // they spread around instead of queueing
+    CHECK(a == b);
+}
+
+TEST(mech_rvo_corridor_pass_through_idle_units) {
+    const char* rules = R"({"victory": "noUnits", "types": {"walker": {"move": {"speed": 3, "radius": 0.4}, "health": {"max": 50}}}})";
+    std::string map = R"({"size":[20,5],"players":[{"name":"A","team":1},{"name":"B","team":2}],"terrain":{"rows":["####################","....................","....................","....................","####################"]},
+      "entities":[{"type":"walker","owner":1,"pos":[10.5,1.5]},{"type":"walker","owner":1,"pos":[10.5,2.5]},{"type":"walker","owner":1,"pos":[10.5,3.5]},
+                  {"type":"walker","owner":1,"pos":[2.5,2.5]},{"type":"walker","owner":2,"pos":[19.5,3.5]}]})";
+    auto play = [&]() {
+        auto sim = makeSimJson(rules, map);
+        Entity mover;
+        sim->world().each<game::Unit, Owner, Transform>([&](Entity e, game::Unit&, Owner& o, Transform& t) { if (o.player == 1 && t.pos.x < Fixed::fromInt(5)) mover = e; });
+        Command c; c.player = 1; c.type = game::kCmdMove; c.units = {mover}; c.point = {Fixed::fromRatio(35, 2), Fixed{}, Fixed::fromRatio(5, 2)};
+        sim->submit(c);
+        uint32_t arrived = 0;
+        for (int i = 0; i < 20 * 15 && !arrived; ++i) {
+            sim->step();
+            if ((sim->world().get<Transform>(mover).pos - c.point).xz().length() < Fixed::fromRatio(6, 10)) arrived = sim->tick();
+        }
+        return std::pair{arrived, sim->checksum()};
+    };
+    auto a = play(), b = play();
+    std::printf("    corridor: arrived at tick %u\n", a.first);
+    CHECK(a.first > 0 && a.first < 20 * 10);                   // got through the three standing units within 10 s
+    CHECK(a == b);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
