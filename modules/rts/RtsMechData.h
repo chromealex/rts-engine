@@ -65,7 +65,6 @@ struct MechType {
     int veterancy = -1;                    // -1: rules table, 0: none, 1: own table below
     VeterancyTable vetTable;
     Fixed killXp{};                        // xp its killer gets: explicit "xp", else its cost x veterancy.fromCost
-    int maxWorkers = 0;                    // resource node: at most N gathering at once (WC3 mine, SC saturation)
     // stage 2
     bool wall = false;                     // built in lines (kCmdBuildLine)
     uint8_t gate = 0;                      // 1: lets its owner through, 2: owner and allies
@@ -115,7 +114,6 @@ struct MechRules {
     VeterancyTable vet;                    // rules "veterancy"
     bool vetHeal = true;                   // rank up heals fully
     Fixed vetFromCost = Fixed::fromInt(1); // xp for a kill without "xp": victim cost x this
-    bool workerCaps = false;
     // stage 2
     bool walls = false, gates = false, bridges = false, tunnels = false, ammo = false, merge = false;
     std::vector<std::string> tunnelNets;   // tunnel network names (MechType::tunnel indexes this)

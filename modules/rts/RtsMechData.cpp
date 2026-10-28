@@ -328,10 +328,6 @@ void loadMechRules(Rules& r, const Json& j) {
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];
         const std::string where = "type '" + id + "'";
-        if (const Json& rn = tj["resourceNode"]; rn.isObject() && rn.has("maxWorkers")) {
-            t.mech.maxWorkers = int(rn.getInt("maxWorkers", 0));
-            if (t.mech.maxWorkers > 0) m.any = m.workerCaps = true;
-        }
         MechType& mt = t.mech;
         if (tj.has("stance")) {
             mt.stance = stanceOf(where + " stance", tj.getStr("stance"));

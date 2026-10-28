@@ -586,7 +586,6 @@ public:
     void mechTick(Simulation& sim);                                  // veterans, toggles
     void mechVeteranKill(Simulation& sim, Entity victim);
     // combat / economy models (RtsMechCombat.cpp)
-    bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
     // stage 2 (RtsMechWorld.cpp, RtsMechEconomy.cpp, RtsMechGroups.cpp)
     bool applyMechCommand3(Simulation& sim, const Command& cmd);
     void mechTickWorld(Simulation& sim);          // gates, bridges, hazards, cycles, docks

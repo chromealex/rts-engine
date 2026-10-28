@@ -193,7 +193,6 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10) && rules_.mech.workerCaps && !mechNodeHasRoom(sim, o.target, e)) { stopMoving(sim, e); return false; }   // agent-mech: waits for a free place
         const Fixed cd = contactDistance(sim, e, o.target);
         // limited nodes (one worker per patch): a worker that can't get to the patch because others stand there
         // waits close by instead of asking for a new path every tick

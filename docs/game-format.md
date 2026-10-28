@@ -906,7 +906,8 @@ These keys come from agent-mech; they are parsed into the single implementation 
   linear `1 + min(-a·k, 0.71)` unless it says `"negative": "exponential"`.
 - type `"shields": {"max", "regen", "delay", "armor"}` = `health.shields` / `shieldRegen` / `shieldDelay` / `shieldArmor`
   (same defaults: regen 2/s, delay 10 s); one shield component (`Shield`) for both spellings.
-- **maxWorkers**: further workers wait next to the node until a place is free.
+- `resourceNode.maxWorkers` = `resourceNode.maxGatherers`: further workers wait next to the node or take a free node
+  of the same resource nearby.
 ### Genre mechanics (agent-mech stage 2)
 
 ```json
@@ -1549,7 +1550,7 @@ uses none of them keeps its exact checksums.
 | `health.shields` (alias type `shields: {max, regen, delay, armor}`) | type | shields soak damage first (after the damage table and weapon bonuses; minus `shieldArmor`, at least the armor floor), the share that breaks through goes on to armor and hp; they recharge `shieldRegen` per second (default 2) after `shieldDelay` seconds (default 10) without a hit on the shield (StarCraft) |
 | `heroes` | rules | `{"skills": true, "max": 3, "freeFirst": true, "tiers": ["hall", "keep", "castle"], "revive": {"costShare": 0.4, "perLevel": 0.1, "timeShare": 0.6, "maxTime": 110, "maxCost": {"gold": 700}}}` — skill points (one at start, one per level; command `kCmdLearn`), ability `"learnAt": [1, 3, 5]` (default) / `[6]` (ultimate); hero n needs a structure from `tiers[n-1..]`; a dead hero is trained again as a revive (its level and skills, cheaper) |
 | `upkeep[].resources`, `incomeMult` (alias `upkeepResources`) | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower); rules `"upkeepResources": ["gold"]` is the default `resources` of every tier without its own |
-| `resourceNode.maxGatherers` | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
+| `resourceNode.maxGatherers` (alias `maxWorkers`) | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
 | `powerField` / `structure.needsField` | type | `{"id": 0, "radius": 6.5}` on pylons; structures with `needsField` are placed and work only inside an own field |
 | `queueSlots` | type | items produced at once (reactor) |
 | `cost.garrison` | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |

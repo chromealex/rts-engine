@@ -205,7 +205,10 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             }
             w.killsCrew = wj.getFx("killsCrew");
         }
-        if (const Json& rn = tj["resourceNode"]; rn.isObject()) { t.maxGatherers = int(rn.getInt("maxGatherers", 0)); if (t.maxGatherers) any = true; }
+        if (const Json& rn = tj["resourceNode"]; rn.isObject()) {   // "maxWorkers": agent-mech alias
+            t.maxGatherers = int(rn.getInt("maxGatherers", rn.getInt("maxWorkers", 0)));
+            if (t.maxGatherers) any = true;
+        }
         if (const Json& pf = tj["powerField"]; pf.isObject()) {
             any = true;
             t.fieldId = int16_t(pf.getInt("id", 0));
