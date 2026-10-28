@@ -19,7 +19,7 @@ public:
         auto& ws = ed.ws();
         ImGui::TextUnformatted(ws.project.manifest.getStr("name", "(игра не открыта)").c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton(ICON_FOLDER_OPEN " Другая игра…")) ed.showGamePicker();
+        if (ImGui::SmallButton(ICON_FOLDER_OPEN " Другой проект…")) ed.showGamePicker();
         ImGui::SameLine();
         ui::inputString("##f", filter_);
         if (!ws.project.rulesError.empty()) ImGui::TextColored(ImVec4(1, 0.45f, 0.4f, 1), "Правила: %s", ws.project.rulesError.c_str());

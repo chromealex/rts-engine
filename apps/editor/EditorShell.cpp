@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <filesystem>
 #include "Editor.h"
+#include "core/Projects.h"
 #include "EditorUtil.h"
 #include "imgui.h"
 #include "imgui_internal.h" // MenuItemEx / BeginMenuEx: icons in menus
@@ -46,11 +47,17 @@ void Editor::drawMenuBar() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 6));
     ImGui::TextColored(theme_.palette().accent, ICON_CASTLE);
     ImGui::PopStyleVar();
-    if (ImGui::BeginMenu("Игра")) {
-        if (item(ICON_FOLDER_OPEN, "Выбрать / создать игру…")) showPicker_ = true;
-        if (menu(ICON_GAME, "Открыть")) {
-            for (auto& g : ws_.listGames())
-                if (ImGui::MenuItem((g.name + "  (" + g.id + ")").c_str(), nullptr, g.dir == ws_.project.dir)) openGame(g.dir);
+    if (ImGui::BeginMenu("Проект")) {
+        if (item(ICON_PLUS, "Новый проект…")) showProjectHub(1);
+        if (item(ICON_FOLDER_OPEN, "Проекты…")) showProjectHub(0);
+        if (menu(ICON_CLOCK, "Недавние")) {
+            int n = 0;
+            for (auto& pr : recentProjects()) {
+                if (!pr.exists || ++n > 12) continue;
+                if (ImGui::MenuItem(pr.name.c_str(), nullptr, pr.dir == ws_.project.dir)) openGame(pr.dir);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pr.dir.c_str());
+            }
+            if (n == 0) ImGui::TextDisabled("пока пусто");
             ImGui::EndMenu();
         }
         if (item(ICON_REFRESH, "Перечитать правила с диска")) {
@@ -324,62 +331,5 @@ void Editor::drawActivityToasts() {
     }
 }
 
-void Editor::drawGamePicker() {
-    ImGuiIO& io = ImGui::GetIO();
-    static char newId[64] = "mygame", newName[128] = "Моя стратегия";
-    static int tpl = 0;
-    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(std::min(720.f, io.DisplaySize.x - 40), std::min(560.f, io.DisplaySize.y - 40)));
-    ImGui::Begin("Выбор игры", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking);
-    ImGui::TextDisabled("Игры в %s", ws_.gamesDir().c_str());
-    ImGui::BeginChild("##games", ImVec2(0, -150), ImGuiChildFlags_Borders);
-    auto games = ws_.listGames();
-    for (auto& g : games) {
-        ImGui::PushID(g.id.c_str());
-        bool current = g.dir == ws_.project.dir;
-        if (ImGui::Selectable("##g", current, ImGuiSelectableFlags_AllowDoubleClick, ImVec2(0, 40)) && ImGui::IsMouseDoubleClicked(0)) openGame(g.dir);
-        ImGui::SameLine(10);
-        ImGui::BeginGroup();
-        ImGui::TextUnformatted(g.name.c_str());
-        ImGui::TextDisabled("%s · карт: %d", g.id.c_str(), g.maps);
-        ImGui::EndGroup();
-        ImGui::SameLine(ImGui::GetContentRegionAvail().x - 90);
-        if (ImGui::Button("Открыть", ImVec2(90, 0))) openGame(g.dir);
-        ImGui::PopID();
-    }
-    if (games.empty()) ImGui::TextUnformatted("Игр пока нет — создайте первую ниже.");
-    ImGui::EndChild();
-    ImGui::SeparatorText("Новая игра");
-    ImGui::SetNextItemWidth(160);
-    ImGui::InputText("id (папка)", newId, sizeof newId);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(220);
-    ImGui::InputText("Название", newName, sizeof newName);
-    std::vector<std::string> templates{"empty"};
-    for (auto& g : games) templates.push_back(g.id);
-    tpl = std::clamp(tpl, 0, int(templates.size()) - 1);
-    ImGui::SetNextItemWidth(220);
-    if (ImGui::BeginCombo("Шаблон", tpl == 0 ? "Пустая игра" : ("Копия " + templates[size_t(tpl)]).c_str())) {
-        for (size_t i = 0; i < templates.size(); ++i)
-            if (ImGui::Selectable(i == 0 ? "Пустая игра" : ("Копия " + templates[i]).c_str(), tpl == int(i))) tpl = int(i);
-        ImGui::EndCombo();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Создать")) {
-        Json p = Json::object();
-        p.set("id", Json::string(newId));
-        p.set("name", Json::string(newName));
-        p.set("template", Json::string(templates[size_t(tpl)]));
-        Json r = ws_.call("create_game", p);
-        if (r.has("error")) status = r.getStr("error");
-        else { ws_.changes.clear(); reloadRules(); showPicker_ = false; fitScene(); status = r.getStr("summary"); }
-    }
-    if (!status.empty()) ImGui::TextWrapped("%s", status.c_str());
-    if (!ws_.project.dir.empty()) {
-        ImGui::SameLine(ImGui::GetWindowWidth() - 110);
-        if (ImGui::Button("Закрыть", ImVec2(90, 0))) showPicker_ = false;
-    }
-    ImGui::End();
-}
 
 } // namespace rts::editor

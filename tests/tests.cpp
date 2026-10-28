@@ -173,8 +173,8 @@ TEST(command_serialization_roundtrip) {
 }
 
 // ---------------- Generic RTS gameplay ----------------
-static const std::string kSkirmish = std::string(RTS_SOURCE_DIR) + "/games/skirmish";
-static const std::string kMushrooms = std::string(RTS_SOURCE_DIR) + "/games/mushrooms";
+static const std::string kSkirmish = std::string(RTS_SOURCE_DIR) + "/templates/skirmish";
+static const std::string kMushrooms = std::string(RTS_SOURCE_DIR) + "/templates/mushrooms";
 
 static std::unique_ptr<Simulation> makeSim(const std::string& game, const std::string& map, uint64_t seed) {
     SimConfig cfg; cfg.seed = seed;
@@ -623,7 +623,7 @@ namespace {
 i18n::FileReader contentReader(const std::string& game) {
     return [game](const std::string& rel, std::string& out) {
         std::string path = rel.rfind("engine/", 0) == 0 ? std::string(RTS_SOURCE_DIR) + "/engine/assets/" + rel.substr(7)
-                                                         : std::string(RTS_SOURCE_DIR) + "/games/" + game + "/" + rel;
+                                                         : std::string(RTS_SOURCE_DIR) + "/templates/" + game + "/" + rel;
         std::ifstream f(path, std::ios::binary);
         if (!f) return false;
         std::stringstream ss; ss << f.rdbuf(); out = ss.str();
@@ -1094,7 +1094,7 @@ TEST(audio_music_playlists) {
 
 TEST(audio_sample_games_banks_load_cleanly) {
     for (const char* g : {"skirmish", "mushrooms"}) {
-        const std::string dir = std::string("games/") + g + "/";
+        const std::string dir = std::string("templates/") + g + "/";
         Json bank = Json::parse(readSource(dir + "audio.json"));
         game::Rules rules = game::loadRules(Json::parse(readSource(dir + "rules.json")));
         auto a = offlineAudio();
@@ -1123,7 +1123,7 @@ TEST(audio_rts_mapping_warnings) {
 TEST(audio_rts_events_keep_sim_deterministic) {
     // The same bot match with and without sound attached must produce identical checksums, and the
     // attached run must actually produce sounds (combat, deaths, the viewer's notifications).
-    const std::string dir = "games/skirmish/";
+    const std::string dir = "templates/skirmish/";
     Json rulesJson = Json::parse(readSource(dir + "rules.json"));
     Json map = Json::parse(readSource(dir + "maps/valley.json"));
     Json bank = Json::parse(readSource(dir + "audio.json"));
@@ -1916,7 +1916,7 @@ TEST(sample_games_bot_matches_deterministic) {
         {"borderrush", "maps/five_lands.json"}, {"hearthhaul", "maps/green_dale.json"}, {"sporelanes", "maps/spore_field.json"},
         {"spellbunkers", "maps/rune_field.json"}};
     for (auto& g : games) {
-        std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g[0];
+        std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/" + g[0];
         std::vector<Command> cmds;
         uint64_t a = botMatch(dir, g[1], 3, 20 * 60, &cmds), b = botMatch(dir, g[1], 3, 20 * 60);
         bool ok = a == b && !cmds.empty();
@@ -1974,7 +1974,7 @@ TEST(tiles2d_terrain_applied_to_map_idempotent) {
 
 TEST(tiles2d_sample_games_deterministic) {
     for (const char* g : {"tiles2d", "km2d"}) {
-        std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g;
+        std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/" + g;
         Json manifest = Json::parseFile(dir + "/game.json");
         auto run = [&] {
             Json map = Json::parseFile(dir + "/" + manifest["maps"][size_t(0)].getStr("file"));
@@ -2465,7 +2465,7 @@ TEST(models_procedural_modifiers) {
 
 TEST(models_sample_assets_load) {
     using namespace modeltest;
-    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/showcase/models/";
     std::vector<std::string> warn;
     auto golem = loadModel(dir + "golem.glb", diskReader(), &warn);
     CHECK(golem->clips.size() == 6 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
@@ -3077,7 +3077,7 @@ TEST(audio_stinger_sync_and_ducking) {
 }
 
 TEST(audio_music_per_map) {
-    const std::string dir = "games/skirmish/";
+    const std::string dir = "templates/skirmish/";
     Json rulesJson = Json::parse(readSource(dir + "rules.json"));
     game::Rules rules = game::loadRules(rulesJson);
     auto a = offlineAudio();
@@ -3296,7 +3296,7 @@ TEST(fx_offscreen_one_shots_are_not_spawned) {
 
 TEST(fx_sample_games_have_valid_effects) {
     for (std::string g : {"skirmish", "mushrooms"}) {
-        const std::string dir = "games/" + g + "/";
+        const std::string dir = "templates/" + g + "/";
         fx::ParticleSystem ps;
         ps.init(nullptr);
         ps.setFileReader([&](const std::string& p, std::string& out) { out = readSource(dir + p); return !out.empty(); });
@@ -3318,7 +3318,7 @@ TEST(fx_sample_games_have_valid_effects) {
 
 TEST(fx_rts_events_keep_sim_deterministic) {
     // Same bot match with and without effects: identical checksums, and effects actually played.
-    const std::string dir = "games/skirmish/";
+    const std::string dir = "templates/skirmish/";
     Json rulesJson = Json::parse(readSource(dir + "rules.json"));
     Json map = Json::parse(readSource(dir + "maps/valley.json"));
     Json bank = Json::parse(readSource(dir + "fx/fx.json"));
@@ -4167,7 +4167,7 @@ TEST(terrain_incremental_clearance_matches_full) {
 }
 
 TEST(terrain_heightfield_match_is_deterministic) {
-    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/metaltide";
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/metaltide";
     Json rules = Json::parseFile(dir + "/rules.json"), map = Json::parseFile(dir + "/maps/twin_craters.json");
     CHECK(game::loadRules(rules).terrain.heightfield());
     auto run = [&] {
@@ -4679,7 +4679,7 @@ TEST(models_additive_and_blend_space) {
 
 TEST(models_morph_targets_and_weights) {
     using namespace modeltest;
-    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/showcase/models/";
     auto m = loadModel(dir + "slime.glb", diskReader(), nullptr);
     const Primitive& p = m->meshes[0].primitives[0];
     CHECK(p.morphTargets == 2 && p.vertexCount > 0 && p.morphDeltas.size() == size_t(2) * p.vertexCount * 6);
@@ -4698,7 +4698,7 @@ TEST(models_morph_targets_and_weights) {
 
 TEST(models_baked_clips_match_the_pose) {
     using namespace modeltest;
-    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/templates/showcase/models/";
     auto m = loadModel(dir + "golem.glb", diskReader(), nullptr);
     NullDevice dev;
     CHECK(bakeAnimations(dev, *m, 30));
@@ -4906,7 +4906,7 @@ TEST(lighting_type_and_map_data) {
     const auto& cat = L.typeLights(uint16_t(sk.findType("catapult")));
     CHECK(!cat.projectile.on && cat.hit.on);                     // data: "projectileLight": false
     // abilities: one light per ability, colour from what it does (artillery = damage -> orange)
-    const std::string fc = std::string(RTS_SOURCE_DIR) + "/games/frostcrown/rules.json";
+    const std::string fc = std::string(RTS_SOURCE_DIR) + "/templates/frostcrown/rules.json";
     if (std::filesystem::exists(fc)) {
         const game::Rules fr = game::loadRules(Json::parseFile(fc));
         game::RtsLights F;
@@ -6205,7 +6205,7 @@ TEST(mcp_install_patches_configs_as_text) {
 #endif
 
 // ---------------- Planets: surface, world block, orbit layer, transit ----------------
-static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/games/planets";
+static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/templates/planets";
 
 TEST(planet_surface_offsets_and_hash_buckets) {
     using namespace rts::game;

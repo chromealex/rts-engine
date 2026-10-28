@@ -12,3 +12,4 @@ __pycache__/
 
 # logs of the editor, rtsbuild and test scripts
 /logs/
+/Builds/

@@ -45,7 +45,7 @@ jobs:
         run: |
           Xvfb :97 -screen 0 1280x800x24 & sleep 1
           for g in skirmish mushrooms; do
-            DISPLAY=:97 RTS_CONTENT=games/$g RTS_SHADOWS=medium RTS_SCREENSHOT=shot-$g.ppm RTS_EXIT_AFTER_FRAMES=300 \
+            DISPLAY=:97 RTS_CONTENT=templates/$g RTS_SHADOWS=medium RTS_SCREENSHOT=shot-$g.ppm RTS_EXIT_AFTER_FRAMES=300 \
               timeout 300 build/linux-release/RTSGame --map 0 --spectate
           done
           python3 .github/scripts/check-screenshot.py shot-*.ppm
@@ -75,7 +75,7 @@ jobs:
         shell: bash
         run: .github/scripts/headless-checksums.sh build/windows-msvc/Release/rts_headless.exe checksums-windows-msvc.txt
       - name: Package (rtsbuild)
-        run: build/windows-msvc/Release/rtsbuild.exe --project games/skirmish --target windows --out dist
+        run: build/windows-msvc/Release/rtsbuild.exe --project templates/skirmish --target windows --out dist
       - uses: actions/upload-artifact@v4
         with: { name: checksums-windows-msvc, path: checksums-*.txt }
       - uses: actions/upload-artifact@v4
@@ -116,8 +116,8 @@ jobs:
         run: .github/scripts/headless-checksums.sh build/macos/Release/rts_headless checksums-macos-arm64.txt
       - name: Package .app and iOS project (rtsbuild)
         run: |
-          build/macos/Release/rtsbuild --project games/skirmish --target macos --out dist
-          build/macos/Release/rtsbuild --project games/skirmish --target ios --out dist
+          build/macos/Release/rtsbuild --project templates/skirmish --target macos --out dist
+          build/macos/Release/rtsbuild --project templates/skirmish --target ios --out dist
       - uses: actions/upload-artifact@v4
         with: { name: checksums-macos-arm64, path: checksums-*.txt }
       - uses: actions/upload-artifact@v4
@@ -144,7 +144,7 @@ jobs:
           cmake --preset android-arm64 -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_HEADLESS=OFF -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
           cmake --build build/android-arm64
       - name: APK (rtsbuild → Gradle)
-        run: build/host/rtsbuild --project games/skirmish --target android --out dist
+        run: build/host/rtsbuild --project templates/skirmish --target android --out dist
       - uses: actions/upload-artifact@v4
         with: { name: game-android, path: dist/android/*.apk }
       - name: Enable KVM

@@ -19,7 +19,7 @@
 // tools/audiopack): desktop targets use "desktop", ios/android "mobile", web "web"; --audio
 // <profile> forces one, --audio off ships the files as they are.
 //
-// Outputs (default <project>/../dist/<target>):
+// Outputs (default <project>/Builds/<target>):
 //   macos    <Name>.app                     (universal arm64+x86_64, ad-hoc signed)
 //   ios      Xcode project (self-contained export) + simulator build check
 //   android  Gradle project (self-contained export) + APK when the Android SDK is found
@@ -397,6 +397,7 @@ fs::path contentPack(Options& o) {
     rts::pack::PackWriter w;
     rts::pack::IgnoreRules rules;
     rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
+    for (const char* d : {"Builds/", "Logs/", "logs/", "dist/", ".rtsengine/"}) rules.add(d);   // project outputs and editor state
     std::vector<std::string> notes;
     addImports(o, w, rules, notes);
     // Game folders produced by importers (tools/importers) carry converted third-party data.
@@ -946,7 +947,7 @@ int main(int argc, char** argv) {
     if (ec) die("папка проекта не найдена");
     o.engine = fs::canonical(o.engine, ec);
     if (ec || !fs::exists(o.engine / "engine" / "core" / "Fixed.h")) die("папка движка не найдена: " + o.engine.string());
-    if (o.out.empty()) o.out = o.project.parent_path() / "dist";
+    if (o.out.empty()) o.out = o.project / "Builds";   // inside the project (like Unity); never packed
     o.out = fs::absolute(o.out);
     if (o.config != "Debug" && o.config != "Release") die("--config должен быть Debug или Release");
 

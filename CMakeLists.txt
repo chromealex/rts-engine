@@ -36,7 +36,14 @@ option(RTS_BUILD_TOOLS "Build rtsbuild packager" ${RTS_DESKTOP})
 option(RTS_BUILD_SERVER "Build the network game server and the network bot client" ${RTS_DESKTOP})
 
 # Game being built (rtsbuild overrides these).
-set(RTS_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/games/skirmish" CACHE PATH "Game content folder (contains game.json)")
+set(RTS_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/templates/skirmish" CACHE PATH "Game content folder (contains game.json)")
+# build folders configured before games/ became templates/ keep the old cached path
+if(NOT EXISTS "${RTS_CONTENT_DIR}/game.json" AND RTS_CONTENT_DIR MATCHES "/games/")
+    string(REPLACE "/games/" "/templates/" _rts_content "${RTS_CONTENT_DIR}")
+    if(EXISTS "${_rts_content}/game.json")
+        set(RTS_CONTENT_DIR "${_rts_content}" CACHE PATH "Game content folder (contains game.json)" FORCE)
+    endif()
+endif()
 set(RTS_ENGINE_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/engine/assets")
 set(RTS_GAME_NAME "RTSEngine Game" CACHE STRING "Display name")
 set(RTS_GAME_ID "com.rtsengine.game" CACHE STRING "Bundle / application id")
@@ -484,7 +491,7 @@ endif()
 
 if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
-    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp
+    add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp apps/editor/core/Projects.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -496,7 +503,7 @@ endif()
 if(RTS_BUILD_EDITOR)
     # windows register themselves (RTS_EDITOR_WINDOW): any .cpp in apps/editor/windows is part of the editor
     file(GLOB RTS_EDITOR_WINDOWS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/windows/*.cpp)
-    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp apps/editor/EditorTheme.cpp
+    add_executable(rts_editor apps/editor/main.cpp apps/editor/Editor.cpp apps/editor/EditorShell.cpp apps/editor/EditorAgent.cpp apps/editor/EditorPlayOps.cpp apps/editor/EditorTheme.cpp apps/editor/EditorProjects.cpp
                    ${RTS_EDITOR_WINDOWS} $<TARGET_OBJECTS:rts_runtime>)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_link_libraries(rts_editor PRIVATE rts_game_fx)
@@ -596,7 +603,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # In-game UI (UI agent): RmlUi (HTML/CSS) rendered through the RHI, fonts via stb_truetype.
-# Documents live in engine/assets/ui; a game overrides any of them with games/<id>/ui/<same name>.
+# Documents live in engine/assets/ui; a game overrides any of them with templates/<id>/ui/<same name>.
 # ---------------------------------------------------------------------------
 file(GLOB RTS_RMLUI_SRC CONFIGURE_DEPENDS
     third_party/rmlui/Source/Core/*.cpp third_party/rmlui/Source/Core/Elements/*.cpp

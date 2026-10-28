@@ -2,7 +2,7 @@
 
 Written by MAIN as stage 0 for the agents `agent-planet-sim`, `agent-planet-render`, `agent-terrain-gen`.
 Everything here is additive: a map without `world` / `generate` loads, plays and looks exactly as before
-(checksums of every game in `games/` must not change).
+(checksums of every game in `templates/` must not change).
 
 ## 1. Bodies
 

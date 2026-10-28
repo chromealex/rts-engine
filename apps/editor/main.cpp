@@ -70,7 +70,7 @@ int rtsMain(int argc, char** argv) {
         else if (a == "--select") g_demoSelect = std::atoi(argv[++i]); // used by automated screenshots
     }
     std::error_code ec;
-    if (!game.empty()) opt.projectDir = opt.engineDir + "/games/" + game;
+    if (!game.empty()) opt.projectDir = opt.engineDir + "/templates/" + game;
     if (!opt.projectDir.empty()) opt.projectDir = fs::absolute(opt.projectDir, ec).lexically_normal().string();
     if (!opt.projectDir.empty() && (opt.projectDir.back() == '/' || opt.projectDir.back() == '\\')) opt.projectDir.pop_back();
     if (!opt.openMap.empty()) opt.openMap = fs::absolute(opt.openMap, ec).string();
@@ -100,7 +100,9 @@ int rtsMain(int argc, char** argv) {
     };
     cb.frame = [](gfx::Device& d, double dt) {
         static int frames = 0;
-        if (++frames == 5 && !g_demoWindow.empty()) g_editor->focusWindow(g_demoWindow);   // after the dock layout exists
+        if (++frames == 5 && !g_demoWindow.empty()) {
+            if (g_demoWindow == "hub-new") g_editor->showProjectHub(1); else g_editor->focusWindow(g_demoWindow);
+        }   // after the dock layout exists
         g_editor->frame(d, dt);
     };
     cb.event = [](const platform::Event& e) { g_editor->event(e); };
