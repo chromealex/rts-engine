@@ -386,7 +386,7 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
     modules/rts/view/RtsFog.cpp
-    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
+    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
 # visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
 add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
 target_link_libraries(rts_terrain_detail PUBLIC rts_game)
@@ -659,7 +659,7 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_link_libraries(rts_tests PRIVATE rts_terrain_detail)   # terrain detail surface tests (agent-terrain)
-    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
+    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
     if(TARGET rts_modelconv)   # model conversion step of packs (models agent)
