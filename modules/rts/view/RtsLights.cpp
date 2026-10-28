@@ -59,6 +59,10 @@ void RtsLights::init(const Rules& rules) {
             L.halo = halo(g, L.radius * 0.2f);
             L.whileBuilding = g.getBool("whileBuilding", false);
         }
+        if (const Json& c = v["contactShadow"]; c.isNumber()) L.contact = std::clamp(float(c.fx().toDouble()), 0.0f, 1.0f);
+        else if (!c.isNull() && !c.boolean(true)) L.contact = 0;
+        L.contactBox = t.structure && t.resourceNode < 0 && t.footprintW * t.footprintH > 1;
+        if (v.has("contactShape")) L.contactBox = v.getStr("contactShape") == "box";
         bool ranged = false, splash = false;
         for (const WeaponDef& w : t.weapons) {
             ranged |= w.projectileSpeed.raw > 0 || w.range > Fixed::fromInt(2);
@@ -236,10 +240,39 @@ void RtsLights::emitActive(LightSystem& ls, double time) {
     active_.resize(w);
 }
 
+void RtsLights::addContactShadows(Renderer3D& r, const RtsScene& s, const MapGrid& grid, const RtsView& view) {
+    LightSystem& ls = r.lights;
+    if (!ls.contactShadows()) return;
+    // Real sun shadows already ground the units on Medium/High; without them (Off/Low) a soft blob
+    // does that job. Buildings always get an AO skirt: shadow maps don't give ambient occlusion.
+    const ShadowQuality sq = r.shadowQuality();
+    const float unitK = sq == ShadowQuality::Off ? 0.5f : sq == ShadowQuality::Low ? 0.38f : 0.2f;
+    const float buildK = sq == ShadowQuality::Off ? 0.45f : 0.3f;
+    for (const SceneObject& o : s.objects) {
+        if (!o.visible || o.isProjectile || o.type >= types_.size()) continue;
+        const UnitType& t = rules_->types[o.type];
+        if (t.layer & kLayerAir) continue; // flyers have their own height blob
+        const float c = types_[o.type].contact;
+        if (c == 0) continue;
+        const float scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());
+        const float3 g{o.pos.x, view.heightAt(grid, o.pos.x, o.pos.z), o.pos.z};
+        if (t.structure) {
+            const float k = (c < 0 ? buildK : c) * std::clamp(o.build, 0.3f, 1.0f);
+            const bool box = types_[o.type].contactBox;
+            const float pad = box ? 0.35f : 0.55f;   // an ellipse needs more room to cover the corners
+            ls.addContactShadow(g, float(t.footprintW) * 0.5f * scale + pad, float(t.footprintH) * 0.5f * scale + pad, k, box, 0.45f);
+        } else {
+            const float rad = std::max(float(t.radius.toDouble()) * 1.3f, 0.22f) * scale;
+            ls.addContactShadow(g, rad, rad, c < 0 ? unitK : c);
+        }
+    }
+}
+
 void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
     if (types_.empty()) return;
     updateSky(r.lighting, s.seconds);
     LightSystem& ls = r.lights;
+    addContactShadows(r, s, grid, view);
     ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
     {   // clouds drift with the wind in game time; a storm covers the sky
         const float clouds = preview_ ? previewClouds_ : clouds_, storm = preview_ ? previewStorm_ : storm_;

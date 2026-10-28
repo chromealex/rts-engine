@@ -67,8 +67,19 @@ bool LightSystem::init(gfx::Device& dev) {
     haloPipe_ = dev.createPipeline(hp);
     gfx::BufferDesc hb; hb.usage = gfx::Usage::Dynamic; hb.size = 256 * 6 * sizeof(HaloVertex); hb.label = "halos";
     haloVB_ = dev.createBuffer(hb);
+    gfx::ShaderDesc ds = hs;
+    ds.glslFragment = shaders::kDecalFS; ds.msl = shaders::kDecalMSL; ds.label = "contact shadow";
+    decalShader_ = dev.createShader(ds);
+    if (!decalShader_.valid()) return false;
+    gfx::PipelineDesc dp = hp;
+    dp.shader = decalShader_;
+    dp.blend = gfx::BlendMode::Alpha;
+    dp.label = "contact shadow";
+    decalPipe_ = dev.createPipeline(dp);
+    gfx::BufferDesc db = hb; db.label = "contact shadows";
+    decalVB_ = dev.createBuffer(db);
     setQuality(quality_);
-    return pipe_.valid() && vb_.valid() && black_.valid() && haloPipe_.valid() && haloVB_.valid();
+    return pipe_.valid() && vb_.valid() && black_.valid() && haloPipe_.valid() && haloVB_.valid() && decalPipe_.valid() && decalVB_.valid();
 }
 
 void LightSystem::createMap(int size) {
@@ -103,6 +114,9 @@ void LightSystem::shutdown() {
     dev_->destroyTexture(black_);
     dev_->destroyBuffer(vb_);
     dev_->destroyBuffer(haloVB_);
+    dev_->destroyBuffer(decalVB_);
+    dev_->destroyPipeline(decalPipe_);
+    dev_->destroyShader(decalShader_);
     dev_->destroyPipeline(pipe_);
     dev_->destroyPipeline(haloPipe_);
     dev_->destroyShader(shader_);
@@ -112,6 +126,7 @@ void LightSystem::shutdown() {
 
 void LightSystem::begin(const RTSCamera& cam, float aspect) {
     lights_.clear();
+    decals_.clear();
     focus_ = cam.target;
     {
         const mat4 v = cam.view();   // rows 0/1 of the view matrix: camera right / up in world space
@@ -225,7 +240,22 @@ void LightSystem::bind(int uniformSlot, int textureSlot) {
     dev_->setTexture(textureSlot, useMap ? map_ : black_);
 }
 
+void LightSystem::addContactShadow(float3 c, float hx, float hz, float strength, bool box, float softness) {
+    if (!contact_ || strength <= 0 || decals_.size() >= kMaxLights * 6) return;
+    const float y = c.y + 0.025f, s = box ? 1.0f : 0.0f;
+    const HaloVertex v0{c.x - hx, y, c.z - hz, -1, -1, s, softness, 0, strength}, v1{c.x + hx, y, c.z - hz, 1, -1, s, softness, 0, strength},
+                     v2{c.x + hx, y, c.z + hz, 1, 1, s, softness, 0, strength}, v3{c.x - hx, y, c.z + hz, -1, 1, s, softness, 0, strength};
+    decals_.insert(decals_.end(), {v0, v1, v2, v0, v2, v3});
+}
+
 void LightSystem::drawHalos(const mat4& viewProj) {
+    if (dev_ && !decals_.empty() && decalPipe_.valid()) {
+        dev_->setPipeline(decalPipe_);
+        dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);
+        dev_->updateBuffer(decalVB_, decals_.data(), decals_.size() * sizeof(HaloVertex));
+        dev_->setVertexBuffer(decalVB_);
+        dev_->draw(uint32_t(decals_.size()));
+    }
     if (!dev_ || quality_ == LightQuality::Off || !haloPipe_.valid()) return;
     halos_.clear();
     for (const PointLight& l : lights_) {
