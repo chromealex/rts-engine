@@ -1,0 +1,50 @@
+// "Hearth and Haul" — Knights and Merchants-like: goods live in buildings, serfs carry them along roads;
+// woodcutter -> sawmill makes planks, quarry gives stone, farm -> mill -> bakery makes bread, the armoury
+// turns planks into swords; construction sites wait for their planks and stone; soldiers are recruits plus
+// a sword, and they eat bread at the inn or slowly starve.
+{
+  "victory": "noStructures",
+  "storage": "buildings",
+  "roadNetwork": {"cost": {"stone": 0.2}, "speed": 1.5},
+  "supplyCap": 60,
+  "resources": {
+    "coins": {"name": "Монеты", "global": true, "start": 500},
+    "wood": {"name": "Брёвна"}, "planks": {"name": "Доски"}, "stone": {"name": "Камень"},
+    "grain": {"name": "Зерно"}, "flour": {"name": "Мука"}, "bread": {"name": "Хлеб"}, "sword": {"name": "Мечи"}
+  },
+  "types": {
+    "storehouse": {"name": "Склад", "structure": {"footprint": [3, 3]}, "storehouse": {"capacity": 3000}, "health": {"max": 2500, "armor": 3}, "sight": 9,
+                   "supply": 10, "income": {"coins": 2}, "weapons": [{"range": 5, "damage": 8, "cooldown": 1.5, "projectileSpeed": 14}], "view": {"shape": "hall"}},
+    "school": {"name": "Школа", "structure": {"footprint": [2, 2]}, "health": {"max": 800}, "produces": ["serf", "labourer", "recruit"], "supply": 10, "view": {"shape": "house"}},
+    "woodcutter": {"name": "Лесоруб", "structure": {"footprint": [2, 2]}, "health": {"max": 500}, "cost": {"planks": 3, "stone": 2, "time": 15},
+                   "recipe": {"out": {"wood": 2}, "time": 8, "from": "wood", "radius": 16}, "view": {"shape": "camp"}},
+    "sawmill": {"name": "Лесопилка", "structure": {"footprint": [2, 2]}, "health": {"max": 500}, "cost": {"planks": 4, "stone": 3, "time": 15},
+                "recipe": {"in": {"wood": 1}, "out": {"planks": 2}, "time": 6}, "view": {"shape": "mill"}},
+    "quarry": {"name": "Каменоломня", "structure": {"footprint": [2, 2]}, "health": {"max": 500}, "cost": {"planks": 3, "time": 15},
+               "recipe": {"out": {"stone": 2}, "time": 8, "from": "stone", "radius": 20}, "view": {"shape": "camp"}},
+    "farm": {"name": "Ферма", "structure": {"footprint": [3, 3]}, "health": {"max": 500}, "cost": {"planks": 3, "stone": 2, "time": 15},
+             "recipe": {"out": {"grain": 2}, "time": 10}, "view": {"shape": "farm"}},
+    "mill": {"name": "Мельница", "structure": {"footprint": [2, 2]}, "health": {"max": 500}, "cost": {"planks": 4, "stone": 3, "time": 15},
+             "recipe": {"in": {"grain": 1}, "out": {"flour": 1}, "time": 6}, "view": {"shape": "mill"}},
+    "bakery": {"name": "Пекарня", "structure": {"footprint": [2, 2]}, "health": {"max": 500}, "cost": {"planks": 4, "stone": 4, "time": 15},
+               "recipe": {"in": {"flour": 1}, "out": {"bread": 2}, "time": 6}, "view": {"shape": "house"}},
+    "armoury": {"name": "Оружейная", "structure": {"footprint": [2, 2]}, "health": {"max": 600}, "cost": {"planks": 5, "stone": 5, "time": 20},
+                "recipe": {"in": {"planks": 2}, "out": {"sword": 1}, "time": 10}, "view": {"shape": "workshop"}},
+    "house": {"name": "Дом", "structure": {"footprint": [2, 2]}, "health": {"max": 400}, "cost": {"planks": 2, "stone": 1, "time": 10}, "supply": 8, "view": {"shape": "house"}},
+    "inn": {"name": "Таверна", "structure": {"footprint": [2, 2]}, "health": {"max": 600}, "cost": {"planks": 4, "stone": 4, "time": 15}, "view": {"shape": "house"}},
+    "barracks": {"name": "Казармы", "structure": {"footprint": [3, 3]}, "health": {"max": 1200, "armor": 2}, "cost": {"planks": 6, "stone": 6, "time": 25},
+                 "produces": ["soldier"], "view": {"shape": "barracks"}},
+    "serf": {"name": "Носильщик", "worker": true, "health": {"max": 40}, "move": {"speed": 2.8, "radius": 0.3}, "sight": 5, "carrier": {"capacity": 2},
+             "cost": {"coins": 40, "time": 8, "supply": 1}, "view": {"shape": "worker"}},
+    "labourer": {"name": "Строитель", "health": {"max": 50}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 5, "cost": {"coins": 50, "time": 8, "supply": 1},
+                 "builds": ["house", "woodcutter", "sawmill", "quarry", "farm", "mill", "bakery", "armoury", "inn", "barracks"], "buildPower": 2, "view": {"shape": "worker"}},
+    "recruit": {"name": "Новобранец", "health": {"max": 40}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 5, "cost": {"coins": 30, "time": 6, "supply": 1}, "view": {"shape": "worker"}},
+    "militia": {"name": "Ополченец", "health": {"max": 90}, "move": {"speed": 2.6, "radius": 0.35}, "sight": 7, "weapons": [{"range": 0.5, "damage": 8, "cooldown": 1.2}],
+                "cost": {"coins": 60, "time": 10, "supply": 1}, "view": {"shape": "soldier"}},
+    "soldier": {"name": "Мечник", "health": {"max": 200, "armor": 2}, "move": {"speed": 2.5, "radius": 0.4}, "sight": 8, "weapons": [{"range": 0.6, "damage": 16, "cooldown": 1.1}],
+                "trainFrom": "recruit", "cost": {"sword": 1, "time": 8, "supply": 1},
+                "needs": {"hunger": {"interval": 120, "at": "inn", "time": 3, "cost": {"bread": 1}, "starve": 0.5}}, "view": {"shape": "soldier"}},
+    "tree": {"name": "Дерево", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 60}, "view": {"shape": "tree"}},
+    "rock": {"name": "Скала", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "stone", "amount": 400}, "view": {"shape": "rock"}}
+  }
+}
