@@ -39,8 +39,8 @@ gallery, `--start T --fixed-dt 0.016` make screenshots reproducible.
 
 In the editor, **Окна → Models** shows the selected type rendered by the view (portrait), its
 clips, materials, variants and nodes (the names to use in `procedural`, `attach`, `fx`, `muzzle`)
-and the warnings of its view block. Model files of the open game are watched: saving a `.glb` /
-`.gltf` / `.obj` / `.fbx` reloads the views. Agents get the same data through the MCP operation
+and the warnings of its view block. Model files of the open game are watched: saving any model file
+reloads the views (converted formats are re-converted first, see below). Agents get the same data through the MCP operation
 `model_info` (`{"type": "footman"}`).
 
 ## Formats
@@ -76,6 +76,41 @@ The parser (`engine/render/TextureCodec.h`) keeps the raw blocks of every mip in
 `Image::compressed` for direct GPU upload; until the RHI uploads them, level 0 is also decoded on
 the CPU into `Image::rgba`, so KTX2 textures already work everywhere, only uncompressed in VRAM.
 ASTC has no CPU decoder yet: ASTC files are skipped with a warning until the GPU path lands.
+
+### Converted formats (`modelconv`)
+
+Everything else that [assimp](https://github.com/assimp/assimp) imports — Blender `.blend` (up to
+2.7x), LightWave `.lwo` / `.lws` / `.lxo`, DirectX `.x`, MilkShape `.ms3d`, Quake `.md2` / `.md3` /
+`.md5mesh`, Valve `.smd`, Blitz3D `.b3d`, AC3D `.ac`, 3ds Max `.ase`, `.3mf`, `.off`, `.cob`, `.iqm`,
+`.irr`, `.ogex`, `.x3d`, `.pmx`, `.vrm` and more (`modelconv --formats` lists them) — is converted on
+the host into a glTF binary **sidecar** next to the source:
+
+```
+games/mygame/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
+games/mygame/models/ship.lwo.glb   <- what the game loads
+```
+
+`render::loadModel` reads `<path>.glb` for any path whose format the runtime doesn't read, so
+`rules.json` keeps the original name and the source stays the file you edit. Who converts:
+
+- **the editor**: when a type uses such a model, and every time the file is saved (Models window,
+  the same watcher as hot reload); the console shows `сконвертирована модель …` or the error;
+- **rtsbuild**: every build converts the game's convertible models that have no sidecar yet, ships
+  only the `.glb` and leaves the sources out of the pack (`модель models/ship.lwo: converted to …`);
+- **by hand / agents**: `modelconv models/ship.lwo` (one file; `--json` for scripts and MCP),
+  `modelconv --project games/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
+
+The converter triangulates, generates missing normals, keeps 4 bone weights per vertex, names
+unnamed clips (`Default`, `Clip1`, …), and rewrites texture paths from the authoring machine
+(`C:\art\ship.png`) to the file next to the model; textures are not embedded, they ship as they are
+(PNG, JPEG, TGA, BMP, KTX2, DDS). Meshes whose bones are missing from the hierarchy are exported
+unskinned (warning). Files assimp can't read are reported (`modelconv: models/old.blend: …`), never
+a crash: on Linux and macOS each conversion runs in a child process.
+
+`modelconv` needs assimp (BSD-3): configure the tools with `-DRTS_ASSIMP=ON` — an installed assimp
+(`find_package`) is used, otherwise v5.4.3 is downloaded from GitHub once (`RTS_FETCH_ASSIMP`).
+Without it (the default) the tools still build: sidecars you already have are used and packed, models
+without one are reported by rtsbuild. The game itself never links assimp.
 
 Conventions: Y up, glTF assets face +Z (`"forward"` changes it), one world unit = one map cell. Model
 files are read through the content system (loose files, `.rpak` packs, Android assets, web preload),
