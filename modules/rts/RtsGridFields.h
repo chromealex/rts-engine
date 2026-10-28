@@ -81,8 +81,8 @@ public:
     bool blocksVision() const { return blocksVision_; }
     bool hasSpeed() const { return hasSpeed_; }
     Fixed speedMul(Simulation& sim, Vec3 pos, uint8_t owner) const;   // multiplier of speed effects at pos
-    // vision: raise occluder heights (1/64 units, same grid as visionOcc) / reveal cells to players
-    void occlude(Simulation& sim, std::vector<int64_t>& occ, const std::vector<int64_t>& base) const;
+    // vision: occluders over the map cells / reveal cells to players
+    void visionBlockers(Simulation& sim, const std::function<void(int x, int y, int64_t h)>& raise) const;   // h: 1/64 units
     void reveal(Simulation& sim, const std::function<void(uint8_t, size_t)>& see) const;
     void applyEffect(Simulation& sim, const EffectDef& e, const EffectCtx& ctx);   // EffectKind::Field
 

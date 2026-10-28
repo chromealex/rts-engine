@@ -81,7 +81,6 @@ void MapGrid::init(int width, int h_) {
     room.assign(n, -1);
     clearance.assign(n, 0);
     clearanceDirty = true;
-    ++pathVersion_;
     soft.assign(n, 0);
     softCells.clear();
 }
@@ -122,7 +121,6 @@ void MapGrid::enableHeightfield(Fixed levelHeight) {
             level[size_t(index(x, y))] = int8_t(std::clamp(lv, 0, 9));
         }
     clearanceDirty = true;
-    ++pathVersion_;
 }
 
 Fixed MapGrid::cellHeight(int x, int y) const {
@@ -220,7 +218,6 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
     for (int y = y0; y < y0 + fh; ++y)
         for (int x = x0; x < x0 + fw; ++x)
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
-    ++pathVersion_;
     // clearance is capped at 3, so only cells within 3 of the footprint change: patch them (same values as a
     // full recompute) instead of a whole-map pass on the next path query
     if (surf) clearanceDirty = true; // planet cells: rows are not geometric neighbours across seams
@@ -240,7 +237,6 @@ void MapGrid::cellChanged(int x, int y) {
     clearanceDirty = true;
     ++flowStamp_;
     if (inside(x, y)) flowTouch(index(x, y));
-    ++pathVersion_;
     if (surf && inside(x, y)) markSphereDirty(index(x, y));
     for (auto& G : hpa_)
         if (inside(x, y)) { G.dirty[size_t((y / HpaGraph::kC) * G.cw + x / HpaGraph::kC)] = 1; G.anyDirty = true; }
@@ -343,9 +339,6 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
 
     std::vector<int> cells;
     bool found = false, routed = false;
-    // agent-mech BA: long ground trips follow the goal's flow field (one Dijkstra per goal cell for a whole army)
-    if (flowFields && goalOk && !pathSoft_ && (layer & 1) && std::max(std::abs(gx - sx), std::abs(gy - sy)) >= flowMinCells)
-        routed = found = flowCells(sx, sy, gx, gy, layer, cells);
     // long trips on big maps: HPA* route refined with A* (plain A* would run out of nodes)
     if (!routed && bigMap() && goalOk && std::max(std::abs(gx - sx), std::abs(gy - sy)) > 2 * HpaGraph::kC) {
         routed = found = hpaPath(sx, sy, gx, gy, layer, cells);

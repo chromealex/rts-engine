@@ -190,6 +190,7 @@ void GameClient::applyLanguage(const std::string& tag, bool save) {
     }
     if (!netMaps_.empty()) describeNetMaps(); // localized titles
     ui_.setKeyboardLanguage(loc_.language());
+    luaEmit("language", Json::string(loc_.language()));
 }
 
 void GameClient::shutdown() {
@@ -425,7 +426,10 @@ void GameClient::event(const Event& e) {
     // mobile apps go quiet in the background; desktop keeps playing when the window loses focus
     if (e.type == EventType::FocusLost && platform::isTouchDevice()) audio_.setPaused(true);
     if (e.type == EventType::FocusGained) audio_.setPaused(false);
+    if (e.type == EventType::Resized) luaEmit("resize", Json());   // UI scripts: safe area, layout
     if (howtoOpen_ && e.type == EventType::KeyDown && e.key == Key::Escape) { howtoOpen_ = false; return; }
+    // the game's own screens (ui/lib/meta.lua): Esc / Android back goes through ui.back()
+    if (screen_ == Screen::Menu && !engineMenu_ && e.type == EventType::KeyDown && e.key == Key::Escape && !e.repeat) { luaEmit("back", Json()); return; }
     if (screen_ == Screen::Paused && e.type == EventType::KeyDown && e.key == Key::Escape && !uiWants) { setScreen(Screen::Playing); return; }
     if (screen_ != Screen::Playing || !sim_) return;
     if (planet() && planetCameraEvent(e, uiWants)) return;   // orbit camera (ClientPlanet.cpp)
@@ -741,6 +745,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         markers_.erase(std::remove_if(markers_.begin(), markers_.end(), [&](auto& m) { return m.second < time_; }), markers_.end());
     }
 
+    luaTick(dt);   // game.on("update", fn) in UI scripts
     updateAudio(dt);
     overlay_.newFrame(dt);
     updateUi();
@@ -825,10 +830,16 @@ int rtsMain(int argc, char** argv) {
     cb.event = [](const Event& e) { boot.event(e); };
     cb.shutdown = [] { boot.shutdown(); };
     // --howto: open "How to play"; --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
+    std::string previewScreen, previewParams, previewProfile, previewLua;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
         if (a == "--howto") g_client->showHowto();
+        // --ui-screen name [--ui-params json] [--ui-profile json] [--ui-lua code]: one screen of the game (MCP ui_preview)
+        if (a == "--ui-screen" && i + 1 < argc) previewScreen = argv[++i];
+        if (a == "--ui-params" && i + 1 < argc) previewParams = argv[++i];
+        if (a == "--ui-profile" && i + 1 < argc) previewProfile = argv[++i];
+        if (a == "--ui-lua" && i + 1 < argc) previewLua = argv[++i];
         if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);
         // --size WxH: window size on desktops (e.g. 540x960 to look at a portrait game)
         if (a == "--size" && i + 1 < argc) {
@@ -837,12 +848,21 @@ int rtsMain(int argc, char** argv) {
         }
         if (a == "--map" && i + 1 < argc) autostartMap = size_t(std::stoul(argv[++i]));
     }
+    if (!previewScreen.empty()) {   // Lua long strings: the JSON goes in verbatim
+        auto lng = [](const std::string& t) { return "[==[" + t + "]==]"; };
+        std::string code;
+        if (!previewProfile.empty()) code += "profile.merge(assert(game.decode(" + lng(previewProfile) + ")))\n";
+        code += "ui.preview(" + lng(previewScreen) + ", " + (previewParams.empty() ? std::string("{}") : "assert(game.decode(" + lng(previewParams) + "))") + ")\n";
+        code += previewLua;
+        g_client->previewScreen(code);
+    }
     // RTS_SPLASH=off: load in the init callback (old behaviour); full: the whole splash even with --map
     ClientBoot::Mode mode = autostartMap != size_t(-1) ? ClientBoot::Mode::LoadingOnly : ClientBoot::Mode::Full;
     if (const char* s = std::getenv("RTS_SPLASH")) {
         if (std::string(s) == "off") mode = ClientBoot::Mode::Off;
         else if (std::string(s) == "full") mode = ClientBoot::Mode::Full;
     }
+    if (!previewScreen.empty()) mode = ClientBoot::Mode::Off;   // previews show the screen at once
     cb.init = [mode](gfx::Device& d) {
         boot.init(d, *g_client, mode, [] { if (autostartMap != size_t(-1)) g_client->autostart(autostartMap); });
     };

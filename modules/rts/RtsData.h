@@ -73,6 +73,11 @@ enum Layer : uint8_t { kLayerGround = 1, kLayerAir = 2, kLayerNaval = 4, kLayerS
 // Can a weapon with these target layers hit a unit of `layer`? Orbit units only by weapons listing "orbit".
 inline bool layerHit(uint8_t targets, uint8_t layer) { return (layer & kLayerOrbit) ? (targets & kLayerOrbit) != 0 : (targets & layer) != 0; }
 
+// Armor model (rules "armor" / alias "armorModel"): one damage pipeline for every game (RtsOriginals.cpp mitigate).
+enum class ArmorModel : uint8_t { Subtract = 0, Percent = 1, Classes = 2 };
+constexpr uint16_t kDamagePure = 0xFFFF;   // damage type: no damage table; in the classes model armor is already applied
+struct ClassAttack { uint16_t cls = 0; Fixed amount{}; };
+
 struct WeaponDef {
     std::string id;
     Fixed range = Fixed::fromInt(1);
@@ -89,6 +94,7 @@ struct WeaponDef {
     uint8_t armorClass = 0;             // 0: armor, 1: armor2 (pierce)
     std::vector<std::pair<uint64_t, Fixed>> bonus; // extra damage vs targets with any of these tags (AoE / SC2 bonuses)
     Fixed killsCrew{};                  // chance per hit to kill the crew of a crewed target (Z snipers)
+    std::vector<ClassAttack> attacks;   // classes model: class attacks (AoE II: melee 6, cavalry +15)
 };
 
 // ------------------------------------------------------------------ abilities and effects
@@ -278,13 +284,18 @@ struct UnitType {
     Fixed autoTrainInterval = Fixed::fromInt(5);
     // ---- fidelity mechanics (RtsOriginals.cpp)
     Fixed armor2{};                            // second armor class (pierce)
+    std::vector<Fixed> classArmors;            // classes model: armor per class (missing = 0)
+    uint64_t classMask = 0;                    // classes it has (bonus classes apply only when present)
     Fixed shieldMax{}, shieldRegen{}, shieldDelay = Fixed::fromInt(10), shieldArmor{}; // StarCraft shields
     int maxGatherers = 0;                      // resource node: workers harvesting at once (WC3 mine 5, SC patch 1)
     int16_t fieldId = -1;                      // provides a power field (pylon) of this id
     Fixed fieldRadius{};
     int16_t needsField = -1;                   // structure works / may be placed only inside an own field
     int queueSlots = 1;                        // items produced in parallel (reactor)
-    uint16_t crew = kNoType;                   // vehicle / gun manned by this unit type (Z drivers)
+    bool crewed = false;                       // vehicle / gun with a crew: killsCrew empties it (owner 0) until manned again
+    uint16_t crew = kNoType;                   // ... manned by this unit type (Z drivers; informational)
+    bool crewOpen = false;                     // "crew": {"accepts": tags} / true: units with these tags (any mobile unit
+    uint64_t crewAccepts = 0;                  //   without tags) man it even without "crews"
     bool crews = false;                        // this unit can man empty crewed vehicles
     uint64_t infectBy = 0;                     // killed by a unit with any of these tags: becomes `infectSpawn`
     uint16_t infectSpawn = kNoType;
@@ -337,9 +348,13 @@ struct UpkeepTier {
     Fixed incomeMult = Fixed::fromInt(1);      // multiplier on per-second income (CoH manpower upkeep)
 };
 
-// Damage model (rules "armor"): subtract (StarCraft, AoE) or percent (Warcraft III).
+// Damage model (rules "armor", alias "armorModel"): subtract (StarCraft), percent (Warcraft III) or classes (AoE II).
 struct ArmorRules {
-    bool percent = false;
+    ArmorModel model = ArmorModel::Subtract;
+    bool negativeExp = false;                  // percent: negative armor amplifies by 2 - (1 - k)^-a (exact WC3) instead of 1 + min(-a*k, 0.71)
+    bool plainFloor = false;                   // no armor rules at all: the original floor raw / 5 (no clamp at minDamage)
+    std::vector<std::string> classes;          // classes model: class names; the first `baseClasses` always apply
+    int baseClasses = 0;
     Fixed perPoint = Fixed::fromRatio(6, 100); // percent: reduction = a*k / (1 + a*k); negative armor amplifies
     Fixed minDamage{};                         // subtract: at least this much
     Fixed minShare = Fixed::fromRatio(1, 5);   // subtract: at least this share of the raw damage
@@ -467,6 +482,7 @@ struct RoadNetworkRules {
 // rules movement.flowField: shared flow fields instead of one path search per unit (RtsFlowField.cpp)
 struct FlowFieldRules {
     int minGroup = 0;                 // move / attack-move / patrol orders of >= this many units use a field (0 = never)
+    int minCells = 0;                 // ... for units at least this many cells (Chebyshev) from the goal; nearer ones keep A*
     bool waves = false;               // scripted and lane waves march along fields
     Fixed spread = Fixed::fromRatio(4, 10);   // goal area radius = 0.3 + spread * sqrt(units) world units
     int maxFields = 64;

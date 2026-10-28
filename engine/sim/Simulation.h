@@ -117,6 +117,12 @@ public:
     bool deserialize(const std::string& bytes, std::string* err = nullptr);
 
     void addSystem(std::string name, SystemFn fn) { systems_.push_back({std::move(name), std::move(fn)}); }
+    // Profiling (tools only, never affects the simulation): with a clock set, step() adds each system's
+    // wall time (clock units, e.g. ns) to systemTime(i).
+    void setProfileClock(int64_t (*clock)()) { profClock_ = clock; profNs_.assign(systems_.size(), 0); }
+    size_t systemCount() const { return systems_.size(); }
+    const std::string& systemName(size_t i) const { return systems_[i].name; }
+    int64_t systemTime(size_t i) const { return i < profNs_.size() ? profNs_[i] : 0; }
     void emit(const SimEvent& e) { events_.push_back(e); }
 
     World& world() { return world_; }
@@ -145,6 +151,8 @@ private:
     Fixed dt_;
     double accumulator_ = 0.0; // real-time only, never affects the simulation
     std::vector<System> systems_;
+    int64_t (*profClock_)() = nullptr;
+    std::vector<int64_t> profNs_;
     std::map<uint32_t, std::vector<Command>> pending_;
     std::vector<Command> executed_;
     std::vector<SimEvent> events_;

@@ -570,7 +570,7 @@ Fixed GridFields::speedMul(Simulation& sim, Vec3 pos, uint8_t owner) const {
     return mul;
 }
 
-void GridFields::occlude(Simulation& sim, std::vector<int64_t>& occ, const std::vector<int64_t>& base) const {
+void GridFields::visionBlockers(Simulation& sim, const std::function<void(int, int, int64_t)>& raise) const {
     const GridFieldStore* st = store(sim);
     if (!st) return;
     for (size_t fi = 0; fi < defs_.size(); ++fi)
@@ -587,10 +587,7 @@ void GridFields::occlude(Simulation& sim, std::vector<int64_t>& occ, const std::
                     for (int x = x0; x < std::min(f.w, x0 + kFieldChunk); ++x) {
                         if (cellMax(f, size_t(y * f.w + x)) < e.above) continue;
                         for (int my = y * res; my < std::min(mapH_, y * res + res); ++my)
-                            for (int mx = x * res; mx < std::min(mapW_, x * res + res); ++mx) {
-                                const size_t i = size_t(my * mapW_ + mx);
-                                if (i < occ.size()) occ[i] = std::max(occ[i], base[i] + hgt);
-                            }
+                            for (int mx = x * res; mx < std::min(mapW_, x * res + res); ++mx) raise(mx, my, hgt);
                     }
             }
         }
