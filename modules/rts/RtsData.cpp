@@ -21,6 +21,7 @@ uint8_t parseLayers(const Json& j, uint8_t def) {
         if (s == "naval") return kLayerNaval;
         if (s == "sand") return kLayerSandOnly;
         if (s == "all") return uint8_t(kLayerGround | kLayerAir | kLayerNaval);
+        if (s == "orbit") return uint8_t(kLayerAir | kLayerOrbit);
         return kLayerGround;
     }
     if (!j.isArray()) return def;
@@ -352,6 +353,7 @@ Rules loadRules(const Json& j) {
         if (const Json& m = tj["move"]; m.isObject()) {
             t.speed = m.getFx("speed", Fixed::fromInt(2));
             t.layer = parseLayers(m["layer"], kLayerGround);
+            t.transitSpeed = m.getFx("transitSpeed", t.speed * 10);
             t.radius = m.getFx("radius", t.radius);
             if (m.has("maxSlope")) {
                 t.maxSlope = m.getFx("maxSlope");
@@ -680,7 +682,7 @@ Rules loadRules(const Json& j) {
     }
     // slope classes: types with their own move.maxSlope get a class (pathing and passability per class)
     for (auto& t : r.types) {
-        t.pathLayer = t.layer;
+        t.pathLayer = uint8_t(t.layer & ~kLayerOrbit);   // bits 4..7 of pathLayer are the slope class
         if (!r.terrain.heightfield() || t.maxSlope.raw < 0 || (t.layer & kLayerAir)) continue;
         auto& cls = r.terrain.slopeClasses;
         auto it = std::find(cls.begin(), cls.end(), t.maxSlope);

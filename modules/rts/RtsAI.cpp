@@ -7,7 +7,7 @@
 namespace rts::game {
 
 namespace {
-Fixed dist(Vec3 a, Vec3 b) { return (a - b).xz().length(); }
+Fixed dist(Vec3 a, Vec3 b) { return Surface::onSphere(a) ? (a - b).length() : (a - b).xz().length(); }
 bool isCombat(const UnitType& t) { return !t.structure && (!t.weapons.empty() || !t.abilities.empty()) && !t.worker; }
 // Units the player controls by hand (possessed, picked up) or that are leaving are not the AI's.
 bool controllable(World& w, Entity e, const Unit& u) {
@@ -483,6 +483,11 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             if (makesArmy) { milProducers += count[ti]; candidates.push_back(uint16_t(ti)); }
         }
         int want = 1 + workers / 6;
+        if (m.surface(sim)) {   // planets: one of each producer kind first (an orbital yard opens the other bodies)
+            std::vector<uint16_t> missingKinds;
+            for (uint16_t c : candidates) if (count[c] == 0) missingKinds.push_back(c);
+            if (!missingKinds.empty()) { candidates = missingKinds; want = std::max(want, milProducers + 1); }
+        }
         if (milProducers < want && !candidates.empty()) {
             uint16_t pick = candidates[rng_.below(uint32_t(candidates.size()))];
             if (!m.requirementsMet(sim, player_, R.types[pick].requires_)) {
@@ -537,6 +542,25 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
             idleArmy.erase(idleArmy.begin(), idleArmy.begin() + long(squad.size()));
         }
     }
+    // planets: a pair of orbit units scouts the other bodies now and then (each body in turn), so the bot
+    // learns to use transfers and claims what lies there
+    if (const Surface* S = m.surface(sim); S && sim.tick() % 600 < cfg_.thinkTicks + 1) {
+        std::vector<Entity> orbiters;
+        for (Entity e : idleArmy) if (R.types[w.get<Unit>(e).type].layer & kLayerOrbit) orbiters.push_back(e);
+        if (orbiters.size() >= 4) {
+            const int here = S->bodyAt(w.get<Transform>(orbiters[0]).pos);
+            int target = -1;
+            for (int k = 1; k <= int(S->bodies.size()) && target < 0; ++k) {
+                const int b = (here + k + wave_) % int(S->bodies.size());
+                if (b != here && m.canTransit(sim, orbiters[0], b)) target = b;
+            }
+            if (target >= 0) {
+                Command t; t.type = kCmdTransit; t.units = {orbiters[0], orbiters[1]}; t.param = target; send(sim, t);
+                idleArmy.erase(std::remove(idleArmy.begin(), idleArmy.end(), orbiters[0]), idleArmy.end());
+                idleArmy.erase(std::remove(idleArmy.begin(), idleArmy.end(), orbiters[1]), idleArmy.end());
+            }
+        }
+    }
     const bool defend = gs.victory.mode == VictoryMode::Survive;
     int needed = defend ? 1 : std::min(cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth, cfg_.maxAttackArmy);
     if (int(idleArmy.size()) < needed) return;
@@ -553,10 +577,23 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
         if (!best.valid() || d < bestD) { best = e; bestD = d; }
     });
     if (!best.valid()) return;
+    const Vec3 goal = w.get<Transform>(best).pos;
+    if (const Surface* S = m.surface(sim)) {
+        // planets: units that can't reach the target's body stay; orbit units take a transfer there first
+        const int gb = S->bodyAt(goal);
+        std::vector<Entity> go, transit;
+        for (Entity e : idleArmy) {
+            if (S->bodyAt(w.get<Transform>(e).pos) == gb) go.push_back(e);
+            else if (m.canTransit(sim, e, gb)) transit.push_back(e);
+        }
+        if (!transit.empty()) { Command t; t.type = kCmdTransit; t.units = transit; t.param = gb; send(sim, t); }
+        if (go.empty()) { if (!transit.empty() && !defend) ++wave_; return; }
+        idleArmy = go;
+    }
     Command cmd;
     cmd.type = kCmdAttack;
     cmd.units = idleArmy;
-    cmd.point = w.get<Transform>(best).pos; // attack-move
+    cmd.point = goal; // attack-move
     send(sim, cmd);
     if (!defend) ++wave_;
 }
@@ -597,7 +634,7 @@ void RtsAI::dungeon(Simulation& sim, RtsModule& m) {
             // cells reachable from home
             std::vector<uint8_t> reach(g.flags.size(), 0);
             std::vector<int> q;
-            int hx = g.cellX(home.x), hy = g.cellY(home.z);
+            int hx, hy; g.cellXY(home, hx, hy);
             g.nearestPassable(hx, hy, kLayerGround, 4);
             if (g.inside(hx, hy)) { q.push_back(g.index(hx, hy)); reach[size_t(q[0])] = 1; }
             static const int dx4[4] = {1, -1, 0, 0}, dy4[4] = {0, 0, 1, -1};
