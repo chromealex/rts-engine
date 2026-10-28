@@ -1,4 +1,6 @@
 #include "MapDoc.h"
+#include <cstring>
+#include "modules/rts/view/RtsTerrainDetail.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -52,6 +54,12 @@ std::string MapDoc::cornersPath(const std::string& mapFile, const std::string& r
     return (dir / r.filename()).string();
 }
 
+std::string MapDoc::detailFileName() const {
+    if (!data.detailFile.empty()) return data.detailFile;
+    std::string stem = path.empty() ? "map" : std::filesystem::path(path).stem().string();
+    return "maps/" + stem + ".detail.r16";
+}
+
 std::string MapDoc::cornersFileName() const {
     if (!data.cornersFile.empty()) return data.cornersFile;
     std::string stem = path.empty() ? "map" : std::filesystem::path(path).stem().string();
@@ -69,6 +77,16 @@ bool MapDoc::load(const std::string& file, std::string* err) {
         };
         if (!game::applyCornersFile(j, read, err)) return false;
         if (!loadJson(j, err)) return false;
+        // visual detail heightmap (+ splat): kept as int16 / RGBA8 for editing, written back by save()
+        if (const Json& dj = j["terrain"]["detail"]; dj.isObject()) {
+            game::terrain::DetailSurface ds;
+            std::vector<uint8_t> sp;
+            std::string derr;
+            if (game::terrain::loadMapDetail(j, read, ds, sp, &derr)) {
+                data.detailScale = ds.k; data.detail = game::terrain::detailToInt16(ds); data.detailSplat = std::move(sp);
+                data.detailFile = dj.getStr("file");
+            } else if (err) *err = derr;   // map still opens; the detail is dropped
+        }
         path = file;
         return true;
     } catch (const std::exception& e) {
@@ -246,6 +264,21 @@ Json MapDoc::toJson() const {
         for (auto v : d.corners) cs.push(Json::number(int64_t(v)));
         terrain.set("corners", cs);
     }
+    if (!d.detail.empty() && d.detailScale > 0) {
+        Json dj = Json::object();
+        dj.set("scale", Json::number(int64_t(d.detailScale)));
+        dj.set("file", Json::string(detailFileName()));
+        game::terrain::DetailSurface ds;
+        game::terrain::detailFromInt16(d.w, d.h, d.detailScale, d.detail, ds);
+        dj.set("blob", Json::string(game::terrain::encodeDetail(ds)));   // written to the file by save()
+        if (!d.detailSplat.empty()) {
+            std::string sp = detailFileName();
+            sp = sp.substr(0, sp.size() - 4) + ".splat";
+            dj.set("splat", Json::string(sp));
+            dj.set("splatBlob", Json::string(std::string(d.detailSplat.begin(), d.detailSplat.end())));
+        }
+        terrain.set("detail", dj);
+    }
     if (d.planet()) j.set("world", worldJson());
     else j.set("terrain", terrain);
     Json fields = Json::array();
@@ -312,7 +345,7 @@ bool MapDoc::save(const std::string& file, std::string* err) {
     path = file;  // the default corners file name follows the map file
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!oldPath.empty() && !fs::equivalent(oldPath, file, ec)) data.cornersFile.clear(); // "save as": own .r16
+    if (!oldPath.empty() && !fs::equivalent(oldPath, file, ec)) { data.cornersFile.clear(); data.detailFile.clear(); } // "save as": own files
     Json j = toJson();
     if (Json* t = j.find("terrain"); t && t->has("cornersBlob")) {
         const std::string cf = cornersPath(file, t->getStr("cornersFile"));
@@ -322,6 +355,19 @@ bool MapDoc::save(const std::string& file, std::string* err) {
         if (!c) { if (err) *err = "cannot write " + cf; path = oldPath; data.cornersFile = oldCorners; return false; }
         t->erase("cornersBlob");
         data.cornersFile = t->getStr("cornersFile");
+    }
+    if (Json* t = j.find("terrain"); t && t->find("detail")) {
+        Json& dj = *t->find("detail");
+        for (auto [fileKey, blobKey] : {std::pair{"file", "blob"}, std::pair{"splat", "splatBlob"}}) {
+            if (!dj.has(blobKey)) continue;
+            const std::string cf = cornersPath(file, dj.getStr(fileKey));
+            std::ofstream c(cf, std::ios::binary);
+            const std::string& blob = dj[blobKey].str();
+            c.write(blob.data(), std::streamsize(blob.size()));
+            if (!c) { if (err) *err = "cannot write " + cf; path = oldPath; return false; }
+            dj.erase(blobKey);
+        }
+        data.detailFile = dj.getStr("file");
     }
     if (Json* wj = j.find("world"); wj && wj->find("bodies"))
         for (size_t bi = 0; bi < wj->find("bodies")->size(); ++bi) {
@@ -347,7 +393,7 @@ void MapDoc::beginEdit() {
     ensureLayers(); // a map that was never created/loaded still has layers sized to w*h
     undo_.push_back(data);
     // whole-document snapshots: keep ~256 MB at most (a 2048x2048 map is ~36 MB per snapshot)
-    const size_t snap = size_t(data.w * data.h) * 8 + data.corners.size() * 2 + 1024;
+    const size_t snap = size_t(data.w * data.h) * 8 + data.corners.size() * 2 + data.detail.size() * 2 + data.detailSplat.size() + 1024;
     const size_t keep = std::clamp<size_t>((size_t(256) << 20) / snap, 4, 200);
     while (undo_.size() > keep) undo_.erase(undo_.begin());
     redo_.clear();
@@ -419,6 +465,7 @@ void MapDoc::resize(int w, int h) {
             for (int x = 0; x <= w; ++x) out[size_t(y * (w + 1) + x)] = d.corners[size_t(std::min(y, d.h) * (d.w + 1) + std::min(x, d.w))];
         d.corners.swap(out);
     }
+    d.detail.clear(); d.detailSplat.clear(); d.detailScale = 0;   // resize drops the visual detail (re-synthesised / re-sculpted)
     d.w = w; d.h = h;
 }
 
@@ -502,6 +549,16 @@ void MapDoc::mirror(bool point) {
             d.cells[to] = d.cells[from]; d.levels[to] = d.levels[from]; d.heights[to] = d.heights[from];
             d.fieldRes[to] = d.fieldRes[from]; d.fieldAmt[to] = d.fieldAmt[from];
         }
+    if (!d.detail.empty() && d.detailScale > 0) { // visual detail heightmap (+ splat) follows the cells
+        const int k = d.detailScale, SW = W * k + 1, SH = H * k + 1;
+        const bool sp = d.detailSplat.size() == size_t(SW) * size_t(SH) * 4;
+        for (int j = 0; j < SH; ++j)
+            for (int i = (SW + 1) / 2; i < SW; ++i) {
+                const size_t to = size_t(j) * size_t(SW) + size_t(i), from = size_t(point ? SH - 1 - j : j) * size_t(SW) + size_t(SW - 1 - i);
+                d.detail[to] = d.detail[from];
+                if (sp) std::memcpy(&d.detailSplat[to * 4], &d.detailSplat[from * 4], 4);
+            }
+    }
     std::vector<DocEntity> left;
     std::vector<int> map(d.entities.size(), -1);
     for (size_t i = 0; i < d.entities.size(); ++i) if (d.entities[i].x < W * 0.5f) { map[i] = int(left.size()); left.push_back(d.entities[i]); }

@@ -233,6 +233,7 @@ void GameClient::startMatch(size_t idx) {
         if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, vm);
         else view_.setWorld(vm);
         view_.setTerrainMaterial(vm["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
+        view_.setTerrainDetail(vm);
     }
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     if (const char* ff = std::getenv("RTS_FAST_FORWARD")) { // testing (screenshots): bots play N game seconds first

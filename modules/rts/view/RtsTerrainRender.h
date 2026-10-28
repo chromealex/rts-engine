@@ -160,6 +160,7 @@ private:
     std::vector<uint8_t> fileSplat_;
     bool hasFileDetail_ = false, fileDetailChanged_ = false, detailOn_ = false;
     int detailK_ = 0;
+    int dirtyI0_ = 1 << 30, dirtyJ0_ = 1 << 30, dirtyI1_ = -1, dirtyJ1_ = -1;   // edited explicit detail samples
     gfx::TextureHandle detailNrmTex_, detailSplatTex_;
     int nrmW_ = 0, nrmH_ = 0, dsplatW_ = 0, dsplatH_ = 0;
     std::vector<uint8_t> nrmPx_, dsplatPx_;

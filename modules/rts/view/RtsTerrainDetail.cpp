@@ -186,4 +186,33 @@ DetailSurface resampleDetail(const DetailSurface& d, int k) {
     return o;
 }
 
+bool loadMapDetail(const Json& map, const ContentReader& read, DetailSurface& out, std::vector<uint8_t>& splat, std::string* err) {
+    const Json& d = map["terrain"]["detail"];
+    splat.clear();
+    if (!d.isObject() || !d.has("file")) return false;
+    const int w = int(map["size"][0].integer(0)), h = int(map["size"][1].integer(0)), k = int(d.getInt("scale", 4));
+    std::string bytes;
+    if (!read || !read(d.getStr("file"), bytes)) { if (err) *err = "terrain.detail: cannot read '" + d.getStr("file") + "'"; return false; }
+    if (!decodeDetail(bytes, w, h, k, out, err)) return false;
+    if (d.has("splat")) {
+        std::string sb;
+        const size_t n = size_t(out.sw()) * size_t(out.sh()) * 4;
+        if (read(d.getStr("splat"), sb) && sb.size() == n) splat.assign(sb.begin(), sb.end());
+        else if (err) *err = "terrain.detail.splat: missing or wrong size (ignored)";
+    }
+    return true;
+}
+
+void detailFromInt16(int w, int h, int k, const std::vector<int16_t>& v, DetailSurface& out) {
+    out.init(w, h, k);
+    const size_t n = std::min(v.size(), out.hgt.size());
+    for (size_t i = 0; i < n; ++i) out.hgt[i] = float(v[i]) * kHeightUnit;
+}
+
+std::vector<int16_t> detailToInt16(const DetailSurface& d) {
+    std::vector<int16_t> v(d.hgt.size());
+    for (size_t i = 0; i < v.size(); ++i) v[i] = int16_t(std::clamp(std::lround(d.hgt[i] * 16.0f), -32768l, 32767l));
+    return v;
+}
+
 } // namespace rts::game::terrain
