@@ -100,14 +100,9 @@ void RtsLights::init(const Rules& rules) {
         TypeLights L;
         const Json& v = t.view;
         if (const Json& g = v["light"]; g.isObject()) {
-            L.glow = g.getBool("enabled", true);
-            L.color = color(g, {1.0f, 0.62f, 0.32f});
-            L.radius = num(g, "radius", 4.0f);
-            L.intensity = num(g, "intensity", 1.5f);
-            L.height = num(g, "height", 1.0f);
-            L.flicker = num(g, "flicker", 0.0f);
-            L.halo = halo(g, L.radius * 0.2f);
-            L.whileBuilding = g.getBool("whileBuilding", false);
+            if (g.getBool("enabled", true)) L.glows.push_back(parseGlow(g));
+        } else if (g.isArray()) {
+            for (const Json& e : g.items()) if (e.isObject() && e.getBool("enabled", true)) L.glows.push_back(parseGlow(e));
         }
         if (const Json& c = v["contactShadow"]; c.isNumber()) L.contact = std::clamp(float(c.fx().toDouble()), 0.0f, 1.0f);
         else if (!c.isNull() && !c.boolean(true)) L.contact = 0;
@@ -131,20 +126,54 @@ void RtsLights::init(const Rules& rules) {
     configure(Json{}, Json{});
 }
 
+RtsLights::Glow RtsLights::parseGlow(const Json& j) {
+    Glow g;
+    g.spot = j.getStr("type") == "spot" || j.has("angle");
+    g.color = color(j, g.spot ? float3{0.95f, 0.97f, 1.0f} : g.color);
+    g.radius = num(j, "radius", g.spot ? 9.0f : 4.0f);
+    g.intensity = num(j, "intensity", g.spot ? 2.2f : 1.5f);
+    g.height = num(j, "height", g.spot ? 1.5f : 1.0f);
+    g.flicker = num(j, "flicker", 0.0f);
+    g.halo = halo(j, g.radius * (g.spot ? 0.05f : 0.2f));
+    g.whileBuilding = j.getBool("whileBuilding", false);
+    g.angle = std::clamp(num(j, "angle", g.angle), 2.0f, 170.0f);
+    g.softness = std::clamp(num(j, "softness", g.softness), 0.02f, 1.0f);
+    g.pitch = std::clamp(num(j, "pitch", g.pitch), -10.0f, 90.0f);
+    g.yaw = num(j, "yaw", 0);
+    g.sweep = std::max(num(j, "sweep", 0), 0.0f);
+    g.sweepSpeed = num(j, "sweepSpeed", g.sweepSpeed);
+    if (const Json& o = j["offset"]; o.size() >= 2) { g.forward = float(o[0].fx().toDouble()); g.side = float(o[1].fx().toDouble()); }
+    return g;
+}
+
+render::PointLight RtsLights::glowLight(const Glow& g, float3 ground, float yaw, float scale, float t, float phase) {
+    const float cy = std::cos(yaw), sy = std::sin(yaw);
+    const float3 p{ground.x + (cy * g.forward - sy * g.side) * scale, ground.y + g.height * scale, ground.z + (sy * g.forward + cy * g.side) * scale};
+    float in = g.intensity;
+    if (g.flicker > 0) // two incommensurate waves per object read as fire, not as a pulse
+        in *= 1.0f + g.flicker * (0.6f * std::sin(t * 9.0f + phase) + 0.4f * std::sin(t * 23.0f + phase * 1.9f));
+    PointLight l{p, g.radius * scale, g.color, in, 0};
+    l.groundY = ground.y;
+    l.halo = std::max(g.halo, 0.0f) * scale;
+    if (g.spot) {
+        constexpr float kDeg = 0.0174532925f;
+        // searchlight swing: amplitude `sweep`, peak angular speed `sweepSpeed`
+        const float swing = g.sweep > 0 ? g.sweep * std::sin(t * g.sweepSpeed / g.sweep + phase) : 0.0f;
+        const float a = yaw + (g.yaw + swing) * kDeg, pitch = g.pitch * kDeg;
+        l.makeSpot({std::cos(a) * std::cos(pitch), -std::sin(pitch), std::sin(a) * std::cos(pitch)}, g.angle, g.softness);
+    }
+    return l;
+}
+
 std::vector<RtsLights::MapLight> RtsLights::parseMapLights(const Json& lights) {
     std::vector<MapLight> out;
     for (const Json& j : lights.items()) {
         if (!j.isObject()) continue;
         MapLight m;
+        static_cast<Glow&>(m) = parseGlow(j);
         const Json& p = j["pos"];
         m.x = p.size() >= 2 ? float(p[0].fx().toDouble()) : num(j, "x", 0);
         m.z = p.size() >= 2 ? float(p[1].fx().toDouble()) : num(j, "z", 0);
-        m.height = num(j, "height", 1.0f);
-        m.color = color(j, m.color);
-        m.radius = num(j, "radius", 4.0f);
-        m.intensity = num(j, "intensity", 1.5f);
-        m.flicker = num(j, "flicker", 0.0f);
-        m.halo = halo(j, m.radius * 0.2f);
         out.push_back(m);
     }
     return out;

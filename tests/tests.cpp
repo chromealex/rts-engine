@@ -4781,9 +4781,9 @@ TEST(lighting_type_and_map_data) {
     game::RtsLights L;
     L.init(sk);
     const auto& hall = L.typeLights(uint16_t(sk.findType("townhall")));
-    CHECK(hall.glow && hall.radius > 4 && hall.halo > 0);
+    CHECK(hall.glows.size() == 1 && hall.glows[0].radius > 4 && hall.glows[0].halo > 0 && !hall.glows[0].spot);
     const auto& archer = L.typeLights(uint16_t(sk.findType("archer")));
-    CHECK(archer.attack.on && archer.projectile.on && !archer.glow);
+    CHECK(archer.attack.on && archer.projectile.on && archer.glows.empty());
     const auto& cat = L.typeLights(uint16_t(sk.findType("catapult")));
     CHECK(!cat.projectile.on && cat.hit.on);                     // data: "projectileLight": false
     // abilities: one light per ability, colour from what it does (artillery = damage -> orange)
@@ -4804,6 +4804,32 @@ TEST(lighting_type_and_map_data) {
     CHECK(ml.size() == 2);
     CHECK(ml[0].x == 1 && ml[0].z == 2 && ml[0].radius == 4 && ml[0].halo > 0);
     CHECK(ml[1].x == 3 && ml[1].z == 4 && ml[1].radius == 6 && ml[1].halo == 0);
+}
+
+TEST(lighting_spot_lights) {
+    using game::RtsLights;
+    const RtsLights::Glow point = RtsLights::parseGlow(Json::parse(R"({"radius": 3})"));
+    CHECK(!point.spot && point.radius == 3);
+    CHECK(!RtsLights::glowLight(point, {0, 0, 0}, 0, 1, 0, 0).spot());
+    const RtsLights::Glow s = RtsLights::parseGlow(Json::parse(R"({"type": "spot", "pitch": 30, "angle": 40, "offset": [0.5, 0.2]})"));
+    CHECK(s.spot && s.radius == 9 && s.angle == 40);
+    render::PointLight l = RtsLights::glowLight(s, {10, 2, 5}, 0, 1, 0, 0);   // facing +X
+    CHECK(l.spot() && l.dir.x > 0.8f && l.dir.y < -0.4f && std::fabs(l.dir.z) < 1e-4f);
+    CHECK(std::fabs(l.pos.x - 10.5f) < 1e-4f && std::fabs(l.pos.z - 5.2f) < 1e-4f && l.groundY == 2);
+    CHECK(l.cosOuter < l.cosInner && std::fabs(l.cosOuter - std::cos(20.0f * 0.0174532925f)) < 1e-4f);
+    render::PointLight turned = RtsLights::glowLight(s, {0, 0, 0}, 1.5707963f, 1, 0, 0);   // facing +Z
+    CHECK(turned.dir.z > 0.8f && std::fabs(turned.dir.x) < 1e-3f);
+    // a searchlight sweeps: its direction changes over time, within the amplitude
+    const RtsLights::Glow sw = RtsLights::parseGlow(Json::parse(R"({"angle": 30, "pitch": 30, "yaw": 90, "sweep": 45, "sweepSpeed": 30})"));
+    float minA = 1e9f, maxA = -1e9f;
+    for (int i = 0; i < 400; ++i) {
+        const render::PointLight x = RtsLights::glowLight(sw, {0, 0, 0}, 0, 1, i * 0.05f, 0);
+        const float a = std::atan2(x.dir.z, x.dir.x) / 0.0174532925f;
+        minA = std::min(minA, a); maxA = std::max(maxA, a);
+    }
+    CHECK(minA > 44 && minA < 50 && maxA > 130 && maxA < 136);
+    const auto ml = RtsLights::parseMapLights(Json::parse(R"([{"x": 4, "z": 6, "type": "spot", "yaw": 90}])"));
+    CHECK(ml.size() == 1 && ml[0].spot && ml[0].x == 4 && ml[0].yaw == 90);
 }
 
 TEST(lighting_quality_governor) {

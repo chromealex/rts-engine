@@ -12,6 +12,8 @@
 //
 // Owned by Renderer3D (`Renderer3D::lights`): add lights between beginScene() and render().
 #pragma once
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <vector>
 #include "../gfx/Gfx.h"
@@ -29,6 +31,18 @@ struct PointLight {
     float priority = 0;          // added to the score when picking per-pixel lights (High)
     float halo = 0;              // > 0: camera-facing glow of this world size around pos
     float haloAlpha = 1;         // halo brightness (display space, additive)
+    // Spot light (cosOuter > -1): a cone along `dir`; full light inside cosInner, none outside cosOuter.
+    float3 dir{0, -1, 0};
+    float cosOuter = -2, cosInner = -2;
+    float groundY = -1e9f;       // ground under the light (light map projection of spots); default: pos.y - 1
+
+    void makeSpot(float3 direction, float coneAngleDeg, float softness = 0.35f) {
+        dir = normalize(direction);
+        const float half = coneAngleDeg * 0.5f * 0.0174532925f;
+        cosOuter = std::cos(half);
+        cosInner = std::cos(half * (1.0f - std::clamp(softness, 0.02f, 1.0f)));
+    }
+    bool spot() const { return cosOuter > -1.5f; }
 };
 
 // Light uniform block (U2 of the lit shader, U4 of the model shader; std140 and MSL match).
@@ -38,7 +52,8 @@ struct LightUniforms {
     float cloud[4];              // noise offset.xz, noise scale, coverage 0..1
     float sky[4];                // x cloud shadow strength 0..1
     float pos[8][4];             // xyz, radius
-    float col[8][4];             // rgb * intensity, unused
+    float col[8][4];             // rgb * intensity, spot cosInner
+    float spot[8][4];            // spot direction xyz, cosOuter (< -1.5: point light)
 };
 
 class LightSystem {
@@ -74,7 +89,8 @@ public:
     bool contactShadows() const { return contact_; }
 
 private:
-    struct MapVertex { float x, y, u, v, r, g, b, a; };
+    // spot: direction + height above ground, cone (cosOuter, cosInner, radius) — cosOuter < -1.5 = point
+    struct MapVertex { float x, y, u, v, r, g, b, a, dx, dy, dz, h, co, ci, rad, pad; };
     struct HaloVertex { float x, y, z, u, v, r, g, b, a; };
     void createMap(int size);
     void pickPixelLights();
