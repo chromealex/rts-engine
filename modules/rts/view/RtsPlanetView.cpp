@@ -21,6 +21,7 @@ uint32_t ringColor(const SceneObject& o) { return o.selected ? (o.owner == 0 ? r
 }
 
 void RtsView::setWorld(const Json& map) {
+    fog_.setBlur({});
     PlanetWorld w = loadPlanetWorld(map, &warnings_);
     planets_.setWorld(w);
     planetVision_.clear();
@@ -56,6 +57,24 @@ void RtsView::updateWorld(const Json& map) {
 }
 
 void RtsView::setSimWorld(std::shared_ptr<const Surface> surf, const MapGrid& grid, const Json& map) {
+    if (surf) { // fog blur over the cube-sphere neighbourhood (across face seams, never into other bodies / void cells)
+        std::shared_ptr<const Surface> S = surf;
+        fog_.setBlur([S, tmp = std::vector<uint16_t>()](std::vector<uint8_t>& f, int radius) mutable {
+            const int n = S->W * S->H;
+            if (int(f.size()) != n || radius <= 0) return;
+            tmp.resize(size_t(n));
+            for (int pass = 0; pass < radius; ++pass) { // repeated 3x3 means ~ a box of the radius
+                for (int c = 0; c < n; ++c) {
+                    int b, fc, x, y;
+                    if (!S->cellFace(c, b, fc, x, y)) { tmp[size_t(c)] = f[size_t(c)]; continue; }
+                    int sum = f[size_t(c)], cnt = 1;
+                    for (int k = 0; k < 8; ++k) { const int o = S->neighbor(c, k); if (o >= 0) { sum += f[size_t(o)]; ++cnt; } }
+                    tmp[size_t(c)] = uint16_t(sum / cnt);
+                }
+                for (int c = 0; c < n; ++c) f[size_t(c)] = uint8_t(tmp[size_t(c)]);
+            }
+        });
+    } else fog_.setBlur({});
     PlanetWorld w = planetWorldFromSim(std::move(surf), grid.flags, loadPlanetWorld(map, &warnings_));
     planets_.setWorld(w);
     planetVision_.clear();
@@ -189,8 +208,8 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
     planetSeconds_ = s.seconds;
     const float blend = std::max(planetCam_.planetBlend(), planetCam_.systemBlend());
     planetNoShadow_ = blend > 0.5f;
-    // fog of war per body: the viewer's vision of the stacked grid, faded / blurred by RtsFog over the whole
-    // grid (the blur may bleed a cell across face rows; seams look right within a cell), then cut per body
+    // fog of war per body: the viewer's vision of the stacked grid, faded by RtsFog and blurred over the
+    // cube-sphere neighbourhood (setSimWorld), then cut per body
     const PlanetWorld& Wd = planets_.world();
     planetVision_.resize(Wd.bodies.size());
     const bool fogOn = vision && !vision->empty() && Wd.sim && grid.w > 0 && vision->size() == size_t(grid.w * grid.h);
