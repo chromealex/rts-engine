@@ -1,0 +1,55 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        -- rows for data-for: one per map of game.json; a map is open when the previous one was won
+        function Levels_rows()
+            local rows, stars = {}, profile.get("stars", {})
+            for i, title in ipairs(game.maps()) do
+                local s = stars[tostring(i)] or 0
+                local prev = i == 1 or (stars[tostring(i - 1)] or 0) > 0
+                rows[#rows + 1] = {index = i, title = title, stars = s, locked = not prev}
+            end
+            return rows
+        end
+        function Levels_play(i)
+            local row = Levels_rows()[i]
+            if row and not row.locked then game.start(i, {difficulty = profile.get("difficulty", 1)}) end
+        end
+        ui.screen("$NAME", {
+            open = function(params, doc) ui.set("levels", Levels_rows()) end,
+        })
+        -- stars for a won map: 3 under 5 minutes, 2 under 10, else 1
+        game.on("matchEnd", function(r)
+            if not r.won or r.spectator then return end
+            local s = r.seconds < 300 and 3 or r.seconds < 600 and 2 or 1
+            local stars = profile.get("stars", {})
+            stars[tostring(r.map)] = math.max(stars[tostring(r.map)] or 0, s)
+            profile.set("stars", stars)
+        end)
+        ui.set("levels", Levels_rows())
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-header">
+            <button class="back" onclick="ui.back()">@meta.back</button>
+            <div class="screen-title">$TITLE</div>
+        </div>
+        <div class="screen-body">
+            <div class="list">
+                <div class="list-row" data-for="lv : levels" data-class-locked="lv.locked">
+                    <div class="grow">{{lv.index}}. {{lv.title}}</div>
+                    <span class="badge" data-if="lv.stars > 0">{{lv.stars}} / 3</span>
+                    <button class="primary" data-if="!lv.locked" data-event-click="call('Levels_play', lv.index)">@meta.play</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</rml>

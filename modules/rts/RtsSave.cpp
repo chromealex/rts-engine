@@ -13,9 +13,9 @@ inline void io(Archive& a, Owner& x) { a(x.player); }
 namespace rts::game {
 
 void io(Archive& a, Unit& x) { a(x.type, x.hp, x.flags, x.lastAttacker, x.facing, x.energy); }
-void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer); }
+void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer, x.flow); }
 void io(Archive& a, Orders& x) { a(x.queue); }
-void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded); }
+void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck); }
 void io(Archive& a, Combat& x) { a(x.cooldown, x.target, x.acquireTimer, x.autoTarget, x.chargeTarget, x.chargeStart, x.slotTarget, x.slot, x.slotTick, x.slotPos); }
 void io(Archive& a, Cargo& x) { a(x.res, x.amount, x.lastNode, x.lastPos, x.field); }
 void io(Archive& a, ProdItem& x) { a(x.item, x.progress, x.paid, x.upgrade); }
@@ -66,12 +66,11 @@ void io(Archive& a, Transport& x) { a(x.cargo, x.used, x.unloadAt, x.unloading, 
 void io(Archive& a, Boarded& x) { a(x.carrier, x.fires); }
 void io(Archive& a, Veteran& x) { a(x.level, x.xp, x.lastHit); }
 void io(Archive& a, RallyPath& x) { a(x.points); }
-void io(Archive& a, MechShield& x) { a(x.hp, x.lastHit); }
-void io(Archive& a, Shield& x) { a(x.value, x.lastHit); }   // originals (StarCraft shields)
-void io(Archive& a, Eater& x) { a(x.kills); }
+void io(Archive& a, Shield& x) { a(x.value, x.lastHit); }   // StarCraft shields
+void io(Archive& a, Eater& x) { a(x.kills); }               // originals (sandworm)
 void io(Archive& a, Weathering& x) { a(x.bare); }                 // fidelity (Dune II foundations)
 void io(Archive& a, TrapState& x) { a(x.charges, x.readyAt); }    // fidelity traps
-void io(Archive& a, TeleportBack& x) { a(x.home, x.at, x.caster); }   // fidelity group teleports               // originals (sandworm)
+void io(Archive& a, TeleportBack& x) { a(x.home, x.at, x.caster); }   // fidelity group teleports
 void io(Archive& a, Formation& x) { a(x.group, x.shape, x.offset); }
 void io(Archive& a, BridgeLaid& x) { a(x.laid, x.cells); }
 void io(Archive& a, Ammo& x) { a(x.left, x.init); }
@@ -94,7 +93,6 @@ void io(Archive& a, Altitude& x) { a(x.target, x.y); }
 void io(Archive& a, Crafter& x) { a(x.in, x.out, x.timer, x.outTimer); }
 void io(Archive& a, Morale& x) { a(x.value, x.fatigue, x.run, x.lastPos, x.chargeTick, x.lastCharge, x.lastFire, x.state, x.init, x.outOfSupply); }
 void io(Archive& a, Turret& x) { a(x.dir, x.init); }
-void io(Archive& a, Abandoned& x) { a(x.formerOwner); }
 void io(Archive& a, GrowState& x) { a(x.timer); }
 // state
 void io(Archive& a, TypeMods& x) { a(x.add, x.mul); }
@@ -193,8 +191,8 @@ template <class... T> struct PoolList {
 using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, Production, Construction, ResourceStock, Extractor, Footprint,
                         Garrison, Projectile, Hero, Transit, Squad, Buffs, AbilityState, Statuses, Area, Channel, GroupTag, Capture, Guard, Summon,
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
-                        Stance, Retreating, Transport, Boarded, Veteran, RallyPath, MechShield, Shield, Eater, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
-                        Suppression, Turret, Abandoned, GrowState, Morale,
+                        Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Eater, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
+                        Suppression, Turret, GrowState, Morale,
                         Weathering, TrapState, TeleportBack, Belt, Crafter, TurnBudget, Altitude>;
 } // namespace
 
@@ -220,6 +218,13 @@ bool RtsModule::serializeState(Simulation& sim, Archive& a) {
         gs.grid.invalidatePathing();   // derived caches (clearance, HPA*) rebuild from the loaded cells
         gs.grid.clearSoft();
         gs.mech.groupSpeed.clear();
+        // flow fields are a cache (pure functions of the grid): re-acquire the ones moving units follow, in ECS order,
+        // so they keep following them instead of dropping to A* (sysFlowFields drops units whose field is gone)
+        w.each<Mobile, Unit>([&](Entity, Mobile& m, Unit& u) {
+            if (!m.flow) return;
+            const UnitType& t = rules_.types[u.type];
+            if (gs.grid.flowAcquire(m.goal, m.flowRadius, t.pathLayer, MapGrid::clearanceFor(t.radius), sim.tick()) < 0) m.flow = false;
+        });
         slotClaims_.clear();
     }
     return a.ok();

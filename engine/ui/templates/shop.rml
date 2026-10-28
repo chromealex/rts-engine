@@ -1,0 +1,54 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <script>
+        -- catalog: ui/shop.json; rows come from shop.list() (data model key "shop", refreshed by meta.lua)
+        function Shop_tab(kind) ui.set("shopTab", kind) end
+        function Shop_press(id, kind)
+            if kind == "item" then
+                local ok, why = shop.buy(id)
+                if not ok and why == "price" then game.notice(game.tr("meta.not_enough")) end
+            elseif kind == "product" then
+                shop.buyReal(id, function(ok, state) if ok then game.notice(game.tr("meta.thanks")) end end)
+            else
+                shop.watch(id)
+            end
+        end
+        ui.set("shopTab", "item")
+    </script>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-header">
+            <button class="back" onclick="ui.back()">@meta.back</button>
+            <div class="screen-title">$TITLE</div>
+            <div class="currencies">
+                <span class="currency">{{profile.gold}} <span class="muted">@currency.gold</span></span>
+                <span class="currency">{{profile.gems}} <span class="muted">@currency.gems</span></span>
+            </div>
+        </div>
+        <div class="screen-body">
+            <div class="tabs">
+                <button data-class-active="shopTab == 'item'" data-event-click="call('Shop_tab', 'item')">@meta.items</button>
+                <button data-class-active="shopTab == 'product'" data-event-click="call('Shop_tab', 'product')">@meta.products</button>
+                <button data-class-active="shopTab == 'rewarded'" data-event-click="call('Shop_tab', 'rewarded')">@meta.free</button>
+            </div>
+            <div class="cards">
+                <div class="card" data-for="it : shop" data-if="it.kind == shopTab" data-class-owned="it.owned">
+                    <img class="card-icon" data-if="it.icon != ''" data-attr-src="it.icon"/>
+                    <span class="card-title">{{it.name}}</span>
+                    <span class="card-text">{{it.description}}</span>
+                    <button class="primary" data-if="!it.owned" data-class-disabled="!it.affordable"
+                            data-event-click="call('Shop_press', it.id, it.kind)">{{it.priceText}}</button>
+                    <span class="badge" data-if="it.owned">@meta.owned</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</rml>

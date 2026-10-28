@@ -56,6 +56,7 @@ public:
     ~Workspace();
     std::string engineDir;        // engine checkout (templates/, docs/, rtsbuild)
     std::string buildTool;        // rtsbuild executable
+    std::string gameExe;          // game client (ui_preview renders screens with it)
     Project project;
     MapDoc map;
     std::vector<Activity> activity;

@@ -75,6 +75,7 @@ void Editor::init(gfx::Device& dev) {
     dev_ = &dev;
     ws_.engineDir = opt_.engineDir;
     ws_.buildTool = opt_.buildTool;
+    ws_.gameExe = opt_.gameExe;
     ws_.clock = [this] { return time_; };
     std::string font = opt_.engineDir + "/engine/assets/fonts/ui.ttf";
     std::error_code fec;

@@ -20,8 +20,6 @@ struct Boarded { Entity carrier = kNullEntity; bool fires = false; };
 struct Veteran { int level = 1; Fixed xp{}; Entity lastHit = kNullEntity; };
 // Extra rally waypoints of a producer (Shift + rally): new units walk them in order after the rally point.
 struct RallyPath { std::vector<Vec3> points; };
-// StarCraft shields: absorb damage first, regenerate after `delay` seconds without being hit.
-struct MechShield { Fixed hp{}; uint32_t lastHit = 0; };   // agent-mech shields (type mech.shieldMax); originals has its own Shield
 
 // ---- stage 2
 struct Formation { uint32_t group = 0; uint8_t shape = 0; Vec3 offset{}; };       // offset in formation space (x right, z back)
@@ -35,7 +33,6 @@ struct GroundItem { Vec3 pos{}; uint16_t item = 0; int charges = 0; };
 // ---- stage 3
 struct Suppression { Fixed value{}; };                    // 0..100: suppressed / pinned thresholds in rules
 struct Turret { Vec3 dir[4] = {}; bool init = false; };   // per weapon aim direction (turnRate)
-struct Abandoned { uint8_t formerOwner = 0; };            // crew killed: neutral until infantry re-crews it
 struct GrowState { Fixed timer{}; };
 struct Bounty { Vec3 pos{}; Entity target = kNullEntity; uint8_t player = 0; int16_t res = -1; Fixed reward{}; };
 struct RoundUnit { uint8_t owner = 0; uint16_t type = 0; Vec3 pos{}; };
