@@ -1,6 +1,7 @@
 #include "RtsMap.h"
 #include "../../engine/sim/CommonComponents.h"
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <queue>
 
@@ -334,6 +335,27 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
     pathEndB_ = inside(gx, gy) ? index(gx, gy) : -1;
     struct Reset { MapGrid* g; ~Reset() { g->pathClear_ = 0; g->pathSoft_ = false; g->pathEndA_ = g->pathEndB_ = -1; } } reset{this};
     bool goalOk = passable(gx, gy, layer);
+    if (!goalOk && blockedGoalNearest && inside(gx, gy)) {
+        // goal inside a structure / obstacle (attacking a building, walking up to it): aim at the free cell around
+        // it nearest to the start instead of letting A* search the whole reachable area for the closest cell.
+        // Opt-in (rules / map movement.blockedGoals: "nearest"): the classic search picks other cells.
+        int best = -1, bestD = INT32_MAX;
+        for (int r = 1; r <= 6 && best < 0; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                    const int x = gx + dx, y = gy + dy;
+                    if (!passable(x, y, layer)) continue;
+                    const int ddx = std::abs(x - sx), ddy = std::abs(y - sy);
+                    const int d = 10 * (ddx + ddy) - 6 * std::min(ddx, ddy);
+                    if (d < bestD) { bestD = d; best = index(x, y); }
+                }
+        if (best >= 0) {
+            const bool ok = findPath(from, cellCenter(best % w, best / w), layer, out, maxNodes, clear, useSoft);
+            (void)ok;
+            return false;   // as before: the goal itself is not reachable
+        }
+    }
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
     if (goalOk && lineWalkable(sx, sy, gx, gy, layer)) { out.push_back(to); return true; }
 

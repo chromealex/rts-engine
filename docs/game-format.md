@@ -113,6 +113,10 @@ any tag in `deficitDisables`).
   A map may carry the same block (`"movement": {"flowField": {...}}` at the map's top level) to switch fields on for
   itself only (e.g. `templates/lastcolony/maps/horde_plain.json`, `templates/planets/maps/big_planet.json`).
   Fliers keep flying straight; units pushed off the field or stuck repeatedly fall back to their own A* path.
+  Followers settle around the goal from the inside out (arrival contagion) and don't block each other.
+- `movement.blockedGoals: "nearest"` (rules or map, default `"search"`): paths to a goal inside a structure or obstacle
+  (attacking a building) end at the free cell around it nearest to the unit - much cheaper for hordes; different cells
+  than the classic search, so it is opt-in (on in `templates/lastcolony/maps/horde_plain.json`).
 
 ## types — blocks
 
