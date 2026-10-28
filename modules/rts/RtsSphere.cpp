@@ -35,6 +35,11 @@ Fixed warp(Fixed a, int n) {
 }
 } // namespace
 
+CubeSphere::CubeSphere(int faceSize) : n_(faceSize < 1 ? 1 : faceSize) {
+    warp_.resize(size_t(n_) + 1);
+    for (int k = 0; k <= n_; ++k) warp_[size_t(k)] = warp(Fixed::fromInt(k), n_);
+}
+
 Vec3 CubeSphere::dirFromFace(int face, Fixed a, Fixed b) const {
     const SphereFace& f = kSphereFaces[face < 0 || face > 5 ? 0 : face];
     const Fixed sw = warp(a, n_), tw = warp(b, n_);
@@ -54,10 +59,14 @@ void CubeSphere::faceFromDir(Vec3 d, int& face, Fixed& a, Fixed& b) const {
     else face = d.z.raw >= 0 ? 4 : 5;
     const SphereFace& f = kSphereFaces[face];
     const Fixed dn = dotI(d, f.n);
+    // inverse warp without trigonometry: s' = du / dn, located among the cell-edge values of the table
+    // (the same function dirFromFace uses, so cell membership is consistent), linear inside the cell
     auto unwarp = [&](Fixed du) {
-        const Fixed ang = fxAtan2Turns(du, dn); // in [-1/8, 1/8]
-        Fixed r = Fixed::fromRaw(((8 * ang.raw + Fixed::kOne) * n_) / 2);
-        return fxClamp(r, Fixed{}, Fixed::fromInt(n_));
+        const Fixed sw = fxClamp(du / dn, warp_.front(), warp_.back());
+        int lo = 0, hi = n_;                       // warp_[lo] <= sw < warp_[hi]
+        while (hi - lo > 1) { const int mid = (lo + hi) / 2; if (warp_[size_t(mid)] <= sw) lo = mid; else hi = mid; }
+        const Fixed w0 = warp_[size_t(lo)], w1 = warp_[size_t(hi)];
+        return Fixed::fromInt(lo) + fxClamp((sw - w0) / (w1 - w0), Fixed{}, Fixed::fromInt(1));
     };
     a = unwarp(dotI(d, f.u));
     b = unwarp(dotI(d, f.v));
@@ -98,6 +107,43 @@ int CubeSphere::neighbor(int id, int dx, int dy) const {
     const SphereFace& h = kSphereFaces[g];
     const int pp = P.dot(h.u), qq = P.dot(h.v);
     return cellId(g, (pp + N - 1) / 2, (qq + N - 1) / 2);
+}
+
+namespace {
+// Fold a lattice point that overflowed one face edge onto the adjacent face (see CubeSphere::neighbor).
+bool foldAxis(int N, int& face, int& p, int& q, bool alongP) {
+    const SphereFace& f = kSphereFaces[face];
+    const int c = alongP ? p : q;
+    if (c <= N && c >= -N) return true;
+    const int sgn = c > 0 ? 1 : -1, over = c * sgn - N;
+    if (over >= 2 * N) return false;
+    const IVec3 P = alongP ? add3(mul(f.u, sgn * N), mul(f.n, N - over), mul(f.v, q))
+                           : add3(mul(f.v, sgn * N), mul(f.n, N - over), mul(f.u, p));
+    const IVec3 nn = alongP ? mul(f.u, sgn) : mul(f.v, sgn);
+    face = faceOfNormal(nn);
+    const SphereFace& h = kSphereFaces[face];
+    p = P.dot(h.u); q = P.dot(h.v);
+    return true;
+}
+} // namespace
+
+int CubeSphere::offset(int id, int dx, int dy) const {
+    if (id < 0 || id >= cellCount() || dx >= n_ || dx <= -n_ || dy >= n_ || dy <= -n_) return -1;
+    const SphereCell c = cell(id);
+    const int N = n_;
+    int face = c.face, p = 2 * c.x + 1 - N, q = 2 * c.y + 1 - N;
+    // step 1: along the face's u axis; the walked direction stays the same 3D vector after a fold
+    const SphereFace& f0 = kSphereFaces[face];
+    p += 2 * dx;
+    if (!foldAxis(N, face, p, q, true)) return -1;
+    // step 2: along the original v axis, expressed in the (possibly new) face
+    const SphereFace& f1 = kSphereFaces[face];
+    const int vu = f0.v.dot(f1.u), vv = f0.v.dot(f1.v);
+    if (vu == 0 && vv == 0) return -1;
+    if (vu) { p += 2 * dy * vu; if (q > N || q < -N) return -1; if (!foldAxis(N, face, p, q, true)) return -1; }
+    else { q += 2 * dy * vv; if (p > N || p < -N) return -1; if (!foldAxis(N, face, p, q, false)) return -1; }
+    if (p > N || p < -N || q > N || q < -N) return -1;
+    return cellId(face, (p + N - 1) / 2, (q + N - 1) / 2);
 }
 
 int CubeSphere::neighbors8(int id, int out[8]) const {
