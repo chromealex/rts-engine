@@ -2445,7 +2445,7 @@ TEST(i18n_ui_documents_translated) {
         std::string rml;
         CHECK(read("engine/ui/" + doc, rml));
         auto keys = i18n::markupKeys(rml);
-        CHECK(!keys.empty());
+        if (doc != "keyboard.rml") CHECK(!keys.empty()); // the on-screen keyboard has only key caps, no text
         for (const char* lang : {"en", "ru"}) {
             std::string text;
             CHECK(read(std::string("engine/lang/") + lang + ".json", text));

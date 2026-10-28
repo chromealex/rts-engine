@@ -511,3 +511,6 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
         endif()
     endforeach()
 endif()
+if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
+    target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
+endif()
