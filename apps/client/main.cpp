@@ -51,6 +51,7 @@ void GameClient::init(gfx::Device& dev) {
     overlay_.init(dev, "fonts/ui.ttf", 17.0f);
     if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
+    r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
     view_.init(dev, rules_);
     initUi();
 }
