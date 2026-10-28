@@ -33,7 +33,7 @@ struct Ctx {
     int32_t relief = 6 * kHU;
     std::vector<char> cell;               // map rows characters
     std::vector<int8_t> lvl;
-    std::vector<uint8_t> biome, occ;      // occ: 1 object, 2 reserved (keep clear)
+    std::vector<uint8_t> biome, occ;      // occ: 1 object, 2 corridor, 3 base core
     std::vector<int32_t> moist;
     std::vector<P2> starts;               // per player (Q16 cell units, base centre)
     Json entities = Json::array(), fields = Json::array(), roads = Json::array();
@@ -98,6 +98,7 @@ Json heightsOut(const Ctx& c);            // levels model: fine visual heights p
 void chooseStarts(Ctx& c);
 void placeContent(Ctx& c);
 void validateFairness(Ctx& c);
+void unblockStarts(Ctx& c);               // removes objects that cut starts off from each other
 void genRegions(Ctx& c);                  // Voronoi regions (when the template map has regions)
 std::string fmtQ16(int64_t raw);          // exact decimal text of a Q16 value (multiples of 1/16 stay short)
 

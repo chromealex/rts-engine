@@ -154,6 +154,7 @@ bool generateMap(const GenRequest& req, const game::Rules& rules, const Json& ru
             }
     }
     placeContent(c);
+    unblockStarts(c);
     genRegions(c);
     validateFairness(c);
 

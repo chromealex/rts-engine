@@ -73,7 +73,6 @@ Kind classify(const Ctx& c, int ti) {
     return Kind::Other;
 }
 
-bool isStructure(const Ctx& c, int ti) { return c.R.types[size_t(ti)].structure; }
 
 // ---------------------------------------------------------------- placement
 
@@ -96,7 +95,8 @@ struct Placer {
     bool cellOk(int x, int y, bool structure, bool allowReserved, int lvl, bool dig) const {
         if (!c.inside(x, y) || x == 0 || y == 0 || x == c.w - 1 || y == c.h - 1) return false;
         const int i = c.ci(x, y);
-        if (c.occ[size_t(i)] == 1 || (c.occ[size_t(i)] == 2 && !allowReserved)) return false;
+        // occ: 1 object, 2 corridor between bases (never built over), 3 base core (kit and base mines only)
+        if (c.occ[size_t(i)] == 1 || (structure && c.occ[size_t(i)] == 2) || (c.occ[size_t(i)] == 3 && !allowReserved)) return false;
         if (dig) return c.cell[size_t(i)] != '#' || true;
         const uint8_t f = g.flags[size_t(i)];
         if (!(f & game::kCellGround) || (f & game::kCellWater)) return false;
@@ -119,6 +119,10 @@ struct Placer {
             return c.inside(x, y) && (c.digPlain ? c.cell[size_t(c.ci(x, y))] == '.' : g.passable(x, y, game::kLayerGround)) && c.occ[size_t(c.ci(x, y))] != 1;
         }
         origin(t, p, x0, y0);
+        return fitsAt(ti, x0, y0, allowReserved, ring);
+    }
+    bool fitsAt(int ti, int x0, int y0, bool allowReserved, bool ring) const {
+        const game::UnitType& t = c.R.types[size_t(ti)];
         const bool dig = c.digPlain != 0;
         const int lvl = c.inside(x0, y0) ? g.level[size_t(c.ci(x0, y0))] : 0;
         for (int y = y0; y < y0 + t.footprintH; ++y)
@@ -184,11 +188,19 @@ struct Placer {
         std::vector<uint8_t> save = c.occ;
         const size_t rects = c.blockRects.size();
         std::vector<char> saveCells = c.cell;
+        const game::UnitType& t = c.R.types[size_t(ti)];
+        if (t.structure) p = {(int64_t(x0) << 16) + (int64_t(t.footprintW) << 15), (int64_t(y0) << 16) + (int64_t(t.footprintH) << 15)};
         for (int k = 0; k < n; ++k) {
-            P2 q = imageOf(k, p);
+            P2 q = imageOf(k, p);     // exact for mirror / point / rot4: the footprint centre maps onto a footprint centre
             if (dedupeCentre && k > 0 && dist(q, p) < (1 << 16)) break;
             int ix, iy;
-            if (!find(ti, q, allowReserved, ring, c.sym.exact() ? 0 : 1, ix, iy)) { c.occ = save; c.cell = saveCells; c.blockRects.resize(rects); return false; }
+            bool ok;
+            if (t.structure && c.sym.exact()) {
+                ix = int((q.x - (int64_t(t.footprintW) << 15)) >> 16); iy = int((q.y - (int64_t(t.footprintH) << 15)) >> 16);
+                ok = fitsAt(ti, ix, iy, allowReserved, ring);
+                if (!ok && k > 0) ok = find(ti, q, allowReserved, ring, 1, ix, iy);   // rot4 with a non-square footprint
+            } else ok = find(ti, q, allowReserved, ring, c.sym.exact() ? 0 : 1, ix, iy);
+            if (!ok) { c.occ = save; c.cell = saveCells; c.blockRects.resize(rects); return false; }
             mark(ti, ix, iy);
             pl.push_back({ix, iy, q.x, q.y});
         }
@@ -289,14 +301,14 @@ void placeContent(Ctx& c) {
     for (auto& s : c.starts) {
         const int sx = int(s.x >> 16), sy = int(s.y >> 16), r = std::max(3, c.baseRadius - 3);
         for (int y = sy - r; y <= sy + r; ++y)
-            for (int x = sx - r; x <= sx + r; ++x) if (c.inside(x, y)) c.occ[size_t(c.ci(x, y))] = 2;
+            for (int x = sx - r; x <= sx + r; ++x) if (c.inside(x, y)) c.occ[size_t(c.ci(x, y))] = 3;
     }
     for (auto& path : c.corridors)
         for (int i : path) {
             const int x = i % c.w, y = i / c.w;
             c.forImages(x, y, [&](int ix, int iy, int) {
                 for (int dy = -1; dy <= 1; ++dy)
-                    for (int dx = -1; dx <= 1; ++dx) if (c.inside(ix + dx, iy + dy)) c.occ[size_t(c.ci(ix + dx, iy + dy))] = 2;
+                    for (int dx = -1; dx <= 1; ++dx) if (c.inside(ix + dx, iy + dy) && c.occ[size_t(c.ci(ix + dx, iy + dy))] != 3) c.occ[size_t(c.ci(ix + dx, iy + dy))] = 2;
             });
         }
     Placer pl(c);
@@ -360,11 +372,16 @@ void placeContent(Ctx& c) {
         }
         return pl.imageOf(k, P2{c.starts[0].x + o.x, c.starts[0].y + o.y});
     };
+    const bool anySymKit = c.sym.kind != Sym::None;
     for (auto& it : kit) {
         const game::UnitType& t = c.R.types[size_t(it.type)];
         for (int n = 0; n < it.count; ++n) {
             P2 off = it.off;
             if (n) off = {off.x + int64_t(n % 4) * Q(4, 5), off.y + int64_t(n / 4) * Q(4, 5)};
+            if (anySymKit) {
+                if (!pl.placeSet(it.type, kitPos(0, off), -100, it.extra, true, false, 3, false)) c.warn("kit: no room for '" + t.id + "'");
+                continue;
+            }
             for (int k = 0; k < c.np; ++k) {
                 P2 p = kitPos(k, off);
                 int x0, y0;
@@ -452,13 +469,13 @@ void placeContent(Ctx& c) {
                 off = {off.x + rot(P2{int64_t(n) << 16, 0}, kOne / 4 + angleOf(off)).x / 2, off.y + rot(P2{int64_t(n) << 16, 0}, kOne / 4 + angleOf(off)).y / 2};
             }
             bool ok = false;
-            if (anySym) ok = pl.placeSet(s.type, P2{c.starts[0].x + off.x, c.starts[0].y + off.y}, s.owner, s.extra, tree, !tree, 4, false);
+            if (anySym) ok = pl.placeSet(s.type, P2{c.starts[0].x + off.x, c.starts[0].y + off.y}, s.owner, s.extra, !tree, !tree, 4, false);
             else {
                 ok = true;
                 for (int k = 0; k < c.np; ++k) {
                     P2 p = kitPos(k, rot(off, -frameTurn));
                     int x0, y0;
-                    if (!pl.find(s.type, p, tree, !tree, 4, x0, y0)) { ok = false; continue; }
+                    if (!pl.find(s.type, p, !tree, !tree, 4, x0, y0)) { ok = false; continue; }
                     pl.mark(s.type, x0, y0); pl.emit(s.type, s.owner, x0, y0, p, s.extra);
                 }
             }
@@ -518,7 +535,11 @@ void placeContent(Ctx& c) {
             const int32_t mul = k == Kind::Tree ? treeMul : (k == Kind::Mine || k == Kind::Spot || k == Kind::Spawner) ? resMul : kOne;
             const int nearN = int((int64_t(s.near) * mul + kOne / 2) >> 16), farN = int((int64_t(s.far) * mul + kOne / 2) >> 16);
             int got = 0;
-            if (nearN > 0) got += placeNear(s, nearN) * (anySym ? c.np : 1);
+            if (nearN > 0) {
+                const int n = placeNear(s, nearN);
+                if (n < nearN && k != Kind::Tree) c.warn("only " + std::to_string(n) + " of " + std::to_string(nearN) + " '" + c.R.types[size_t(ti)].id + "' near each base");
+                got += n * (anySym ? c.np : 1);
+            }
             if (farN > 0) got += placeFar(s, farN * domains) * (anySym ? c.np : 1);
             for (int q = 0; q < s.centreCount; ++q) {
                 P2 p = ctr;
@@ -586,6 +607,76 @@ void placeContent(Ctx& c) {
             r.push(Json::string("g" + std::to_string(a))); r.push(Json::string("g" + std::to_string(b)));
             c.roads.push(r);
         }
+    }
+}
+
+// ---------------------------------------------------------------- unblocking
+
+namespace {
+void entityRect(const Ctx& c, const Json& e, int& x0, int& y0, int& fw, int& fh) {
+    const int ti = c.R.findType(e.getStr("type"));
+    const game::UnitType& t = c.R.types[size_t(ti)];
+    fw = t.structure ? t.footprintW : 0; fh = t.structure ? t.footprintH : 0;
+    const int64_t px = e["pos"][size_t(0)].fx().raw, py = e["pos"][size_t(1)].fx().raw;
+    x0 = int((px - (int64_t(fw) << 15) + 32768) >> 16);
+    y0 = int((py - (int64_t(fh) << 15) + 32768) >> 16);
+}
+} // namespace
+
+// Objects must never cut a start off (trees in a 1-cell gap): while some start is unreachable with objects,
+// remove the objects on the cheapest route (and their symmetric images). Kit objects are never removed.
+void unblockStarts(Ctx& c) {
+    if (c.connect == "none" || c.starts.size() < 2) return;
+    const bool dig = c.digPlain != 0;
+    for (int round = 0; round < 24; ++round) {
+        game::MapGrid g;
+        c.blockRects.clear();
+        for (auto& e : c.entities.items()) {
+            int x0, y0, fw, fh; entityRect(c, e, x0, y0, fw, fh);
+            if (fw > 0) c.blockRects.push_back({x0, y0, fw, fh});
+        }
+        buildGrid(c, g, true);
+        const int sx = int(c.starts[0].x >> 16), sy = int(c.starts[0].y >> 16);
+        int ax = sx, ay = sy;
+        g.nearestPassable(ax, ay, game::kLayerGround, 8);
+        std::vector<uint8_t> seen = reachable(c, g, ax, ay, dig);
+        int bad = -1, bx = 0, by = 0;
+        for (size_t k = 1; k < c.starts.size() && bad < 0; ++k) {
+            bx = int(c.starts[k].x >> 16); by = int(c.starts[k].y >> 16);
+            g.nearestPassable(bx, by, game::kLayerGround, 8);
+            if (!seen[size_t(c.ci(bx, by))]) bad = int(k);
+        }
+        if (bad < 0) return;
+        // route on terrain only, then drop objects whose footprint touches it
+        game::MapGrid t;
+        buildGrid(c, t, false);
+        std::vector<uint8_t> onPath(size_t(c.w * c.h), 0);
+        {
+            std::vector<Vec3> path;
+            t.findPath(t.cellCenter(ax, ay), t.cellCenter(bx, by), game::kLayerGround, path, c.w * c.h * 2);
+            Vec3 p = t.cellCenter(ax, ay);
+            for (auto& wp : path) {   // rasterize the segments
+                const int steps = int(std::max(fxAbs(wp.x - p.x), fxAbs(wp.z - p.z)).toInt()) * 2 + 1;
+                for (int k = 0; k <= steps; ++k) {
+                    const Vec3 q = p + (wp - p) * Fixed::fromRatio(k, steps);
+                    const int x = t.cellX(q.x), y = t.cellY(q.z);
+                    c.forImages(x, y, [&](int ix, int iy, int) { onPath[size_t(c.ci(ix, iy))] = 1; });
+                }
+                p = wp;
+            }
+        }
+        Json kept = Json::array();
+        int removed = 0;
+        for (auto& e : c.entities.items()) {
+            int x0, y0, fw, fh; entityRect(c, e, x0, y0, fw, fh);
+            bool hit = false;
+            if (e.getInt("owner", 0) == 0 || e.getInt("owner", 0) < 0)
+                for (int y = y0; y < y0 + fh && !hit; ++y)
+                    for (int x = x0; x < x0 + fw; ++x) if (c.inside(x, y) && onPath[size_t(c.ci(x, y))]) { hit = true; break; }
+            if (hit) ++removed; else kept.push(e);
+        }
+        if (!removed) { c.warn("objects could not be cleared from the route between starts"); return; }
+        c.entities = kept;
     }
 }
 
