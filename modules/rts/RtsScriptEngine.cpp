@@ -3,6 +3,7 @@
 #include "RtsScriptInternal.h"
 #include <algorithm>
 #include "RtsInternal.h"
+#include "RtsStdLua.h"
 
 namespace rts::game {
 using namespace script;
@@ -52,8 +53,10 @@ struct ScriptEngine::Impl {
     uint64_t serialCounter = 0, lastSerial = 0;
     uint32_t budgetTick = UINT32_MAX;
     std::vector<PendingEffect> effects;
+    int stdRefs[size_t(StdFn::Count)];
+    bool stdFailed[size_t(StdFn::Count)] = {};
 
-    Impl(ScriptEngine& s, RtsModule& mod) : self(s), m(mod) {}
+    Impl(ScriptEngine& s, RtsModule& mod) : self(s), m(mod) { for (int& r : stdRefs) r = LUA_NOREF; }
 
     void logLine(bool error, const std::string& text) {
         ScriptLogEntry e{error, vm.sim ? vm.sim->tick() : 0, text};
@@ -323,6 +326,9 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     vm.budget = std::max<int64_t>(10000, rules.getInt("scriptBudget", 1000000));
 
     openGameApi(vm);
+    openStdApi(vm);
+    lua_newtable(L);
+    lua_setglobal(L, "std");
     lua_getglobal(L, "game");
     lua_pushcfunction(L, bind<lAfter>); lua_setfield(L, -2, "after");
     lua_pop(L, 1);
@@ -333,12 +339,36 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     lua_pushvalue(L, -1); lua_setfield(L, LUA_REGISTRYINDEX, "rts.state");
     lua_setglobal(L, "state");
 
-    // run the files (a larger budget: setup work)
+    // the standard library first (engine code: no budget); scripts/std/<name>.lua of the game replaces a module
     vm.loading = true;
+    lua_sethook(L, nullptr, 0, 0);
+    for (const stdlua::File* f = stdlua::kFiles; f->name; ++f) {
+        const std::string over = std::string("scripts/std/") + f->name + ".lua";
+        auto it = vm.sources.find(over);
+        const bool own = it != vm.sources.end();
+        const std::string name = own ? over : std::string("std/") + f->name + ".lua";
+        const std::string text = own ? it->second : std::string(reinterpret_cast<const char*>(f->data), f->size);
+        std::string err;
+        if (!loadChunk(vm, name, text, err) || lua_pcall(L, 0, 0, 0) != LUA_OK) {
+            if (err.empty()) { err = lua_tostring(L, -1) ? lua_tostring(L, -1) : "error"; lua_pop(L, 1); }
+            im.logLine(true, err);
+        }
+    }
+    static const char* const kStdNames[] = {"victory"};
+    static_assert(sizeof(kStdNames) / sizeof(kStdNames[0]) == size_t(StdFn::Count));
+    lua_getglobal(L, "std");
+    for (size_t k = 0; k < size_t(StdFn::Count); ++k) {
+        if (lua_getfield(L, -1, kStdNames[k]) == LUA_TFUNCTION) im.stdRefs[k] = luaL_ref(L, LUA_REGISTRYINDEX);
+        else { lua_pop(L, 1); im.logLine(true, std::string("standard library: std.") + kStdNames[k] + " is missing"); }
+    }
+    lua_pop(L, 1);
+    // the game's files (a larger budget: setup work)
     const int64_t tickBudget = vm.budget;
     vm.budget = tickBudget * 20;
     vm.used = 0;
     for (const std::string& f : scriptFiles(rules, map)) {
+        if (f.rfind("scripts/std/", 0) == 0) continue;   // standard library overrides: loaded above
+        userScripts_ = true;
         auto it = vm.sources.find(f);
         if (it == vm.sources.end()) { im.logLine(true, f + ": script source not loaded (the loader must call embedScripts)"); continue; }
         std::string err;
@@ -382,6 +412,7 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
         for (auto& a : d.actions)
             if (a.kind == TrigAction::Script && !hasFunction(a.name)) im.logLine(true, "trigger '" + d.id + "': script function '" + a.name + "' is not defined");
     }
+    st.userScripts = userScripts_;
     st.disabled.assign(im.handlers.size(), 0);
     st.inside.assign(im.handlers.size(), {});
     im.commit(sim);
@@ -462,6 +493,24 @@ void ScriptEngine::tick(Simulation& sim) {
     im.commit(sim);
 }
 
+void ScriptEngine::callStd(Simulation& sim, StdFn fn) {
+    Impl& im = *impl_;
+    const int ref = im.stdRefs[size_t(fn)];
+    if (ref == LUA_NOREF) return;
+    lua_State* L = im.vm.L;
+    im.enter(sim);
+    lua_sethook(L, nullptr, 0, 0);   // engine code: no instruction budget (user calls set it again)
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    lua_pushinteger(L, sim.tick());
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+        if (!im.stdFailed[size_t(fn)]) {
+            im.stdFailed[size_t(fn)] = true;
+            im.logLine(true, std::string("standard library: ") + (lua_tostring(L, -1) ? lua_tostring(L, -1) : "error"));
+        }
+        lua_pop(L, 1);
+    }
+}
+
 bool ScriptEngine::callCondition(Simulation& sim, const std::string& fn, const Json& args, uint8_t player, Entity unit, Vec3 at) {
     Impl& im = *impl_;
     if (!im.vm.L) return false;
@@ -487,6 +536,7 @@ void ScriptEngine::queueEffect(const EffectDef& e, const EffectCtx& ctx, std::ve
 }
 
 void ScriptStore::hash(Hasher& h) const {
+    if (!userScripts) return;   // only the standard library: its state lives in GameState (hashed there)
     h.str(state);
     h.u32(started);
     for (auto d : disabled) h.u32(d);

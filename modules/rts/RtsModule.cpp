@@ -17,11 +17,9 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.world().setResource<GameState>();
     setupMap(sim, map);
     loadTriggers(rules_, rulesJson, map, triggers_);
-    script_.reset();
-    if (!scriptFiles(rulesJson, map).empty()) {   // zero cost for games without scripts: no VM, no system
-        script_ = std::make_unique<ScriptEngine>(*this);
-        script_->load(sim, rulesJson, map);
-    }
+    // Lua: the engine's standard library (rule-level mechanics, modules/rts/lua) + the game's scripts
+    script_ = std::make_unique<ScriptEngine>(*this);
+    script_->load(sim, rulesJson, map);
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
@@ -45,9 +43,9 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("capture", [this](Simulation& s) { sysCapture(s); });
     sim.addSystem("creep", [this](Simulation& s) { sysCreep(s); });
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
-    sim.addSystem("victory", [this](Simulation& s) { sysVictory(s); });
+    sim.addSystem("victory", [this](Simulation& s) { script_->callStd(s, StdFn::Victory); });   // lua/victory.lua
     sim.addSystem("triggers", [this](Simulation& s) { sysTriggers(s); }); // last: sees every event of the tick
-    if (script_) sim.addSystem("scripts", [this](Simulation& s) { script_->tick(s); }); // after triggers: same events
+    if (script_->hasUserScripts()) sim.addSystem("scripts", [this](Simulation& s) { script_->tick(s); }); // after triggers: same events
     sysCreep(sim);
     sysEconomy(sim); // initial supply/tech counts
     // big maps: build the hierarchical pathing graph now (it is derived data, so this only moves the cost
