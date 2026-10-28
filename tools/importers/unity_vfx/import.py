@@ -65,6 +65,7 @@ def map_system(ctx, ps, psr, go_id, wpos, wrot, wscale, path, as_sub):
     mp.map_forces(s, em)
     mat = ml.map_renderer(s, em)
     ml.map_over_life(s, em, mat.tint)
+    ml.model_file_turn(s, em)
     ml.map_noise(s, em)
     ml.map_texture_sheet(s, em, mat.blend)
     ml.map_collision(s, em)

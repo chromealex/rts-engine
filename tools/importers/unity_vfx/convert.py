@@ -24,6 +24,19 @@ I3 = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
 A_Y_TO_Z = ((1, 0, 0), (0, 0, -1), (0, 1, 0))
 
 
+def arc_frame(arc):
+    """Engine shape-local frame (axis +Y, arc from +X towards +Z) -> Unity shape-local frame (axis +Z, arc from +X
+    towards +Y). The mirror reverses the sweep, so the engine starts at Unity's arc end and sweeps back: the same
+    sector (loop / ping-pong modes run the other way round). arc >= 360: A_Y_TO_Z."""
+    if arc >= 360:
+        return A_Y_TO_Z
+    c, s = math.cos(math.radians(arc)), math.sin(math.radians(arc))
+    return ((c, 0, s), (s, 0, -c), (0, 1, 0))
+
+
+Y180 = ((-1, 0, 0), (0, 1, 0), (0, 0, -1))
+
+
 def mm(a, b):
     return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)) for i in range(3))
 
