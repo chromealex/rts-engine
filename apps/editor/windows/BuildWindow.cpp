@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdio>
 #include <map>
+#include <sstream>
 #include <filesystem>
 #include "../Editor.h"
 #include "../EditorUtil.h"
@@ -197,10 +198,31 @@ private:
                 size_t e = log.find('\n', pos);
                 std::string line = log.substr(pos + 22, e == std::string::npos ? std::string::npos : e - pos - 22);
                 pos = e == std::string::npos ? log.size() : e;
-                if (size_t c = line.find(':'); c != std::string::npos) missing_.push_back({line.substr(0, c), line.substr(c + 1)});
+                if (size_t c = line.find(':'); c != std::string::npos) missing_.push_back({line.substr(0, c), describe(ws, line.substr(0, c), line.substr(c + 1))});
             }
-            if (!missing_.empty()) { showMissing_ = true; open = true; checks_.clear(); }
+            if (!missing_.empty()) { showMissing_ = missingOpen_ = true; checks_.clear(); ed.focusWindow("build"); }
         }
+    }
+
+    // "emsdk,cmake" -> "Emscripten (emsdk) ≈ 400 МБ, CMake ≈ 50 МБ" from the last check of that target
+    std::string describe(Workspace& ws, const std::string& target, const std::string& ids) {
+        if (!checks_.count(target)) {   // the window was closed during the build: check now (a fraction of a second)
+            Check c;
+            try { c.status = ws.toolchainCheck(target); } catch (const std::exception& e) { c.error = e.what(); }
+            checks_[target] = c;
+        }
+        auto it = checks_.find(target);
+        std::string out, id;
+        std::stringstream ss(ids);
+        while (std::getline(ss, id, ',')) {
+            while (!id.empty() && id[0] == ' ') id.erase(0, 1);
+            std::string text = id;
+            if (it != checks_.end())
+                for (auto& r : it->second.status["requirements"].items())
+                    if (r.getStr("id") == id) text = r.getStr("name") + (r.has("size") ? " (" + r.getStr("size") + ")" : "");
+            out += (out.empty() ? "" : ", ") + text;
+        }
+        return out;
     }
 
     void startInstall(Editor& ed, const std::string& what) {
@@ -246,12 +268,14 @@ private:
             ImGui::PushID(r.getStr("id").c_str());
             const bool req = r.getBool("required");
             ImGui::Bullet();
-            ImGui::TextColored(req ? red : yellow, "%s — %s", r.getStr("name").c_str(), r.getStr("detail", "не установлен").c_str());
+            std::string line = r.getStr("name") + " — " + r.getStr("detail", "не установлен");
+            if (r.getBool("autoInstall") && r.has("size")) line += "  (" + r.getStr("size") + ")";
+            if (!req) line += ", необязательно";
+            ImGui::PushStyleColor(ImGuiCol_Text, req ? red : yellow);
+            ImGui::TextWrapped("%s", line.c_str());
+            ImGui::PopStyleColor();
             if (r.getBool("autoInstall")) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("(%s)", r.getStr("size", "?").c_str());
                 if (ImGui::IsItemHovered()) ImGui::SetTooltip("Установщик: %s", r.getStr("install").c_str());
-                if (!req) { ImGui::SameLine(); ImGui::TextDisabled("необязательно"); }
             } else if (r.has("manual")) {
                 // read-only field: the command can be selected and copied
                 std::string m = r.getStr("manual");
@@ -292,28 +316,41 @@ private:
         ImGui::PopID();
     }
 
+    // Not an ImGui modal: a floating window over the editor (a modal opened from a docked window
+    // was closed again by the focus restore in NewFrame). It stays until a button is pressed.
     void missingPopup(Editor& ed) {
-        if (showMissing_) { ImGui::OpenPopup("Не хватает инструментов###toolchain-missing"); showMissing_ = false; }
-        ImGui::SetNextWindowSize(ImVec2(520, 0), ImGuiCond_Appearing);
-        if (!ImGui::BeginPopupModal("Не хватает инструментов###toolchain-missing", nullptr, ImGuiWindowFlags_NoSavedSettings)) return;
-        ImGui::TextWrapped("Сборка остановлена: на этом компьютере не хватает инструментов.");
-        for (auto& [target, ids] : missing_) ImGui::BulletText("%s: %s", targetName(target).c_str(), ids.c_str());
-        ImGui::Spacing();
-        ImGui::TextWrapped("Их можно установить автоматически в ~/.rtsengine/toolchains (без прав администратора, загрузка может быть большой: "
-                           "Emscripten ≈ 400 МБ, Android NDK ≈ 700 МБ). После установки сборка запустится снова.");
-        ImGui::Spacing();
-        if (ui::button(ICON_DOWNLOAD, "Установить и собрать", true)) {
-            installQueue_.clear();
-            for (size_t i = 1; i < missing_.size(); ++i) installQueue_.push_back(missing_[i].first);
-            rebuildAfter_ = lastBuildTarget_.empty() ? missing_[0].first : lastBuildTarget_;
-            startInstall(ed, missing_[0].first);
-            ImGui::CloseCurrentPopup();
+        if (!missingOpen_) return;
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        if (showMissing_) {
+            ImGui::SetNextWindowPos(vp->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowFocus();
+            showMissing_ = false;
         }
-        ImGui::SameLine();
-        if (ImGui::Button("Только установить")) { installQueue_.clear(); for (size_t i = 1; i < missing_.size(); ++i) installQueue_.push_back(missing_[i].first); rebuildAfter_.clear(); startInstall(ed, missing_[0].first); ImGui::CloseCurrentPopup(); }
-        ImGui::SameLine();
-        if (ImGui::Button("Закрыть")) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
+        ImGui::SetNextWindowSize(ImVec2(540, 0), ImGuiCond_Always);
+        const ImGuiWindowFlags f = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize;
+        if (ImGui::Begin(ICON_WARNING "  Не хватает инструментов###toolchain-missing", &missingOpen_, f)) {
+            ImGui::TextWrapped("Сборка остановлена: на этом компьютере не хватает инструментов.");
+            for (auto& [target, ids] : missing_) ImGui::BulletText("%s: %s", targetName(target).c_str(), ids.c_str());
+            ImGui::Spacing();
+            ImGui::TextWrapped("Их можно установить автоматически в ~/.rtsengine/toolchains — без прав администратора и изменений в системе "
+                               "(удалить: удалить эту папку). После установки сборка запустится снова.");
+            ImGui::Spacing();
+            auto install = [&](bool rebuild) {
+                installQueue_.clear();
+                for (size_t i = 1; i < missing_.size(); ++i) installQueue_.push_back(missing_[i].first);
+                rebuildAfter_ = rebuild ? (lastBuildTarget_.empty() ? missing_[0].first : lastBuildTarget_) : std::string();
+                startInstall(ed, missing_[0].first);
+                missingOpen_ = false;
+            };
+            ImGui::BeginDisabled(ed.ws().building());
+            if (ui::button(ICON_DOWNLOAD, "Установить и собрать", true)) install(true);
+            ImGui::SameLine();
+            if (ImGui::Button("Только установить")) install(false);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button("Закрыть")) missingOpen_ = false;
+        }
+        ImGui::End();
     }
 
     std::string buildFlags() const {
@@ -591,7 +628,7 @@ private:
     std::string outDir_, filter_, error_, lastProject_;
     std::map<std::string, Json> reports_;
     // toolchains
-    bool autoInstall_ = false, recheck_ = false, showMissing_ = false;
+    bool autoInstall_ = false, recheck_ = false, showMissing_ = false, missingOpen_ = false;
     std::future<Check> checking_;
     std::string checkingTarget_, lastBuildTarget_, rebuildAfter_, installError_;
     std::map<std::string, Check> checks_;

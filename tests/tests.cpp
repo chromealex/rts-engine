@@ -8840,6 +8840,12 @@ TEST(toolchain_detection_fake_home) {
     CHECK(st.env["EMSDK"] == (tcd / "emsdk").string() && st.env.count("EM_CONFIG"));
     CHECK(std::find(st.binDirs.begin(), st.binDirs.end(), tcd / "emsdk" / "node" / "20.18.0_64bit" / "bin") != st.binDirs.end());
     CHECK(machineLine(st) == "RTS_MISSING_TOOLCHAIN web:");
+    // an emsdk too old for the engine is not used
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emscripten-version.txt", "\"3.1.6\"\n");
+    st = checkToolchain("web", env);
+    CHECK(!st.find("emsdk")->found && st.find("emsdk")->detail.find("3.1.6") != std::string::npos);
+    touch(tcd / "emsdk" / "upstream" / "emscripten" / "emscripten-version.txt", "\"4.0.12\"\n");
+    CHECK(checkToolchain("web", env).ok());
 
     // RTS_TOOLCHAINS_DIR moves our folder
     env.vars["RTS_TOOLCHAINS_DIR"] = (home / "elsewhere").string();

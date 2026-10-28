@@ -255,6 +255,7 @@ std::string installEmsdk(const ToolEnv& env, const ToolLog& log) {
         }
         if (!isFile(dir / "emsdk.py")) return "emsdk не скачан: нет " + (dir / "emsdk.py").string();
     }
+    setEnvVar("PYTHONUNBUFFERED", "1");   // emsdk's progress in order with its errors when piped into the editor
     if (sh(inDir(dir, shq(py) + " emsdk.py install latest", env), log) != 0)
         return "emsdk install latest не удался (см. журнал выше; нужен доступ к storage.googleapis.com)";
     if (sh(inDir(dir, shq(py) + " emsdk.py activate latest", env), log) != 0) return "emsdk activate latest не удался";
