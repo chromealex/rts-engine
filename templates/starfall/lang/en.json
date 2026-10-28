@@ -3,11 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "StarCraft II: three distinct races, high ground blocks vision, minerals and gas.",
+  "howto.like": "StarCraft II: three races, each with its own way to build.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "Static defence (photon cannon, spine crawler, bunker) pays off early against rushes.",
-  "howto.step1": "Workers (probes, drones or SCVs, depending on your side) mine minerals; build an assimilator, extractor or refinery on a geyser for gas.",
-  "howto.step2": "Supply: pylons for the Guild, overlords for the Swarm, depots for the third faction.",
-  "howto.step3": "Guild: the gateway trains zealots and stalkers (stalkers Blink); Swarm: the spawning pool unlocks zerglings and hydras; humans: barracks with marines and marauders.",
-  "howto.step4": "Low ground cannot see the plateau: hold the high ground and keep a scout up there."
+  "howto.tip": "Stalker and zealot shields recharge after 10 seconds without damage — pull wounded units back.",
+  "howto.step1": "One worker mines a patch at a time, 5 minerals a trip; gas is 4 a trip from an assimilator, extractor or refinery.",
+  "howto.step2": "Guild: probes start a structure and walk on; structures work only in a pylon field. Swarm: drones become structures, up to 3 larva per hatchery, everything on creep.",
+  "howto.step3": "Legion: SCVs build; barracks and factory take add-ons — a tech lab (marauders, siege tanks) or a reactor (two marines at once).",
+  "howto.step4": "Damage = attack + bonus vs armored or light − armor. Low ground can't see up the plateau."
 }

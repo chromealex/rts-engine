@@ -88,22 +88,6 @@
    "owner": 1,
    "pos": [
     14,
-    21
-   ]
-  },
-  {
-   "type": "villager",
-   "owner": 2,
-   "pos": [
-    50,
-    27
-   ]
-  },
-  {
-   "type": "villager",
-   "owner": 1,
-   "pos": [
-    14,
     22
    ]
   },
@@ -148,6 +132,86 @@
    ]
   },
   {
+   "type": "scout",
+   "owner": 1,
+   "pos": [
+    15,
+    26
+   ]
+  },
+  {
+   "type": "scout",
+   "owner": 2,
+   "pos": [
+    49,
+    22
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    7.5,
+    15.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    56.5,
+    32.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    8.5,
+    15.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    55.5,
+    32.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    9.5,
+    15.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    54.5,
+    32.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    7.5,
+    16.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    56.5,
+    31.5
+   ]
+  },
+  {
    "type": "gold_pile",
    "owner": 0,
    "pos": [
@@ -164,6 +228,38 @@
    ]
   },
   {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    9.5,
+    16.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    54.5,
+    31.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    8.5,
+    17.5
+   ]
+  },
+  {
+   "type": "gold_pile",
+   "owner": 0,
+   "pos": [
+    55.5,
+    30.5
+   ]
+  },
+  {
    "type": "stone_pile",
    "owner": 0,
    "pos": [
@@ -177,6 +273,118 @@
    "pos": [
     47.5,
     16.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    17.5,
+    31.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    46.5,
+    16.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    16.5,
+    32.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    47.5,
+    15.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    17.5,
+    32.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    46.5,
+    15.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    18.5,
+    31.5
+   ]
+  },
+  {
+   "type": "stone_pile",
+   "owner": 0,
+   "pos": [
+    45.5,
+    16.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    16.5,
+    17.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    47.5,
+    30.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    17.5,
+    17.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    46.5,
+    30.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    18.5,
+    17.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    45.5,
+    30.5
    ]
   },
   {
@@ -200,7 +408,7 @@
    "owner": 0,
    "pos": [
     17.5,
-    19.5
+    18.5
    ]
   },
   {
@@ -208,7 +416,23 @@
    "owner": 0,
    "pos": [
     46.5,
-    28.5
+    29.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    18.5,
+    18.5
+   ]
+  },
+  {
+   "type": "berry_bush",
+   "owner": 0,
+   "pos": [
+    45.5,
+    29.5
    ]
   },
   {

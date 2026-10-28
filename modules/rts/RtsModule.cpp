@@ -46,6 +46,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("mech", [this](Simulation& s) { if (mechOn(s)) sysMech(s); });   // agent-mech
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
     if (rules_.advancedEffects) sim.addSystem("effects", [this](Simulation& s) { sysEffects(s); });
+    if (rules_.originals) sim.addSystem("originals", [this](Simulation& s) { sysOriginals(s); }); // RtsOriginals.cpp
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
     sim.addSystem("movement", [this](Simulation& s) { sysMovement(s); });
     if (state(sim).surface) sim.addSystem("transit", [this](Simulation& s) { sysTransit(s); });
@@ -447,6 +448,8 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (underConstruction) w.add<Construction>(e);
     if (t.hero) w.add<Hero>(e);
     if (t.members > 1) w.add<Squad>(e);
+    if (t.shieldMax.raw > 0) w.add<Shield>(e, Shield{t.shieldMax, 0});
+    if (t.eats > 0) w.add<Eater>(e);
     if (!t.abilities.empty()) w.add<AbilityState>(e);
     if (t.captureTime.raw > 0) w.add<Capture>(e);
     if (t.hasNeeds) { Needs n; n.happiness = t.needs.happyStart; w.add<Needs>(e, n); }
@@ -474,6 +477,7 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     }
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
+    if (t.hero && rules_.originals) onHeroSpawn(sim, e, owner);
     sim.emit({kEvSpawned, owner, e, kNullEntity, type, pos});
     return e;
 }
@@ -507,6 +511,16 @@ bool RtsModule::canTrain(Simulation& sim, uint8_t player, uint16_t type) const {
     if (!requirementsMet(sim, player, t.requires_)) return false;
     if (player < gs->players.size() && !gs->players[player].typeDisabled.empty() && gs->players[player].typeDisabled[type]) return false;
     if (t.unique && player < gs->players.size() && gs->players[player].typeCountAll[type] > 0) return false;
+    if (t.hero && rules_.originals && !heroAllowed(sim, player, type)) return false;
+    if (t.requiresRegions > 0 && player != 0 && player < gs->players.size()) {   // Z: factory level from territories held
+        int owned = 0;
+        for (auto o : gs->regionOwner) if (o == player) ++owned;
+        if (owned < t.requiresRegions) return false;
+    }
+    if (t.factionMask && player != 0 && player < gs->players.size()) {   // house / race units (Dune II houses)
+        int fi = rules_.findFaction(gs->players[player].faction);
+        if (fi < 0 || !(t.factionMask & (1u << fi))) return false;
+    }
     return true;
 }
 
@@ -612,6 +626,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
         case Stat::EnergyRegen: case Stat::Defense: case Stat::CooldownRate: case Stat::UpgradeCost: case Stat::DamageTaken: case Stat::Scale: base = kOne; break;
         case Stat::GarrisonCap: base = Fixed::fromInt(t.garrisonMax); break;
         case Stat::Lifesteal: base = Fixed{}; break;
+        case Stat::Armor2: base = t.armor2; break;
         default: break;
     }
     uint8_t owner = w.get<Owner>(e).player;
@@ -635,6 +650,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
                     if (m.stat == s) { add += m.add * in.stacks; for (int k = 0; k < in.stacks; ++k) mul *= m.mul; }
     }
     if (mechOn(sim)) mechStatMod(sim, e, s, add, mul);   // agent-mech states (retreat speed, cargo arrows, veterancy)
+    if (rules_.originals) add += playerModsStat(sim, owner, u.type, s, mul);   // forges, morale
     // Damage/Range/GatherRate/AttackSpeed "add" are fractional bonuses on top of 1 / absolute range
     return (base + add) * mul;
 }
@@ -689,6 +705,18 @@ bool RtsModule::canClaim(Simulation& sim, uint8_t player, int region, std::vecto
     bool adjacent = false;
     for (uint16_t n : gs->regionAdj[size_t(region)]) if (gs->regionOwner[n] == player) adjacent = true;
     if (!adjacent) return false;
+    if (rules_.regions.requireExplored && player < gs->vision.size() && !gs->vision[player].empty()) {
+        Vec3 c = gs->regionCenter[size_t(region)];
+        int x = gs->grid.cellX(c.x), y = gs->grid.cellY(c.z);
+        if (gs->grid.inside(x, y) && gs->vision[player][size_t(gs->grid.index(x, y))] == 0) return false;   // never scouted
+    }
+    if (rules_.regions.clearFirst) {
+        bool guarded = false;
+        sim.world().each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& t) {
+            if (!guarded && o.player == kHostileNeutral && u.hp.raw > 0 && !rules_.types[u.type].structure && regionAt(sim, t.pos) == region) guarded = true;
+        });
+        if (guarded) return false;
+    }
     std::vector<Amount> cost = rules_.regions.claimCost;
     int owned = 0;
     for (auto o : gs->regionOwner) if (o == player) ++owned;
@@ -745,6 +773,7 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
             });
             if (hasBase && !near) return fail("too far from base");
         }
+        if (t.needsField >= 0 && !inField(sim, player, t.needsField, centre, t)) return fail("needs power field");
         if (rules_.regions.enabled && rules_.regions.buildOnlyOwned && gs.regionCount > 0) {
             int ri = regionAt(sim, centre);
             if (ri < 0 || gs.regionOwner[size_t(ri)] != player) return fail("region not owned");
@@ -1030,14 +1059,16 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
                 });
                 if (!recruit.valid()) break;
             }
-            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, rules_.types[ut].cost, rules_.types[ut].supplyUsed)) break;
+            Fixed timeMult = kOne;
+            const std::vector<Amount> tcost = rules_.originals ? trainCost(sim, cmd.player, ut, &timeMult) : rules_.types[ut].cost;
+            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, tcost, rules_.types[ut].supplyUsed)) break;
             if (recruit.valid()) { Unit& ru = w.get<Unit>(recruit); ru.hp = Fixed{}; ru.flags |= kUnitSilent; }
             if (rules_.costModel == CostModel::Progressive && !canAfford(sim, cmd.player, {}, rules_.types[ut].supplyUsed)) {
                 sim.emit({kEvNotEnough, cmd.player, kNullEntity, kNullEntity, 255, {}});
                 break;
             }
             if (t.chargesMax > 0) --prod->charges;
-            prod->queue.push_back({int32_t(ut), Fixed{}, Fixed{}});
+            prod->queue.push_back({int32_t(ut), Fixed{}, Fixed{}, false, timeMult});
             gs.players[cmd.player].typeCountAll[ut]++;
             sim.emit({kEvTrainStarted, cmd.player, e, kNullEntity, ut, w.get<Transform>(e).pos});
             break;
@@ -1049,6 +1080,11 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (std::find(t.researches.begin(), t.researches.end(), k) == t.researches.end()) break;
             auto& eco = gs.players[cmd.player];
             if (int(eco.researched[k]) >= rules_.techs[k].levels || eco.researching[k] || !requirementsMet(sim, cmd.player, rules_.techs[k].requires_)) break;
+            if (rules_.techs[k].requiresAnyCount > 0) {   // AoE ages: N different buildings of the previous age
+                int have = 0;
+                for (uint16_t ty : rules_.techs[k].requiresAny) if (eco.typeCount[ty] > 0) ++have;
+                if (have < rules_.techs[k].requiresAnyCount) break;
+            }
             if (int(prod->queue.size()) >= rules_.maxQueue) break;
             if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, techCost(sim, cmd.player, k), {})) break;
             eco.researching[k] = 1;
@@ -1068,7 +1104,8 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!prod || prod->queue.empty()) break;
             size_t slot = cmd.param < 0 || size_t(cmd.param) >= prod->queue.size() ? prod->queue.size() - 1 : size_t(cmd.param);
             ProdItem it = prod->queue[slot];
-            const std::vector<Amount> cost = it.item >= 0 ? rules_.types[size_t(it.item)].cost : techCost(sim, cmd.player, uint16_t(~it.item));
+            const std::vector<Amount> cost = it.item >= 0 ? (rules_.originals && !it.upgrade ? trainCost(sim, cmd.player, uint16_t(it.item)) : rules_.types[size_t(it.item)].cost)
+                                                          : techCost(sim, cmd.player, uint16_t(~it.item));
             refund(sim, cmd.player, cost, rules_.costModel == CostModel::Upfront ? kOne : it.paid);
             if (it.item >= 0) gs.players[cmd.player].typeCountAll[size_t(it.item)]--;
             else gs.players[cmd.player].researching[size_t(~it.item)] = 0;
@@ -1088,7 +1125,12 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (busy || int(prod.queue.size()) >= rules_.maxQueue) break;
             std::vector<Amount> ucost = rules_.types[ut].cost;
             if (rules_.advancedEffects) { Fixed mult = stat(sim, e, Stat::UpgradeCost); for (auto& c : ucost) c.value = c.value * mult; }
+            // Mushroom Wars 2: upgrades and conversions are paid with units of the garrison
+            const int ug = rules_.types[ut].upgradeGarrison;
+            auto* ugar = ug > 0 ? w.tryGet<Garrison>(e) : nullptr;
+            if (ug > 0 && (!ugar || ugar->count < ug)) break;
             if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, ucost, {})) break;
+            if (ugar) ugar->count -= ug;
             prod.queue.push_back({int32_t(ut), Fixed{}, Fixed{}, true});
             break;
         }
@@ -1153,6 +1195,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
                 const UnitType& tt = rules_.types[w.get<Unit>(tg).type];
                 auto* cargo = w.tryGet<Cargo>(e);
                 if (t.entersGarrison && w.has<Garrison>(tg)) { o.type = OrderType::Enter; issue(sim, e, o, queue); break; }
+                if (rules_.originals && canCrew(sim, e, tg)) { o.type = OrderType::Enter; issue(sim, e, o, queue); break; }  // man an empty vehicle (Z)
                 if (hostile(sim, cmd.player, towner) && !t.weapons.empty()) { o.type = OrderType::Attack; issue(sim, e, o, queue); break; }
                 if (auto* rs = w.tryGet<ResourceStock>(tg)) {
                     bool can = false;
@@ -1180,13 +1223,18 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             issue(sim, e, o, queue);
             break;
         }
+        case kCmdLearn:
+            if (rules_.heroes.skills) applyLearn(sim, e, int(cmd.param));
+            break;
         case kCmdSend: {
             auto* g = w.tryGet<Garrison>(e);
             if (!g || !w.alive(cmd.target) || cmd.target == e || !w.has<Garrison>(cmd.target) || t.spawnUnit == kNoType) break;
             if (rules_.advancedEffects && (statusFlags(sim, e) & kStLock)) break;   // locked: can't send
             int64_t pct = std::clamp<int64_t>(cmd.param, 1, 100);
-            int n = int(int64_t(g->count) * pct / 100);
-            if (n <= 0 && g->count > 0) n = 1;
+            const int sendable = std::max(0, g->count - t.garrisonKeep);   // State.io: one soldier stays home
+            int n = int(int64_t(sendable) * pct / 100);
+            if (n <= 0 && sendable > 0) n = 1;
+            if (n <= 0 && t.garrisonKeep > 0) break;
             g->count -= n;
             g->pendingOut += n;
             g->pendingTarget = cmd.target;
@@ -1301,6 +1349,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     if (rules_.dungeon) hashDungeon(sim, h);
     if (rules_.settlers) hashSettlers(sim, h);
     if (rules_.advancedEffects) hashEffects(sim, h);
+    if (rules_.originals) hashOriginals(sim, h);
     if (rules_.lanes.enabled) {
         h.u32(gs.laneSignature); h.u32(uint32_t(gs.lanes.size()));
         for (auto& l : gs.lanes) { h.u32(uint32_t(l.points.size())); if (!l.points.empty()) h.v3(l.points[l.points.size() / 2]); }

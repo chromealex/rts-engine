@@ -66,7 +66,8 @@ void io(Archive& a, Transport& x) { a(x.cargo, x.used, x.unloadAt, x.unloading, 
 void io(Archive& a, Boarded& x) { a(x.carrier, x.fires); }
 void io(Archive& a, Veteran& x) { a(x.level, x.xp, x.lastHit); }
 void io(Archive& a, RallyPath& x) { a(x.points); }
-void io(Archive& a, Shield& x) { a(x.hp, x.lastHit); }
+void io(Archive& a, MechShield& x) { a(x.hp, x.lastHit); }
+void io(Archive& a, Shield& x) { a(x.value, x.lastHit); }   // originals (StarCraft shields)
 void io(Archive& a, Formation& x) { a(x.group, x.shape, x.offset); }
 void io(Archive& a, BridgeLaid& x) { a(x.laid, x.cells); }
 void io(Archive& a, Ammo& x) { a(x.left, x.init); }
@@ -171,7 +172,7 @@ template <class... T> struct PoolList {
 using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, Production, Construction, ResourceStock, Extractor, Footprint,
                         Garrison, Projectile, Hero, Transit, Squad, Buffs, AbilityState, Statuses, Area, Channel, GroupTag, Capture, Guard, Summon,
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
-                        Stance, Retreating, Transport, Boarded, Veteran, RallyPath, Shield, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag>;
+                        Stance, Retreating, Transport, Boarded, Veteran, RallyPath, MechShield, Shield, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {
