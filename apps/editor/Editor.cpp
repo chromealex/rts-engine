@@ -424,6 +424,7 @@ void Editor::startPlay(int humanSlot) {
         };
         if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
         sim_->setup(ws_.project.rulesJson, mapJson);
+        view_.lights().configure(ws_.project.manifest["lighting"], mapJson["lighting"]); // day/night
     } catch (const std::exception& e) {
         status = std::string("Ошибка запуска: ") + e.what();
         sim_.reset();
