@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include "../../../engine/platform/Platform.h"
 #include "RtsTerrainShaders.h"
 #include "RtsTerrainSurface.h"
 
@@ -574,10 +575,8 @@ void TerrainRenderer::buildWater(gfx::Device& dev, const MapGrid& g, bool flatDi
                     if (!g.inside(nx, ny)) continue;
                     size_t ni = size_t(g.index(nx, ny));
                     if (isWater(nx, ny)) { if (body[ni] < 0) { body[ni] = id; stack.push_back(int(ni)); } continue; }
-                    // shore: the two corners of the shared edge
-                    int ax = dx > 0 ? x + 1 : x, ay = dy > 0 ? y + 1 : y;
-                    int bx = dy != 0 ? ax + 1 : ax, by = dx != 0 ? ay + 1 : ay;
-                    rim = std::min({rim, terrain::gridCorner(g, lh_, ax, ay, flatDig), terrain::gridCorner(g, lh_, bx, by, flatDig)});
+                    // shore: the ground of the land cell next to the water (its centre; corners dip into the lake)
+                    rim = std::min(rim, terrain::heightAt(g, lh_, float(nx) + 0.5f, float(ny) + 0.5f));
                 }
                 for (int cy = 0; cy <= 1; ++cy) for (int cx = 0; cx <= 1; ++cx) top = std::max(top, terrain::gridCorner(g, lh_, x + cx, y + cy, flatDig));
             }
@@ -684,11 +683,11 @@ int TerrainRenderer::tierFor(const Renderer3D& r) const {
         std::string v = e;
         return v == "low" ? 0 : v == "medium" ? 1 : 2;
     }
-    switch (r.materialQuality()) {
-        case MaterialQuality::Low: return 0;
-        case MaterialQuality::Medium: return 1;
-        default: return 2;
-    }
+    // the renderer's model material tier, capped by the device default (weak Mali / Adreno / PowerVR
+    // get vertex colours, other phones splat without normal maps) - one quality switch for both
+    auto tier = [](MaterialQuality q) { return q == MaterialQuality::Low ? 0 : q == MaterialQuality::Medium ? 1 : 2; };
+    static const int deviceTier = dev_ ? tier(Renderer3D::defaultMaterialQualityFor(*dev_, platform::isTouchDevice())) : 2;
+    return std::min(tier(r.materialQuality()), deviceTier);
 }
 
 gfx::PipelineHandle TerrainRenderer::pipeline(gfx::Device& dev, int tier) {
