@@ -2372,6 +2372,76 @@ TEST(models_sample_assets_load) {
     CHECK(warn.empty());
 }
 
+#include "engine/atlas/TextureLibrary.h"
+
+namespace {
+// Records texture creation; everything else is a no-op.
+class FakeDevice final : public rts::gfx::Device {
+public:
+    std::vector<std::pair<int, int>> created;
+    int alive = 0;
+    rts::gfx::DeviceInfo info_;
+    std::string err_;
+    const rts::gfx::DeviceInfo& info() const override { return info_; }
+    rts::gfx::BufferHandle createBuffer(const rts::gfx::BufferDesc&) override { return {}; }
+    void updateBuffer(rts::gfx::BufferHandle, const void*, size_t, size_t) override {}
+    void destroyBuffer(rts::gfx::BufferHandle) override {}
+    rts::gfx::TextureHandle createTexture(const rts::gfx::TextureDesc& d) override { created.push_back({d.width, d.height}); ++alive; return {uint32_t(created.size())}; }
+    void updateTexture(rts::gfx::TextureHandle, int, int, int, int, const void*, int) override {}
+    void destroyTexture(rts::gfx::TextureHandle) override { --alive; }
+    rts::gfx::ShaderHandle createShader(const rts::gfx::ShaderDesc&) override { return {}; }
+    void destroyShader(rts::gfx::ShaderHandle) override {}
+    rts::gfx::PipelineHandle createPipeline(const rts::gfx::PipelineDesc&) override { return {}; }
+    void destroyPipeline(rts::gfx::PipelineHandle) override {}
+    const std::string& lastError() const override { return err_; }
+    void beginFrame(int, int) override {}
+    void endFrame() override {}
+    void beginPass(const rts::gfx::PassDesc&) override {}
+    void endPass() override {}
+    void setViewport(const rts::gfx::Rect&) override {}
+    void setScissor(const rts::gfx::Rect&) override {}
+    void setPipeline(rts::gfx::PipelineHandle) override {}
+    void setVertexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setIndexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setTexture(int, rts::gfx::TextureHandle) override {}
+    void setUniforms(int, const void*, size_t) override {}
+    void draw(uint32_t, uint32_t) override {}
+    void drawIndexed(uint32_t, uint32_t, int32_t) override {}
+};
+} // namespace
+
+TEST(atlas_texture_library_is_transparent) {
+    using namespace rts;
+    pack::PackWriter w;
+    atlas::Image a = atlasTestImage(40, 40, 8, 6, 20, 24, 21), b = atlasTestImage(40, 40, 0, 0, 30, 30, 22), m = atlasTestImage(8, 4, 0, 0, 8, 4, 23, true);
+    CHECK(w.addData("units/x/a.png", atlas::encodePng(a)));
+    CHECK(w.addData("units/x/b.png", atlas::encodePng(b)));
+    CHECK(w.addData("models/m.png", atlas::encodePng(m)));
+    atlas::AtlasStats st;
+    CHECK(atlas::applyAtlas(w, atlas::AtlasConfig::fromGame(Json::object(), "web"), st));
+    std::string bytes;
+    CHECK(w.writeToString(bytes, pack::WriteOptions{}));
+    auto p = pack::Pack::open(pack::memorySource(bytes));
+    if (!p) { CHECK(false); return; }
+    FakeDevice dev;
+    {
+        atlas::TextureLibrary lib(dev, [&](const std::string& path, std::string& out) { return p->read(path, out); });
+        const atlas::TextureRef* ra = lib.get("units/x/a.png");
+        const atlas::TextureRef* rb = lib.get("units/x/b.png");
+        const atlas::TextureRef* rm = lib.get("models/m.png");
+        CHECK(ra && rb && rm && !lib.get("nope.png"));
+        if (!ra || !rb || !rm) return;
+        CHECK(ra->texture == rb->texture && ra->page >= 0);          // same page: no texture switch
+        CHECK(ra->offsetX == 8 && ra->offsetY == 6 && ra->w == 20 && ra->h == 24 && ra->sourceW == 40);
+        CHECK(rm->page == -1 && rm->w == 8 && rm->h == 4 && rm->opaque && rm->uv[4] == 1.0f);
+        CHECK(dev.created.size() == 2 && lib.residentPages() == 1);  // one page + one standalone texture
+        CHECK(lib.get("units/x/a.png") == ra);                      // cached
+        atlas::Image back;
+        CHECK(lib.loadImage("units/x/b.png", back) && sameImage(back, b));
+    }
+    CHECK(dev.alive == 0);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

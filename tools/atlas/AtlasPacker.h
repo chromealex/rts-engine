@@ -27,7 +27,6 @@ public:
 
 private:
     void place(const PackRect& r);
-    void prune();
     int w_, h_;
     std::vector<PackRect> free_;
 };
