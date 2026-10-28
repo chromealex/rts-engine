@@ -86,6 +86,15 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
 - Presets per genre: continents, islands/archipelago, highlands/canyons, Dungeon Keeper caves (dig layer), lanes
   (MW2), classic Warcraft/Red Alert land maps, TA metal maps, planets (rocky, ocean, moon).
 
+Implemented (agent-terrain-gen, `modules/rts/gen/`, format and params: docs/game-format.md § Map generation):
+- `body.generate` with presets `rocky`, `ocean`, `moon`: heights from 3D fBm sampled at `CubeSphere::cornerDir` (RtsSphere.h),
+  so duplicated seam corners are bit-identical (and averaged defensively); craters for moons; sea level by quantile (written
+  relative to `seaLevel` 0); faces get `rows` (`~` water, `#` peaks, `.` ice over polar seas), `terrain.material` per face
+  (layer digits like `terrainMaterial`), `corners`; `generated.starts` = maximally separated land sites
+  (farthest-point sampling with `sphereArcTurns`) as `{body, face, x, y}`, flattened base areas; `generated.minStartArc`.
+- Runs at match start from `RtsModule::setup` (per body seed = match seed mixed with the body index for `"seed": "match"`).
+  Not yet: placing objects / players on planets (needs the planet sim's object placement), fairness paths on spheres.
+
 ## 5. Rendering (agent-planet-render)
 
 Cube-sphere terrain with per-face quadtree/CDLOD chunks (reuse the flat terrain's materials, quality tiers and
