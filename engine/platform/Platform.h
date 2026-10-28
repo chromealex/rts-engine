@@ -32,6 +32,8 @@ enum class EventType : uint8_t {
     KeyDown, KeyUp, Char,
     TouchBegin, TouchMove, TouchEnd, TouchCancel,
     Resized, FocusGained, FocusLost, QuitRequested,
+    TextInputEnded,   // the user closed the on-screen keyboard (Done, Back, hide key): blur the field
+    KeyboardChanged,  // on-screen keyboard shown/hidden/resized: see softKeyboardHeight()
 };
 
 struct Event {
@@ -73,6 +75,23 @@ bool isTouchDevice();
 const char* name();       // "macos", "ios", "android", "web", "windows", "linux"
 void requestQuit();
 void setTitle(const std::string& title);
+
+// --- text input / on-screen keyboard ---
+// Call startTextInput when a text field gets focus and stopTextInput when it loses it. Phones and
+// tablets (iOS, Android, mobile browsers) show the on-screen keyboard; on desktops it is a no-op,
+// the physical keyboard already sends KeyDown/Char. Typed text arrives as Char events in any
+// language (after IME composition), Backspace and Enter as KeyDown + KeyUp.
+// `area` is the focused field in logical points; it keeps the field where the user expects it
+// (web places its hidden input there, so the browser doesn't scroll or zoom).
+// Web: call it while handling the touch/mouse event that focused the field — mobile browsers open
+// the keyboard only inside a user gesture.
+struct TextInputArea { float x = 0, y = 0, w = 0, h = 0; };
+void startTextInput(const TextInputArea& area = {});
+void stopTextInput();
+bool textInputActive();
+// Height of the bottom part of the window covered by the on-screen keyboard, in logical points
+// (0 when hidden or on desktop). Move the focused field above it. Changes: EventType::KeyboardChanged.
+float softKeyboardHeight();
 
 // --- files ---
 // Content (rules, maps, textures) shipped with the app: bundle Resources on Apple, APK assets on

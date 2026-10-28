@@ -144,6 +144,7 @@ void main() {
     vec3 V = normalize(u_camPos.xyz - v_wpos);
     float ndl = max(dot(n, L), 0.0);
     float sh = ndl > 0.0 ? shadowFactor(n) : 1.0;
+    sh *= cloudShade(v_wpos);
     vec3 sun = u_sunColor.rgb * u_sunColor.rgb * u_sunDir.w;
     vec3 sky = u_skyColor.rgb * u_skyColor.rgb, ground = u_groundColor.rgb * u_groundColor.rgb;
     vec3 amb = mix(ground, sky, n.y * 0.5 + 0.5);
@@ -152,7 +153,7 @@ void main() {
     float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.25;
     vec3 col = base * (amb + sun * ndl * sh) + sun * spec * sh + amb * rim * base;
     col += base * dynamicLight(v_wpos, n, V, u_params.y);
-    col = mix(col, base, u_params.x) + base * u_params.w;
+    col = mix(col, base, u_params.x) + base * (u_params.w * (1.0 + nightGlow()));
     float dist = length(u_camPos.xyz - v_wpos);
     col = mix(col, u_fog.rgb * u_fog.rgb, 1.0 - exp(-dist * u_fog.w));
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0); // ACES fit
@@ -179,7 +180,7 @@ static float shadowFactor(constant U0& u, constant U1& f, float3 wpos, float3 n,
 }
 fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], constant U1& f [[buffer(2)]],
                         depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]],
-                        constant U2& l [[buffer(3)]], texture2d<float> tex1 [[texture(1)]], sampler s1 [[sampler(1)]]) {
+                        constant LightU& l [[buffer(3)]], texture2d<float> tex1 [[texture(1)]], sampler s1 [[sampler(1)]]) {
     float4 albedo = u.color * in.col;
     float3 base = albedo.rgb * albedo.rgb;
     float3 n = normalize(in.nrm);
@@ -187,6 +188,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], cons
     float3 V = normalize(f.camPos.xyz - in.wpos);
     float ndl = max(dot(n, L), 0.0);
     float sh = ndl > 0.0 ? shadowFactor(u, f, in.wpos, n, in.pos.xy, tex0, s0) : 1.0;
+    sh *= cloudShade(l, in.wpos);
     float3 sun = f.sunColor.rgb * f.sunColor.rgb * f.sunDir.w;
     float3 amb = mix(f.groundColor.rgb * f.groundColor.rgb, f.skyColor.rgb * f.skyColor.rgb, n.y * 0.5 + 0.5);
     float3 H = normalize(L + V);
@@ -194,7 +196,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], cons
     float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.25;
     float3 col = base * (amb + sun * ndl * sh) + sun * spec * sh + amb * rim * base;
     col += base * dynamicLight(l, tex1, s1, in.wpos, n, V, u.params.y);
-    col = mix(col, base, u.params.x) + base * u.params.w;
+    col = mix(col, base, u.params.x) + base * (u.params.w * (1.0 + l.info.w));
     float dist = length(f.camPos.xyz - in.wpos);
     col = mix(col, f.fog.rgb * f.fog.rgb, 1.0 - exp(-dist * f.fog.w));
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);

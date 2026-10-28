@@ -5,9 +5,11 @@
 
 #include <cctype>
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 
 #include "UiInternal.h"
+#include "UiKeyboard.h"
 
 namespace rts::ui {
 
@@ -40,7 +42,11 @@ public:
     }
     void SetClipboardText(const Rml::String& text) override { platform::setClipboardText(text); }
 
+    void ActivateKeyboard(Rml::Vector2f caret, float) override { if (keyboard) keyboard->activate(caret.y); }
+    void DeactivateKeyboard() override { if (keyboard) keyboard->deactivate(); }
+
     std::function<std::string(const std::string&)> translate;
+    UiKeyboard* keyboard = nullptr;
     void GetClipboardText(Rml::String& text) override { text = platform::clipboardText(); }
 
 private:
@@ -124,10 +130,12 @@ struct UiLayer::Impl {
     UiFiles files;
     UiRenderer renderer;
     UiFontEngine fonts;
+    UiKeyboard keyboard;
     Rml::Context* context = nullptr;
     gfx::Device* dev = nullptr;
     int64_t primaryTouch = -1;
     bool debugger = false;
+    Rml::Element* textField = nullptr; // field the on-screen keyboard was opened for
 };
 
 UiLayer::UiLayer() = default;
@@ -154,12 +162,17 @@ bool UiLayer::init(gfx::Device& dev, const char* gameFont) {
     if (!m.context) { shutdown(); return false; }
     m.context->SetDensityIndependentPixelRatio(platform::dpiScale());
     Rml::Debugger::Initialise(m.context);
+    m.system.keyboard = &m.keyboard;
+    setOnScreenKeyboard(OnScreenKeyboard::Auto);
+    m.keyboard.init(*m.context); // its document is created last: drawn above the game's documents
     return true;
 }
 
 void UiLayer::shutdown() {
     if (!impl_) return;
     if (impl_->context) {
+        impl_->system.keyboard = nullptr;
+        impl_->keyboard.shutdown();
         Rml::Debugger::Shutdown();
         Rml::Shutdown(); // releases contexts, documents and all render resources
         impl_->context = nullptr;
@@ -185,6 +198,17 @@ void UiLayer::setTranslator(std::function<std::string(const std::string&)> fn) {
     if (impl_) impl_->system.translate = std::move(fn);
 }
 
+void UiLayer::setOnScreenKeyboard(OnScreenKeyboard mode) {
+    if (!impl_) return;
+    const char* env = std::getenv("RTS_OSK");
+    const bool on = mode == OnScreenKeyboard::Always ||
+                    (mode == OnScreenKeyboard::Auto && (platform::isTouchDevice() || (env && env[0] == '1')));
+    impl_->keyboard.setEnabled(on);
+}
+
+void UiLayer::setKeyboardLanguage(const std::string& tag) { if (impl_) impl_->keyboard.setLanguage(tag); }
+bool UiLayer::keyboardVisible() const { return impl_ && impl_->keyboard.visible(); }
+
 void UiLayer::setImageSource(ImageSource source) {
     if (impl_) impl_->renderer.setImageSource(std::move(source));
 }
@@ -197,6 +221,34 @@ bool UiLayer::textInputFocused() const {
     return f && (f->GetTagName() == "input" || f->GetTagName() == "textarea" || f->GetTagName() == "select");
 }
 
+namespace {
+// Fields that take typed text (checkboxes, ranges, buttons and selects don't need a keyboard).
+bool isTextField(Rml::Element* f) {
+    if (!f) return false;
+    if (f->GetTagName() == "textarea") return true;
+    if (f->GetTagName() != "input") return false;
+    const std::string type = f->GetAttribute<Rml::String>("type", "text");
+    return type == "text" || type == "password" || type == "search" || type == "email" || type == "number";
+}
+} // namespace
+
+void UiLayer::syncTextInput() {
+    if (!context()) return;
+    Rml::Element* f = impl_->context->GetFocusElement();
+    if (!isTextField(f)) f = nullptr;
+    if (f) {
+        if (f != impl_->textField || !platform::textInputActive()) {
+            const float s = platform::dpiScale();
+            const Rml::Vector2f pos = f->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const Rml::Vector2f size = f->GetBox().GetSize(Rml::BoxArea::Border);
+            platform::startTextInput({pos.x / s, pos.y / s, size.x / s, size.y / s});
+        }
+    } else if (impl_->textField) {
+        platform::stopTextInput();
+    }
+    impl_->textField = f;
+}
+
 void UiLayer::toggleDebugger() {
     if (!impl_) return;
     impl_->debugger = !impl_->debugger;
@@ -204,6 +256,19 @@ void UiLayer::toggleDebugger() {
 }
 
 bool UiLayer::handleEvent(const platform::Event& e) {
+    if (e.type == platform::EventType::TextInputEnded && context()) {
+        // the user closed the keyboard: leave the field so the next tap opens it again
+        if (Rml::Element* f = impl_->context->GetFocusElement(); f && f == impl_->textField) f->Blur();
+        impl_->textField = nullptr;
+        return false;
+    }
+    bool consumed = processEvent(e);
+    // inside the input handler on purpose: mobile browsers open the keyboard only during a gesture
+    syncTextInput();
+    return consumed;
+}
+
+bool UiLayer::processEvent(const platform::Event& e) {
     using platform::EventType;
     if (!context()) return false;
     Impl& m = *impl_;
@@ -222,7 +287,12 @@ bool UiLayer::handleEvent(const platform::Event& e) {
     case EventType::TouchBegin:
         if (m.primaryTouch != -1) return false;
         c.ProcessMouseMove(x, y, 0);
-        if (c.ProcessMouseButtonDown(0, 0)) { c.ProcessMouseLeave(); return false; } // not on the UI: the game owns it
+        if (c.ProcessMouseButtonDown(0, 0)) { // not on the UI: the game owns it
+            c.ProcessMouseLeave();
+            // a tap outside a text field closes the on-screen keyboard, as in native apps
+            if (Rml::Element* f = c.GetFocusElement(); isTextField(f)) f->Blur();
+            return false;
+        }
         m.primaryTouch = e.touchId;
         return true;
     case EventType::TouchMove:
@@ -258,7 +328,9 @@ void UiLayer::update() {
     const Rml::Vector2i dims{platform::framebufferWidth(), platform::framebufferHeight()};
     if (c.GetDimensions() != dims) c.SetDimensions(dims);
     if (c.GetDensityIndependentPixelRatio() != platform::dpiScale()) c.SetDensityIndependentPixelRatio(platform::dpiScale());
+    impl_->keyboard.update();
     c.Update();
+    syncTextInput(); // focus changed by a script or a closed document
 }
 
 void UiLayer::render() {
