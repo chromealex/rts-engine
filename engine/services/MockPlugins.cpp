@@ -1,5 +1,6 @@
 // Desktop stand-ins for store and ad SDKs, so purchase and ad flows can be built and tested without
-// a phone. The bridge registers them on Windows/macOS/Linux (and so in tests); never in mobile/web apps.
+// a phone. The bridge registers one when game.json "plugins" lists it (or RTS_MOCK_PLUGINS=1);
+// packaged builds leave this file out unless the game lists a mock (CMake RTS_MOCK_PLUGINS).
 //
 //   RTS_MOCK_STORE = purchased (default) | pending | cancelled | failed   — outcome of purchase()
 //   RTS_MOCK_ADS   = ok (default) | noreward | fail                        — outcome of show()
@@ -122,9 +123,15 @@ public:
 };
 } // namespace
 
+void registerMockPlugin(const std::string& name) {
+    if (plugins::available(name)) return; // keep an already registered instance (and its state)
+    if (name == "mock-store") plugins::registerPlugin(name, std::make_shared<MockStore>());
+    else if (name == "mock-ads") plugins::registerPlugin(name, std::make_shared<MockAds>());
+}
+
 void registerMockPlugins() {
-    plugins::registerPlugin("mock-store", std::make_shared<MockStore>());
-    plugins::registerPlugin("mock-ads", std::make_shared<MockAds>());
+    registerMockPlugin("mock-store");
+    registerMockPlugin("mock-ads");
 }
 
 } // namespace rts::services

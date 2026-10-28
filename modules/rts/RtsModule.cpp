@@ -7,9 +7,6 @@
 namespace rts::game {
 
 using namespace detail;
-namespace {
-Vec3 readPos(const Json& p) { return {p[0].fx(), Fixed{}, p[p.size() >= 3 ? 2 : 1].fx()}; }
-} // namespace
 
 // ================================================================= setup
 
@@ -48,6 +45,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (rules_.advancedEffects) sim.addSystem("effects", [this](Simulation& s) { sysEffects(s); });
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
     sim.addSystem("movement", [this](Simulation& s) { sysMovement(s); });
+    if (state(sim).surface) sim.addSystem("transit", [this](Simulation& s) { sysTransit(s); });
     sim.addSystem("weapons", [this](Simulation& s) { sysWeapons(s); });
     sim.addSystem("projectiles", [this](Simulation& s) { sysProjectiles(s); });
     sim.addSystem("death", [this](Simulation& s) { sysDeath(s); });
@@ -74,54 +72,59 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     GameState& gs = state(sim);
     MapGrid& g = gs.grid;
 
-    int mw = int(map["size"][0].integer(64)), mh = int(map["size"][1].integer(64));
-    if (mw < 4 || mh < 4 || mw > kMaxMapSize || mh > kMaxMapSize) throw std::runtime_error("map: size must be 4.." + std::to_string(kMaxMapSize));
-    g.init(mw, mh);
-    const Json& terrain = map["terrain"];
-    const Json& rows = terrain["rows"];
-    for (size_t y = 0; y < rows.size() && int(y) < mh; ++y) {
-        std::string row = rows[y].str();
-        for (size_t x = 0; x < row.size() && int(x) < mw; ++x) {
-            size_t i = size_t(g.index(int(x), int(y)));
-            int dk = rules_.findDiggable(row[x]);
-            if (dk >= 0) { g.flags[i] = 0; g.dig[i] = uint8_t(dk + 1); g.digHp[i] = rules_.diggables[size_t(dk)].hardness; }
-            else g.flags[i] = cellFlagsFromChar(row[x]);
+    const bool planets = map["world"].isObject();
+    if (planets) setupWorld(sim, map);
+    else {
+        int mw = int(map["size"][0].integer(64)), mh = int(map["size"][1].integer(64));
+        if (mw < 4 || mh < 4 || mw > kMaxMapSize || mh > kMaxMapSize) throw std::runtime_error("map: size must be 4.." + std::to_string(kMaxMapSize));
+        g.init(mw, mh);
+        const Json& terrain = map["terrain"];
+        const Json& rows = terrain["rows"];
+        for (size_t y = 0; y < rows.size() && int(y) < mh; ++y) {
+            std::string row = rows[y].str();
+            for (size_t x = 0; x < row.size() && int(x) < mw; ++x) {
+                size_t i = size_t(g.index(int(x), int(y)));
+                int dk = rules_.findDiggable(row[x]);
+                if (dk >= 0) { g.flags[i] = 0; g.dig[i] = uint8_t(dk + 1); g.digHp[i] = rules_.diggables[size_t(dk)].hardness; }
+                else g.flags[i] = cellFlagsFromChar(row[x]);
+            }
+        }
+        for (auto& r : terrain["rects"].items()) {
+            int x0 = int(r["rect"][0].integer()), y0 = int(r["rect"][1].integer());
+            int rw = int(r["rect"][2].integer()), rh = int(r["rect"][3].integer());
+            std::string t = r.getStr("type", ".");
+            char c = t == "water" ? '~' : t == "blocked" ? '#' : t == "nobuild" ? ',' : t == "rock" ? 'R' : t == "ramp" ? '/' : t.size() == 1 ? t[0] : '.';
+            for (int y = y0; y < y0 + rh; ++y)
+                for (int x = x0; x < x0 + rw; ++x)
+                    if (g.inside(x, y)) g.flags[size_t(g.index(x, y))] = cellFlagsFromChar(c);
+        }
+        const Json& levels = terrain["levels"];
+        for (size_t y = 0; y < levels.size() && int(y) < mh; ++y) {
+            std::string row = levels[y].str();
+            for (size_t x = 0; x < row.size() && int(x) < mw; ++x)
+                if (row[x] >= '0' && row[x] <= '9') g.level[size_t(g.index(int(x), int(y)))] = int8_t(row[x] - '0');
+        }
+        const Json& heights = terrain["heights"];
+        for (size_t i = 0; i < heights.size() && i < g.height.size(); ++i) g.height[i] = int16_t(heights[i].integer());
+        const Json& corners = terrain["corners"];  // heightfield: (w+1)*(h+1) corner heights, 1/16 units
+        if (corners.size() > 0) {
+            g.corner.assign(size_t((mw + 1) * (mh + 1)), 0);
+            for (size_t i = 0; i < corners.size() && i < g.corner.size(); ++i) g.corner[i] = int16_t(corners[i].integer());
+        } else if (terrain.has("cornersFile")) { // big maps: raw int16 LE file, attached by applyCornersFile()
+            std::string err;
+            if (!decodeCorners(terrain, mw, mh, g.corner, &err)) throw std::runtime_error(err);
+        }
+        if (rules_.terrain.model == TerrainModel::Flat) std::fill(g.level.begin(), g.level.end(), int8_t(0));
+        if (rules_.terrain.heightfield() && g.hasCorners()) {
+            const TerrainRules& tr = rules_.terrain;
+            g.slopeLimit[0] = MapGrid::slopeUnits(tr.maxSlopeGround);
+            g.sandLimit = MapGrid::slopeUnits(tr.maxSlopeSand.raw < 0 ? tr.maxSlopeGround : tr.maxSlopeSand);
+            g.buildLimit = MapGrid::slopeUnits(tr.buildSlope);
+            for (size_t k = 0; k < tr.slopeClasses.size() && k < 15; ++k) g.slopeLimit[k + 1] = MapGrid::slopeUnits(tr.slopeClasses[k]);
+            g.enableHeightfield(rules_.levelHeight);
         }
     }
-    for (auto& r : terrain["rects"].items()) {
-        int x0 = int(r["rect"][0].integer()), y0 = int(r["rect"][1].integer());
-        int rw = int(r["rect"][2].integer()), rh = int(r["rect"][3].integer());
-        std::string t = r.getStr("type", ".");
-        char c = t == "water" ? '~' : t == "blocked" ? '#' : t == "nobuild" ? ',' : t == "rock" ? 'R' : t == "ramp" ? '/' : t.size() == 1 ? t[0] : '.';
-        for (int y = y0; y < y0 + rh; ++y)
-            for (int x = x0; x < x0 + rw; ++x)
-                if (g.inside(x, y)) g.flags[size_t(g.index(x, y))] = cellFlagsFromChar(c);
-    }
-    const Json& levels = terrain["levels"];
-    for (size_t y = 0; y < levels.size() && int(y) < mh; ++y) {
-        std::string row = levels[y].str();
-        for (size_t x = 0; x < row.size() && int(x) < mw; ++x)
-            if (row[x] >= '0' && row[x] <= '9') g.level[size_t(g.index(int(x), int(y)))] = int8_t(row[x] - '0');
-    }
-    const Json& heights = terrain["heights"];
-    for (size_t i = 0; i < heights.size() && i < g.height.size(); ++i) g.height[i] = int16_t(heights[i].integer());
-    const Json& corners = terrain["corners"];  // heightfield: (w+1)*(h+1) corner heights, 1/16 units
-    if (corners.size() > 0) {
-        g.corner.assign(size_t((mw + 1) * (mh + 1)), 0);
-        for (size_t i = 0; i < corners.size() && i < g.corner.size(); ++i) g.corner[i] = int16_t(corners[i].integer());
-    } else if (terrain.has("cornersFile")) { // big maps: raw int16 LE file, attached by applyCornersFile()
-        std::string err;
-        if (!decodeCorners(terrain, mw, mh, g.corner, &err)) throw std::runtime_error(err);
-    }
-    if (rules_.terrain.model == TerrainModel::Flat) std::fill(g.level.begin(), g.level.end(), int8_t(0));
-    if (rules_.terrain.heightfield() && g.hasCorners()) {
-        const TerrainRules& tr = rules_.terrain;
-        g.slopeLimit[0] = MapGrid::slopeUnits(tr.maxSlopeGround);
-        g.sandLimit = MapGrid::slopeUnits(tr.maxSlopeSand.raw < 0 ? tr.maxSlopeGround : tr.maxSlopeSand);
-        g.buildLimit = MapGrid::slopeUnits(tr.buildSlope);
-        for (size_t k = 0; k < tr.slopeClasses.size() && k < 15; ++k) g.slopeLimit[k + 1] = MapGrid::slopeUnits(tr.slopeClasses[k]);
-        g.enableHeightfield(rules_.levelHeight);
-    }
+    const int mw = g.w, mh = g.h;
 
     // resource fields
     for (auto& f : map["fields"].items()) {
@@ -143,10 +146,19 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
                     if (row[x] >= '1' && row[x] <= '9') setCell(int(x), int(y), rd.fieldCellMax * (row[x] - '0') / 9);
             }
         } else {
-            Vec3 c = readPos(f["center"]);
+            Vec3 c = mapPos(sim, f["center"]);
             int r = int(f.getInt("radius", 3));
             Fixed amt = f.getFx("amount", rd.fieldCellMax);
-            int cx = g.cellX(c.x), cy = g.cellY(c.z);
+            if (planets) {   // disc of cells around the centre, across face seams
+                const int c0 = g.cellOf(c);
+                for (int dy = -r; dy <= r; ++dy)
+                    for (int dx = -r; dx <= r; ++dx) {
+                        const int d2 = dx * dx + dy * dy, n = g.offsetCell(c0, dx, dy);
+                        if (d2 <= r * r && n >= 0) setCell(n % g.w, n / g.w, amt * (r * r + 1 - d2) / (r * r + 1) + amt / 4);
+                    }
+                continue;
+            }
+            int cx, cy; g.cellXY(c, cx, cy);
             for (int y = cy - r; y <= cy + r; ++y)
                 for (int x = cx - r; x <= cx + r; ++x) {
                     int d2 = (x - cx) * (x - cx) + (y - cy) * (y - cy);
@@ -244,12 +256,13 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     for (size_t p = 1; p <= np; ++p) {
         const Json& pj = map["players"][p - 1];
         if (!pj.has("start")) continue;
-        Vec3 start = readPos(pj["start"]);
+        Vec3 start = mapPos(sim, pj["start"]);
         int fi = rules_.findFaction(gs.players[p].faction);
         if (fi < 0) continue;
         for (auto& st : rules_.factions[size_t(fi)].start) {
             for (int k = 0; k < st.count; ++k) {
-                Vec3 pos = start + Vec3{st.dx + Fixed::fromRatio(k % 4, 1) * Fixed::fromRatio(4, 5), Fixed{}, st.dz + Fixed::fromInt(k / 4) * Fixed::fromRatio(4, 5)};
+                Vec3 off{st.dx + Fixed::fromRatio(k % 4, 1) * Fixed::fromRatio(4, 5), Fixed{}, st.dz + Fixed::fromInt(k / 4) * Fixed::fromRatio(4, 5)};
+                Vec3 pos = planets ? gs.surface->project(start + gs.surface->fromPlane(start, off)) : start + off;
                 const UnitType& t = rules_.types[st.type];
                 if (t.structure) pos = snapToFootprint(t, pos);
                 spawn(sim, st.type, uint8_t(p), pos);
@@ -266,7 +279,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         int owner = int(ej.getInt("owner", 0));
         if (owner == -1) owner = kHostileNeutral;
         if ((owner < 0 || owner > int(np)) && owner != kHostileNeutral) throw std::runtime_error("map entity: owner out of range");
-        Entity e = spawn(sim, uint16_t(t), uint8_t(owner), readPos(ej["pos"]));
+        Entity e = spawn(sim, uint16_t(t), uint8_t(owner), mapPos(sim, ej.has("at") ? ej["at"] : ej["pos"]));
         placed.push_back(e);
         if (auto* gg = w.tryGet<Garrison>(e)) gg->count = int(ej.getInt("garrison", 0));
         if (auto* rs = w.tryGet<ResourceStock>(e); rs && ej.has("amount")) rs->amount = ej.getFx("amount");
@@ -289,7 +302,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
             const Json& pj = map["players"][p - 1];
             for (auto& rn : pj["regions"].items())
                 for (int i = 0; i < gs.regionCount; ++i) if (gs.regionNames[size_t(i)] == rn.str()) gs.regionOwner[size_t(i)] = uint8_t(p);
-            if (pj.has("start")) { int ri = regionAt(sim, readPos(pj["start"])); if (ri >= 0 && !gs.regionOwner[size_t(ri)]) gs.regionOwner[size_t(ri)] = uint8_t(p); }
+            if (pj.has("start")) { int ri = regionAt(sim, mapPos(sim, pj["start"])); if (ri >= 0 && !gs.regionOwner[size_t(ri)]) gs.regionOwner[size_t(ri)] = uint8_t(p); }
         }
         w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& t) {
             if (o.player == 0 || o.player > np || !rules_.types[u.type].structure) return;
@@ -308,7 +321,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
             if (t < 0) throw std::runtime_error("map wave: unknown type '" + s.getStr("type") + "'");
             wd.spawn.push_back({uint16_t(t), int(s.getInt("count", 1))});
         }
-        wd.at = readPos(wj["at"]);
+        wd.at = mapPos(sim, wj["at"]);
         wd.spread = wj.getFx("spread", wd.spread);
         wd.every = uint32_t((wj.getFx("every") * int64_t(sim.tickRate())).toInt());
         wd.growth = wj.getFx("growth", Fixed::fromInt(1));
@@ -344,12 +357,38 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     }
 }
 
-void RtsModule::footprintAt(const UnitType& t, Vec3 c, int& x0, int& y0) {
+namespace {
+// Planets: face coordinates of a footprint whose centre is near p; false if it would cross a face seam.
+bool sphereFootprint(const Surface& S, const UnitType& t, Vec3 p, int& body, int& face, int& fx0, int& fy0) {
+    body = S.bodyAt(p);
+    const BodyDef& b = S.bodies[size_t(body)];
+    if (!b.hasSurface()) return false;
+    Fixed a, c;
+    S.cubeOf(body).faceFromDir(p - Surface::anchor(body), face, a, c);
+    fx0 = int((a - Fixed::fromInt(t.footprintW) / 2 + kHalf).floorInt());
+    fy0 = int((c - Fixed::fromInt(t.footprintH) / 2 + kHalf).floorInt());
+    return fx0 >= 0 && fy0 >= 0 && fx0 + t.footprintW <= b.faceSize && fy0 + t.footprintH <= b.faceSize;
+}
+} // namespace
+
+void RtsModule::footprintAt(const UnitType& t, Vec3 c, int& x0, int& y0, const Surface* S) {
+    if (S && Surface::onSphere(c)) {
+        int b, f, fx, fy;
+        if (!sphereFootprint(*S, t, c, b, f, fx, fy)) { x0 = y0 = -1; return; }
+        const int g = S->gridCell(b, f, fx, fy);
+        x0 = g % S->W; y0 = g / S->W;   // a footprint inside one face is a plain rect of grid rows
+        return;
+    }
     x0 = int((c.x - Fixed::fromInt(t.footprintW) / 2 + kHalf).floorInt());
     y0 = int((c.z - Fixed::fromInt(t.footprintH) / 2 + kHalf).floorInt());
 }
 
-Vec3 RtsModule::snapToFootprint(const UnitType& t, Vec3 p) {
+Vec3 RtsModule::snapToFootprint(const UnitType& t, Vec3 p, const Surface* S) {
+    if (S && Surface::onSphere(p)) {
+        int b, f, fx, fy;
+        if (!sphereFootprint(*S, t, p, b, f, fx, fy)) return S->project(p);
+        return Surface::anchor(b) + S->facePoint(b, f, Fixed::fromInt(fx) + Fixed::fromInt(t.footprintW) / 2, Fixed::fromInt(fy) + Fixed::fromInt(t.footprintH) / 2);
+    }
     int x0, y0;
     footprintAt(t, p, x0, y0);
     return {Fixed::fromInt(x0) + Fixed::fromInt(t.footprintW) / 2, Fixed{}, Fixed::fromInt(y0) + Fixed::fromInt(t.footprintH) / 2};
@@ -360,14 +399,16 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     GameState& gs = state(sim);
     const UnitType& t = rules_.types[type];
     Entity e = w.create();
+    const Surface* S = gs.surface.get();
     if (t.structure) {
-        pos = snapToFootprint(t, pos);
+        pos = snapToFootprint(t, pos, S);
         int x0, y0;
-        footprintAt(t, pos, x0, y0);
+        footprintAt(t, pos, x0, y0, S);
         w.add<Footprint>(e, Footprint{x0, y0, t.footprintW, t.footprintH});
         gs.grid.block(x0, y0, t.footprintW, t.footprintH, +1);
     }
-    if (gs.grid.hf) pos.y = gs.grid.surfaceHeight(pos.x, pos.z);
+    if (S) pos = (t.layer & kLayerOrbit) ? S->toShell(pos, S->bodies[size_t(S->bodyAt(pos))].shellRadius()) : S->project(pos);
+    else if (gs.grid.hf) pos.y = gs.grid.surfaceHeight(pos.x, pos.z);
     w.add<Transform>(e, Transform{pos, pos, Fixed{}});
     w.add<Owner>(e, Owner{owner});
     Unit u;
@@ -592,23 +633,26 @@ int RtsModule::membersAlive(Simulation& sim, Entity e) const {
 
 int RtsModule::levelAt(Simulation& sim, Vec3 p) const {
     auto* gs = sim.world().resource<GameState>();
-    return gs->grid.levelAt(gs->grid.cellX(p.x), gs->grid.cellY(p.z));
+    int x, y; gs->grid.cellXY(p, x, y);
+    return gs->grid.levelAt(x, y);
 }
 
 Fixed RtsModule::groundHeight(Simulation& sim, Vec3 p) const {
     const MapGrid& g = sim.world().resource<GameState>()->grid;
+    if (g.surf) return g.surf->heightAt(p);   // above the body radius
     return g.hf ? g.surfaceHeight(p.x, p.z) : Fixed{};
 }
 
 Fixed RtsModule::heightAdvantage(Simulation& sim, Vec3 a, Vec3 b) const {
     const MapGrid& g = sim.world().resource<GameState>()->grid;
     if (!g.hf || rules_.levelHeight.raw <= 0) return Fixed::fromInt(levelAt(sim, a) - levelAt(sim, b));
+    if (g.surf) return (g.surf->heightAt(a) - g.surf->heightAt(b)) / rules_.levelHeight;
     return (g.surfaceHeight(a.x, a.z) - g.surfaceHeight(b.x, b.z)) / rules_.levelHeight;
 }
 
 Fixed RtsModule::slopeSpeed(Simulation& sim, Vec3 p, Vec2 dir) const {
     const MapGrid& g = sim.world().resource<GameState>()->grid;
-    if (!g.hf) return kOne;
+    if (!g.hf || g.surf) return kOne;   // planets: slope factor applied in moveSphere
     Vec3 gr = g.gradient(p.x, p.z);
     Fixed climb = gr.x * dir.x + gr.z * dir.y;   // rise per cell along the move
     Fixed f = climb.raw > 0 ? kOne - rules_.terrain.uphillSpeed * climb : kOne - rules_.terrain.downhillSpeed * climb;
@@ -617,7 +661,7 @@ Fixed RtsModule::slopeSpeed(Simulation& sim, Vec3 p, Vec2 dir) const {
 
 int RtsModule::regionAt(Simulation& sim, Vec3 p) const {
     auto* gs = sim.world().resource<GameState>();
-    int x = gs->grid.cellX(p.x), y = gs->grid.cellY(p.z);
+    int x, y; gs->grid.cellXY(p, x, y);
     return gs->grid.inside(x, y) ? gs->grid.region[size_t(gs->grid.index(x, y))] : -1;
 }
 
@@ -638,7 +682,7 @@ bool RtsModule::canClaim(Simulation& sim, uint8_t player, int region, std::vecto
 bool RtsModule::isVisible(Simulation& sim, uint8_t player, Vec3 p) const {
     auto* gs = sim.world().resource<GameState>();
     if (player == 0 || player >= gs->vision.size()) return true;
-    int x = int(p.x.floorInt()), y = int(p.z.floorInt());
+    int x, y; gs->grid.cellXY(p, x, y);
     if (!gs->grid.inside(x, y)) return false;
     return gs->vision[player][size_t(gs->grid.index(x, y))] == 2;
 }
@@ -650,9 +694,10 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
     World& w = sim.world();
     GameState& gs = state(sim);
     MapGrid& g = gs.grid;
-    centre = snapToFootprint(t, centre);
+    centre = snapToFootprint(t, centre, gs.surface.get());
     int x0, y0;
-    footprintAt(t, centre, x0, y0);
+    footprintAt(t, centre, x0, y0, gs.surface.get());
+    if (gs.surface && x0 < 0) return fail("crosses a face seam");
     if (t.placeOn != kNoType) {
         // must sit exactly on a free node of the required type
         Entity node;
@@ -694,7 +739,7 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
     bool clear = true;
     w.each<Unit, Transform, Mobile>([&](Entity e, Unit& u, Transform& tr, Mobile&) {
         if (e == ignore || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
-        int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+        int cx, cy; g.cellXY(tr.pos, cx, cy);
         if (cx >= x0 && cx < x0 + t.footprintW && cy >= y0 && cy < y0 + t.footprintH) {
             // own units step aside (they will be pushed); enemies block
             if (w.get<Owner>(e).player != player) clear = false;
@@ -707,12 +752,13 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
 Entity RtsModule::findNearestFieldCell(Simulation& sim, Vec3 p, int res, Vec3& out, int maxRadius) const {
     auto* gs = sim.world().resource<GameState>();
     const MapGrid& g = gs->grid;
-    int cx = g.cellX(p.x), cy = g.cellY(p.z);
+    int cx, cy; g.cellXY(p, cx, cy);
     for (int r = 0; r <= maxRadius; ++r)
         for (int dy = -r; dy <= r; ++dy)
             for (int dx = -r; dx <= r; ++dx) {
                 if (std::abs(dx) != r && std::abs(dy) != r) continue;
                 int x = cx + dx, y = cy + dy;
+                if (g.surf) { const int c = g.offsetCell(g.cellOf(p), dx, dy); if (c < 0) continue; x = c % g.w; y = c / g.w; }
                 if (!g.inside(x, y)) continue;
                 size_t i = size_t(g.index(x, y));
                 if (g.fieldAmt[i] >= kOne && (res < 0 || g.fieldRes[i] == res) && !g.blocked[i]) { // skip regrowth crumbs
@@ -730,6 +776,8 @@ Fixed RtsModule::contactDistance(Simulation& sim, Entity a, Entity b) {
     if (!ta || !tb) return Fixed::fromInt(1 << 20);
     const UnitType& A = rules_.types[w.get<Unit>(a).type];
     const UnitType& B = rules_.types[w.get<Unit>(b).type];
+    if (B.structure && Surface::onSphere(tb->pos)) // planets: footprint as a disc of its half extent
+        return fxMax(dist2D(ta->pos, tb->pos) - A.radius - Fixed::fromInt(std::min(B.footprintW, B.footprintH)) / 2, Fixed{});
     if (B.structure) {
         auto& f = w.get<Footprint>(b);
         Fixed px = fxClamp(ta->pos.x, Fixed::fromInt(f.x), Fixed::fromInt(f.x + f.w));
@@ -743,7 +791,26 @@ Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer) {
     World& w = sim.world();
     GameState& gs = state(sim);
     Vec3 c = w.get<Transform>(s).pos;
-    int x0 = int(c.x.floorInt()), y0 = int(c.z.floorInt());
+    if (gs.surface) {   // planets: rings of cells around the structure, across face seams
+        const int c0 = gs.grid.cellOf(c);
+        int half = 1;
+        if (auto* f = w.tryGet<Footprint>(s)) half = (std::max(f->w, f->h) + 1) / 2;
+        for (int ring = half; ring < half + 10; ++ring)
+            for (int dy = -ring; dy <= ring; ++dy)
+                for (int dx = -ring; dx <= ring; ++dx) {
+                    if (std::abs(dx) != ring && std::abs(dy) != ring) continue;
+                    const int n = gs.grid.offsetCell(c0, dx, dy);
+                    if (n < 0 || !gs.grid.passable(n % gs.grid.w, n / gs.grid.w, layer)) continue;
+                    const Vec3 cc = gs.grid.centerOf(n);
+                    bool occupied = false;
+                    gs.hash.query(cc, kOne, [&](Entity o) {
+                        if (auto* t = w.tryGet<Transform>(o); t && dist2D(t->pos, cc) < Fixed::fromRatio(6, 10) && w.has<Mobile>(o)) occupied = true;
+                    });
+                    if (!occupied) return cc;
+                }
+        return c;
+    }
+    int x0, y0; state(sim).grid.cellXY(c, x0, y0);
     int fw = 1, fh = 1;
     if (auto* f = w.tryGet<Footprint>(s)) { x0 = f->x; y0 = f->y; fw = f->w; fh = f->h; }
     for (int ring = 0; ring < 10; ++ring)
@@ -764,7 +831,7 @@ Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer) {
 Entity RtsModule::placeStructure(Simulation& sim, uint8_t player, uint16_t type, Vec3 centre, Entity builder, bool complete) {
     World& w = sim.world();
     const UnitType& t = rules_.types[type];
-    centre = snapToFootprint(t, centre);
+    centre = snapToFootprint(t, centre, surface(sim));
     // take over a resource node (refinery on a geyser): remember it, remove the node
     Fixed inherited{};
     int16_t inheritedRes = -1;
@@ -820,6 +887,8 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     const bool queue = cmd.flags & kCmdQueue;
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
     if (cmd.type == kCmdBuildRoad || cmd.type == kCmdConnectRoad) { applySettlersCommand(sim, cmd); return; }
+
+    if (cmd.type == kCmdTransit) { applyTransit(sim, cmd); return; }
 
     if (cmd.type == kCmdSurrender) {
         pi->alive = false; // hashed with the player table; result() then reports the remaining team
@@ -1080,7 +1149,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
                 }
             } else {
                 // right click on a resource field
-                int cx = gs.grid.cellX(target.x), cy = gs.grid.cellY(target.z);
+                int cx, cy; gs.grid.cellXY(target, cx, cy);
                 if (gs.grid.inside(cx, cy)) {
                     int16_t fr = gs.grid.fieldRes[size_t(gs.grid.index(cx, cy))];
                     bool can = false;
@@ -1146,22 +1215,30 @@ bool RtsModule::findAutoSpot(Simulation& sim, uint8_t player, uint16_t type, Vec
         Fixed d = dist2D(tr.pos, c);
         if (d < best) { best = d; enemy = tr.pos; }
     });
-    Vec2 away = (c - enemy).xz();
+    Vec2 away = state(sim).surface ? (bodyOf(sim, enemy) == bodyOf(sim, c) ? state(sim).surface->toPlane(c, c - enemy).xz() : Vec2{}) : (c - enemy).xz();
     Fixed al = away.length();
     if (al.raw > 0) away = away / al;
     const int R = std::max(6, rules_.buildRadius > 0 ? rules_.buildRadius : 12);
     Fixed bestScore = Fixed::fromInt(1 << 20);
     bool found = false;
-    int cx = int(c.x.floorInt()), cy = int(c.z.floorInt());
+    int cx, cy; state(sim).grid.cellXY(c, cx, cy);
+    const Surface* S = state(sim).surface.get();
+    const int c0 = state(sim).grid.cellOf(c);
     for (int dy = -R; dy <= R; ++dy)
         for (int dx = -R; dx <= R; ++dx) {
-            Vec3 p = snapToFootprint(t, {Fixed::fromInt(cx + dx) + kHalf, Fixed{}, Fixed::fromInt(cy + dy) + kHalf});
+            Vec3 p;
+            if (S) {
+                const int n = S->offset(c0, dx, dy);
+                if (n < 0) continue;
+                p = snapToFootprint(t, S->cellCenter(n), S);
+            } else p = snapToFootprint(t, {Fixed::fromInt(cx + dx) + kHalf, Fixed{}, Fixed::fromInt(cy + dy) + kHalf});
             int x0, y0;
-            footprintAt(t, p, x0, y0);
+            footprintAt(t, p, x0, y0, S);
+            if (x0 < 0 && S) continue;
             // keep a one-cell gap around structures so units can walk between them
             if (!state(sim).grid.areaBuildable(x0 - 1, y0 - 1, t.footprintW + 2, t.footprintH + 2) && t.placeOn == kNoType) continue;
             if (!canPlace(sim, player, type, p)) continue;
-            Vec2 d = (p - c).xz();
+            Vec2 d = S ? S->toPlane(c, p - c).xz() : (p - c).xz();
             Fixed score = d.length() - d.dot(away) / 2;     // close to the core, behind it
             if (score < bestScore) { bestScore = score; out = p; found = true; }
         }
@@ -1218,6 +1295,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);
     }
+    if (gs.surface) hashWorld(sim, h);   // planet maps only: flat games keep their checksums
     for (size_t i = 0; i < gs.grid.fieldAmt.size(); i += 7) h.fx(gs.grid.fieldAmt[i]);
     h.u32(uint32_t(w.count<Unit>()));
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {

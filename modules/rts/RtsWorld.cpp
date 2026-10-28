@@ -22,6 +22,7 @@ void RtsModule::sysVision(Simulation& sim) {
         for (int32_t i : gs.visibleCells[p]) gs.vision[p][size_t(i)] = 1;
         gs.visibleCells[p].clear();
     }
+    if (gs.surface) { visionSphere(sim); return; }   // planets (RtsPlanets.cpp)
     std::vector<std::vector<uint8_t>> sharers(np);
     for (size_t p = 1; p < np; ++p) for (size_t q = 1; q < np; ++q) if (q == p || (rules_.fog.shareAllies && sim.allied(uint8_t(p), uint8_t(q)))) sharers[p].push_back(uint8_t(q));
     const bool cliffs = rules_.heights.blockVision;
@@ -91,7 +92,7 @@ void RtsModule::sysVision(Simulation& sim) {
         if (o.player == 0 || o.player >= np || (u.flags & kUnitInHand)) return;
         const UnitType& t = rules_.types[u.type];
         int r = int(stat(sim, e, Stat::Sight).toInt());
-        int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+        int cx, cy; state(sim).grid.cellXY(tr.pos, cx, cy);
         const bool air = (t.layer & kLayerAir) != 0;
         if (losAll && !air && !t.seesOver && g.inside(cx, cy)) {
             const int64_t eye = base[size_t(cy * W + cx)] + eyeUp + sumUnits(t.eyeHeight);
@@ -129,7 +130,7 @@ void RtsModule::sysVision(Simulation& sim) {
             Fixed sight = e.delivery.sight.raw > 0 ? e.delivery.sight : e.kind == EffectKind::Reveal ? a.radius : Fixed{};
             if (sight.raw <= 0 || sim.tick() < a.fireAt) return;
             int r = int(sight.floorInt());
-            int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+            int cx, cy; state(sim).grid.cellXY(tr.pos, cx, cy);
             for (int y = std::max(0, cy - r); y <= std::min(H - 1, cy + r); ++y)
                 for (int x = std::max(0, cx - r); x <= std::min(W - 1, cx + r); ++x)
                     if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
@@ -153,7 +154,7 @@ void RtsModule::sysCreep(Simulation& sim) {
         if (t.creepRadius <= 0) return;
         // under construction: creep grows with progress
         int r = t.creepRadius;
-        int cx = g.cellX(tr.pos.x), cy = g.cellY(tr.pos.z);
+        int cx, cy; g.cellXY(tr.pos, cx, cy);
         for (int y = cy - r; y <= cy + r; ++y)
             for (int x = cx - r; x <= cx + r; ++x)
                 if (g.inside(x, y) && (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r && (g.flags[size_t(g.index(x, y))] & kCellGround))
@@ -249,7 +250,7 @@ void RtsModule::sysNeutrals(Simulation& sim) {
                 Fixed r = t.wanderRadius;
                 for (int tries = 0; tries < 6; ++tries) {
                     Vec3 p = g.home + Vec3{(sim.rng().unit() * 2 - kOne) * r, Fixed{}, (sim.rng().unit() * 2 - kOne) * r};
-                    if (!gs.grid.passable(gs.grid.cellX(p.x), gs.grid.cellY(p.z), t.pathLayer)) continue;
+                    if (!gs.grid.passableAt(p, t.pathLayer)) continue;
                     moves.push_back({e, p});
                     break;
                 }

@@ -54,6 +54,7 @@ enum CommandType : uint16_t {
     kCmdPlayerAbility,// no units; param = index into rules.playerAbilities, point
     kCmdBuildRoad,    // no units; rect (extra 0 build, 1 remove), cost per cell from rules.roadNetwork
     kCmdConnectRoad,  // units: own structures; the sim lays the shortest road from each to the own road network
+    kCmdTransit,      // planets: orbit units, param = target body index; timed transfer to that body's orbit shell
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -100,11 +101,14 @@ enum GameEvent : uint16_t {
     kEvChannelStart, kEvChannelEnd, // a = caster
     kEvAlert,         // player = alerted player, a = first unit of the group, b = target structure
     kEvGarrisonChanged, // a = structure, value = units delta (effects)
+    kEvTransitStart,  // planets: a = unit, value = target body, pos = departure point
+    kEvTransitEnd,    // planets: a = unit, value = body arrived at, pos = arrival point
 };
 
 // ---------------------------------------------------------------- components
 enum UnitFlags : uint8_t { kUnitHold = 1, kUnitUnderConstruction = 2, kUnitDisabled = 4 /*power deficit*/, kUnitSilent = 8 /*removed without death effects*/,
-                          kUnitInHand = 16 /*picked up: off the map*/, kUnitPossessed = 32 /*directly controlled*/ };
+                          kUnitInHand = 16 /*picked up: off the map*/, kUnitPossessed = 32 /*directly controlled*/,
+                          kUnitInTransit = 64 /*between bodies (set together with kUnitInHand: off every surface)*/ };
 
 struct Unit {
     uint16_t type = 0;
@@ -206,6 +210,9 @@ struct Projectile {
 };
 
 struct Hero { int level = 1; Fixed xp{}; };
+// Interplanetary transfer (kCmdTransit): leaves the shell of `from` at depart, arrives on the shell of `to`.
+// from/to world positions are the shell points at departure (body positions at that tick), for the view.
+struct Transit { int16_t from = 0, to = 0; uint32_t depart = 0, arrive = 0; Vec3 fromWorld{}, toWorld{}; Vec3 arrival{}; };
 struct Squad { Fixed reinforceTimer{}; bool reinforcing = false; };
 
 struct Buff { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); uint32_t until = 0; uint16_t sourceType = kNoType; };
@@ -372,6 +379,8 @@ struct GameState {
     bool lanesDirty = true;
     uint32_t laneSignature = 0;              // garrisons/obstacles the lanes were built for
     std::vector<uint32_t> laneRoundRobin;    // per garrison entity index: next lane slot
+    // planets (map `world` block): bodies, cube-sphere layout of the grid rows (RtsSurface.h); null on flat maps
+    std::shared_ptr<const Surface> surface;
 };
 
 // ---------------------------------------------------------------- module
@@ -397,8 +406,10 @@ public:
     Entity spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos, bool underConstruction = false);
     // Full placement check for `player` (terrain, blocking, radius, regions, creep, placeOn...).
     bool canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 centre, Entity ignore = kNullEntity, std::string* why = nullptr);
-    static void footprintAt(const UnitType& t, Vec3 centre, int& x0, int& y0);
-    static Vec3 snapToFootprint(const UnitType& t, Vec3 p);
+    // Footprint cells of a structure centred near `centre` (grid coordinates). On planets (surface given) the
+    // footprint lies inside one face; one that would cross a face seam gets x0 = y0 = -1 (never buildable).
+    static void footprintAt(const UnitType& t, Vec3 centre, int& x0, int& y0, const Surface* surface = nullptr);
+    static Vec3 snapToFootprint(const UnitType& t, Vec3 p, const Surface* surface = nullptr);
     bool requirementsMet(Simulation& sim, uint8_t player, const std::vector<Requirement>& req) const;
     bool canTrain(Simulation& sim, uint8_t player, uint16_t type) const; // requirements + unique
     bool canAfford(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed supply = {}, int* missing = nullptr) const;
@@ -413,6 +424,19 @@ public:
     Fixed groundHeight(Simulation& sim, Vec3 p) const;
     Fixed heightAdvantage(Simulation& sim, Vec3 a, Vec3 b) const;
     Fixed slopeSpeed(Simulation& sim, Vec3 p, Vec2 dir) const;   // uphill / downhill speed factor (1 off heightfields)
+    // p lifted to `h` above the ground (flat: y = ground height + h; planets: along the local up)
+    Vec3 lift(Simulation& sim, Vec3 p, Fixed h) const;
+    // ---- planets: what the view / editor / AI call (all no-ops / flat answers on flat maps)
+    const Surface* surface(Simulation& sim) const;                // null on flat maps
+    int bodyOf(Simulation& sim, Vec3 p) const;                     // 0 on flat maps
+    // Body centre in world space at a sim tick (circular orbits, Fixed). View: float(world) at tick + alpha.
+    Vec3 bodyWorldPosition(Simulation& sim, int body, uint32_t tick) const;
+    // World-space position of an entity at a tick: body centre + body-local position; units in transit are
+    // interpolated between the departure and arrival shell points.
+    Vec3 worldPosition(Simulation& sim, Entity e, uint32_t tick) const;
+    // Visibility of a planet cell (body, face, x, y) for a player: 0 unexplored, 1 explored, 2 visible.
+    uint8_t cellVision(Simulation& sim, uint8_t player, int body, int face, int x, int y) const;
+    bool canTransit(Simulation& sim, Entity e, int body) const;
     int regionAt(Simulation& sim, Vec3 p) const;
     bool canClaim(Simulation& sim, uint8_t player, int region, std::vector<Amount>* cost = nullptr) const;
     Entity findNearestFieldCell(Simulation& sim, Vec3 p, int res, Vec3& out, int maxRadius = 24) const;
@@ -469,6 +493,14 @@ public:
 private:
     Json generated_;                 // generated map (see generatedMap())
     void setupMap(Simulation& sim, const Json& map);
+    // ---- planets (RtsPlanets.cpp)
+    void setupWorld(Simulation& sim, const Json& map);               // world block -> Surface + stacked grid
+    Vec3 mapPos(Simulation& sim, const Json& p) const;               // [x, z] / [x, y, z] or {"body", "face", "x", "y"}
+    void moveSphere(Simulation& sim);                                // movement + separation on planet surfaces / shells
+    void visionSphere(Simulation& sim);
+    void sysTransit(Simulation& sim);
+    void applyTransit(Simulation& sim, const Command& cmd);
+    void hashWorld(Simulation& sim, Hasher& h);
     // systems
     void sysEconomy(Simulation& sim);
     void sysFields(Simulation& sim);

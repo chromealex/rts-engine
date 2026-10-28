@@ -75,6 +75,9 @@ public:
     virtual ~NativePlugin() = default;
     // method == "init" is the first call, with the game.json config as args.
     virtual void call(const std::string& method, const std::string& argsJson, Reply reply) = 0;
+    // Called every frame on the game thread (from pump()) once the plugin got "init": run SDK
+    // callbacks here (e.g. SteamAPI_RunCallbacks).
+    virtual void update() {}
 };
 
 // Registers a C++ plugin under `name` (replaces an earlier one). Thread-safe.

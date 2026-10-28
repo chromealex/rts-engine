@@ -448,7 +448,7 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
                 footprintAt(st, snapToFootprint(st, p), x0, y0);
                 if (!gs.grid.areaBuildable(x0, y0, st.footprintW, st.footprintH)) continue;
             } else {
-                int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+                int cx, cy; gs.grid.cellXY(p, cx, cy);
                 if (!gs.grid.nearestPassable(cx, cy, st.layer, 4)) continue;
                 p = gs.grid.cellCenter(cx, cy);
             }
@@ -462,7 +462,7 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
         if (!w.alive(ctx.caster)) break;
         auto& g = gs.grid;
         const UnitType& ct = rules_.types[w.get<Unit>(ctx.caster).type];
-        if (g.passable(g.cellX(ctx.point.x), g.cellY(ctx.point.z), ct.layer)) {
+        if (g.passableAt(ctx.point, ct.layer)) {
             Transform& tr = w.get<Transform>(ctx.caster);
             tr.pos = flat(ctx.point); tr.prevPos = tr.pos;
             stopMoving(sim, ctx.caster);
@@ -497,7 +497,7 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
             const UnitType& ht = rules_.types[w.get<Unit>(h).type];
             for (int k = 0; k < 8; ++k) {
                 Vec3 np = tr.pos + d * (dist / 8);
-                if (!(ht.layer & kLayerAir) && !gs.grid.passable(gs.grid.cellX(np.x), gs.grid.cellY(np.z), ht.layer)) break;
+                if (!(ht.layer & kLayerAir) && !gs.grid.passableAt(np, ht.layer)) break;
                 tr.pos = np;
             }
             stopMoving(sim, h);
@@ -512,7 +512,7 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
             Vec3 p = flat(ctx.point) + Vec3{Fixed::fromRatio(k % 3 - 1, 2), Fixed{}, Fixed::fromRatio((k / 3) % 3 - 1, 2)};
             ++k;
             const UnitType& ht = rules_.types[w.get<Unit>(h).type];
-            int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
+            int cx, cy; gs.grid.cellXY(p, cx, cy);
             if (!(ht.layer & kLayerAir) && !gs.grid.passable(cx, cy, ht.layer)) {
                 if (!gs.grid.nearestPassable(cx, cy, ht.layer, 3)) continue;
                 p = gs.grid.cellCenter(cx, cy);
@@ -683,7 +683,7 @@ void RtsModule::tickAreas(Simulation& sim) {
             case AreaMotion::Follow: if (w.alive(ar.follow) && w.has<Transform>(ar.follow)) tr.pos = flat(w.get<Transform>(ar.follow).pos); else ar.endAt = tick; break;
             case AreaMotion::Wander:
                 if ((tick - ar.fireAt) % (2 * sim.tickRate()) == 0) { ar.dir = {sim.rng().unit() * 2 - kOne, Fixed{}, sim.rng().unit() * 2 - kOne}; if (ar.dir.length().raw > 0) ar.dir = ar.dir / ar.dir.length(); }
-                { Vec3 np = tr.pos + ar.dir * step; if (gs.grid.inside(gs.grid.cellX(np.x), gs.grid.cellY(np.z))) tr.pos = np; }
+                { Vec3 np = tr.pos + ar.dir * step; if ((gs.grid.cellOf(np) >= 0)) tr.pos = np; }
                 break;
             case AreaMotion::Lane:
                 if (ar.lane >= 0 && size_t(ar.lane) < gs.lanes.size()) {
