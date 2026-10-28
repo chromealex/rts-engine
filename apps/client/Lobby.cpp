@@ -193,8 +193,12 @@ void GameClient::startNetMatch() {
         if (sl != human_) bots_.emplace_back(sl, m.seed, AIConfig{});
     mapIndex_ = 0;
     for (size_t i = 0; i < maps_.size(); ++i) if (maps_[i].file == m.map.file) mapIndex_ = i;
-    if (const Json* gm = mod().generatedMap()) // generated maps: material layer of the map the sim was built from
+    if (const Json* gm = mod().generatedMap()) { // generated maps: world / material of the map the sim was built from
+        if ((*gm)["world"].isObject()) view_.setWorld(*gm);
         view_.setTerrainMaterial((*gm)["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
+    }
+    if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, mod().generatedMap() ? *mod().generatedMap() : Json());   // planets
+    else view_.setWorld(Json());
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();

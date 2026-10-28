@@ -1,6 +1,7 @@
 #include "Lights.h"
 #include "LightShaders.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -27,7 +28,7 @@ bool LightSystem::init(gfx::Device& dev) {
     dev_ = &dev;
     gfx::ShaderDesc sd;
     sd.glslVertex = shaders::kLightMapVS; sd.glslFragment = shaders::kLightMapFS; sd.msl = shaders::kLightMapMSL;
-    sd.uniformSlots = 0; sd.label = "lightmap";
+    sd.uniformSlots = 1; sd.textureSlots = 1; sd.label = "lightmap";   // U0 + tex0: spot shadow
     shader_ = dev.createShader(sd);
     if (!shader_.valid()) return false;
     gfx::PipelineDesc pd;
@@ -37,7 +38,8 @@ bool LightSystem::init(gfx::Device& dev) {
     pd.attrs[2] = {2, gfx::VertexFormat::Float4, 16};
     pd.attrs[3] = {3, gfx::VertexFormat::Float4, 32};
     pd.attrs[4] = {4, gfx::VertexFormat::Float4, 48};
-    pd.attrCount = 5; pd.stride = sizeof(MapVertex);
+    pd.attrs[5] = {5, gfx::VertexFormat::Float4, 64};
+    pd.attrCount = 6; pd.stride = sizeof(MapVertex);
     pd.indexType = gfx::IndexType::None;
     pd.cull = gfx::CullMode::None;
     pd.blend = gfx::BlendMode::Additive;
@@ -126,9 +128,22 @@ size_t LightSystem::stream(gfx::BufferHandle buf, size_t& cursor, size_t capacit
     return at;
 }
 
+void LightSystem::createSpotShadow(int size) {
+    if (size == spotShadowSize_ && spotShadow_.valid()) return;
+    if (spotShadow_.valid()) dev_->destroyTexture(spotShadow_);
+    gfx::TextureDesc td;
+    td.width = td.height = size;
+    td.format = gfx::PixelFormat::Depth;
+    td.renderTarget = true; td.compare = true; td.filter = gfx::Filter::Linear; td.label = "spot shadow";
+    spotShadow_ = dev_->createTexture(td);
+    spotShadowSize_ = size;
+}
+
 void LightSystem::setQuality(LightQuality q) {
     quality_ = q;
     if (!dev_) return;
+    // the light-map shader always declares the shadow sampler: keep a valid (tiny) depth texture
+    createSpotShadow(q == LightQuality::High ? 512 : 16);
     // The map is low frequency (lights are soft blobs), so a small target is enough; linear
     // filtering hides the texels.
     createMap(q == LightQuality::Off ? 0 : q == LightQuality::Low ? 128 : 256);
@@ -137,6 +152,8 @@ void LightSystem::setQuality(LightQuality q) {
 void LightSystem::shutdown() {
     if (!dev_) return;
     createMap(0);
+    if (spotShadow_.valid()) dev_->destroyTexture(spotShadow_);
+    spotShadow_ = {};
     if (reflColor_.valid()) dev_->destroyTexture(reflColor_);
     if (reflDepth_.valid()) dev_->destroyTexture(reflDepth_);
     reflColor_ = reflDepth_ = {};
@@ -159,6 +176,7 @@ void LightSystem::shutdown() {
 void LightSystem::begin(const RTSCamera& cam, float aspect) {
     lights_.clear();
     decals_.clear();
+    shadowLight_ = -1;
     reflReady_ = false;
     focus_ = cam.target;
     {
@@ -193,6 +211,35 @@ void LightSystem::add(const PointLight& l) {
     lights_.push_back(l);
 }
 
+bool LightSystem::prepareSpotShadow() {
+    shadowLight_ = -1;
+    if (quality_ != LightQuality::High || !dev_ || !spotShadow_.valid() || spotShadowSize_ < 64) return false;
+    float best = 0;
+    for (int i = 0; i < int(lights_.size()); ++i) {
+        const PointLight& l = lights_[size_t(i)];
+        if (!l.spot() || l.intensity < 0.2f) continue;
+        const float dx = l.pos.x - focus_.x, dz = l.pos.z - focus_.z;
+        float sc = (l.rank >= 0 ? l.rank : l.intensity) * l.radius / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f);
+        if (l.key && l.key == shadowKey_) sc *= 1.6f;   // keep the same spot while it is close to the best
+        if (sc > best) { best = sc; shadowLight_ = i; }
+    }
+    if (shadowLight_ < 0) { shadowKey_ = 0; return false; }
+    const PointLight& l = lights_[size_t(shadowLight_)];
+    shadowKey_ = l.key;
+    const float fov = std::min(2.0f * std::acos(std::clamp(l.cosOuter, -1.0f, 1.0f)) * 1.1f, 2.6f);
+    const float3 up = std::fabs(l.dir.y) > 0.95f ? float3{0, 0, 1} : float3{0, 1, 0};
+    spotVP_ = mat4::perspective(fov, 1.0f, 0.25f, l.radius * 1.05f, dev_->info().clipDepthZeroToOne) * mat4::lookAt(l.pos, l.pos + l.dir, up);
+    return true;
+}
+
+gfx::PassDesc LightSystem::spotShadowPass() const {
+    gfx::PassDesc p;
+    p.depthTarget = spotShadow_;
+    p.clearColorEnabled = false;
+    p.clearDepthEnabled = true;
+    return p;
+}
+
 void LightSystem::pickPixelLights() {
     perPixel_.assign(lights_.size(), 0);
     int n = 0;
@@ -207,6 +254,7 @@ void LightSystem::pickPixelLights() {
             const float spotK = l.spot() ? 1.5f : 1.0f;   // beams show their cone best on the precise path
             const float keep = l.key && std::binary_search(prevKeys_.begin(), prevKeys_.end(), l.key) ? 1.6f : 1.0f;
             const float in = l.rank >= 0 ? l.rank : l.intensity;
+            if (int(i) == shadowLight_) continue;   // the shadowed spot lives in the map only (its shadow is there)
             score.push_back({lum * in * l.radius * spotK * keep * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
         }
         n = std::min<int>(kMaxPixelLights, int(score.size()));
@@ -226,7 +274,14 @@ void LightSystem::pickPixelLights() {
 }
 
 void LightSystem::renderMap() {
+    const auto t0 = std::chrono::steady_clock::now();
+    stats_ = LightStats{};
+    stats_.mapSize = mapSize_;
+    struct Done { LightSystem& s; std::chrono::steady_clock::time_point t0;
+        ~Done() { s.stats_.mapMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count(); } } done{*this, t0};
     pickPixelLights();
+    stats_.lights = int(lights_.size());
+    stats_.perPixel = int(u_.info[0]);
     if (quality_ == LightQuality::Off || !map_.valid() || !pipe_.valid()) { mapReady_ = false; return; }
     // Low: refresh every other frame; the old map stays valid because it is world-aligned.
     // Only when the map already covers this view's area: two views a frame (editor) differ.
@@ -244,15 +299,18 @@ void LightSystem::renderMap() {
                     cb = std::min(l.color.z * l.intensity * k, 1.0f);
         const float h = std::max(l.pos.y - (l.groundY > -1e8f ? l.groundY : l.pos.y - 1.0f), 0.1f);
         const float co = l.spot() ? l.cosOuter : -2.0f;
-        const MapVertex a{cx - r, cy - r, -1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
-                        b{cx + r, cy - r, 1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
-                        c{cx + r, cy + r, 1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
-                        d{cx - r, cy + r, -1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0};
+        const float gy = l.pos.y - h, sh = int(i) == shadowLight_ ? 1.0f : 0.0f;
+        const MapVertex a{cx - r, cy - r, -1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0, l.pos.x, l.pos.z, gy, sh},
+                        b{cx + r, cy - r, 1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0, l.pos.x, l.pos.z, gy, sh},
+                        c{cx + r, cy + r, 1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0, l.pos.x, l.pos.z, gy, sh},
+                        d{cx - r, cy + r, -1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0, l.pos.x, l.pos.z, gy, sh};
         verts_.insert(verts_.end(), {a, b, c, a, c, d});
     }
     mapReady_ = true;
     mapX_ = originX_; mapZ_ = originZ_; mapExtent_ = extent_;
     mapHasLights_ = !verts_.empty();
+    stats_.mapQuads = int(verts_.size() / 6);
+    stats_.mapDrawn = mapHasLights_;
     if (!mapHasLights_) return; // nothing in the map: no pass, the shaders skip the fetch
     gfx::PassDesc p;
     p.colorTarget = map_;
@@ -263,6 +321,16 @@ void LightSystem::renderMap() {
     dev_->beginPass(p);
     dev_->setViewport({0, 0, mapSize_, mapSize_});
     dev_->setPipeline(pipe_);
+    {   // spot shadow: matrix + depth conventions of this backend (same as the sun shadow)
+        struct { float vp[16]; float info[4]; } mu{};
+        std::memcpy(mu.vp, spotVP_.m, sizeof mu.vp);
+        const bool z01 = dev_->info().clipDepthZeroToOne;
+        mu.info[0] = z01 ? 1.0f : 0.5f; mu.info[1] = z01 ? 0.0f : 0.5f;
+        mu.info[2] = dev_->info().renderTargetFlipY ? 1.0f : 0.0f;
+        mu.info[3] = 1.0f / float(std::max(spotShadowSize_, 1));
+        dev_->setUniforms(0, &mu, sizeof mu);
+        dev_->setTexture(0, spotShadow_);
+    }
     dev_->setVertexBuffer(vb_, stream(vb_, vbCursor_, vbCap_, verts_.data(), verts_.size() * sizeof(MapVertex)));
     dev_->draw(uint32_t(verts_.size()));
     dev_->endPass();
@@ -303,6 +371,7 @@ bool LightSystem::beginReflection(int viewW, int viewH, float3 clear) {
 void LightSystem::endReflection() {
     dev_->endPass();
     reflReady_ = true;
+    stats_.reflection = true; stats_.reflW = reflW_; stats_.reflH = reflH_;
 }
 
 void LightSystem::bind(int uniformSlot, int textureSlot, int reflectionSlot) {
@@ -317,6 +386,7 @@ void LightSystem::bind(int uniformSlot, int textureSlot, int reflectionSlot) {
     u_.sky[1] = reflReady_ ? 0.9f : 0.0f;
     u_.sky[2] = 1.0f / viewW_; u_.sky[3] = 1.0f / viewH_;
     u_.env[0] = quality_ == LightQuality::Medium || quality_ == LightQuality::High ? 1.0f : 0.0f;
+    u_.env[1] = unlitTint_.x; u_.env[2] = unlitTint_.y; u_.env[3] = unlitTint_.z;
     dev_->setUniforms(uniformSlot, &u_, sizeof u_);
     dev_->setTexture(textureSlot, useMap ? map_ : black_);
     if (reflectionSlot >= 0) dev_->setTexture(reflectionSlot, reflReady_ ? reflColor_ : black_);
@@ -369,6 +439,7 @@ void LightSystem::drawHalos(const mat4& viewProj, bool decals) {
                          v2{b1.x, b1.y, b1.z, 1, 1, cr, cg, cb, a}, v3{b0.x, b0.y, b0.z, -1, 1, cr, cg, cb, a};
         beams_.insert(beams_.end(), {v0, v1, v2, v0, v2, v3});
     }
+    if (decals) { stats_.beams = int(beams_.size() / 6); stats_.halos = int(halos_.size() / 6); stats_.decals = int(decals_.size() / 6); }
     if (!beams_.empty() && beamPipe_.valid()) {
         dev_->setPipeline(beamPipe_);
         dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);

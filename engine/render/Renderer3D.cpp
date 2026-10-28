@@ -259,6 +259,7 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
         dev_->endPass();
     }
 
+    renderSpotShadow();   // High: the main spot light's shadow map (Renderer3DReflect.cpp)
     lights.renderMap();
     renderReflection();   // High: mirrored pass for water (Renderer3DReflect.cpp)
 

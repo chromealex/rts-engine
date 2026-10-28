@@ -28,4 +28,8 @@ private:
     uint64_t statusTags(const Json& arr);
 };
 
+// Fidelity mechanics of the type / rules blocks (RtsOriginalsData.cpp), called by loadRules before the
+// effect engine switch is decided.
+void loadOriginals(Rules& r, const Json& j, EffectParser& ep);
+
 } // namespace rts::game

@@ -14,6 +14,7 @@
 #include "engine/sim/Replay.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
+#include "modules/rts/RtsCampaign.h"   // agent-mech
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
 #include "modules/rts/RtsSphere.h"
@@ -2708,6 +2709,7 @@ TEST(terrain_line_of_sight_behind_ridge) {
 // ------------------------------------------------------------------ split packs (downloadable chunks)
 
 #include "engine/pack/Chunks.h"
+#include "engine/pack/FileCopy.h"
 #include "engine/pack/Sha256.h"
 
 TEST(pack_sha256_vectors) {
@@ -3183,7 +3185,8 @@ TEST(audiopack_profiles_and_conversion) {
 TEST(audiopack_stage_game_folder) {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "rts_audiopack_test";
-    fs::remove_all(root);
+    std::error_code cleanup;
+    fs::remove_all(root, cleanup);
     fs::create_directories(root / "game" / "music");
     auto write = [](const fs::path& p, const std::string& s) { std::ofstream f(p, std::ios::binary); f << s; };
     write(root / "game" / "game.json", R"({"name":"T","audio":"sound.json"})");
@@ -3192,21 +3195,25 @@ TEST(audiopack_stage_game_folder) {
     write(root / "game" / "rules.json", "{}");
     audiopack::Report rep;
     std::string err;
-    CHECK(audiopack::stageGame((root / "game").string(), (root / "web").string(), "web", rep, &err));
+    const bool staged = audiopack::stageGame((root / "game").string(), (root / "web").string(), "web", rep, &err);
+    if (!staged) std::printf("    stageGame: %s\n", err.c_str());
+    CHECK(staged);
     CHECK(fs::exists(root / "web" / "music" / "a.ogg") && !fs::exists(root / "web" / "music" / "a.wav") && fs::exists(root / "web" / "rules.json"));
-    CHECK(Json::parseFile((root / "web" / "sound.json").string())["music"].getStr("match") == "music/a.ogg");
+    // a failed staging must fail the check, not abort every following test with an exception
+    CHECK(fs::exists(root / "web" / "sound.json") && Json::parseFile((root / "web" / "sound.json").string())["music"].getStr("match") == "music/a.ogg");
     CHECK(fs::exists(root / "game" / "music" / "a.wav"));                 // the project itself is untouched
     CHECK(audiopack::stageGame((root / "game").string(), (root / "desktop").string(), "desktop", rep, &err));
     CHECK(fs::exists(root / "desktop" / "music" / "a.wav") && rep.items.empty());   // desktop keeps files by default
     write(root / "game" / "sound.json", R"({"sounds":{"x":{"file":"../../../etc/passwd"}},"build":{"web":{"sounds":"pcm"}}})");
     CHECK(audiopack::stageGame((root / "game").string(), (root / "web2").string(), "web", rep, &err));
     CHECK(rep.items.empty() && rep.warnings.size() == 1);                  // nothing outside the game folder is read
-    fs::remove_all(root);
+    fs::remove_all(root, cleanup);   // never throws: a locked temp file on Windows must not abort the run
 }
 
 // ---------------- particles (engine/fx, modules/rts/fx) ----------------
 #include <cstdlib>
 #include "engine/fx/ParticleSystem.h"
+#include "engine/fx/FxModelMesh.h"
 #include "modules/rts/fx/RtsFx.h"
 
 namespace {
@@ -4838,6 +4845,10 @@ TEST(lighting_day_night_cycle) {
     CHECK(n < 0.01f);
     render::Lighting dusk = sky(R"({"time": 0.71})", 0, &n);
     CHECK(dusk.sunColor.z < base.sunColor.z - 0.1f);            // warm evening sun
+    // the simulation's day phase (mechanic E) drives the sky even without a lighting block
+    { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 0, 0.0f); CHECK(L.night() > 0.95f); }
+    { game::RtsLights L; L.init(rules); L.configure(Json::parse(R"({"time": 0.0})"), Json{}, Json{});
+      render::Lighting l = base; L.updateSky(l, 0, 0.5f); CHECK(L.night() < 0.01f); }   // and wins over the block's clock
     // no block: the renderer's lighting is left alone
     { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 1234); CHECK(l.sunIntensity == base.sunIntensity && L.night() == 0); }
 }
@@ -4911,7 +4922,7 @@ TEST(lighting_type_and_map_data) {
         const game::Rules fr = game::loadRules(Json::parseFile(fc));
         game::RtsLights F;
         F.init(fr);
-        const int t = fr.findType("demolisher");
+        const int t = fr.findType("far_seer");   // chain lightning: damage -> orange
         CHECK(t >= 0);
         if (t >= 0) {
             const auto& d = F.typeLights(uint16_t(t));
@@ -4949,6 +4960,42 @@ TEST(lighting_spot_lights) {
     CHECK(minA > 44 && minA < 50 && maxA > 130 && maxA < 136);
     const auto ml = RtsLights::parseMapLights(Json::parse(R"([{"x": 4, "z": 6, "type": "spot", "yaw": 90}])"));
     CHECK(ml.size() == 1 && ml[0].spot && ml[0].x == 4 && ml[0].yaw == 90);
+}
+
+TEST(lighting_reactive_patterns) {
+    using game::RtsLights;
+    auto avg = [](const RtsLights::Glow& g, float hp, bool powered, float night, float* mn = nullptr, float* mx = nullptr) {
+        float sum = 0, lo = 1e9f, hi = -1e9f;
+        for (int i = 0; i < 2000; ++i) { const float v = RtsLights::glowLevel(g, i * 0.01f, 0.3f, hp, powered, night); sum += v; lo = std::min(lo, v); hi = std::max(hi, v); }
+        if (mn) *mn = lo;
+        if (mx) *mx = hi;
+        return sum / 2000;
+    };
+    const RtsLights::Glow steady = RtsLights::parseGlow(Json::parse(R"({})"));
+    CHECK(std::fabs(avg(steady, 1, true, 0) - 1) < 1e-4f);
+    CHECK(std::fabs(avg(steady, 0.1f, false, 0) - 1) < 1e-4f);   // a fire ignores power and damage
+    float lo = 0, hi = 0;
+    avg(RtsLights::parseGlow(Json::parse(R"({"pattern": "pulse", "rate": 1})")), 1, true, 0, &lo, &hi);
+    CHECK(lo > 0.05f && lo < 0.2f && hi > 0.95f);
+    const float strobe = avg(RtsLights::parseGlow(Json::parse(R"({"pattern": "strobe", "rate": 2})")), 1, true, 0);
+    CHECK(strobe > 0.06f && strobe < 0.18f);                     // short flashes
+    const RtsLights::Glow night = RtsLights::parseGlow(Json::parse(R"({"nightOnly": true})"));
+    CHECK(RtsLights::glowLevel(night, 1, 0, 1, true, 0) == 0 && RtsLights::glowLevel(night, 1, 0, 1, true, 1) == 1);
+    const RtsLights::Glow lamp = RtsLights::parseGlow(Json::parse(R"({"electric": true})"));
+    const float brown = avg(lamp, 1, false, 0), broken = avg(lamp, 0.05f, true, 0);
+    CHECK(brown > 0.15f && brown < 0.5f);                        // low power: dim and stuttering
+    CHECK(broken < 0.8f && broken > 0.2f);                       // badly damaged: sparks out now and then
+    CHECK(RtsLights::glowLevel(lamp, 3.21f, 0.5f, 0.05f, false, 0) == RtsLights::glowLevel(lamp, 3.21f, 0.5f, 0.05f, false, 0));
+    CHECK(RtsLights::parseGlow(Json::parse(R"({"type": "spot"})")).electric);
+    // a beacon spot rotates all the way round
+    const RtsLights::Glow beacon = RtsLights::parseGlow(Json::parse(R"({"type": "spot", "pattern": "beacon", "rate": 0.5})"));
+    float minA = 1e9f, maxA = -1e9f;
+    for (int i = 0; i < 100; ++i) {
+        const render::PointLight l = RtsLights::glowLight(beacon, {0, 0, 0}, 0, 1, i * 0.02f, 0);
+        const float a = std::atan2(l.dir.z, l.dir.x) / 0.0174532925f;
+        minA = std::min(minA, a); maxA = std::max(maxA, a);
+    }
+    CHECK(maxA - minA > 300);
 }
 
 TEST(lighting_quality_governor) {
@@ -5323,8 +5370,8 @@ TEST(fx_modules_parse_round_trip_and_errors) {
     const auto& e = d.emitters[0];
     CHECK(e.blend == fx::FxBlend::Premultiplied && e.align == fx::FxAlign::Upright && e.shape == fx::FxShape::Cone);
     CHECK(e.bursts.size() == 2 && e.bursts[1].cycles == 3 && e.bursts[1].count.max == 4 && e.startColorPair && e.localSpace);
-    CHECK(e.maxParticles == 40 && e.velocity.y == 2 && e.speedLimit == 4 && e.colorBySpeed.size() == 2 && e.sizeBySpeed.size() == 2);
-    CHECK(e.noise.strength == 1 && e.cycles == 2 && e.startFrame.max == 3 && e.arc == 180 && e.radial == -0.5f);
+    CHECK(e.maxParticles == 40 && e.velocity.y == 2 && e.speedLimit.max == 4 && e.colorBySpeed.size() == 2 && e.sizeBySpeed.size() == 2);
+    CHECK(e.noise.strength.max == 1 && e.cycles == 2 && e.startFrame.max == 3 && e.arc == 180 && e.radial == -0.5f);
     CHECK(e.collision.enabled && e.collision.bounce > 0.29f && e.subEmitters.size() == 1 && e.subEmitters[0].on == fx::FxSubEvent::Death);
     CHECK(e.trail.enabled && e.trail.blend == fx::FxBlend::Alpha && !e.trail.inheritColor && e.light.enabled && e.light.max == 3);
     CHECK(d.lifetime() > 0.4f && !d.looping());
@@ -5468,10 +5515,299 @@ TEST(fx_unity_importer_output_is_valid) {
     if (ex && ex->emitters.size() == 4) {
         CHECK(ex->emitters[2].trail.enabled && ex->emitters[2].light.enabled && ex->emitters[2].collision.enabled);
         CHECK(ex->emitters[2].subEmitters.size() == 1 && ex->emitters[2].align == fx::FxAlign::Velocity);
-        CHECK(ex->emitters[1].bursts.size() == 2 && ex->emitters[1].noise.strength > 0);
+        CHECK(ex->emitters[1].bursts.size() == 2 && ex->emitters[1].noise.strength.max > 0);
     }
     CHECK(std::filesystem::exists(out + "/fx/textures/smoke.png"));
     std::filesystem::remove_all(out);
+}
+
+// ---------------- particles: the rest of Unity's modules ----------------
+namespace {
+struct FxRun {
+    fx::ParticleSystem ps;
+    std::vector<fx::FxParticleInfo> parts;
+    int id = -1;
+    explicit FxRun(const char* json, fx::FxQuality q = fx::FxQuality::High) {
+        ps.setQuality(q);
+        ps.init(nullptr);
+        std::vector<std::string> errs;
+        fx::EffectDef d;
+        fx::parseEffect(Json::parse(json), "t.json", d, errs);
+        for (auto& e : errs) std::printf("    %s\n", e.c_str());
+        id = ps.define("t", d);
+    }
+    void step(float seconds, float dt = 1 / 30.0f) { for (float t = 0; t < seconds - 1e-4f; t += dt) ps.update(dt); ps.snapshot(parts); }
+};
+} // namespace
+
+TEST(fx_unity_modules_parse_and_round_trip) {
+    const char* text = R"({
+      "emitters": [{
+        "texture": "builtin:spark", "blend": "multiply", "align": "world", "loop": true, "duration": 2, "prewarm": true,
+        "delay": [0, 0.5], "life": { "curve": [[0, 1], [1, 2]] }, "speed": [-2, 3], "size": { "curve": [[0, 0.5]], "curveMin": [[0, 0.2]] },
+        "rate": { "curve": [[0, 0], [1, 50]] }, "bursts": [{ "time": 0, "count": 4, "cycles": 0, "interval": 0.25, "chance": 0.5 }],
+        "shape": "donut", "radius": 2, "donutRadius": 0.3, "emitFrom": "shell", "arcMode": "loop", "arcSpeed": 2, "arcSpread": 0.25,
+        "shapeRotation": [0, 45, 0], "randomDirection": 0.2, "sphericalDirection": 0.1, "randomPosition": 0.05, "alignToDirection": true,
+        "sizeY": [1, 2], "rotation3D": { "x": [0, 90] }, "gravityScale": 0.5, "startColor": { "gradient": [[0, "#ff0000"], [1, "#0000ff"]], "overTime": true },
+        "colorMin": [[0, "#ffffff"], [1, "#000000"]], "sizeOverLifeMin": [[0, 0.5]], "sizeOverLifeY": [[0, 1], [1, 2]],
+        "spin": { "curve": [[0, 90], [1, -90]] }, "spin3D": { "x": 30 }, "spinBySpeed": { "speed": [0, 5], "spin": [[0, 0], [1, 180]] },
+        "velocityOverLife": { "y": { "curve": [[0, 2], [1, 0]] }, "orbitalY": 90, "orbitalOffset": [0, 1, 0], "radial": 0.5, "speedModifier": [[0, 1], [1, 0.5]] },
+        "force": { "x": [-1, 1], "randomize": true }, "speedLimit": 4, "speedLimitAxes": { "y": 2 }, "limitDampen": 0.5,
+        "drag": [0.1, 0.2], "dragBySize": true, "dragBySpeed": true, "inheritVelocity": { "mode": "current", "amount": 0.5 },
+        "lifeBySpeed": { "speed": [0, 10], "factor": [[0, 1], [1, 0.5]] }, "externalForces": 1,
+        "noise": { "strength": 1, "axes": [1, 0.5, 1], "octaves": 3, "damping": true, "rotation": 45, "size": 0.2, "remap": [[0, -1], [1, 1]] },
+        "frames": [4, 2], "row": "random", "frameOverTime": { "curve": [[0, 0], [1, 1]] }, "flip": [0.5, 0],
+        "pivot": [0, 0.5, 0], "cameraStretch": 0.1, "sort": "youngest", "sortOrder": 3, "maxScreenSize": 0.3, "meshes": ["builtin:cube"],
+        "maxParticles": 50, "ringBuffer": true,
+        "collision": { "ground": false, "planes": [{ "point": [0, 0, 0], "normal": [0, 1, 0] }], "radius": 0.5, "maxKillSpeed": 20 },
+        "trigger": { "volumes": [{ "center": [0, 1, 0], "radius": 2 }], "outside": "kill", "enter": "callback" },
+        "subEmitters": [{ "on": "trigger", "effect": "t2", "inherit": ["color", "size", "duration"] }, { "on": "manual", "effect": "t2" }],
+        "trail": { "mode": "ribbon", "ribbons": 2, "lifeColor": "#ff8000", "textureMode": "tile", "dieWithParticles": false, "lifeFraction": 0.5 },
+        "light": { "radiusOverLife": [[0, 1], [1, 0]] }
+      }],
+      "forceFields": [{ "position": [0, 1, 0], "shape": "cylinder", "radius": 3, "length": 4, "gravity": 2, "rotation": 90, "rotationAttraction": 0.5 }]
+    })";
+    std::vector<std::string> errs;
+    fx::EffectDef d = fxParse(text, &errs);
+    for (auto& e : errs) std::printf("    %s\n", e.c_str());
+    CHECK(errs.empty() && d.emitters.size() == 1 && d.forceFields.size() == 1);
+    const auto& e = d.emitters[0];
+    CHECK(e.blend == fx::FxBlend::Multiply && e.align == fx::FxAlign::World && e.prewarm && e.delay.max == 0.5f);
+    CHECK(e.life.curved() && e.life.min == 1 && e.life.max == 2 && e.size.curveMin.size() == 1 && e.speed.min == -2);
+    CHECK(e.rate.curved() && e.continuous() && e.bursts[0].cycles == 0 && e.bursts[0].chance == 0.5f);
+    CHECK(e.shape == fx::FxShape::Donut && e.emitFrom == fx::FxEmitFrom::Shell && e.arcMode == fx::FxArcMode::Loop && e.shapeRotation.y == 45);
+    CHECK(e.size3D && e.rotation3D && e.startColorOverTime && e.spin.curved() && e.spin3D && e.spinBySpeed.enabled);
+    CHECK(e.velocityOverLife.enabled && e.velocityOverLife.y.curved() && e.velocityOverLife.orbitalY.max == 90 && e.force.randomize);
+    CHECK(e.speedLimitAxes.enabled && e.speedLimitAxes.x.min > 1e5f && e.inheritVelocity.current && e.lifeBySpeed.enabled && e.externalForces == 1);
+    CHECK(e.noise.octaves == 3 && e.noise.damping && e.noise.remap.size() == 2 && e.row == -2 && e.frameOverTime.curved());
+    CHECK(e.sort == fx::FxSort::Youngest && e.sortOrder == 3 && e.meshes.size() == 1 && e.ringBuffer);
+    CHECK(e.collision.planes.size() == 1 && !e.collision.ground && e.trigger.volumes.size() == 1 && e.trigger.outside == fx::FxTriggerAction::Kill);
+    CHECK(e.subEmitters.size() == 2 && e.subEmitters[0].inheritSize && e.subEmitters[0].inheritDuration && e.subEmitters[1].on == fx::FxSubEvent::Manual);
+    CHECK(e.trail.ribbon && e.trail.ribbons == 2 && !e.trail.dieWithParticles && e.trail.textureMode == fx::FxTextureMode::Tile);
+    CHECK(d.forceFields[0].cylinder && d.forceFields[0].rotation == 90);
+    // serialize -> parse -> serialize is stable
+    fx::EffectDef back;
+    std::vector<std::string> e2;
+    CHECK(fx::parseEffect(fx::effectToJson(d), "t.json", back, e2) && e2.empty());
+    CHECK(fx::effectToJson(back).dump() == fx::effectToJson(d).dump());
+    // readable errors for the new keys
+    fxParse(R"({"emitters": [{ "burst": 1, "shape": "mesh", "ringBuffer": true, "life": { "curve": "x" } }]})", &errs);
+    CHECK(errs.size() == 3);   // mesh missing, ringBuffer without maxParticles, bad curve
+}
+
+TEST(fx_curves_prewarm_bursts_ring_buffer) {
+    // rate rising linearly 0 -> 100 over 1 s: about 50 particles
+    FxRun a(R"({"emitters": [{ "rate": { "curve": [[0, 0], [1, 100]] }, "duration": 1, "life": 5, "speed": 0 }]})");
+    a.ps.play(a.id, {0, 0, 0});
+    a.step(1.0f);
+    CHECK(a.parts.size() >= 44 && a.parts.size() <= 56);
+    // life curve over the emitter time: early particles live 1 s, late ones 3 s
+    FxRun b(R"({"emitters": [{ "rate": 20, "duration": 1, "life": { "curve": [[0, 1], [1, 3]] }, "speed": 0 }]})");
+    b.ps.play(b.id, {0, 0, 0});
+    b.step(1.0f);
+    float lo = 1e9f, hi = 0;
+    for (auto& p : b.parts) { lo = std::min(lo, p.life); hi = std::max(hi, p.life); }
+    CHECK(lo < 1.3f && hi > 2.6f);
+    // prewarm: a looping effect is full right away
+    FxRun c(R"({"emitters": [{ "rate": 50, "duration": 2, "loop": true, "prewarm": true, "life": 1, "speed": 0 }]})");
+    c.ps.play(c.id, {0, 0, 0});
+    c.step(0.0f);
+    CHECK(c.parts.size() >= 40);
+    // endless burst cycles every 0.25 s for a 1 s duration, half of them by chance
+    FxRun e(R"({"emitters": [{ "bursts": [{ "time": 0, "count": 10, "cycles": 0, "interval": 0.25 }], "duration": 1, "life": 5, "speed": 0 }]})");
+    e.ps.play(e.id, {0, 0, 0});
+    e.step(1.5f);
+    CHECK(e.parts.size() == 40);
+    // ring buffer: 5 at most, they never die, new ones replace the oldest
+    FxRun r(R"({"emitters": [{ "rate": 20, "duration": 5, "life": 0.2, "speed": 0, "maxParticles": 5, "ringBuffer": true }]})");
+    r.ps.play(r.id, {0, 0, 0});
+    r.step(1.0f);
+    CHECK(r.parts.size() == 5);
+    float oldest = 0;
+    for (auto& p : r.parts) oldest = std::max(oldest, p.age);
+    CHECK(oldest < 0.4f);   // replaced, not kept from the start
+    // instances live on while their particles do; playing() only while emitting
+    FxRun l(R"({"emitters": [{ "burst": 3, "life": 1, "speed": 0 }]})");
+    fx::FxHandle h = l.ps.play(l.id, {0, 0, 0});
+    l.step(0.1f);
+    CHECK(!l.ps.playing(h) && l.ps.stats().instances == 1 && l.parts.size() == 3);
+    l.step(1.0f);
+    CHECK(l.ps.stats().instances == 0 && l.parts.empty());
+}
+
+TEST(fx_shapes_donut_box_mesh_cone_arc) {
+    auto distTorus = [](fx::float3 p, float R) { float q = std::sqrt(p.x * p.x + p.z * p.z) - R; return std::sqrt(q * q + p.y * p.y); };
+    FxRun d(R"({"emitters": [{ "burst": 200, "shape": "donut", "radius": 2, "donutRadius": 0.5, "emitFrom": "shell", "life": 5, "speed": 0 }]})");
+    d.ps.play(d.id, {0, 0, 0});
+    d.step(1 / 30.0f);
+    bool onTube = !d.parts.empty();
+    for (auto& p : d.parts) onTube = onTube && std::fabs(distTorus(p.pos, 2) - 0.5f) < 1e-3f;
+    CHECK(onTube);
+    FxRun b(R"({"emitters": [{ "burst": 200, "shape": "box", "box": [2, 2, 2], "emitFrom": "shell", "life": 5, "speed": 0 }]})");
+    b.ps.play(b.id, {0, 0, 0});
+    b.step(1 / 30.0f);
+    bool onFace = b.parts.size() == 200;
+    for (auto& p : b.parts) onFace = onFace && std::fabs(std::max({std::fabs(p.pos.x), std::fabs(p.pos.y), std::fabs(p.pos.z)}) - 1) < 1e-3f;
+    CHECK(onFace);
+    // mesh shape: the built-in cube, from triangles -> on its surface, directed along its normals
+    FxRun m(R"({"emitters": [{ "burst": 200, "shape": "mesh", "mesh": "builtin:cube", "emitFrom": "triangle", "life": 5, "speed": 1 }]})");
+    m.ps.play(m.id, {0, 0, 0});
+    m.step(1 / 30.0f);
+    bool onCube = m.parts.size() == 200;
+    for (auto& p : m.parts) {
+        fx::float3 q = p.pos - p.vel * (1 / 30.0f);
+        onCube = onCube && std::fabs(std::max({std::fabs(q.x), std::fabs(q.y), std::fabs(q.z)}) - 0.5f) < 2e-3f;
+    }
+    CHECK(onCube);
+    // cone volume: particles start anywhere along the length (not only on the base)
+    FxRun c(R"({"emitters": [{ "burst": 300, "shape": "cone", "radius": 0.5, "spread": 20, "length": 4, "life": 5, "speed": 0 }]})");
+    c.ps.play(c.id, {0, 0, 0});
+    c.step(1 / 30.0f);
+    float top = 0;
+    for (auto& p : c.parts) top = std::max(top, p.pos.y);
+    CHECK(top > 3.0f);
+    // arc spread: burst evenly over 4 directions only
+    FxRun s(R"({"emitters": [{ "burst": 40, "shape": "ring", "radius": 1, "arcMode": "spread", "arcSpread": 0.25, "life": 5, "speed": 0 }]})");
+    s.ps.play(s.id, {0, 0, 0});
+    s.step(1 / 30.0f);
+    std::vector<std::pair<int, int>> spots;
+    for (auto& p : s.parts) {
+        std::pair<int, int> k{int(std::lround(p.pos.x * 10)), int(std::lround(p.pos.z * 10))};
+        if (std::find(spots.begin(), spots.end(), k) == spots.end()) spots.push_back(k);
+    }
+    CHECK(spots.size() == 4);
+}
+
+TEST(fx_velocity_force_limit_fields_noise) {
+    // orbital velocity: particles keep their distance to the centre and go around it
+    FxRun o(R"({"emitters": [{ "burst": 20, "shape": "ring", "radius": 1, "emitFrom": "shell", "life": 5, "speed": 0,
+                 "velocityOverLife": { "orbitalY": 90 } }]})");
+    o.ps.play(o.id, {0, 0, 0});
+    o.step(1 / 30.0f);
+    std::vector<fx::float3> start;
+    for (auto& p : o.parts) start.push_back(p.pos);
+    o.step(1.0f, 1 / 60.0f);
+    bool kept = o.parts.size() == start.size();
+    float turned = 0;
+    for (size_t i = 0; kept && i < o.parts.size(); ++i) {
+        kept = std::fabs(std::sqrt(o.parts[i].pos.x * o.parts[i].pos.x + o.parts[i].pos.z * o.parts[i].pos.z) - 1) < 0.08f;
+        turned += std::acos(std::clamp(render::dot(render::normalize(o.parts[i].pos), render::normalize(start[i])), -1.0f, 1.0f));
+    }
+    CHECK(kept);
+    CHECK(o.parts.size() && std::fabs(turned / float(o.parts.size()) - 3.14159f / 2) < 0.2f);
+    // force up + hard speed limit 2
+    FxRun f(R"({"emitters": [{ "burst": 10, "life": 5, "speed": 0, "force": { "y": 20, "space": "world" }, "speedLimit": 2 }]})");
+    f.ps.play(f.id, {0, 0, 0});
+    f.step(1.0f);
+    bool limited = !f.parts.empty();
+    for (auto& p : f.parts) limited = limited && render::length(p.vel) <= 2.01f && p.vel.y > 1.5f;
+    CHECK(limited);
+    // a gravity force field pulls particles towards its centre
+    FxRun g(R"({"emitters": [{ "burst": 30, "shape": "sphere", "radius": 3, "emitFrom": "shell", "life": 5, "speed": 0, "externalForces": 1 }],
+                "forceFields": [{ "radius": 10, "gravity": 5 }]})");
+    g.ps.play(g.id, {0, 0, 0});
+    g.step(0.5f);
+    float avg = 0;
+    for (auto& p : g.parts) avg += render::length(p.pos);
+    CHECK(!g.parts.empty() && avg / float(g.parts.size()) < 2.6f);
+    // wind acts on externalForces emitters only
+    FxRun w(R"({"emitters": [{ "burst": 5, "life": 5, "speed": 0, "externalForces": 1 }, { "burst": 5, "life": 5, "speed": 0 }]})");
+    w.ps.setWind({4, 0, 0});
+    w.ps.play(w.id, {0, 0, 0});
+    w.step(1.0f);
+    int blown = 0, still = 0;
+    for (auto& p : w.parts) (p.pos.x > 1 ? blown : still) += p.emitter == 0 ? (p.pos.x > 1 ? 1 : 0) : (p.pos.x < 0.01f ? 1 : 0);
+    CHECK(blown == 5 && still == 5);
+    // noise with octaves moves particles on every tier
+    for (auto q : {fx::FxQuality::Low, fx::FxQuality::High}) {
+        FxRun n(R"({"emitters": [{ "burst": 10, "life": 5, "speed": 0, "noise": { "strength": 2, "octaves": 4, "remap": [[0, -1], [1, 1]] } }]})", q);
+        n.ps.play(n.id, {0, 0, 0});
+        n.step(1.0f);
+        float moved = 0;
+        for (auto& p : n.parts) moved += render::length(p.pos);
+        CHECK(n.parts.size() > 0 && moved > 0.1f);
+    }
+}
+
+TEST(fx_collision_planes_triggers_subemitters_inherit) {
+    // a wall at x = 1 (normal -x) sends particles back
+    FxRun c(R"({"emitters": [{ "burst": 5, "life": 5, "speed": 3, "direction": [0, 0, 1], "spread": 0,
+                 "collision": { "ground": false, "bounce": 1, "planes": [{ "point": [0, 0, 1], "normal": [0, 0, -1] }] } }]})");
+    c.ps.play(c.id, {0, 0, 0});
+    c.step(1.0f);
+    bool back = !c.parts.empty();
+    for (auto& p : c.parts) back = back && p.pos.x < 1.01f && p.vel.x < 0;   // effect z = world x for the default play direction
+    CHECK(back);
+    // trigger: particles leaving the volume die
+    FxRun t(R"({"emitters": [{ "burst": 20, "life": 5, "speed": 2, "trigger": { "volumes": [{ "radius": 1 }], "outside": "kill" } }]})");
+    t.ps.play(t.id, {0, 0, 0});
+    t.step(0.3f);
+    CHECK(t.parts.size() == 20);
+    t.step(0.5f);
+    CHECK(t.parts.empty());
+    // manual sub-emitters fire on emitManual; inherited size scales the child particles
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    int child = ps.define("child", fxParse(R"({"emitters": [{ "burst": 1, "life": 5, "speed": 0, "size": 1 }]})"));
+    int parent = ps.define("parent", fxParse(R"({"emitters": [{ "burst": 2, "life": 5, "speed": 0, "size": 3,
+        "subEmitters": [{ "on": "manual", "effect": "child", "inherit": ["size"] }] }]})"));
+    CHECK(child >= 0 && parent >= 0);
+    fx::FxHandle h = ps.play(parent, {0, 0, 0});
+    ps.update(1 / 30.0f);
+    CHECK(ps.stats().particles == 2);
+    ps.emitManual(h);
+    ps.update(1 / 30.0f);
+    ps.update(1 / 30.0f);
+    std::vector<fx::FxParticleInfo> parts;
+    ps.snapshot(parts);
+    int big = 0;
+    for (auto& p : parts) if (p.effect == child && std::fabs(p.size - 3) < 0.05f) ++big;
+    CHECK(parts.size() == 4 && big == 2);
+}
+
+TEST(fx_ribbons_orphan_trails_and_meshes_simulate) {
+    // trails that outlive their particles keep the effect instance busy until they fade
+    FxRun o(R"({"emitters": [{ "rate": 20, "duration": 0.5, "life": 0.3, "speed": 2,
+                "trail": { "time": 0.6, "dieWithParticles": false, "minQuality": "low" } }]})");
+    o.ps.play(o.id, {0, 0, 0});
+    o.step(1.0f);
+    CHECK(o.parts.empty());
+    // mesh particles and ribbons run headless (drawing is checked on screenshots)
+    FxRun m(R"({"emitters": [{ "rate": 30, "duration": 1, "life": 1, "speed": 1, "meshes": ["builtin:cube", "builtin:sphere"], "rotation3D": { "x": [0, 90] },
+                "spin3D": { "y": 90 }, "trail": { "mode": "ribbon", "ribbons": 2 } }]})");
+    m.ps.play(m.id, {0, 0, 0});
+    m.step(0.5f);
+    CHECK(m.parts.size() > 10);
+    CHECK(m.ps.errors().empty());
+}
+
+TEST(fx_mesh_particles_from_model_files) {
+    // a tetrahedron as OBJ: loaded through the model loader for mesh particles and the "mesh" shape
+    const std::string obj = "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 3 2\nf 1 2 4\nf 1 4 3\nf 2 3 4\n";
+    auto read = [&](const std::string& p, std::string& out) { if (p != "models/shard.obj") return false; out = obj; return true; };
+    fx::FxMesh mesh;
+    CHECK(fx::meshFromModelFile("models/shard.obj", read, mesh));
+    CHECK(mesh.idx.size() == 12 && mesh.pos.size() >= 4 && mesh.nrm.size() == mesh.pos.size());
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.setMeshLoader([&](const std::string& name, fx::FxMesh& out) { return fx::meshFromModelFile(name, read, out); });
+    ps.init(nullptr);
+    int id = ps.define("m", fxParse(R"({"emitters": [{ "burst": 50, "life": 2, "speed": 0, "shape": "mesh", "mesh": "models/shard.obj",
+                                         "emitFrom": "vertex", "meshes": ["models/shard.obj"] }]})"));
+    ps.play(id, {0, 0, 0});
+    ps.update(1 / 30.0f);
+    std::vector<fx::FxParticleInfo> parts;
+    ps.snapshot(parts);
+    bool onVertex = parts.size() == 50;
+    for (auto& p : parts) {   // model space -> effect space -> world for the default play direction: unchanged
+        bool hit = false;
+        for (auto v : {fx::float3{0, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, 0, 1}}) hit = hit || render::length(p.pos - v) < 1e-3f;
+        onVertex = onVertex && hit;
+    }
+    CHECK(onVertex);
+    for (auto& e : ps.errors()) std::printf("    %s\n", e.c_str());
+    CHECK(ps.errors().empty());
 }
 
 // ---------------- Cube-sphere (RtsSphere) ----------------
@@ -5605,6 +5941,7 @@ TEST(sphere_great_circle_steps) {
 #define GEN_GOLD_LANES 0x6010e5d33a6a8fdbull
 #define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
 #define GEN_GOLD_METAL 0x5e11afce218433b2ull
+#define GEN_GOLD_PLANET_WORLD 0x8101a56ab8e6f0c6ull
 #define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
 
 // ---------------- terrain / map generator (agent-terrain-gen) ----------------
@@ -6307,6 +6644,1520 @@ TEST(mcp_install_patches_configs_as_text) {
 }
 #endif
 
+
+// ---------------------------------------------------------------------------------------------
+// Converted formats: "<file>.glb" sidecars (tools/models/ModelConvert.h, models agent)
+// ---------------------------------------------------------------------------------------------
+TEST(models_converted_sidecar_loads_for_the_source_path) {
+    using namespace modeltest;
+    std::string glb;
+    CHECK(diskReader()(std::string(RTS_SOURCE_DIR) + "/templates/showcase/models/sword.glb", glb));
+    CHECK(isNativeModelFormat("a/b.MDX") && isNativeModelFormat("x.vox") && !isNativeModelFormat("ship.lwo") && !isNativeModelFormat("noext"));
+    auto m = loadModel("units/ship.lwo", mapReader({{"units/ship.lwo", "LWO source"}, {"units/ship.lwo.glb", glb}}), nullptr);
+    CHECK(m && m->path == "units/ship.lwo" && !m->meshes.empty());
+    bool threw = false;
+    try { loadModel("units/raw.lwo", mapReader({{"units/raw.lwo", "LWO source"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("modelconv") != std::string::npos; }
+    CHECK(threw);
+}
+
+#if defined(RTS_TEST_MODELCONV)
+#include "tools/models/ModelConvert.h"
+TEST(models_pack_step_ships_sidecars_not_sources) {
+    using namespace rts::models;
+    CHECK(needsConversion("m/a.blend") && needsConversion("m/A.LWO") && !needsConversion("m/a.glb") && !needsConversion("m/a.mdx") &&
+          !needsConversion("m/a.png") && sidecarPath("m/a.x") == "m/a.x.glb");
+    rts::pack::PackWriter w;
+    CHECK(w.addData("models/ship.lwo", "source"));
+    CHECK(w.addData("models/ship.lwo.glb", "converted"));
+    CHECK(w.addData("models/broken.x", "not a model at all"));
+    CHECK(w.addData("models/tank.glb", "glb"));
+    ConvertReport rep;
+    std::string err;
+    CHECK(applyModelConversion(w, rep, &err));
+    const auto paths = w.paths();
+    auto has = [&](const std::string& p) { return std::find(paths.begin(), paths.end(), p) != paths.end(); };
+    CHECK(!has("models/ship.lwo") && has("models/ship.lwo.glb") && !has("models/broken.x") && has("models/tank.glb"));
+    int failed = 0;
+    for (const auto& it : rep.items) failed += it.ok ? 0 : 1;
+    CHECK(rep.items.size() == 2 && failed == 1);   // broken.x can't be converted (or no converter): reported
+}
+#endif
+#include <array>
+// ---------------- models: voxels (.vox MagicaVoxel, .vxl/.hva Westwood) ----------------
+namespace voxtest {
+using namespace rts::render;
+using Kv = std::vector<std::pair<std::string, std::string>>;
+inline void i32(std::string& b, int32_t v) { b.append(reinterpret_cast<const char*>(&v), 4); }
+inline void f32(std::string& b, float v) { b.append(reinterpret_cast<const char*>(&v), 4); }
+inline std::string vstr(const std::string& s) { std::string b; i32(b, int32_t(s.size())); return b + s; }
+inline std::string vdict(const Kv& d) {
+    std::string b; i32(b, int32_t(d.size()));
+    for (auto& [k, v] : d) b += vstr(k) + vstr(v);
+    return b;
+}
+inline std::string chunk(const char* id, const std::string& content, const std::string& kids = "") {
+    std::string b(id, 4); i32(b, int32_t(content.size())); i32(b, int32_t(kids.size()));
+    return b + content + kids;
+}
+inline std::string model(int sx, int sy, int sz, const std::vector<std::array<uint8_t, 4>>& vox) {
+    std::string s; i32(s, sx); i32(s, sy); i32(s, sz);
+    std::string x; i32(x, int32_t(vox.size()));
+    for (auto& v : vox) x.append(reinterpret_cast<const char*>(v.data()), 4);
+    return chunk("SIZE", s) + chunk("XYZI", x);
+}
+inline std::string trn(int id, int child, const std::string& name, const Kv& frame) {
+    std::string b; i32(b, id); b += vdict(name.empty() ? Kv{} : Kv{{"_name", name}});
+    i32(b, child); i32(b, -1); i32(b, 0); i32(b, 1); b += vdict(frame);
+    return chunk("nTRN", b);
+}
+inline std::string grp(int id, const std::vector<int>& kids) {
+    std::string b; i32(b, id); b += vdict({}); i32(b, int32_t(kids.size()));
+    for (int k : kids) i32(b, k);
+    return chunk("nGRP", b);
+}
+inline std::string shp(int id, const std::vector<std::pair<int, int>>& models) {  // (model, frame)
+    std::string b; i32(b, id); b += vdict({}); i32(b, int32_t(models.size()));
+    for (auto& [m, f] : models) { i32(b, m); b += vdict({{"_f", std::to_string(f)}}); }
+    return chunk("nSHP", b);
+}
+// 2x1x1 red box (shared by "Body" and the rotated "Body2"), a 1-voxel team flag, a 2-frame "Anim"
+inline std::string sampleVox() {
+    std::string kids = model(2, 1, 1, {{0, 0, 0, 1}, {1, 0, 0, 1}}) + model(1, 1, 1, {{0, 0, 0, 250}});
+    kids += trn(0, 1, "", {}) + grp(1, {2, 4, 6, 8});
+    kids += trn(2, 3, "Body", {{"_t", "0 0 5"}}) + shp(3, {{0, 0}});
+    kids += trn(4, 5, "Flag", {}) + shp(5, {{1, 0}});
+    kids += trn(6, 7, "Body2", {{"_r", "17"}}) + shp(7, {{0, 0}});
+    kids += trn(8, 9, "Anim", {}) + shp(9, {{0, 0}, {1, 1}});
+    std::string pal;
+    for (int i = 0; i < 256; ++i) {
+        const uint8_t c[4] = {uint8_t(i == 0 ? 255 : 128), 0, uint8_t(i == 0 ? 0 : 128), 255};  // entry 0 = colour index 1
+        pal.append(reinterpret_cast<const char*>(c), 4);
+    }
+    kids += chunk("RGBA", pal);
+    std::string matl; i32(matl, 1); matl += vdict({{"_type", "_emit"}, {"_emit", "0.5"}});
+    kids += chunk("MATL", matl);
+    std::string f = "VOX "; i32(f, 150);
+    return f + chunk("MAIN", "", kids);
+}
+struct VxlSec { std::string name; int sx, sy, sz; std::vector<std::array<int, 4>> vox; float scale; };  // x, y, z, colour
+inline std::string sampleVxl(const std::vector<VxlSec>& secs, bool withPalette) {
+    std::string body, tails;
+    for (const auto& s : secs) {
+        std::vector<int32_t> starts(size_t(s.sx * s.sy), -1), ends(size_t(s.sx * s.sy), -1);
+        std::string data;
+        for (int y = 0; y < s.sy; ++y)
+            for (int x = 0; x < s.sx; ++x) {
+                std::vector<int> col(size_t(s.sz), -1);
+                for (auto& v : s.vox) if (v[0] == x && v[1] == y) col[size_t(v[2])] = v[3];
+                bool any = false;
+                for (int c : col) any = any || c >= 0;
+                if (!any) continue;
+                starts[size_t(y * s.sx + x)] = int32_t(data.size());
+                int z = 0;
+                while (z < s.sz) {  // one span per run: skip, count, (colour, normal) x count, count
+                    int skip = 0;
+                    while (z < s.sz && col[size_t(z)] < 0) { ++z; ++skip; }
+                    std::string run;
+                    while (z < s.sz && col[size_t(z)] >= 0) { run += char(col[size_t(z)]); run += char(0); ++z; }
+                    data += char(skip); data += char(run.size() / 2); data += run; data += char(run.size() / 2);
+                }
+                ends[size_t(y * s.sx + x)] = int32_t(data.size()) - 1;
+            }
+        const uint32_t s0 = uint32_t(body.size());
+        for (int32_t v : starts) i32(body, v);
+        const uint32_t e0 = uint32_t(body.size());
+        for (int32_t v : ends) i32(body, v);
+        const uint32_t d0 = uint32_t(body.size());
+        body += data;
+        i32(tails, int32_t(s0)); i32(tails, int32_t(e0)); i32(tails, int32_t(d0)); f32(tails, s.scale);
+        const float id[12] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+        for (float v : id) f32(tails, v);
+        for (float v : {0.0f, 0.0f, 0.0f, float(s.sx), float(s.sy), float(s.sz)}) f32(tails, v);
+        tails += char(s.sx); tails += char(s.sy); tails += char(s.sz); tails += char(4);
+    }
+    std::string f("Voxel Animation\0", 16);
+    i32(f, 1); i32(f, int32_t(secs.size())); i32(f, int32_t(secs.size())); i32(f, int32_t(body.size()));
+    f += char(16); f += char(31);
+    std::string pal(768, '\0');
+    if (withPalette) { pal[64 * 3] = char(255); pal[20 * 3 + 1] = char(200); }
+    f += pal;
+    for (size_t i = 0; i < secs.size(); ++i) {
+        std::string n = secs[i].name; n.resize(16, '\0');
+        f += n; i32(f, int32_t(i)); i32(f, 1); i32(f, 0);
+    }
+    return f + body + tails;
+}
+inline std::string sampleHva(const std::vector<std::string>& names, const std::vector<std::vector<std::array<float, 12>>>& frames) {
+    std::string f("test");
+    f.resize(16, '\0');
+    i32(f, int32_t(frames.size())); i32(f, int32_t(names.size()));
+    for (auto n : names) { n.resize(16, '\0'); f += n; }
+    for (auto& fr : frames) for (auto& mx : fr) for (float v : mx) f32(f, v);
+    return f;
+}
+// every triangle winds counter-clockwise around its stored normal, and normals point outwards
+inline bool facesConsistent(const Model& m, int mesh) {
+    if (mesh < 0) return false;
+    for (const auto& p : m.meshes[size_t(mesh)].primitives) {
+        float3 c{};
+        for (uint32_t i = 0; i < p.vertexCount; ++i) c += m.vertices[p.firstVertex + i].pos;
+        c = c * (1.0f / float(p.vertexCount));
+        for (uint32_t i = p.firstIndex; i + 2 < p.firstIndex + p.indexCount; i += 3) {
+            const ModelVertex &a = m.vertices[m.indices[i]], &b = m.vertices[m.indices[i + 1]], &d = m.vertices[m.indices[i + 2]];
+            if (dot(cross(b.pos - a.pos, d.pos - a.pos), a.nrm) <= 0) return false;
+            if (dot(a.nrm, a.pos - c) <= 0) return false;
+        }
+    }
+    return true;
+}
+inline size_t meshVerts(const Model& m, int mesh) { size_t n = 0; if (mesh >= 0) for (auto& p : m.meshes[size_t(mesh)].primitives) n += p.vertexCount; return n; }
+inline size_t meshIdx(const Model& m, int mesh) { size_t n = 0; if (mesh >= 0) for (auto& p : m.meshes[size_t(mesh)].primitives) n += p.indexCount; return n; }
+} // namespace voxtest
+
+TEST(models_vox_greedy_scene_team) {
+    using namespace voxtest;
+    using modeltest::near;
+    std::vector<std::string> warn;
+    auto m = loadModel("units/t.vox", modeltest::mapReader({{"units/t.vox", sampleVox()}}), &warn);
+    const int body = m->findNode("Body"), body2 = m->findNode("Body2"), flag = m->findNode("Flag"), anim = m->findNode("Anim");
+    CHECK(body >= 0 && body2 >= 0 && flag >= 0 && anim >= 0);
+    if (body < 0 || body2 < 0 || flag < 0 || anim < 0) return;
+    const Node &b = m->nodes[size_t(body)], &b2 = m->nodes[size_t(body2)], &fl = m->nodes[size_t(flag)];
+    CHECK(b.mesh >= 0 && b.mesh == b2.mesh);                              // a model used twice shares its mesh
+    CHECK(meshVerts(*m, b.mesh) == 24 && meshIdx(*m, b.mesh) == 36);     // 2x1x1 box = 6 merged quads
+    CHECK(facesConsistent(*m, b.mesh) && facesConsistent(*m, fl.mesh));
+    CHECK(near(b.t.x, 0) && near(b.t.y, 5) && near(b.t.z, 0));           // MagicaVoxel z up -> y up
+    const float3 rx = b2.r.rotate({1, 0, 0});                             // 90 degrees about z -> about y
+    CHECK(near(rx.x, 0) && near(rx.y, 0) && near(rx.z, -1));
+    if (b.mesh < 0 || fl.mesh < 0) return;
+    const auto& bp = m->meshes[size_t(b.mesh)].primitives[0];
+    CHECK(m->vertices[bp.firstVertex].color == 0xff0000ffu);              // palette red, linear
+    CHECK(m->materials[size_t(bp.material)].emissive.x > 0.5f && near(m->materials[size_t(bp.material)].emissiveStrength, 0.5f));
+    const auto& fp = m->meshes[size_t(fl.mesh)].primitives[0];
+    const uint32_t team = m->vertices[fp.firstVertex].color;
+    CHECK((team >> 24) == 0 && (team & 255) == 55);                       // team slot: alpha 0, sRGB 128 -> linear 55
+    CHECK(m->materials[size_t(fp.material)].team == TeamMode::VertexAlpha);
+    // two-frame shape -> clip Idle toggling child scales
+    const int ci = m->findClip("Idle");
+    CHECK(ci >= 0);
+    if (ci >= 0) {
+        const AnimClip& c = m->clips[size_t(ci)];
+        CHECK(c.channels.size() == 2 && near(c.duration, 0.2f));
+        CHECK(c.channels[0].interp == AnimChannel::Step && c.channels[0].path == AnimChannel::Scale && c.channels[0].times.size() == 2);
+    }
+    CHECK(m->nodes[size_t(anim)].children.size() == 2);
+    CHECK(warn.empty());
+    // the generated showcase sample loads with its scene graph
+    std::vector<std::string> w2;
+    auto tank = loadModel(std::string(RTS_SOURCE_DIR) + "/templates/showcase/models/voxel_tank.vox", modeltest::diskReader(), &w2);
+    const int turret = tank->findNode("Turret"), barrel = tank->findNode("Barrel");
+    CHECK(turret >= 0 && barrel >= 0 && tank->findNode("Hull") >= 0 && w2.empty());
+    if (barrel >= 0) CHECK(tank->nodes[size_t(barrel)].parent == turret);
+}
+
+TEST(models_vxl_hva_sections) {
+    using namespace voxtest;
+    using modeltest::near;
+    std::vector<VxlSec> secs = {{"Body", 2, 1, 1, {{0, 0, 0, 64}, {1, 0, 0, 20}}, 1.0f}, {"Turret", 1, 1, 1, {{0, 0, 0, 64}}, 1.0f}};
+    const std::array<float, 12> ident = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+    std::vector<std::vector<std::array<float, 12>>> frames;
+    for (int f = 0; f < 3; ++f)  // turret: 90 degrees about z (voxel space), lifted by 24, moved forward by 12
+        frames.push_back({ident, {0, -1, 0, 12, 1, 0, 0, 0, 0, 0, 1, 24.0f + float(f)}});
+    std::vector<std::string> warn;
+    auto m = loadModel("units/tank.vxl", modeltest::mapReader({{"units/tank.vxl", sampleVxl(secs, true)}, {"units/tank.hva", sampleHva({"Body", "Turret"}, frames)}}), &warn);
+    const int body = m->findNode("Body"), tur = m->findNode("Turret");
+    CHECK(body >= 0 && tur >= 0 && warn.empty());
+    if (body < 0 || tur < 0) return;
+    const Node &b = m->nodes[size_t(body)], &t = m->nodes[size_t(tur)];
+    CHECK(meshVerts(*m, b.mesh) == 10 * 4 && facesConsistent(*m, b.mesh));  // 2 colours: 4 sides split in two + 2 caps
+    CHECK(near(t.t.x, 0) && near(t.t.y, 24) && near(t.t.z, 12));          // (x, y, z) voxel -> (y, z, x) engine
+    const float3 fwd = t.r.rotate({0, 0, 1});                             // voxel +x (forward) turned to voxel +y
+    CHECK(near(fwd.x, 1) && near(fwd.y, 0) && near(fwd.z, 0));
+    bool teamV = false, own = false;
+    if (b.mesh >= 0)
+        for (auto& p : m->meshes[size_t(b.mesh)].primitives)
+            for (uint32_t i = 0; i < p.vertexCount; ++i) {
+                const uint32_t c = m->vertices[p.firstVertex + i].color;
+                if ((c >> 24) == 0) teamV = true;
+                if (c == 0xff0000ffu) own = true;                             // palette 64 = red
+            }
+    CHECK(teamV && own && m->materials[0].team == TeamMode::VertexAlpha);
+    const int ci = m->findClip("Idle");
+    CHECK(ci >= 0);
+    if (ci >= 0) {
+        CHECK(near(m->clips[size_t(ci)].duration, 3.0f / 15.0f) && m->clips[size_t(ci)].channels.size() == 6);
+        CHECK(m->clips[size_t(ci)].channels[3].times.size() == 3);
+    }
+    // no .hva: warning, no clip; empty palette: unittem.pal next to it (6-bit)
+    std::string pal(768, '\0');
+    pal[64 * 3 + 2] = char(63);
+    warn.clear();
+    auto m2 = loadModel("units/tank.vxl", modeltest::mapReader({{"units/tank.vxl", sampleVxl(secs, false)}, {"units/unittem.pal", pal}}), &warn);
+    CHECK(m2->clips.empty() && warn.size() == 1);
+    const int b2 = m2->findNode("Body");
+    bool blue = false;
+    if (b2 >= 0 && m2->nodes[size_t(b2)].mesh >= 0)
+        for (auto& p : m2->meshes[size_t(m2->nodes[size_t(b2)].mesh)].primitives)
+            for (uint32_t i = 0; i < p.vertexCount; ++i) blue = blue || m2->vertices[p.firstVertex + i].color == 0xffff0000u;
+    CHECK(blue);
+}
+
+TEST(models_voxel_broken_files) {
+    using namespace voxtest;
+    auto expectThrow = [](const std::string& path, const std::string& bytes) {
+        try { loadModel(path, modeltest::mapReader({{path, bytes}}), nullptr); }
+        catch (const std::exception& e) { return std::string(e.what()).find(path) != std::string::npos; }
+        return false;
+    };
+    CHECK(expectThrow("a/x.vox", "VOX junk"));
+    CHECK(expectThrow("a/x.vxl", "Voxel Anim"));
+    CHECK(expectThrow("a/x.vox", sampleVox().substr(0, 60)));
+    // truncations and byte flips never crash (the loader either throws or returns a model)
+    const std::string vox = sampleVox();
+    const std::string vxl = sampleVxl({{"Body", 3, 2, 4, {{0, 0, 0, 64}, {1, 1, 2, 20}, {2, 0, 3, 5}}, 1.0f}}, true);
+    uint32_t rng = 12345;
+    int loaded = 0;
+    for (int i = 0; i < 400; ++i) {
+        std::string v = i % 2 ? vox : vxl;
+        rng = rng * 1664525u + 1013904223u;
+        if (i % 4 < 2) v.resize(rng % v.size());
+        else for (int k = 0; k < 4; ++k) { rng = rng * 1664525u + 1013904223u; v[rng % v.size()] = char(rng >> 24); }
+        const std::string p = i % 2 ? "f.vox" : "f.vxl";
+        std::vector<std::string> w;
+        try { loadModel(p, modeltest::mapReader({{p, v}}), &w); ++loaded; } catch (const std::exception&) {}
+    }
+    CHECK(loaded > 0);
+}
+
+// ---------------- models (MDX agent): Warcraft III .mdx / .mdl, BLP textures ----------------
+namespace mdxtest {
+using namespace rts::render;
+using modeltest::put;
+inline std::string cstr(const std::string& s, size_t n) { std::string r = s; r.resize(n, '\0'); return r; }
+inline std::string u32s(std::initializer_list<uint32_t> v) { std::string b; put<uint32_t>(b, v); return b; }
+inline std::string f32s(std::initializer_list<float> v) { std::string b; put<float>(b, v); return b; }
+inline std::string chunk(const char* tag, const std::string& data) { return std::string(tag, 4) + u32s({uint32_t(data.size())}) + data; }
+inline std::string sized(const std::string& body) { return u32s({uint32_t(body.size() + 4)}) + body; }
+// track: tag, interpolation, global sequence, keys (frame + comps values [+ in / out tangents])
+inline std::string track(const char* tag, uint32_t interp, int32_t gseq, const std::vector<std::pair<int32_t, std::vector<float>>>& keys) {
+    std::string b(tag, 4);
+    b += u32s({uint32_t(interp > 1 ? keys.size() / 3 : keys.size()), interp, uint32_t(gseq)});
+    for (size_t i = 0; i < keys.size(); ++i) {
+        if (interp <= 1 || i % 3 == 0) put<int32_t>(b, {keys[i].first});
+        for (float f : keys[i].second) put<float>(b, {f});
+    }
+    return b;
+}
+inline std::string node(const std::string& name, int32_t id, int32_t parent, uint32_t flags, const std::string& tracks) {
+    std::string body = cstr(name, 80);
+    put<int32_t>(body, {id, parent});
+    body += u32s({flags}) + tracks;
+    return sized(body);
+}
+// Pixels: red opaque, green transparent, red half, green opaque.
+inline std::string paletted2x2() {
+    std::string b = "BLP1" + u32s({1, 8, 2, 2, 4, 0});
+    b += u32s({156 + 1024}) + std::string(15 * 4, '\0') + u32s({8}) + std::string(15 * 4, '\0');
+    std::string pal(1024, '\0');
+    pal[2] = char(255); pal[5] = char(255);   // 0 = red (B, G, R, x), 1 = green
+    b += pal;
+    put<uint8_t>(b, {0, 1, 0, 1, 255, 0, 128, 255});
+    return b;
+}
+inline const float kS = 0.70710678f;
+// One geoset (6 vertices, 3 triangles), bones Root (0) and Arm (1), attachment "Hand Right Ref" (2),
+// sequences Stand / Walk, one global sequence, team colour under an alpha-tested texture.
+inline std::string mdx() {
+    std::string d = "MDLX" + chunk("VERS", u32s({800}));
+    d += chunk("MODL", std::string(372, '\0'));
+    std::string seqs;
+    for (auto [name, s, e] : {std::tuple<const char*, uint32_t, uint32_t>{"Stand", 0, 1000}, {"Walk", 2000, 3000}})
+        seqs += cstr(name, 80) + u32s({s, e}) + f32s({0}) + u32s({0}) + f32s({0}) + u32s({0}) + std::string(28, '\0');
+    d += chunk("SEQS", seqs);
+    d += chunk("GLBS", u32s({500}));
+    std::string lays = u32s({28, 0, 0, 1}) + u32s({0xffffffffu, 0}) + f32s({1}) + u32s({28, 1, 0x10, 0}) + u32s({0xffffffffu, 0}) + f32s({1});
+    const std::string mat = u32s({0, 0}) + "LAYS" + u32s({2}) + lays;
+    d += chunk("MTLS", sized(mat));
+    d += chunk("TEXS", u32s({0}) + cstr("Textures\\Guy.blp", 260) + u32s({3}) + u32s({1}) + cstr("", 260) + u32s({0}));
+    std::string g = "VRTX" + u32s({6}) + f32s({-8, -16, 0, -8, 16, 0, -8, 0, 64, 0, -32, 64, 0, -32, 96, 32, 0, 32});
+    g += "NRMS" + u32s({6}) + f32s({1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0});
+    g += "PTYP" + u32s({1, 4}) + "PCNT" + u32s({1, 9}) + "PVTX" + u32s({9});
+    put<uint16_t>(g, {0, 1, 2, 2, 4, 3, 0, 1, 5});
+    g += "GNDX" + u32s({6});
+    put<uint8_t>(g, {0, 0, 1, 2, 2, 0});
+    g += "MTGC" + u32s({3, 1, 2, 1}) + "MATS" + u32s({4, 0, 0, 1, 1});
+    g += u32s({0, 0, 0}) + std::string(28, '\0') + u32s({0});
+    g += "UVAS" + u32s({1}) + "UVBS" + u32s({6}) + f32s({0, 0, 1, 0, 0, 1, 1, 1, 0.5f, 0.5f, 0.25f, 0.75f});
+    d += chunk("GEOS", sized(g));
+    const std::string rootT = track("KGTR", 1, -1, {{0, {0, 0, 0}}, {500, {0, 0, 10}}, {1000, {0, 0, 0}}});
+    const std::string armR = track("KGRT", 1, -1, {{2250, {0, 0, 0, 1}}, {2750, {0, 0, kS, kS}}});
+    const std::string armS = track("KGSC", 2, -1, {{0, {1, 1, 1}}, {0, {0, 0, 0}}, {0, {0, 0, 0}}, {1000, {2, 2, 2}}, {1000, {0, 0, 0}}, {1000, {0, 0, 0}}});
+    std::string bones = node("Root", 0, -1, 256, rootT) + u32s({0, 0xffffffffu}) + node("Arm", 1, 0, 256, armR + armS) + u32s({0, 0xffffffffu});
+    d += chunk("BONE", bones);
+    const std::string handT = track("KGTR", 1, 0, {{0, {0, 0, 0}}, {500, {0, 0, 128}}});
+    d += chunk("ATCH", sized(node("Hand Right Ref", 2, 1, 2048, handT) + cstr("", 260) + u32s({0})));
+    d += chunk("PIVT", f32s({0, 0, 0, 0, 0, 64, 0, -32, 64}));
+    d += chunk("CAMS", std::string(16, 'x'));   // unknown / unsupported chunks are skipped
+    return d;
+}
+inline const char* kMdl = R"(// the same model as mdx() in text form
+Version { FormatVersion 800, }
+Model "Guy" { BlendTime 150, }
+Sequences 2 {
+    Anim "Stand" { Interval { 0, 1000 }, }
+    Anim "Walk" { Interval { 2000, 3000 }, MoveSpeed 200, }
+}
+GlobalSequences 1 { Duration 500, }
+Textures 2 {
+    Bitmap { Image "Textures\Guy.blp", WrapWidth, WrapHeight, }
+    Bitmap { Image "", ReplaceableId 1, }
+}
+Materials 1 {
+    Material {
+        Layer { FilterMode None, static TextureID 1, }
+        Layer { FilterMode Transparent, TwoSided, static TextureID 0, }
+    }
+}
+Geoset {
+    Vertices 6 { { -8, -16, 0 }, { -8, 16, 0 }, { -8, 0, 64 }, { 0, -32, 64 }, { 0, -32, 96 }, { 32, 0, 32 }, }
+    Normals 6 { { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, { 1, 0, 0 }, }
+    TVertices 6 { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 }, { 0.5, 0.5 }, { 0.25, 0.75 }, }
+    VertexGroup { 0, 0, 1, 2, 2, 0, }
+    Faces 1 9 { Triangles { { 0, 1, 2, 2, 4, 3, 0, 1, 5 }, } }
+    Groups 3 4 { Matrices { 0 }, Matrices { 0, 1 }, Matrices { 1 }, }
+    MinimumExtent { -8, -32, 0 },
+    MaterialID 0,
+    SelectionGroup 0,
+}
+Bone "Root" {
+    ObjectId 0,
+    GeosetId 0,
+    GeosetAnimId None,
+    Translation 3 { Linear, 0: { 0, 0, 0 }, 500: { 0, 0, 10 }, 1000: { 0, 0, 0 }, }
+}
+Bone "Arm" {
+    ObjectId 1,
+    Parent 0,
+    Rotation 2 { Linear, 2250: { 0, 0, 0, 1 }, 2750: { 0, 0, 0.70710678, 0.70710678 }, }
+    Scaling 2 {
+        Hermite,
+        0: { 1, 1, 1 },
+            InTan { 0, 0, 0 },
+            OutTan { 0, 0, 0 },
+        1000: { 2, 2, 2 },
+            InTan { 0, 0, 0 },
+            OutTan { 0, 0, 0 },
+    }
+}
+Attachment "Hand Right Ref" {
+    ObjectId 2,
+    Parent 1,
+    AttachmentID 0,
+    Translation 2 { Linear, GlobalSeqId 0, 0: { 0, 0, 0 }, 500: { 0, 0, 128 }, }
+}
+PivotPoints 3 { { 0, 0, 0 }, { 0, 0, 64 }, { 0, -32, 64 }, }
+Camera "unused" { Position { 0, 0, 0 }, }
+)";
+inline FileReader files() { return modeltest::mapReader({{"units/Textures/Guy.blp", paletted2x2()}}); }
+inline int vertexAt(const Model& m, float3 p) {
+    for (size_t i = 0; i < m.vertices.size(); ++i) if (length(m.vertices[i].pos - p) < 1e-4f) return int(i);
+    return -1;
+}
+} // namespace mdxtest
+
+TEST(models_mdx_skeleton_skin_clips_team) {
+    using namespace mdxtest;
+    using modeltest::near;
+    std::vector<std::string> warn;
+    auto m = loadModel("units/guy/guy.mdx", modeltest::mapReader({{"units/guy/guy.mdx", mdx()}, {"units/Textures/Guy.blp", paletted2x2()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    // nodes: root, Root, Arm, Hand Right Ref, mesh
+    CHECK(m->nodes.size() == 5 && m->skins.size() == 1 && m->meshes.size() == 1);
+    const int root = m->findNode("Root"), arm = m->findNode("Arm"), hand = m->findNode("Hand Right Ref");
+    CHECK(root > 0 && arm > 0 && hand > 0);
+    if (root <= 0 || arm <= 0 || hand <= 0) return;
+    CHECK(m->nodes[size_t(arm)].parent == root && m->nodes[size_t(hand)].parent == arm && m->nodes[size_t(root)].parent == 0);
+    // pivot (0, 0, 64) -> Y up, metres = 128 units; pivot-relative bind translations
+    CHECK(near(m->nodes[size_t(arm)].t.y, 0.5f) && near(m->nodes[size_t(arm)].t.x, 0) && near(m->nodes[size_t(arm)].t.z, 0));
+    CHECK(near(m->nodes[size_t(hand)].t.x, -0.25f) && near(m->nodes[size_t(hand)].t.y, 0));
+    // facing: the nose vertex (WC3 +X forward) is at engine +Z
+    CHECK(vertexAt(*m, {0, 0.25f, 0.25f}) >= 0);
+    CHECK(near(m->boundsMax.z, 0.25f) && near(m->boundsMin.y, 0) && near(m->boundsMax.y, 0.75f));
+    // skin: bind palette = identity, matrix group {Root, Arm} averaged
+    const Skin& sk = m->skins[0];
+    for (auto& p : m->meshes[0].primitives) {
+        std::vector<mat4> pal;
+        paletteMatrices(*m, sk, p, m->bindWorld, pal);
+        bool identity = true;
+        for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        CHECK(identity && p.jointPalette.size() <= size_t(kMaxPaletteJoints));
+    }
+    const int v2 = vertexAt(*m, {0, 0.5f, -0.0625f});
+    CHECK(v2 >= 0);
+    if (v2 >= 0) {
+        const ModelVertex& v = m->vertices[size_t(v2)];
+        CHECK(v.weights[0] + v.weights[1] == 255 && v.weights[0] >= 127 && v.weights[1] >= 127 && v.joints[0] != v.joints[1]);
+    }
+    // material: team colour under the texture -> BaseAlpha, opaque, two-sided, texture from the parent directory
+    const Material& mat = m->materials[size_t(m->meshes[0].primitives[0].material)];
+    CHECK(mat.team == TeamMode::BaseAlpha && mat.alpha == AlphaMode::Opaque && mat.doubleSided && mat.baseTex >= 0);
+    if (mat.baseTex >= 0) {
+        const Image& img = m->images[size_t(mat.baseTex)];
+        CHECK(img.width == 2 && img.height == 2 && img.repeat && img.rgba[0] == 255 && img.rgba[7] == 0);
+    }
+    // clips
+    CHECK(m->clips.size() == 2 && m->findClip("Stand") == 0 && m->findClip("walk") == 1);
+    if (m->clips.size() != 2) return;
+    CHECK(near(m->clips[0].duration, 1) && near(m->clips[1].duration, 1));
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.5f, pose);
+    CHECK(near(pose[size_t(root)].t.y, 10.0f / 128));                  // KGTR (0,0,10) -> +Y
+    CHECK(near(pose[size_t(arm)].s.x, 1.5f, 0.01f));                   // Hermite, flat tangents
+    sampleClip(m->clips[0], 0.25f, pose);                                // global sequence: 2 periods of 0.5 s
+    CHECK(near(pose[size_t(hand)].t.y, 0.5f, 0.01f));
+    sampleClip(m->clips[0], 0.75f, pose);
+    CHECK(near(pose[size_t(hand)].t.y, 0.5f, 0.01f));
+    // Walk: keys at 0.25 s (identity) and 0.75 s (90 degrees about up); the loop seam gets 45 degrees
+    bindPose(*m, pose);
+    sampleClip(m->clips[1], 0.0f, pose);
+    const quat q45 = quat::axisAngle({0, 1, 0}, 0.785398f);
+    CHECK(near(std::fabs(dot(pose[size_t(arm)].r, q45)), 1, 1e-3f));
+    sampleClip(m->clips[1], 1.0f, pose);
+    CHECK(near(std::fabs(dot(pose[size_t(arm)].r, q45)), 1, 1e-3f));
+    // rotation happens around the pivot: hand vertex (0,-32,64) turns to (32,0,64) -> engine (0, 0.5, 0.25)
+    sampleClip(m->clips[1], 0.75f, pose);
+    std::vector<mat4> world;
+    worldMatrices(*m, pose, world);
+    int j = -1;
+    for (size_t k = 0; k < sk.joints.size(); ++k) if (sk.joints[k] == arm) j = int(k);
+    CHECK(j >= 0);
+    if (j >= 0) {
+        const float3 p = (world[size_t(arm)] * sk.inverseBind[size_t(j)]).transformPoint({-0.25f, 0.5f, 0});
+        CHECK(near(p.x, 0) && near(p.y, 0.5f) && near(p.z, 0.25f));
+    }
+}
+
+TEST(models_mdl_matches_mdx) {
+    using namespace mdxtest;
+    using modeltest::near;
+    std::vector<std::string> wx, wl;
+    auto a = loadMdx("units/guy/guy.mdx", mdx(), files(), &wx);
+    auto b = loadModel("units/guy/guy.mdl", modeltest::mapReader({{"units/guy/guy.mdl", kMdl}, {"units/Textures/Guy.blp", paletted2x2()}}), &wl);
+    for (auto& w : wl) std::printf("  warning: %s\n", w.c_str());
+    CHECK(wl.empty());
+    CHECK(a->nodes.size() == b->nodes.size() && a->vertices.size() == b->vertices.size() && a->indices == b->indices);
+    CHECK(a->materials.size() == b->materials.size() && a->images.size() == b->images.size() && a->clips.size() == b->clips.size());
+    if (a->nodes.size() != b->nodes.size() || a->vertices.size() != b->vertices.size() || a->clips.size() != b->clips.size()) return;
+    for (size_t i = 0; i < a->nodes.size(); ++i)
+        CHECK(a->nodes[i].name == b->nodes[i].name && a->nodes[i].parent == b->nodes[i].parent && length(a->nodes[i].t - b->nodes[i].t) < 1e-5f);
+    bool same = true;
+    for (size_t i = 0; i < a->vertices.size(); ++i) {
+        const ModelVertex &x = a->vertices[i], &y = b->vertices[i];
+        same &= length(x.pos - y.pos) < 1e-5f && std::memcmp(x.weights, y.weights, 4) == 0 && std::memcmp(x.joints, y.joints, 4) == 0 && near(x.uv.y, y.uv.y);
+    }
+    CHECK(same);
+    const Material &ma = a->materials[0], &mb = b->materials[0];
+    CHECK(ma.team == mb.team && ma.alpha == mb.alpha && ma.doubleSided == mb.doubleSided && (ma.baseTex >= 0) == (mb.baseTex >= 0));
+    for (size_t c = 0; c < a->clips.size(); ++c) {
+        const AnimClip &x = a->clips[c], &y = b->clips[c];
+        CHECK(x.name == y.name && near(x.duration, y.duration) && x.channels.size() == y.channels.size());
+        if (x.channels.size() != y.channels.size()) continue;
+        for (size_t k = 0; k < x.channels.size(); ++k) {
+            CHECK(x.channels[k].node == y.channels[k].node && x.channels[k].interp == y.channels[k].interp && x.channels[k].times == y.channels[k].times);
+            bool vals = x.channels[k].values.size() == y.channels[k].values.size();
+            for (size_t i = 0; vals && i < x.channels[k].values.size(); ++i) vals = near(x.channels[k].values[i], y.channels[k].values[i], 1e-5f);
+            CHECK(vals);
+        }
+    }
+}
+
+TEST(models_mdx_mdl_malformed_input) {
+    using namespace mdxtest;
+    const std::string good = mdx();
+    int threw = 0, loaded = 0;
+    for (size_t len = 0; len < good.size(); ++len) {   // every truncation: an exception or a model, never a crash
+        try { loadMdx("cut.mdx", good.substr(0, len), files(), nullptr); ++loaded; }
+        catch (const std::runtime_error& e) { ++threw; if (len == 100) std::printf("  (expected) %s\n", e.what()); }
+    }
+    CHECK(threw > int(good.size()) * 9 / 10 && threw + loaded == int(good.size()));
+    uint32_t rng = 12345;
+    for (int iter = 0; iter < 3000; ++iter) {          // random corruption
+        std::string bad = good;
+        for (int k = 0; k < 1 + iter % 8; ++k) {
+            rng = rng * 1664525u + 1013904223u;
+            const size_t at = (rng >> 8) % bad.size();
+            rng = rng * 1664525u + 1013904223u;
+            bad[at] = char(rng >> 24);
+        }
+        try { loadMdx("bad.mdx", bad, files(), nullptr); } catch (const std::runtime_error&) {}
+    }
+    const std::string text = kMdl;
+    threw = 0;
+    for (size_t len = 0; len < text.size(); len += 7) {
+        try { loadMdl("cut.mdl", text.substr(0, len), files(), nullptr); } catch (const std::runtime_error&) { ++threw; }
+    }
+    CHECK(threw > 0);
+    for (int iter = 0; iter < 500; ++iter) {
+        std::string bad = text;
+        rng = rng * 1664525u + 1013904223u;
+        bad[(rng >> 8) % bad.size()] = "{},:\"0-x\n"[(rng >> 4) % 9];
+        try { loadMdl("bad.mdl", bad, files(), nullptr); } catch (const std::runtime_error&) {}
+    }
+    bool msg = false;
+    try { loadMdl("deep.mdl", std::string(5000, '{'), files(), nullptr); }
+    catch (const std::runtime_error& e) { msg = std::string(e.what()).find("deep.mdl") != std::string::npos; }
+    CHECK(msg);
+    msg = false;
+    try { loadModel("u/x.mdx", modeltest::mapReader({{"u/x.mdx", "MDLX"}}), nullptr); }
+    catch (const std::runtime_error& e) { msg = std::string(e.what()).find("u/x.mdx: no geosets") != std::string::npos; }
+    CHECK(msg);
+}
+
+TEST(models_blp_decode) {
+    using namespace mdxtest;
+    // BLP1 paletted, 8-bit alpha
+    Image img;
+    CHECK(decodeImage(paletted2x2(), img) && img.width == 2 && img.height == 2);
+    if (img.rgba.size() == 16) {
+        CHECK(img.rgba[0] == 255 && img.rgba[1] == 0 && img.rgba[3] == 255);    // red, opaque
+        CHECK(img.rgba[5] == 255 && img.rgba[7] == 0);                          // green, transparent
+        CHECK(img.rgba[11] == 128 && img.rgba[15] == 255);
+    }
+    // BLP1 JPEG: 4 components stored as B, G, R, A without colour transform (16x16, made with PIL)
+    auto hex = [](const char* h) { std::string b; for (; h[0] && h[1]; h += 2) b += char(std::stoi(std::string(h, 2), nullptr, 16)); return b; };
+    const std::string jh = hex("ffd8ffee000e41646f626500640000000000ffdb00430001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101ffc000140800100010044311004d11005911004b1100ffc4001f0000010501010101010100000000000000000102030405060708090a0bffc400b5100002010303020403050504040000017d01020300041105122131410613516107227114328191a1082342b1c11552d1f02433627282090a161718191a25262728292a3435363738393a434445464748494a535455565758595a636465666768696a737475767778797a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3f4f5f6f7f8f9fa");
+    const std::string jm = hex("ffda000e0443004d0059004b00003f00fe902be1fafe27ebfbf8aff2afa28afe20ff00e0e45ff83917fe19ff00fe13dff827a7fc13d3c7bff1901ff132f07fed2ffb4bf83f52ff00937fff005b61af7c1df83baf584bff002701febf4cf885f10b4c9ffe31ff00fd2bc2be15baff008680fed6d5bf67ff00f550a2bfd9028ff83917fe0e45ff00867fff0084f7fe09e9ff0004f4f1effc6407fc4cbc1ffb4bfed2fe0fd4bfe4dfff00d6d86bdf077e0eebd612ff00c9c07fafd33e217c42d327ff008c7fff004af0af856ebfe1a03fb5b56fd9ff00fcabe8a2bfce0ebfffd9");
+    std::string jb = "BLP1" + u32s({0, 8, 16, 16, 4, 0}) + u32s({uint32_t(160 + jh.size())}) + std::string(60, '\0') + u32s({uint32_t(jm.size())}) + std::string(60, '\0');
+    jb += u32s({uint32_t(jh.size())}) + jh + jm;
+    Image ji;
+    CHECK(decodeImage(jb, ji) && ji.width == 16 && ji.height == 16);
+    if (ji.rgba.size() == 16 * 16 * 4) {
+        auto px = [&](int x, int y, int c) { return int(ji.rgba[size_t(y * 16 + x) * 4 + size_t(c)]); };
+        auto close = [](int a, int b) { return std::abs(a - b) <= 3; };
+        CHECK(close(px(0, 0, 0), 20) && close(px(0, 0, 1), 100) && close(px(0, 0, 2), 200) && close(px(0, 0, 3), 255));
+        CHECK(close(px(12, 12, 0), 220) && close(px(12, 12, 2), 30) && close(px(12, 12, 3), 0));
+    }
+    // BLP2: uncompressed BGRA and DXT3 (explicit alpha)
+    auto blp2 = [&](uint8_t enc, uint8_t depth, uint8_t type, uint32_t w, uint32_t h, const std::string& data) {
+        std::string b = "BLP2" + u32s({1});
+        put<uint8_t>(b, {enc, depth, type, 0});
+        b += u32s({w, h, uint32_t(148 + 1024)}) + std::string(60, '\0') + u32s({uint32_t(data.size())}) + std::string(60, '\0') + std::string(1024, '\0') + data;
+        return b;
+    };
+    std::string bgra;
+    put<uint8_t>(bgra, {10, 20, 30, 40, 50, 60, 70, 80});
+    Image u;
+    CHECK(decodeImage(blp2(3, 8, 0, 2, 1, bgra), u) && u.width == 2 && u.rgba.size() == 8 && u.rgba[0] == 30 && u.rgba[2] == 10 && u.rgba[3] == 40 && u.rgba[7] == 80);
+    std::string dxt3;
+    put<uint8_t>(dxt3, {0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF});      // pixel 0 alpha 0, others 15
+    put<uint16_t>(dxt3, {0xF800, 0x001F});                                       // red, blue
+    put<uint8_t>(dxt3, {0, 0, 0, 0});
+    Image d3;
+    CHECK(decodeImage(blp2(2, 8, 1, 4, 4, dxt3), d3) && d3.width == 4 && d3.rgba.size() == 64);
+    if (d3.rgba.size() == 64) CHECK(d3.rgba[0] == 255 && d3.rgba[2] == 0 && d3.rgba[3] == 0 && d3.rgba[7] == 255);
+    // broken files: false, never a crash
+    int ok = 0;
+    for (const std::string& f : {paletted2x2(), jb, blp2(2, 8, 1, 4, 4, dxt3)})
+        for (size_t len = 0; len < f.size(); ++len) { Image t; ok += decodeImage(f.substr(0, len), t); }
+    CHECK(ok == 0);
+    uint32_t rng = 7;
+    for (int iter = 0; iter < 2000; ++iter) {
+        std::string bad = jb;
+        for (int k = 0; k < 4; ++k) { rng = rng * 1664525u + 1013904223u; bad[160 + (rng >> 8) % (bad.size() - 160)] = char(rng >> 24); }
+        Image t;
+        decodeImage(bad, t);
+    }
+}
+
+
+TEST(models_find_clip_numbered_variants) {
+    using namespace rts::render;
+    Model m;
+    for (const char* n : {"Stand Ready", "Attack - 1", "Attack - 2", "Walk", "Spell_01"}) { AnimClip c; c.name = n; m.clips.push_back(c); }
+    CHECK(m.findClip("Attack") == 1 && m.findClip("attack - 2") == 2 && m.findClip("walk") == 3 && m.findClip("Spell") == 4);
+    CHECK(m.findClip("Stand") == -1 && m.findClip("Att") == -1);   // "Stand Ready" is another action
+}
+
+// ---- interchange formats: Collada, 3DS, PLY, STL (models agent, interchange loaders)
+
+namespace interchangetest {
+using namespace rts::render;
+using modeltest::near;
+using modeltest::mapReader;
+// 2x2 uncompressed 32-bit TGA (stb_image reads it): red, green, blue, white
+inline std::string tga2x2() {
+    std::string t(18, '\0');
+    t[2] = 2; t[12] = 2; t[14] = 2; t[16] = 32; t[17] = 0x28;
+    const unsigned char px[16] = {0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255};   // BGRA
+    t.append(reinterpret_cast<const char*>(px), 16);
+    return t;
+}
+inline const char* skinnedDae() {
+    return R"(<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+ <asset><unit meter="1"/><up_axis>Y_UP</up_axis></asset>
+ <library_geometries>
+  <geometry id="quad" name="Quad"><mesh>
+   <source id="quad-pos"><float_array id="quad-pos-a" count="12">-0.5 0 0  0.5 0 0  0.5 2 0  -0.5 2 0</float_array>
+    <technique_common><accessor source="#quad-pos-a" count="4" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+   <vertices id="quad-v"><input semantic="POSITION" source="#quad-pos"/></vertices>
+   <polylist count="1"><input semantic="VERTEX" source="#quad-v" offset="0"/><vcount>4</vcount><p>0 1 2 3</p></polylist>
+  </mesh></geometry>
+ </library_geometries>
+ <library_controllers>
+  <controller id="skin" name="Skin"><skin source="#quad">
+   <bind_shape_matrix>1 0 0 0  0 1 0 0  0 0 1 0.25  0 0 0 1</bind_shape_matrix>
+   <source id="skin-joints"><Name_array id="skin-joints-a" count="2">JRoot JTop</Name_array>
+    <technique_common><accessor source="#skin-joints-a" count="2" stride="1"><param name="JOINT" type="name"/></accessor></technique_common></source>
+   <source id="skin-ibm"><float_array id="skin-ibm-a" count="32">1 0 0 -0.5  0 1 0 0  0 0 1 0  0 0 0 1   1 0 0 -0.5  0 1 0 -1  0 0 1 0  0 0 0 1</float_array>
+    <technique_common><accessor source="#skin-ibm-a" count="2" stride="16"><param name="TRANSFORM" type="float4x4"/></accessor></technique_common></source>
+   <source id="skin-w"><float_array id="skin-w-a" count="3">1 0.5 0.25</float_array>
+    <technique_common><accessor source="#skin-w-a" count="3" stride="1"><param name="WEIGHT" type="float"/></accessor></technique_common></source>
+   <joints><input semantic="JOINT" source="#skin-joints"/><input semantic="INV_BIND_MATRIX" source="#skin-ibm"/></joints>
+   <vertex_weights count="4"><input semantic="JOINT" source="#skin-joints" offset="0"/><input semantic="WEIGHT" source="#skin-w" offset="1"/>
+    <vcount>1 1 2 2</vcount><v>0 0  0 0  0 1 1 1  1 0 0 2</v></vertex_weights>
+  </skin></controller>
+ </library_controllers>
+ <library_visual_scenes><visual_scene id="scene">
+  <node id="Armature" name="Armature">
+   <node id="Root" sid="JRoot" name="Root" type="JOINT"><matrix sid="transform">1 0 0 0.5  0 1 0 0  0 0 1 0  0 0 0 1</matrix>
+    <node id="Top" sid="JTop" name="Top" type="JOINT"><translate sid="location">0 1 0</translate><rotate sid="rotZ">0 0 1 0</rotate></node>
+   </node>
+  </node>
+  <node id="Body" name="Body"><instance_controller url="#skin"><skeleton>#Root</skeleton></instance_controller></node>
+ </visual_scene></library_visual_scenes>
+ <library_animations>
+  <animation id="anim-root">
+   <source id="ar-in"><float_array id="ar-in-a" count="2">0 1</float_array><technique_common><accessor source="#ar-in-a" count="2" stride="1"/></technique_common></source>
+   <source id="ar-out"><float_array id="ar-out-a" count="32">1 0 0 0.5 0 1 0 0 0 0 1 0 0 0 0 1  1 0 0 2.5 0 1 0 0 0 0 1 0 0 0 0 1</float_array>
+    <technique_common><accessor source="#ar-out-a" count="2" stride="16"/></technique_common></source>
+   <sampler id="ar-s"><input semantic="INPUT" source="#ar-in"/><input semantic="OUTPUT" source="#ar-out"/></sampler>
+   <channel source="#ar-s" target="Root/transform"/>
+  </animation>
+  <animation id="anim-top"><animation>
+   <source id="at-in"><float_array id="at-in-a" count="2">0 1</float_array><technique_common><accessor source="#at-in-a" count="2" stride="1"/></technique_common></source>
+   <source id="at-out"><float_array id="at-out-a" count="2">0 90</float_array><technique_common><accessor source="#at-out-a" count="2" stride="1"/></technique_common></source>
+   <source id="at-i"><Name_array id="at-i-a" count="2">LINEAR LINEAR</Name_array><technique_common><accessor source="#at-i-a" count="2" stride="1"/></technique_common></source>
+   <sampler id="at-s"><input semantic="INPUT" source="#at-in"/><input semantic="OUTPUT" source="#at-out"/><input semantic="INTERPOLATION" source="#at-i"/></sampler>
+   <channel source="#at-s" target="Top/rotZ.ANGLE"/>
+  </animation></animation>
+ </library_animations>
+ <library_animation_clips>
+  <animation_clip id="walk" name="Walk" start="0" end="1"><instance_animation url="#anim-root"/><instance_animation url="#anim-top"/></animation_clip>
+ </library_animation_clips>
+ <scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>)";
+}
+inline const char* texturedZupDae() {
+    return R"(<COLLADA version="1.4.1"><asset><unit name="centimeter" meter="0.01"/><up_axis>Z_UP</up_axis></asset>
+<library_images><image id="img"><init_from>tex%20file.tga</init_from></image></library_images>
+<library_effects><effect id="fx"><profile_COMMON>
+ <newparam sid="surf"><surface type="2D"><init_from>img</init_from></surface></newparam>
+ <newparam sid="samp"><sampler2D><source>surf</source></sampler2D></newparam>
+ <technique sid="common"><phong>
+  <emission><color>0.5 0 0 1</color></emission>
+  <diffuse><texture texture="samp" texcoord="UVMap"/></diffuse>
+  <shininess><float>30</float></shininess>
+  <transparent opaque="A_ONE"><color>1 1 1 1</color></transparent>
+  <transparency><float>0.5</float></transparency>
+ </phong></technique></profile_COMMON>
+ <extra><technique profile="GOOGLEEARTH"><double_sided>1</double_sided></technique></extra></effect></library_effects>
+<library_materials><material id="mat" name="Paint &amp; Glass"><instance_effect url="#fx"/></material></library_materials>
+<library_geometries><geometry id="tri"><mesh>
+ <source id="p"><float_array id="pa" count="9">0 0 0  100 0 0  0 0 100</float_array><technique_common><accessor source="#pa" count="3" stride="3"/></technique_common></source>
+ <source id="uv"><float_array id="uva" count="6">0 0 1 0 0 1</float_array><technique_common><accessor source="#uva" count="3" stride="2"/></technique_common></source>
+ <vertices id="v"><input semantic="POSITION" source="#p"/></vertices>
+ <!-- one triangle -->
+ <triangles count="1" material="sym"><input semantic="VERTEX" source="#v" offset="0"/><input semantic="TEXCOORD" source="#uv" offset="1" set="0"/><p>0 0 1 1 2 2</p></triangles>
+</mesh></geometry></library_geometries>
+<library_visual_scenes><visual_scene id="s"><node id="n" name="Tri"><instance_geometry url="#tri"><bind_material><technique_common>
+ <instance_material symbol="sym" target="#mat"/></technique_common></bind_material></instance_geometry></node></visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#s"/></scene></COLLADA>)";
+}
+template <class T> void be(std::string& b, T v) {   // big endian
+    char tmp[sizeof(T)];
+    std::memcpy(tmp, &v, sizeof(T));
+    for (size_t i = 0; i < sizeof(T); ++i) b += tmp[sizeof(T) - 1 - i];
+}
+template <class T> void le(std::string& b, T v) { b.append(reinterpret_cast<const char*>(&v), sizeof(T)); }
+inline std::string chunk3ds(uint16_t id, const std::string& payload) {
+    std::string c;
+    le<uint16_t>(c, id);
+    le<uint32_t>(c, uint32_t(payload.size() + 6));
+    return c + payload;
+}
+inline std::string sample3ds() {
+    std::string mat = chunk3ds(0xA000, std::string("Red") + '\0');
+    mat += chunk3ds(0xA020, chunk3ds(0x0011, std::string("\xff\x00\x00", 3)));
+    std::string pct; le<int16_t>(pct, 50);
+    mat += chunk3ds(0xA050, chunk3ds(0x0030, pct));
+    std::string verts; le<uint16_t>(verts, 4);
+    for (float f : {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f}) le<float>(verts, f);
+    std::string uvs; le<uint16_t>(uvs, 4);
+    for (float f : {0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f}) le<float>(uvs, f);
+    std::string matrix;
+    for (float f : {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f}) le<float>(matrix, f);
+    std::string faces; le<uint16_t>(faces, 2);
+    for (uint16_t i : {0, 1, 2, 7, 0, 2, 3, 7}) le<uint16_t>(faces, i);
+    std::string group = std::string("Red") + '\0';
+    for (uint16_t i : {2, 0, 1}) le<uint16_t>(group, i);
+    std::string smooth; le<uint32_t>(smooth, 1); le<uint32_t>(smooth, 2);   // different groups: hard edge on the diagonal
+    faces += chunk3ds(0x4130, group) + chunk3ds(0x4150, smooth);
+    const std::string mesh = chunk3ds(0x4110, verts) + chunk3ds(0x4140, uvs) + chunk3ds(0x4160, matrix) + chunk3ds(0x4120, faces);
+    std::string version; le<uint32_t>(version, 3);
+    const std::string editor = chunk3ds(0x3D3E, version) + chunk3ds(0xAFFF, mat) + chunk3ds(0x4000, std::string("Box") + '\0' + chunk3ds(0x4100, mesh));
+    std::string frames; le<uint32_t>(frames, 0); le<uint32_t>(frames, 30);
+    std::string id; le<uint16_t>(id, 0);
+    std::string hdr = std::string("Box") + '\0'; le<uint16_t>(hdr, 0); le<uint16_t>(hdr, 0); le<uint16_t>(hdr, 0xFFFF);
+    std::string pivot; for (float f : {0.f, 0.f, 0.f}) le<float>(pivot, f);
+    std::string track; le<uint16_t>(track, 0); le<uint32_t>(track, 0); le<uint32_t>(track, 0); le<uint32_t>(track, 2);
+    le<uint32_t>(track, 0); le<uint16_t>(track, 0); for (float f : {0.f, 0.f, 0.f}) le<float>(track, f);
+    le<uint32_t>(track, 30); le<uint16_t>(track, 1); le<float>(track, 0.5f); for (float f : {3.f, 0.f, 0.f}) le<float>(track, f);   // tension
+    const std::string node = chunk3ds(0xB030, id) + chunk3ds(0xB010, hdr) + chunk3ds(0xB013, pivot) + chunk3ds(0xB020, track);
+    const std::string kf = chunk3ds(0xB008, frames) + chunk3ds(0xB002, node);
+    return chunk3ds(0x4D4D, chunk3ds(0x0002, version) + chunk3ds(0x3D3D, editor) + chunk3ds(0xB000, kf));
+}
+inline const char* asciiPly() {
+    return "ply\r\nformat ascii 1.0\r\ncomment TextureFile t.tga\r\nelement vertex 4\r\nproperty float x\r\nproperty float y\r\nproperty float z\r\n"
+           "property float s\r\nproperty float t\r\nproperty uchar red\r\nproperty uchar green\r\nproperty uchar blue\r\n"
+           "element face 1\r\nproperty list uchar int vertex_indices\r\nend_header\r\n"
+           "0 0 0 0 0 255 0 0\r\n1 0 0 1 0 0 255 0\r\n1 1 0 1 1 0 0 255\r\n0 1 0 0 1 255 255 255\r\n4 0 1 2 3\r\n";
+}
+inline std::string binaryPly() {   // the same quad, big endian, with an unknown element in between
+    std::string b = "ply\nformat binary_big_endian 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\n"
+                    "property float s\nproperty float t\nproperty uchar red\nproperty uchar green\nproperty uchar blue\n"
+                    "element extra 2\nproperty list uchar short junk\nproperty double w\n"
+                    "element face 1\nproperty list uchar int vertex_indices\nend_header\n";
+    const float v[4][5] = {{0, 0, 0, 0, 0}, {1, 0, 0, 1, 0}, {1, 1, 0, 1, 1}, {0, 1, 0, 0, 1}};
+    const uint8_t c[4][3] = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}};
+    for (int i = 0; i < 4; ++i) { for (float f : v[i]) be<float>(b, f); for (uint8_t x : c[i]) b += char(x); }
+    for (int i = 0; i < 2; ++i) { b += char(2); be<int16_t>(b, 7); be<int16_t>(b, 8); be<double>(b, 1.5); }
+    b += char(4);
+    for (int i : {0, 1, 2, 3}) be<int32_t>(b, i);
+    return b;
+}
+inline std::string binaryStl() {   // header starting with "solid" on purpose, two facets, VisCAM colour on the first
+    std::string b = "solid but actually binary";
+    b.resize(80, ' ');
+    le<uint32_t>(b, 2);
+    const float tri[2][12] = {{0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0}, {0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0}};
+    for (int t = 0; t < 2; ++t) {
+        for (float f : tri[t]) le<float>(b, f);
+        le<uint16_t>(b, t == 0 ? uint16_t(0x8000u | (31u << 10)) : uint16_t(0));
+    }
+    return b;
+}
+// Truncations and byte flips must end in an exception or a model, never a crash.
+inline int fuzz(const std::string& path, const std::string& bytes, const std::map<std::string, std::string>& extra) {
+    int threw = 0;
+    auto run = [&](const std::string& b) {
+        std::map<std::string, std::string> files = extra;
+        files[path] = b;
+        try { std::vector<std::string> w; loadModel(path, mapReader(files), &w); }
+        catch (const std::exception&) { ++threw; }
+    };
+    uint32_t s = 12345;
+    auto rnd = [&]() { s = s * 1664525u + 1013904223u; return s >> 8; };
+    for (size_t cut = 0; cut < bytes.size(); cut += 1 + bytes.size() / 97) run(bytes.substr(0, cut));
+    for (int i = 0; i < 300; ++i) {
+        std::string b = bytes;
+        for (int k = 0, n = 1 + int(rnd() % 4); k < n; ++k) b[rnd() % b.size()] = char(rnd());
+        run(b);
+    }
+    return threw;
+}
+} // namespace interchangetest
+
+TEST(models_dae_skinned_two_bones) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto m = loadModel("units/rig.dae", mapReader({{"units/rig.dae", skinnedDae()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    const int root = m->findNode("Root"), top = m->findNode("Top"), body = m->findNode("Body");
+    CHECK(root >= 0 && top >= 0 && body >= 0 && m->nodes.size() == 4);
+    if (root < 0 || top < 0 || body < 0) return;
+    CHECK(m->nodes[size_t(top)].parent == root && m->nodes[size_t(root)].parent == m->findNode("Armature"));
+    CHECK(near(m->nodes[size_t(root)].t.x, 0.5f) && near(m->nodes[size_t(top)].t.y, 1));   // row-major <matrix>
+    CHECK(m->skins.size() == 1 && m->nodes[size_t(body)].skin == 0 && m->nodes[size_t(body)].mesh == 0);
+    const Skin& sk = m->skins[0];
+    CHECK(sk.joints.size() == 2 && sk.joints[0] == root && sk.joints[1] == top);
+    CHECK(near(sk.inverseBind[1].at(1, 3), -1) && near(sk.inverseBind[1].at(0, 3), -0.5f));
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(m->meshes[0].primitives.size() == 1 && p.indexCount == 6 && p.jointPalette.size() == 2);
+    std::vector<mat4> pal;
+    paletteMatrices(*m, sk, p, m->bindWorld, pal);
+    bool identity = true;
+    for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+    CHECK(identity);
+    bool topVertex = false;
+    for (uint32_t i = 0; i < p.indexCount; ++i) {
+        const ModelVertex& v = m->vertices[m->indices[p.firstIndex + i]];
+        CHECK(near(v.pos.z, 0.25f));                       // bind shape matrix baked in
+        CHECK(v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3] == 255);
+        if (near(v.pos.x, -0.5f) && near(v.pos.y, 2)) {    // JTop 1, JRoot 0.25 -> 0.8 / 0.2
+            topVertex = true;
+            CHECK(p.jointPalette[v.joints[0]] == 1 && near(v.weights[0] / 255.0f, 0.8f, 0.01f));
+        }
+    }
+    CHECK(topVertex);
+    CHECK(m->clips.size() == 1 && m->findClip("walk") == 0);
+    if (m->clips.empty()) return;
+    const AnimClip& clip = m->clips[0];
+    CHECK(near(clip.duration, 1));
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(clip, 0.5f, pose);
+    const quat e = quat::axisAngle({0, 0, 1}, 0.785398f);
+    CHECK(near(pose[size_t(root)].t.x, 1.5f, 1e-3f));
+    CHECK(near(std::fabs(pose[size_t(top)].r.z), e.z, 2e-3f) && near(std::fabs(pose[size_t(top)].r.w), e.w, 2e-3f));
+    CHECK(near(pose[size_t(top)].t.y, 1));
+}
+
+TEST(models_dae_textured_zup_and_errors) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto m = loadModel("dae/tri.dae", mapReader({{"dae/tri.dae", texturedZupDae()}, {"dae/tex file.tga", tga2x2()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    // root node: centimetres -> metres, Z up -> Y up
+    CHECK(m->nodes.size() == 2 && m->nodes[0].name == "root" && near(m->nodes[0].s.x, 0.01f) && m->nodes[1].parent == 0);
+    CHECK(near(m->boundsMax.y, 1) && near(m->boundsMax.x, 1) && near(m->boundsMin.y, 0));
+    const float3 up = m->nodes[0].r.rotate({0, 0, 1});
+    CHECK(near(up.y, 1));
+    const Primitive& p = m->meshes[0].primitives[0];
+    const Material& mt = m->materials[size_t(p.material)];
+    CHECK(m->materials.size() == 1 && mt.name == "Paint & Glass");
+    CHECK(mt.baseTex == 0 && m->images.size() == 1 && m->images[0].width == 2);
+    CHECK(mt.alpha == AlphaMode::Blend && near(mt.baseColor.w, 0.5f) && near(mt.emissive.x, 0.5f) && near(mt.roughness, 0.25f) && mt.doubleSided);
+    const ModelVertex& v2 = m->vertices[m->indices[p.firstIndex + 2]];
+    CHECK(near(v2.uv.y, 0) && near(v2.nrm.y, -1));         // V flipped; smoothed normal (no NORMAL input)
+    // readable errors
+    auto err = [](const std::string& path, const std::string& text) {
+        try { loadModel(path, mapReader({{path, text}}), nullptr); }
+        catch (const std::exception& e) { return std::string(e.what()); }
+        return std::string();
+    };
+    std::string e = err("bad.dae", "<COLLADA><asset></COLLADA>");
+    CHECK(e.find("bad.dae") == 0 && e.find("line 1") != std::string::npos);
+    std::string broken = texturedZupDae();
+    broken.replace(broken.find("<p>0 0 1 1 2 2</p>"), 18, "<p>0 0 1 1 9 2</p>");
+    e = err("idx.dae", broken);
+    CHECK(e.find("out of range") != std::string::npos);
+    CHECK(err("cam.dae", "<COLLADA><library_visual_scenes><visual_scene id='s'><node id='c'/></visual_scene></library_visual_scenes></COLLADA>").find("no geometry") != std::string::npos);
+    CHECK(err("x.dae", "<mesh/>").find("not a Collada") != std::string::npos);
+}
+
+TEST(models_3ds_chunks_smoothing_keyframer) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto m = loadModel("old/box.3ds", mapReader({{"old/box.3ds", sample3ds()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    CHECK(m->nodes.size() == 2 && m->nodes[0].name == "root" && m->nodes[1].name == "Box" && m->nodes[1].parent == 0);
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(m->meshes[0].primitives.size() == 1 && p.indexCount == 6);
+    CHECK(p.vertexCount == 6);            // smoothing groups 1 and 2 split the shared diagonal
+    const Material& mt = m->materials[size_t(p.material)];
+    CHECK(mt.name == "Red" && near(mt.baseColor.x, 1) && near(mt.baseColor.y, 0) && mt.alpha == AlphaMode::Blend && near(mt.baseColor.w, 0.5f));
+    for (uint32_t i = 0; i < p.vertexCount; ++i) CHECK(near(m->vertices[p.firstVertex + i].nrm.z, 1));
+    const float3 up = m->nodes[0].r.rotate({0, 0, 1});
+    CHECK(near(up.y, 1));                  // Z up -> Y up
+    CHECK(m->clips.size() == 1 && m->clips[0].name == "Take 001" && near(m->clips[0].duration, 1));
+    if (m->clips.empty()) return;
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.5f, pose);
+    CHECK(near(pose[1].t.x, 1.5f));
+    bool threw = false;
+    std::string bad = sample3ds();
+    bad[2] = 0x7f;                         // main chunk length past the end
+    try { loadModel("old/bad.3ds", mapReader({{"old/bad.3ds", bad}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("old/bad.3ds") == 0; }
+    CHECK(threw);
+}
+
+TEST(models_ply_ascii_binary) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto a = loadModel("scan/q.ply", mapReader({{"scan/q.ply", asciiPly()}, {"scan/t.tga", tga2x2()}}), &warn);
+    auto b = loadModel("scan/b.ply", mapReader({{"scan/b.ply", binaryPly()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    for (const Model* m : {a.get(), b.get()}) {
+        CHECK(m->vertices.size() == 4 && m->indices.size() == 6);
+        CHECK(m->vertices[0].color == 0xff0000ffu && m->vertices[3].color == 0xffffffffu);   // red; white
+        CHECK(near(m->vertices[2].uv.x, 1) && near(m->vertices[2].uv.y, 0));
+        CHECK(near(m->vertices[1].nrm.z, 1));                                               // smoothed
+        CHECK(near(m->boundsMax.y, 1) && near(m->boundsMax.x, 1));                          // Y up kept
+    }
+    CHECK(a->materials[0].baseTex == 0 && b->materials[0].baseTex == -1);
+    bool threw = false;
+    std::string bad = asciiPly();
+    bad.replace(bad.find("4 0 1 2 3"), 9, "4 0 1 2 7");
+    try { loadModel("scan/bad.ply", mapReader({{"scan/bad.ply", bad}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("out of range") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(models_stl_ascii_binary) {
+    using namespace interchangetest;
+    const std::string ascii = "solid part\n facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid part\n";
+    std::vector<std::string> warn;
+    auto a = loadModel("print/a.stl", mapReader({{"print/a.stl", ascii}}), &warn);
+    auto b = loadModel("print/b.STL", mapReader({{"print/b.STL", binaryStl()}}), &warn);
+    CHECK(warn.empty());
+    CHECK(a->nodes.size() == 1 && a->nodes[0].name == "part" && a->vertices.size() == 3);
+    CHECK(near(a->vertices[0].nrm.y, 1));                          // zero normal recomputed, Z up -> Y up
+    CHECK(near(a->vertices[2].pos.z, -1) && near(a->vertices[2].pos.y, 0));
+    CHECK(b->vertices.size() == 6 && b->vertices[0].color == 0xff0000ffu && b->vertices[3].color == 0xffffffffu);
+    CHECK(near(b->vertices[0].nrm.y, 1));
+    bool threw = false;
+    try { loadModel("print/c.stl", mapReader({{"print/c.stl", "solid x\n facet normal 0 0 1\n vertex 0 0 zero\nendsolid\n"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("print/c.stl") == 0; }
+    CHECK(threw);
+}
+
+TEST(models_dae_palette_split) {
+    using namespace interchangetest;
+    // 100 joints, one triangle per joint: primitives are split so each palette fits kMaxPaletteJoints
+    const int n = 100;
+    std::string pos, idx, names, ibm, vcount, v, nodes;
+    for (int j = 0; j < n; ++j) {
+        const float x = float(j);
+        pos += std::to_string(x) + " 0 0 " + std::to_string(x + 0.5f) + " 0 0 " + std::to_string(x) + " 1 0 ";
+        idx += std::to_string(j * 3) + " " + std::to_string(j * 3 + 1) + " " + std::to_string(j * 3 + 2) + " ";
+        names += "j" + std::to_string(j) + " ";
+        ibm += "1 0 0 " + std::to_string(-x) + " 0 1 0 0 0 0 1 0 0 0 0 1 ";
+        vcount += "1 1 1 ";
+        for (int k = 0; k < 3; ++k) v += std::to_string(j) + " 0 ";
+        nodes += "<node id='n" + std::to_string(j) + "' sid='j" + std::to_string(j) + "'><translate>" + std::to_string(x) + " 0 0</translate></node>";
+    }
+    const std::string dae = "<COLLADA><library_geometries><geometry id='g'><mesh><source id='p'><float_array id='pa' count='" + std::to_string(n * 9) + "'>" + pos +
+        "</float_array><technique_common><accessor source='#pa' count='" + std::to_string(n * 3) + "' stride='3'/></technique_common></source>"
+        "<vertices id='v'><input semantic='POSITION' source='#p'/></vertices><triangles count='" + std::to_string(n) + "'><input semantic='VERTEX' source='#v' offset='0'/><p>" + idx +
+        "</p></triangles></mesh></geometry></library_geometries><library_controllers><controller id='c'><skin source='#g'>"
+        "<source id='jn'><Name_array id='jna' count='" + std::to_string(n) + "'>" + names + "</Name_array><technique_common><accessor source='#jna' count='" + std::to_string(n) + "'/></technique_common></source>"
+        "<source id='ib'><float_array id='iba' count='" + std::to_string(n * 16) + "'>" + ibm + "</float_array><technique_common><accessor source='#iba' count='" + std::to_string(n) + "' stride='16'/></technique_common></source>"
+        "<source id='w'><float_array id='wa' count='1'>1</float_array><technique_common><accessor source='#wa' count='1'/></technique_common></source>"
+        "<joints><input semantic='JOINT' source='#jn'/><input semantic='INV_BIND_MATRIX' source='#ib'/></joints>"
+        "<vertex_weights count='" + std::to_string(n * 3) + "'><input semantic='JOINT' source='#jn' offset='0'/><input semantic='WEIGHT' source='#w' offset='1'/><vcount>" + vcount + "</vcount><v>" + v + "</v></vertex_weights>"
+        "</skin></controller></library_controllers><library_visual_scenes><visual_scene id='s'><node id='skel'>" + nodes + "</node>"
+        "<node id='body'><instance_controller url='#c'><skeleton>#skel</skeleton></instance_controller></node></visual_scene></library_visual_scenes></COLLADA>";
+    std::vector<std::string> warn;
+    auto m = loadModel("many.dae", mapReader({{"many.dae", dae}}), &warn);
+    CHECK(warn.empty());
+    CHECK(m->skins.size() == 1 && m->skins[0].joints.size() == size_t(n));
+    const auto& prims = m->meshes[0].primitives;
+    CHECK(prims.size() == 2);
+    uint32_t tris = 0;
+    for (const Primitive& p : prims) {
+        tris += p.indexCount / 3;
+        CHECK(!p.jointPalette.empty() && int(p.jointPalette.size()) <= kMaxPaletteJoints);
+        std::vector<mat4> pal;
+        paletteMatrices(*m, m->skins[0], p, m->bindWorld, pal);
+        bool identity = true;
+        for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        CHECK(identity);
+        for (uint32_t i = 0; i < p.indexCount; ++i) {   // every vertex points at the joint of its triangle
+            const ModelVertex& vx = m->vertices[m->indices[p.firstIndex + i]];
+            const int joint = p.jointPalette[vx.joints[0]];
+            CHECK(vx.weights[0] == 255 && joint == int(std::floor(vx.pos.x + 0.01f)));
+        }
+    }
+    CHECK(tris == uint32_t(n));
+}
+
+TEST(models_interchange_fuzz_never_crashes) {
+    using namespace interchangetest;
+    // every loader survives truncations and random byte flips (throws or loads, never crashes)
+    const int a = fuzz("f/rig.dae", skinnedDae(), {});
+    const int b = fuzz("f/tri.dae", texturedZupDae(), {{"f/tex file.tga", tga2x2()}});
+    const int c = fuzz("f/box.3ds", sample3ds(), {});
+    const int d = fuzz("f/q.ply", asciiPly(), {});
+    const int e = fuzz("f/b.ply", binaryPly(), {});
+    const int f = fuzz("f/b.stl", binaryStl(), {});
+    CHECK(a > 50 && b > 50 && c > 50 && d > 20 && e > 20 && f > 20);   // most truncations are reported
+}
+
+// ---- classic formats: Total Annihilation .3do / .gaf, C&C Generals .w3d, DDS (synthetic data) ----
+
+namespace classictest {
+using namespace rts::render;
+using modeltest::near;
+template <class T> void put(std::string& b, T v) { b.append(reinterpret_cast<const char*>(&v), sizeof v); }
+template <class T> void putAt(std::string& b, size_t at, T v) { std::memcpy(&b[at], &v, sizeof v); }
+
+// TA 3DO writer: pieces with vertices (native frame, units), primitives (colour, indices, texture).
+struct TaPrim { int color; std::vector<uint16_t> idx; std::string tex; };
+struct TaPiece { std::string name; float3 off; std::vector<float3> verts; std::vector<TaPrim> prims; std::vector<TaPiece> kids; int sel = -1; };
+inline uint32_t emit3do(std::string& out, const TaPiece& p) {
+    const uint32_t at = uint32_t(out.size());
+    out.append(52, '\0');
+    const uint32_t nameAt = uint32_t(out.size());
+    out += p.name; out += '\0';
+    const uint32_t vAt = uint32_t(out.size());
+    for (auto v : p.verts) { put<int32_t>(out, int32_t(v.x * 65536)); put<int32_t>(out, int32_t(v.y * 65536)); put<int32_t>(out, int32_t(v.z * 65536)); }
+    const uint32_t pAt = uint32_t(out.size());
+    out.append(32 * p.prims.size(), '\0');
+    for (size_t k = 0; k < p.prims.size(); ++k) {
+        const uint32_t iAt = uint32_t(out.size());
+        for (auto i : p.prims[k].idx) put<uint16_t>(out, i);
+        uint32_t tAt = 0;
+        if (!p.prims[k].tex.empty()) { tAt = uint32_t(out.size()); out += p.prims[k].tex; out += '\0'; }
+        const size_t pa = pAt + 32 * k;
+        putAt<int32_t>(out, pa, p.prims[k].color); putAt<int32_t>(out, pa + 4, int32_t(p.prims[k].idx.size()));
+        putAt<uint32_t>(out, pa + 12, iAt); putAt<uint32_t>(out, pa + 16, tAt);
+    }
+    uint32_t child = 0, prev = 0;
+    for (const auto& k : p.kids) {
+        const uint32_t c = emit3do(out, k);
+        if (!prev) child = c; else putAt<uint32_t>(out, prev + 44, c);
+        prev = c;
+    }
+    const int32_t hdr[13] = {1, int32_t(p.verts.size()), int32_t(p.prims.size()), p.sel, int32_t(p.off.x * 65536), int32_t(p.off.y * 65536),
+                             int32_t(p.off.z * 65536), int32_t(nameAt), 0, int32_t(vAt), int32_t(pAt), 0, int32_t(child)};
+    std::memcpy(&out[at], hdr, sizeof hdr);
+    return at;
+}
+// GAF with one entry; frames of w x h palette indices; compressed frames use TA's run-length lines.
+inline std::string gafFile(const std::string& name, const std::vector<std::vector<uint8_t>>& frames, int w, int h, bool compressed) {
+    std::string g;
+    put<uint32_t>(g, 0x00010100); put<uint32_t>(g, 1); put<uint32_t>(g, 0); put<uint32_t>(g, 16);
+    put<uint16_t>(g, uint16_t(frames.size())); put<uint16_t>(g, 1); put<uint32_t>(g, 0);
+    std::string n = name; n.resize(32, '\0'); g += n;
+    const size_t table = g.size();
+    g.append(8 * frames.size(), '\0');
+    for (size_t f = 0; f < frames.size(); ++f) {
+        const uint32_t fat = uint32_t(g.size());
+        g.append(24, '\0');
+        const uint32_t dat = uint32_t(g.size());
+        if (!compressed) g.append(reinterpret_cast<const char*>(frames[f].data()), frames[f].size());
+        else
+            for (int y = 0; y < h; ++y) {
+                std::string line;
+                for (int x = 0; x < w;) {
+                    const uint8_t v = frames[f][size_t(y * w + x)];
+                    int run = 1;
+                    while (x + run < w && frames[f][size_t(y * w + x + run)] == v && run < 32) ++run;
+                    if (v == 9) line += char(run << 1 | 1);
+                    else if (run > 1) { line += char((run - 1) << 2 | 2); line += char(v); }
+                    else { line += char(0); line += char(v); }
+                    x += run;
+                }
+                put<uint16_t>(g, uint16_t(line.size())); g += line;
+            }
+        putAt<uint16_t>(g, fat, uint16_t(w)); putAt<uint16_t>(g, fat + 2, uint16_t(h));
+        g[fat + 8] = 9; g[fat + 9] = compressed ? 1 : 0;
+        putAt<uint32_t>(g, fat + 16, dat);
+        putAt<uint32_t>(g, table + 8 * f, fat); putAt<uint32_t>(g, table + 8 * f + 4, 1);
+    }
+    return g;
+}
+inline std::string taPalette() {
+    std::string p;
+    for (int i = 0; i < 256; ++i) { p += char(i); p += char(255 - i); p += char(i / 2); p += '\0'; }
+    return p;
+}
+inline uint8_t lin(int c) { float s = c / 255.0f; float l = s <= 0.04045f ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f); return uint8_t(std::lround(l * 255)); }
+// Every triangle's winding agrees with its stored normal (front faces point outward).
+inline bool windingMatchesNormals(const Model& m) {
+    for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const ModelVertex &a = m.vertices[m.indices[i]], &b = m.vertices[m.indices[i + 1]], &c = m.vertices[m.indices[i + 2]];
+        if (dot(cross(b.pos - a.pos, c.pos - a.pos), a.nrm) <= 0) return false;
+    }
+    return true;
+}
+// Feeds every prefix of `bytes` to `load`: each must throw (or load), never crash.
+template <class F> bool survivesTruncation(const std::string& bytes, F&& load) {
+    int threw = 0;
+    for (size_t n = 0; n < bytes.size(); n += 1 + n / 64) {
+        try { load(bytes.substr(0, n)); } catch (const std::runtime_error&) { ++threw; }
+    }
+    // random byte flips
+    uint32_t seed = 12345;
+    for (int k = 0; k < 300; ++k) {
+        std::string b = bytes;
+        for (int j = 0; j < 4; ++j) { seed = seed * 1664525u + 1013904223u; b[(seed >> 8) % b.size()] = char(seed >> 24); }
+        try { load(b); } catch (const std::runtime_error&) {}
+    }
+    return threw > 0;
+}
+
+inline std::string tank3do() {
+    TaPiece base{"base", {0, 0, 0}, {{-1, 0, -2}, {1, 0, -2}, {1, 0, 2}, {-1, 0, 2}, {0, 1, 0}, {-3, 0, -3}, {3, 0, -3}, {3, 0, 3}}, {}, {}, -1};
+    // top-down CCW seen from +Y in the native frame: textured quad facing up
+    base.prims.push_back({0, {0, 3, 2, 1}, "plate"});
+    base.prims.push_back({40, {0, 1, 4}, ""});           // coloured triangle (palette 40)
+    base.prims.push_back({40, {1, 0, 4}, ""});           // same vertex set: the last one wins
+    base.prims.push_back({7, {0, 1}, ""});               // a line: skipped
+    base.prims.push_back({3, {5, 6, 7}, ""});            // selection primitive: skipped
+    base.sel = 4;
+    TaPiece turret{"turret", {0.5f, 2, 1}, {{0, 0, 0}, {0, 1, 0}, {1, 0, 0}}, {{200, {0, 1, 2}, ""}}, {}, -1};
+    TaPiece flare{"flare", {0, 0, -3}, {}, {}, {}, -1};
+    turret.kids.push_back(flare);
+    base.kids.push_back(turret);
+    TaPiece sib{"door", {-2, 0, 0}, {}, {}, {}, -1};
+    base.kids.push_back(sib);
+    std::string out;
+    emit3do(out, base);
+    return out;
+}
+} // namespace classictest
+
+TEST(models_3do_pieces_palette_gaf) {
+    using namespace classictest;
+    std::vector<uint8_t> px(16, 50);
+    px[0] = 9; px[1] = 9;                                 // transparent run (compressed skip)
+    px[5] = 77;
+    const std::string gaf = gafFile("plate", {px}, 4, 4, true);
+    std::vector<std::string> warn;
+    auto m = loadModel("units/tank.3do", modeltest::mapReader({{"units/tank.3do", tank3do()}, {"units/textures/plate.gaf", gaf}, {"units/../palettes/PALETTE.PAL", taPalette()}}), &warn);
+    CHECK(warn.empty());
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    const int b = m->findNode("base"), t = m->findNode("turret"), f = m->findNode("flare"), d = m->findNode("door");
+    CHECK(b == 0 && t > 0 && f > 0 && d > 0);
+    CHECK(m->nodes[size_t(t)].parent == b && m->nodes[size_t(f)].parent == t && m->nodes[size_t(d)].parent == b);
+    CHECK(near(m->nodes[size_t(t)].t.x, 0.5f) && near(m->nodes[size_t(t)].t.y, 2) && near(m->nodes[size_t(t)].t.z, -1));   // z mirrored
+    CHECK(near(m->nodes[size_t(f)].t.z, 3) && m->nodes[size_t(f)].mesh < 0);
+    // base: textured quad (2 triangles) + one coloured triangle; selection primitive, duplicate, line skipped
+    const MeshDef& bm = m->meshes[size_t(m->nodes[size_t(b)].mesh)];
+    uint32_t tris = 0;
+    for (auto& p : bm.primitives) tris += p.indexCount / 3;
+    CHECK(tris == 3 && bm.primitives.size() == 2);
+    CHECK(windingMatchesNormals(*m));
+    const Primitive* texPrim = nullptr; const Primitive* colPrim = nullptr;
+    for (auto& p : bm.primitives) (m->materials[size_t(p.material)].baseTex >= 0 ? texPrim : colPrim) = &p;
+    CHECK(texPrim && colPrim);
+    if (texPrim && colPrim) {
+        // the textured quad faces +Y; colour 40 -> palette (40, 215, 20) as linear vertex colour
+        CHECK(near(m->vertices[m->indices[texPrim->firstIndex]].nrm.y, 1));
+        const uint32_t c = m->vertices[m->indices[colPrim->firstIndex]].color;
+        CHECK((c & 255) == lin(40) && ((c >> 8) & 255) == lin(215) && ((c >> 16) & 255) == lin(20));
+        const Image& img = m->images[size_t(m->materials[size_t(texPrim->material)].baseTex)];
+        CHECK(img.width == 4 && img.height == 4 && img.rgba[3] == 0 && img.rgba[1 * 4 + 3] == 0 && img.rgba[2 * 4 + 3] == 255);
+        CHECK(uint8_t(img.rgba[5 * 4]) == 77 && uint8_t(img.rgba[5 * 4 + 1]) == 255 - 77 && uint8_t(img.rgba[2 * 4]) == 50);
+        CHECK(m->materials[size_t(texPrim->material)].alpha == AlphaMode::Mask);
+    }
+    CHECK(m->clips.empty() && m->skins.empty());
+    // turret colour 200
+    const MeshDef& tm = m->meshes[size_t(m->nodes[size_t(t)].mesh)];
+    CHECK(tm.primitives.size() == 1 && tm.primitives[0].indexCount == 3);
+}
+
+TEST(models_3do_team_texture_and_fallbacks) {
+    using namespace classictest;
+    // 10 player frames: the logo pixels (index 1, 2) change, the border (index 0) does not -> team mask
+    std::vector<std::vector<uint8_t>> frames;
+    for (int p = 0; p < 10; ++p) { std::vector<uint8_t> f(4, 0); f[1] = uint8_t(100 + p); f[2] = uint8_t(100 + p); frames.push_back(f); }
+    std::vector<std::string> warn;
+    auto m = loadModel("u/tank.3do", modeltest::mapReader({{"u/tank.3do", tank3do()}, {"u/plate.gaf", gafFile("plate", frames, 2, 2, false)}, {"u/palette.pal", taPalette()}}), &warn);
+    CHECK(warn.empty());
+    int team = -1;
+    for (auto& mt : m->materials) if (mt.team == TeamMode::Mask) team = mt.teamTex;
+    CHECK(team >= 0);
+    if (team >= 0) {
+        const Image& mask = m->images[size_t(team)];
+        CHECK(mask.rgba[0] == 0 && uint8_t(mask.rgba[4]) == 255 && uint8_t(mask.rgba[8]) == 255 && mask.rgba[12] == 0);
+    }
+    // no palette, no texture: built-in palette + one aggregated warning each
+    warn.clear();
+    auto m2 = loadModel("u/tank.3do", modeltest::mapReader({{"u/tank.3do", tank3do()}}), &warn);
+    CHECK(warn.size() == 2 && m2->images.empty());
+    bool mentions = false;
+    for (auto& w : warn) mentions |= w.find("plate") != std::string::npos;
+    CHECK(mentions);
+    // converted PNG-free fallback: a .tga next to the model
+    std::string tga(18, '\0');
+    tga[2] = 2; tga[12] = 1; tga[14] = 1; tga[16] = 32; tga[17] = 8;
+    tga += std::string("\x10\x20\x30\xff", 4);
+    warn.clear();
+    auto m3 = loadModel("u/tank.3do", modeltest::mapReader({{"u/tank.3do", tank3do()}, {"u/textures/plate.tga", tga}, {"u/palette.pal", taPalette()}}), &warn);
+    CHECK(warn.empty() && m3->images.size() == 1 && m3->images[0].width == 1);
+}
+
+TEST(models_3do_malformed_input) {
+    using namespace classictest;
+    const std::string good = tank3do();
+    auto reader = modeltest::mapReader({{"u/palette.pal", taPalette()}});
+    CHECK(survivesTruncation(good, [&](const std::string& b) { load3do("u/tank.3do", b, reader, nullptr); }));
+    // the turret's sibling pointing at itself: cycle error, not an endless loop
+    std::string loop = good;
+    uint32_t turretAt = 0;
+    std::memcpy(&turretAt, &good[48], 4);
+    putAt<uint32_t>(loop, turretAt + 44, turretAt);
+    bool threw = false;
+    try { load3do("u/a.3do", loop, reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("cycle") != std::string::npos; }
+    CHECK(threw);
+    std::string bad = good;
+    putAt<uint32_t>(bad, 48, uint32_t(bad.size() + 100));
+    threw = false;
+    try { load3do("u/b.3do", bad, reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("u/b.3do") == 0; }
+    CHECK(threw);
+    threw = false;
+    try { load3do("u/c.3do", std::string("\x02\0\0\0", 4) + std::string(60, '\0'), reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("version") != std::string::npos; }
+    CHECK(threw);
+    // GAF damage: textures fall back to palette colours with a warning, never a crash
+    std::vector<uint8_t> px(16, 50);
+    const std::string gaf = gafFile("plate", {px}, 4, 4, true);
+    for (size_t n = 0; n < gaf.size(); n += 3) {
+        std::vector<std::string> w;
+        auto r = modeltest::mapReader({{"u/palette.pal", taPalette()}, {"u/plate.gaf", gaf.substr(0, n)}});
+        auto m = load3do("u/tank.3do", good, r, &w);
+        CHECK(!m->meshes.empty());
+    }
+}
+
+namespace classictest {
+// W3D writer helpers
+inline std::string ck(uint32_t id, const std::string& payload, bool container = false) {
+    std::string c;
+    put<uint32_t>(c, id); put<uint32_t>(c, uint32_t(payload.size()) | (container ? 0x80000000u : 0));
+    return c + payload;
+}
+inline std::string nm(const std::string& s, size_t n = 16) { std::string r = s; r.resize(n, '\0'); return r; }
+inline std::string f32s(std::initializer_list<float> v) { std::string s; for (float x : v) put<float>(s, x); return s; }
+inline std::string u32s(std::initializer_list<uint32_t> v) { std::string s; for (uint32_t x : v) put<uint32_t>(s, x); return s; }
+// one triangle mesh (+ optional influences / texture / house colour name)
+inline std::string w3dTri(const std::string& name, const std::vector<float3>& pos, const std::vector<uint16_t>& bones, const std::string& tex, uint32_t attrs = 0) {
+    std::string hdr = u32s({0x00040002, attrs | (bones.empty() ? 0u : 0x00020000u)}) + nm(name) + nm("TANK");
+    hdr += u32s({1, uint32_t(pos.size()), 1, 0, 0, 0, 0, 3, 1}) + std::string(40, '\0');
+    std::string c = ck(0x1F, hdr), v, n, uv, t;
+    for (auto p : pos) { v += f32s({p.x, p.y, p.z}); n += f32s({0, 0, 1}); uv += f32s({p.x, p.y}); }
+    c += ck(0x02, v) + ck(0x03, n);
+    t = u32s({0, 1, 2, 0}) + f32s({0, 0, 1, 0});
+    c += ck(0x20, t);
+    if (!bones.empty()) { std::string inf; for (auto b : bones) { put<uint16_t>(inf, b); inf.append(6, '\0'); } c += ck(0x0E, inf); }
+    std::string vm = u32s({0}) + std::string("\xff\xff\xff\0\xff\xff\xff\0", 8) + std::string(8, '\0') + f32s({1, 1, 0});
+    c += ck(0x2A, ck(0x2B, ck(0x2D, vm), true), true);
+    std::string sh(16, '\0'); sh[0] = 3; sh[1] = 1; sh[5] = 1; sh[7] = 1; sh[8] = tex.empty() ? 0 : 1;
+    c += ck(0x29, sh);
+    std::string pass = ck(0x39, u32s({0})) + ck(0x3A, u32s({0}));
+    if (!tex.empty()) {
+        c += ck(0x30, ck(0x31, ck(0x32, tex + '\0'), true), true);
+        pass += ck(0x48, ck(0x49, u32s({0})) + ck(0x4A, uv), true);
+    }
+    c += ck(0x38, pass, true);
+    return ck(0x00, c, true);
+}
+inline std::string w3dHierarchy() {
+    std::string hdr = u32s({0x00040001}) + nm("TANK_SKL") + u32s({2}) + f32s({0, 0, 0});
+    std::string piv = nm("ROOTTRANSFORM") + u32s({0xffffffffu}) + f32s({0, 0, 0, 0, 0, 0, 0, 0, 0, 1});
+    piv += nm("Turret") + u32s({0}) + f32s({1, 0, 2, 0, 0, 0, 0, 0, 0, 1});
+    return ck(0x100, ck(0x101, hdr) + ck(0x102, piv), true);
+}
+inline std::string w3dHlod() {
+    std::string lod = ck(0x703, u32s({3}) + f32s({1e30f}));
+    lod += ck(0x704, u32s({1}) + nm("TANK.GUN", 32));
+    lod += ck(0x704, u32s({0}) + nm("TANK.HOUSECOLOR01", 32));
+    lod += ck(0x704, u32s({0}) + nm("TANK.SKIN", 32));
+    std::string low = ck(0x703, u32s({1}) + f32s({0.2f})) + ck(0x704, u32s({0}) + nm("TANK.LOWLOD", 32));
+    return ck(0x700, ck(0x701, u32s({0x00010000, 2}) + nm("TANK") + nm("TANK_SKL")) + ck(0x702, low, true) + ck(0x702, lod, true), true);
+}
+// classic animation: Turret rotates about W3D Z (up) by 0 -> 90 degrees over 3 frames at 2 fps
+inline std::string w3dAnim() {
+    std::string hdr = u32s({0x00040001}) + nm("TANK_SKL.TURN") + nm("TANK_SKL") + u32s({3, 2});
+    std::string q;
+    for (int f = 0; f < 3; ++f) { const float a = 0.785398f * float(f) / 2; q += f32s({0, 0, std::sin(a), std::cos(a)}); }
+    std::string chq; put<uint16_t>(chq, 0); put<uint16_t>(chq, 2); put<uint16_t>(chq, 4); put<uint16_t>(chq, 6); put<uint16_t>(chq, 1); put<uint16_t>(chq, 0);
+    std::string chx; put<uint16_t>(chx, 1); put<uint16_t>(chx, 1); put<uint16_t>(chx, 1); put<uint16_t>(chx, 0); put<uint16_t>(chx, 1); put<uint16_t>(chx, 0);
+    return ck(0x200, ck(0x201, hdr) + ck(0x202, chq + q) + ck(0x202, chx + f32s({0.5f})), true);
+}
+inline std::string w3dModel(bool withHierarchy) {
+    std::string f = withHierarchy ? w3dHierarchy() : std::string();
+    f += w3dTri("GUN", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "gun.tga");
+    f += w3dTri("HOUSECOLOR01", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "");
+    f += w3dTri("LOWLOD", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "");
+    f += w3dTri("HIDDEN", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "", 0x1000);
+    // skinned: vertex 2 lives in Turret space (0, 1, 1) -> model (1, 1, 3) in W3D = (1, 3, 1) in the engine
+    f += w3dTri("SKIN", {{0, 0, 0}, {1, 0, 0}, {0, 1, 1}}, {0, 0, 1}, "zhca_body.tga");
+    f += w3dHlod();
+    if (withHierarchy) f += w3dAnim();
+    return f;
+}
+inline std::string ddsHeader(int w, int h, const char* fourcc, uint32_t bits = 0, uint32_t r = 0, uint32_t g = 0, uint32_t b = 0, uint32_t a = 0, uint32_t mips = 1, uint32_t pfFlags = 0) {
+    std::string d = "DDS ";
+    put<uint32_t>(d, 124); put<uint32_t>(d, 0x1007 | (mips > 1 ? 0x20000u : 0)); put<uint32_t>(d, uint32_t(h)); put<uint32_t>(d, uint32_t(w));
+    put<uint32_t>(d, 0); put<uint32_t>(d, 0); put<uint32_t>(d, mips); d.append(44, '\0');
+    put<uint32_t>(d, 32);
+    if (fourcc) { put<uint32_t>(d, 0x4 | pfFlags); d.append(fourcc, 4); d.append(20, '\0'); }
+    else { put<uint32_t>(d, pfFlags ? pfFlags : 0x41); put<uint32_t>(d, 0); put<uint32_t>(d, bits); put<uint32_t>(d, r); put<uint32_t>(d, g); put<uint32_t>(d, b); put<uint32_t>(d, a); }
+    put<uint32_t>(d, 0x1000); d.append(16, '\0');
+    return d;
+}
+inline std::string dxt1Solid(uint16_t c565, int blocks) {
+    std::string s;
+    for (int i = 0; i < blocks; ++i) { put<uint16_t>(s, c565); put<uint16_t>(s, c565); put<uint32_t>(s, 0); }
+    return s;
+}
+} // namespace classictest
+
+TEST(models_w3d_hierarchy_hlod_skin_anim) {
+    using namespace classictest;
+    const std::string tga = std::string("\0\0\x02\0\0\0\0\0\0\0\0\0\x01\0\x01\0\x20\x08", 18) + std::string("\x10\x20\x30\x00", 4);
+    std::vector<std::string> warn;
+    auto m = loadModel("art/w3d/tank.w3d", modeltest::mapReader({{"art/w3d/tank.w3d", w3dModel(true)}, {"art/w3d/../Textures/gun.dds", ddsHeader(4, 4, "DXT1") + dxt1Solid(0xF800, 1)},
+                                                                  {"art/w3d/zhca_body.tga", tga}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    const int root = m->findNode("ROOTTRANSFORM"), turret = m->findNode("Turret");
+    CHECK(root == 0 && turret == 1 && m->nodes[1].parent == 0);
+    // W3D (1, 0, 2) Z-up / +X forward -> engine (0, 2, 1) Y-up / +Z forward
+    CHECK(near(m->nodes[1].t.x, 0) && near(m->nodes[1].t.y, 2) && near(m->nodes[1].t.z, 1));
+    // GUN on the Turret bone node itself, HOUSECOLOR01 on the root, LOWLOD / HIDDEN skipped
+    CHECK(m->nodes[1].mesh >= 0 && m->meshes[size_t(m->nodes[1].mesh)].name == "GUN");
+    CHECK(m->nodes[0].mesh >= 0 && m->meshes[size_t(m->nodes[0].mesh)].name == "HOUSECOLOR01");
+    CHECK(m->meshes.size() == 3);
+    for (auto& md : m->meshes) CHECK(md.name != "LOWLOD" && md.name != "HIDDEN");
+    const Material& gun = m->materials[size_t(m->meshes[size_t(m->nodes[1].mesh)].primitives[0].material)];
+    CHECK(gun.baseTex >= 0 && m->images[size_t(gun.baseTex)].width == 4 && m->images[size_t(gun.baseTex)].compressed);
+    CHECK(near(gun.baseColor.x, 1) && gun.team == TeamMode::None);
+    const Material& house = m->materials[size_t(m->meshes[size_t(m->nodes[0].mesh)].primitives[0].material)];
+    CHECK(house.team == TeamMode::Tint && near(house.baseColor.x, 1) && near(house.baseColor.y, 1));
+    // UV V flipped (D3D convention): vertex (1, 0) -> uv (1, 1)
+    const Primitive& gp = m->meshes[size_t(m->nodes[1].mesh)].primitives[0];
+    CHECK(near(m->vertices[gp.firstVertex + 1].uv.x, 1) && near(m->vertices[gp.firstVertex + 1].uv.y, 1));
+    CHECK(near(m->vertices[gp.firstVertex].pos.y, 0) && near(m->vertices[gp.firstVertex + 1].pos.z, 1));   // w3d +X -> engine +Z
+    CHECK(windingMatchesNormals(*m));
+    // skin: joints = pivots, vertex 2 moved from Turret space into model space
+    CHECK(m->skins.size() == 1 && m->skins[0].joints.size() == 2);
+    int skinNode = -1;
+    for (size_t i = 0; i < m->nodes.size(); ++i) if (m->nodes[i].skin == 0) skinNode = int(i);
+    CHECK(skinNode >= 0);
+    if (skinNode >= 0) {
+        const Primitive& sp = m->meshes[size_t(m->nodes[size_t(skinNode)].mesh)].primitives[0];
+        CHECK(sp.jointPalette.size() == 2);
+        const ModelVertex& v2 = m->vertices[sp.firstVertex + 2];
+        CHECK(near(v2.pos.x, 1) && near(v2.pos.y, 3) && near(v2.pos.z, 1));
+        CHECK(sp.jointPalette[v2.joints[0]] == 1 && v2.weights[0] == 255);
+        const mat4 jm = m->bindWorld[1] * m->skins[0].inverseBind[1];
+        CHECK(near(jm.at(0, 0), 1) && near(jm.at(1, 3), 0));   // bind pose: identity joint matrix
+        CHECK(m->materials[size_t(sp.material)].team == TeamMode::BaseAlpha);
+    }
+    // clip TURN: 3 frames at 2 fps = 1 s; Turret yaw about W3D Z = engine Y, translation +0.5 W3D X at frame 1
+    CHECK(m->clips.size() == 1 && m->findClip("TURN") == 0);
+    if (m->clips.size() == 1) {
+        CHECK(near(m->clips[0].duration, 1));
+        Pose pose;
+        bindPose(*m, pose);
+        sampleClip(m->clips[0], 1.0f, pose);
+        const quat e = quat::axisAngle({0, 1, 0}, 1.570796f);
+        CHECK(near(pose[1].r.y, e.y) && near(pose[1].r.w, e.w) && near(pose[1].r.x, 0));
+        CHECK(near(pose[1].t.z, 1));   // outside its frame range the X channel is 0
+        sampleClip(m->clips[0], 0.5f, pose);
+        CHECK(near(pose[1].t.z, 1.5f) && near(pose[1].t.y, 2));
+    }
+}
+
+TEST(models_w3d_external_hierarchy_and_anims) {
+    using namespace classictest;
+    // time-coded: Turret X 0 -> 1 between frames 0 and 4, then a binary (step) key to 3 at frame 6
+    std::string tc;
+    put<uint32_t>(tc, 3); put<uint16_t>(tc, 1); tc += char(1); tc += char(0);
+    tc += u32s({0}) + f32s({0}) + u32s({4}) + f32s({1}) + u32s({6u | 0x80000000u}) + f32s({3});
+    const std::string tcAnim = ck(0x280, ck(0x281, u32s({1}) + nm("TANK_SKL.RECOIL") + nm("TANK_SKL") + u32s({8}) + std::string("\x0a\0\0\0", 4)) + ck(0x282, tc), true);
+    // adaptive delta: Turret Y starts at 2, +1 * 0.25 per frame (filter index 8 = 1.0, scale 0.25)
+    std::string ad;
+    put<uint32_t>(ad, 5); put<uint16_t>(ad, 1); ad += char(1); ad += char(1); put<float>(ad, 0.25f);
+    put<float>(ad, 2.0f);
+    ad += char(8); ad += std::string(8, char(0x11));
+    const std::string adAnim = ck(0x280, ck(0x281, u32s({1}) + nm("WOBBLE") + nm("TANK_SKL") + u32s({5}) + std::string("\x0a\0\x01\0", 4)) + ck(0x282, ad), true);
+    const std::string other = ck(0x200, ck(0x201, u32s({0x00040001}) + nm("OTHER.WALK") + nm("OTHER_SKL") + u32s({2, 30})), true);
+    std::vector<std::string> warn;
+    auto m = loadModel("w/tank.w3d", modeltest::mapReader({{"w/tank.w3d", w3dModel(false)}, {"w/TANK_SKL.w3d", w3dHierarchy() + tcAnim},
+                                                            {"w/tank.anims.txt", "# clips\nwobble.w3d\n  missing.w3d \nother.w3d\n"},
+                                                            {"w/wobble.w3d", adAnim}, {"w/other.w3d", other}}), &warn);
+    CHECK(m->findNode("Turret") == 1 && m->skins.size() == 1);
+    CHECK(m->findClip("RECOIL") >= 0 && m->findClip("WOBBLE") >= 0 && m->clips.size() == 2);
+    int missing = 0, wrongHier = 0, tex = 0;
+    for (auto& w : warn) { missing += w.find("missing.w3d") != std::string::npos; wrongHier += w.find("OTHER_SKL") != std::string::npos; tex += w.find("not found") != std::string::npos; }
+    CHECK(missing == 1 && wrongHier == 1 && tex >= 2);   // + the two textures
+    Pose pose;
+    bindPose(*m, pose);
+    const int rc = m->findClip("RECOIL"), wb = m->findClip("WOBBLE");
+    if (rc >= 0 && wb >= 0) {
+        sampleClip(m->clips[size_t(rc)], 2 / 10.0f, pose);   // frame 2: halfway 0 -> 1
+        CHECK(near(pose[1].t.z, 1.5f));
+        sampleClip(m->clips[size_t(rc)], 5 / 10.0f, pose);   // frame 5: held at 1 (next key is a step)
+        CHECK(near(pose[1].t.z, 2.0f));
+        sampleClip(m->clips[size_t(rc)], 6 / 10.0f, pose);
+        CHECK(near(pose[1].t.z, 4.0f));
+        sampleClip(m->clips[size_t(wb)], 4 / 10.0f, pose);   // frame 4: 2 + 4 * 0.25 = 3 along W3D Y = engine X
+        CHECK(near(pose[1].t.x, 3.0f) && near(pose[1].t.y, 2));
+    }
+    // hierarchy missing entirely: meshes at the origin + warning
+    warn.clear();
+    auto m2 = loadModel("w/tank.w3d", modeltest::mapReader({{"w/tank.w3d", w3dModel(false)}}), &warn);
+    bool said = false;
+    for (auto& w : warn) said |= w.find("TANK_SKL") != std::string::npos;
+    CHECK(said && m2->skins.empty() && !m2->meshes.empty());
+}
+
+TEST(models_w3d_malformed_input) {
+    using namespace classictest;
+    const std::string good = w3dModel(true);
+    auto reader = modeltest::mapReader({});
+    CHECK(survivesTruncation(good, [&](const std::string& b) { loadW3d("x.w3d", b, reader, nullptr); }));
+    bool threw = false;
+    try { loadW3d("h.w3d", w3dHierarchy(), reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("no meshes") != std::string::npos; }
+    CHECK(threw);
+    // triangle index out of range
+    std::string bad = good;
+    const size_t tri = bad.find(u32s({0, 1, 2, 0}));
+    putAt<uint32_t>(bad, tri + 4, 99);
+    threw = false;
+    try { loadW3d("t.w3d", bad, reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("out of range") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(models_dds_formats) {
+    using namespace classictest;
+    Image img;
+    // DXT1 8x8 with a full mip chain (4 + 1 + 1 + 1 blocks... 8x8: 4 blocks, 4x4: 1, 2x2: 1, 1x1: 1)
+    CHECK(decodeImage(ddsHeader(8, 8, "DXT1", 0, 0, 0, 0, 0, 4) + dxt1Solid(0x07E0, 7), img));
+    CHECK(img.width == 8 && img.height == 8 && img.rgba[0] == 0 && uint8_t(img.rgba[1]) == 255 && uint8_t(img.rgba[3]) == 255);
+    CHECK(img.compressed && img.compressed->format == BlockFormat::BC1 && img.compressed->levels.size() == 4 && img.compressed->vkFormat == 133);
+    // DXT1 three-colour block using index 3, no alpha flag -> opaque black, kept as CPU copy
+    std::string tb; put<uint16_t>(tb, 0x0000); put<uint16_t>(tb, 0xFFFF); put<uint32_t>(tb, 0xFFFFFFFFu);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT1") + tb, img) && img.rgba[0] == 0 && uint8_t(img.rgba[3]) == 255 && img.compressed->vkFormat == 131);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT1", 0, 0, 0, 0, 0, 1, 0x1) + tb, img) && img.rgba[3] == 0);
+    // DXT5: alpha endpoints 255 / 0, all indices 1 -> alpha 0; colour red
+    std::string b5 = std::string("\xff\x00", 2) + std::string("\x49\x92\x24\x49\x92\x24", 6);
+    put<uint16_t>(b5, 0xF800); put<uint16_t>(b5, 0xF800); put<uint32_t>(b5, 0);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT5") + b5, img) && uint8_t(img.rgba[0]) == 255 && img.rgba[3] == 0 && img.compressed && img.compressed->format == BlockFormat::BC3);
+    // DXT3: explicit 4-bit alpha 0x8 -> 136
+    std::string b3(8, char(0x88)); put<uint16_t>(b3, 0x001F); put<uint16_t>(b3, 0x001F); put<uint32_t>(b3, 0);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT3") + b3, img) && uint8_t(img.rgba[2]) == 255 && uint8_t(img.rgba[3]) == 136 && !img.compressed);
+    // ATI2 / BC5: red = green = 255 -> blue reconstructed ~0 ... x = y = 1 -> z = 0 -> 128
+    std::string b45 = std::string("\xff\xff", 2) + std::string(6, '\0');
+    CHECK(decodeImage(ddsHeader(4, 4, "ATI2") + b45 + b45, img) && uint8_t(img.rgba[0]) == 255 && uint8_t(img.rgba[1]) == 255 && near(float(uint8_t(img.rgba[2])), 128, 1.5f));
+    CHECK(decodeImage(ddsHeader(4, 4, "ATI1") + b45, img) && uint8_t(img.rgba[0]) == 255 && img.rgba[1] == 0);
+    // uncompressed A8R8G8B8 2x1
+    CHECK(decodeImage(ddsHeader(2, 1, nullptr, 32, 0xff0000, 0xff00, 0xff, 0xff000000u, 1, 0x41) + std::string("\x30\x20\x10\x80\x01\x02\x03\x04", 8), img));
+    CHECK(img.width == 2 && img.rgba[0] == 0x10 && img.rgba[1] == 0x20 && img.rgba[2] == 0x30 && uint8_t(img.rgba[3]) == 0x80 && img.rgba[4] == 3 && img.rgba[7] == 4);
+    // X8R8G8B8 (no alpha flag), R5G6B5, L8, A8L8 (D3DFMT code in the FourCC field)
+    CHECK(decodeImage(ddsHeader(1, 1, nullptr, 32, 0xff0000, 0xff00, 0xff, 0, 1, 0x40) + std::string("\x30\x20\x10\x00", 4), img) && uint8_t(img.rgba[3]) == 255 && img.rgba[0] == 0x10);
+    std::string p565; put<uint16_t>(p565, 0xF800);
+    CHECK(decodeImage(ddsHeader(1, 1, nullptr, 16, 0xf800, 0x7e0, 0x1f, 0, 1, 0x40) + p565, img) && uint8_t(img.rgba[0]) == 255 && img.rgba[1] == 0 && img.rgba[2] == 0);
+    CHECK(decodeImage(ddsHeader(1, 1, nullptr, 8, 0xff, 0, 0, 0, 1, 0x20000) + std::string("\x40", 1), img) && img.rgba[0] == 0x40 && img.rgba[2] == 0x40 && uint8_t(img.rgba[3]) == 255);
+    const char a8l8[4] = {51, 0, 0, 0};
+    CHECK(decodeImage(ddsHeader(1, 1, a8l8) + std::string("\x40\x80", 2), img) && img.rgba[1] == 0x40 && uint8_t(img.rgba[3]) == 0x80);
+    // DX10 header: BC7 is kept compressed, unknown DXGI formats are rejected
+    std::string dx10 = ddsHeader(4, 4, "DX10");
+    std::string bc7(16, '\0'); bc7[0] = 0x40;   // mode 6
+    CHECK(decodeImage(dx10 + u32s({98, 3, 0, 1, 0}) + bc7, img) && img.compressed && img.compressed->format == BlockFormat::BC7);
+    CHECK(!decodeImage(dx10 + u32s({2, 3, 0, 1, 0}) + std::string(256, '\0'), img));
+    // truncated / malformed: false, never a crash
+    const std::string full = ddsHeader(16, 16, "DXT5", 0, 0, 0, 0, 0, 5) + std::string(16 * 16 + 64 + 16 * 3, '\x5a');
+    int ok = 0;
+    for (size_t n = 0; n < full.size(); n += 7) { Image t; ok += decodeImage(full.substr(0, n), t); }
+    CHECK(ok > 0 && ok < 60);
+    CHECK(!decodeImage(ddsHeader(0, 4, "DXT1"), img) && !decodeImage(ddsHeader(100000, 4, "DXT1"), img));
+}
+
 // ---------------- Planets: surface, world block, orbit layer, transit ----------------
 static const std::string kPlanets = std::string(RTS_SOURCE_DIR) + "/templates/planets";
 
@@ -6488,6 +8339,273 @@ TEST(planet_mapdoc_round_trip_and_validate) {
     CHECK(seam && pos);
 }
 #endif
+// ------------------------------------------------------------------ fidelity mechanics (RtsOriginals.cpp)
+
+static Entity spawnAt(Simulation& sim, const std::string& type, uint8_t owner, double x, double z) {
+    return mod(sim).spawn(sim, uint16_t(mod(sim).rules().findType(type)), owner, Vec3{Fixed::fromRatio(int64_t(x * 100), 100), Fixed{}, Fixed::fromRatio(int64_t(z * 100), 100)});
+}
+
+TEST(orig_crush_infantry_and_spice_bloom) {
+    const char* rules = R"({"victory": "noUnits",
+      "resources": {"spice": {"field": true, "regrow": 0, "cellMax": 100}},
+      "types": {
+        "tank": {"tags": ["vehicle"], "move": {"speed": 4, "radius": 0.5}, "health": {"max": 300}, "crush": {"tags": ["infantry", "bloom"]}},
+        "soldier": {"tags": ["infantry"], "move": {"speed": 1, "radius": 0.25}, "health": {"max": 40}},
+        "bloom": {"tags": ["bloom"], "health": {"max": 1}, "countsForVictory": false, "deathField": {"resource": "spice", "radius": 3, "amount": 100}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, ""));
+    auto& gs = mod(*sim).state(*sim);
+    Entity tank = spawnAt(*sim, "tank", 1, 4, 8);
+    Entity foe = spawnAt(*sim, "soldier", 2, 10, 8);
+    Entity friendly = spawnAt(*sim, "soldier", 1, 14, 8.6);
+    spawnAt(*sim, "bloom", 0, 20, 8);
+    Command c; c.player = 1; c.type = game::kCmdMove; c.units = {tank}; c.point = {Fixed::fromInt(26), Fixed{}, Fixed::fromInt(8)};
+    sim->submit(c);
+    run(*sim, 8);
+    CHECK(!sim->world().alive(foe));                       // run over
+    CHECK(sim->world().alive(friendly));                   // own infantry is safe
+    CHECK(countType(*sim, "bloom", 0) == 0);               // the bloom burst...
+    CHECK(gs.grid.fieldAmt[size_t(gs.grid.index(20, 8))] > Fixed::fromInt(50));   // ...into a spice field
+    Fixed before = gs.grid.fieldAmt[size_t(gs.grid.index(21, 8))];
+    run(*sim, 5);
+    CHECK(gs.grid.fieldAmt[size_t(gs.grid.index(21, 8))] == before);                // no regrowth
+}
+
+TEST(orig_sandworm_eats_submerges_and_resurfaces) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+        "worm": {"move": {"speed": 3, "radius": 0.6, "layer": "sand"}, "health": {"max": 3000}, "sight": 10,
+                 "weapons": [{"range": 1.2, "damage": 2000, "cooldown": 1}], "neutral": {"wander": true, "wanderRadius": 5, "leash": 30, "eats": 2, "resurface": 5},
+                 "countsForVictory": false},
+        "quad": {"move": {"speed": 0.5, "radius": 0.4}, "health": {"max": 130}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[29,13]},{"type":"worm","owner":-1,"pos":[16,8]}])"));
+    auto& gs = mod(*sim).state(*sim);
+    spawnAt(*sim, "quad", 1, 18, 8);
+    spawnAt(*sim, "quad", 2, 14, 8);
+    spawnAt(*sim, "quad", 1, 16, 10);
+    run(*sim, 6);
+    CHECK(countType(*sim, "quad", 1) + countType(*sim, "quad", 2) == 1);   // two eaten
+    CHECK(countType(*sim, "worm", game::kHostileNeutral) == 0);            // full: dived
+    CHECK(gs.resurface.size() == 1);
+    run(*sim, 6);
+    CHECK(countType(*sim, "worm", game::kHostileNeutral) == 1);            // back somewhere on the sand
+}
+
+TEST(orig_armor_models_bonus_and_shields) {
+    const char* rules = R"({"victory": "noUnits", "armor": {"model": "percent", "perPoint": 0.06},
+      "types": {
+        "dummy": {"tags": ["cavalry"], "health": {"max": 1000, "armor": 5}},
+        "shielded": {"health": {"max": 100, "shields": 50, "shieldRegen": 50, "shieldDelay": 1}},
+        "spear": {"weapons": [{"damage": 10, "bonus": {"cavalry": 15}}]}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(16, 16, ""));
+    auto& m = mod(*sim);
+    Entity d = spawnAt(*sim, "dummy", 2, 4, 4);
+    m.dealDamage(*sim, d, Fixed::fromInt(100), 0, kNullEntity, 1);
+    Fixed hp = sim->world().get<game::Unit>(d).hp;
+    CHECK(hp > Fixed::fromInt(922) && hp < Fixed::fromInt(925));            // 100 * (1 - 0.3 / 1.3) = 76.9 taken
+    const game::WeaponDef& wd = m.rules().types[size_t(m.rules().findType("spear"))].weapons[0];
+    m.dealDamage(*sim, d, Fixed::fromInt(10), 0, kNullEntity, 1, &wd);       // +15 vs cavalry
+    Fixed hp2 = sim->world().get<game::Unit>(d).hp;
+    CHECK(hp - hp2 > Fixed::fromInt(19) && hp - hp2 < Fixed::fromInt(20));   // 25 * 0.769
+    Entity s = spawnAt(*sim, "shielded", 2, 8, 8);
+    m.dealDamage(*sim, s, Fixed::fromInt(30), 0, kNullEntity, 1);
+    CHECK(sim->world().get<game::Unit>(s).hp == Fixed::fromInt(100));        // soaked by the shield
+    m.dealDamage(*sim, s, Fixed::fromInt(30), 0, kNullEntity, 1);
+    CHECK(sim->world().get<game::Unit>(s).hp < Fixed::fromInt(100));
+    run(*sim, 3);
+    CHECK(sim->world().get<game::Shield>(s).value == Fixed::fromInt(50));    // regenerated after the pause
+}
+
+TEST(orig_hero_skills_limit_free_first_and_revive) {
+    const char* rules = R"({"victory": "noStructures",
+      "resources": {"gold": {"start": 2000}},
+      "heroes": {"skills": true, "max": 2, "freeFirst": true, "tiers": ["hall", "keep"], "revive": {"costShare": 0.5, "perLevel": 0.1}},
+      "types": {
+        "hall": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "upgrades": ["keep"]},
+        "keep": {"structure": {"footprint": [2, 2]}, "health": {"max": 1200}, "cost": {"gold": 100, "time": 1}},
+        "altar": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "produces": ["bm", "fs"]},
+        "bm": {"hero": {"levels": [10, 20, 30]}, "move": {"speed": 2}, "health": {"max": 500}, "energy": {"max": 100, "start": 100},
+               "cost": {"gold": 400, "time": 1, "supply": 0},
+               "abilities": [{"id": "whirl", "target": "none", "cooldown": 1, "energy": 1, "effects": [{"type": "damage", "amount": 1, "radius": 1}]},
+                             {"id": "ult", "target": "none", "cooldown": 1, "energy": 1, "learnAt": [6], "effects": [{"type": "damage", "amount": 1, "radius": 1}]}]},
+        "fs": {"hero": {"levels": [10]}, "move": {"speed": 2}, "health": {"max": 400}, "cost": {"gold": 400, "time": 1}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(16, 16, R"(,"entities":[{"type":"hall","owner":1,"pos":[3,3]},{"type":"altar","owner":1,"pos":[8,3]},{"type":"hall","owner":2,"pos":[13,13]}])"));
+    auto& m = mod(*sim);
+    auto& eco = m.state(*sim).players[1];
+    Entity altar = findType(*sim, "altar", 1);
+    Command t; t.player = 1; t.type = game::kCmdTrain; t.units = {altar}; t.param = m.rules().findType("bm");
+    sim->submit(t);
+    run(*sim, 2);
+    Entity bm = findType(*sim, "bm", 1);
+    CHECK(bm.valid() && stockOf(*sim, 1, "gold") == Fixed::fromInt(2000));   // the first hero is free
+    CHECK(sim->world().get<game::Hero>(bm).points == 1);
+    CHECK(!m.canCast(*sim, bm, 0));                                          // not learned yet
+    CHECK(!m.canTrain(*sim, 1, uint16_t(m.rules().findType("fs"))));         // second hero needs the keep
+    Command l; l.player = 1; l.type = game::kCmdLearn; l.units = {bm}; l.param = 1;   // ultimate: level 6 only
+    sim->submit(l);
+    run(*sim, 0.2);
+    CHECK(sim->world().get<game::Hero>(bm).skill[1] == 0);
+    l.param = 0; sim->submit(l);
+    run(*sim, 0.2);
+    CHECK(sim->world().get<game::Hero>(bm).skill[0] == 1 && m.canCast(*sim, bm, 0));
+    m.addHeroXp(*sim, bm, Fixed::fromInt(25), 1);                            // level 3: two more points
+    CHECK(sim->world().get<game::Hero>(bm).points == 2);
+    sim->world().get<game::Unit>(bm).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(eco.deadHeroes.size() == 1 && eco.deadHeroes[0].level == 3);
+    auto cost = m.trainCost(*sim, 1, uint16_t(m.rules().findType("bm")));
+    CHECK(cost.size() == 1 && cost[0].value > Fixed::fromInt(279) && cost[0].value < Fixed::fromInt(281));   // 400 * (0.5 + 0.1 * 2)
+    sim->submit(t);
+    run(*sim, 2);
+    bm = findType(*sim, "bm", 1);
+    CHECK(bm.valid() && sim->world().get<game::Hero>(bm).level == 3 && sim->world().get<game::Hero>(bm).skill[0] == 1);
+    CHECK(stockOf(*sim, 1, "gold") > Fixed::fromInt(1719) && stockOf(*sim, 1, "gold") < Fixed::fromInt(1721));
+}
+
+TEST(orig_gatherer_limit_and_upkeep_per_resource) {
+    const char* rules = R"({"victory": "noStructures",
+      "resources": {"gold": {}, "wood": {}},
+      "upkeep": [{"supply": 2, "gatherMult": 0.5, "resources": ["gold"]}],
+      "types": {
+        "hall": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "dropoff": ["gold", "wood"], "supply": 10},
+        "mine": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 10000, "maxGatherers": 1}},
+        "peon": {"move": {"speed": 3, "radius": 0.3}, "health": {"max": 50}, "cost": {"supply": 1}, "gather": {"gold": {"carry": 10, "time": 2}}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(24, 12, R"(,"entities":[{"type":"hall","owner":1,"pos":[3,6]},{"type":"mine","owner":0,"pos":[8,6]},{"type":"hall","owner":2,"pos":[21,6]}])"));
+    auto& m = mod(*sim);
+    Entity a = spawnAt(*sim, "peon", 1, 6, 5), b = spawnAt(*sim, "peon", 1, 6, 7);
+    Entity mine = findType(*sim, "mine", 0);
+    Command g; g.player = 1; g.type = game::kCmdGather; g.units = {a, b}; g.target = mine;
+    sim->submit(g);
+    int maxAt = 0;
+    for (int i = 0; i < 20 * 20; ++i) { sim->step(); maxAt = std::max(maxAt, m.gatherersAt(*sim, mine)); }
+    CHECK(maxAt == 1);
+    CHECK(m.gatherMultFor(*sim, 1, m.rules().findResource("gold")) == Fixed::fromRatio(1, 2));   // 2 supply used
+    CHECK(m.gatherMultFor(*sim, 1, m.rules().findResource("wood")) == Fixed::fromInt(1));
+}
+
+TEST(orig_power_field_placement_and_switch_off) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "pylon": {"structure": {"footprint": [2, 2]}, "health": {"max": 200}, "powerField": {"radius": 6}},
+        "gate": {"structure": {"footprint": [2, 2], "needsField": 0}, "health": {"max": 500}, "produces": ["zealot"]},
+        "zealot": {"move": {"speed": 2}, "health": {"max": 100}, "cost": {"time": 1}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"pylon","owner":1,"pos":[5,8]},{"type":"gate","owner":1,"pos":[9,8]},{"type":"pylon","owner":2,"pos":[28,8]}])"));
+    auto& m = mod(*sim);
+    uint16_t gt = uint16_t(m.rules().findType("gate"));
+    CHECK(m.canPlace(*sim, 1, gt, {Fixed::fromInt(7), Fixed{}, Fixed::fromInt(12)}));
+    CHECK(!m.canPlace(*sim, 1, gt, {Fixed::fromInt(20), Fixed{}, Fixed::fromInt(8)}));
+    run(*sim, 0.2);
+    Entity gate = findType(*sim, "gate", 1);
+    CHECK(!(sim->world().get<game::Unit>(gate).flags & game::kUnitDisabled));
+    sim->world().get<game::Unit>(findType(*sim, "pylon", 1)).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(sim->world().get<game::Unit>(gate).flags & game::kUnitDisabled);
+}
+
+TEST(orig_crews_snipers_and_empty_vehicles) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "fort": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+        "jeep": {"move": {"speed": 0.1, "radius": 0.5}, "health": {"max": 200}, "crew": "robot"},
+        "sniper": {"move": {"speed": 2}, "health": {"max": 50}, "weapons": [{"range": 8, "damage": 1, "cooldown": 0.5, "killsCrew": 1}]},
+        "robot": {"move": {"speed": 3, "radius": 0.3}, "health": {"max": 70}, "crews": true}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"fort","owner":1,"pos":[2,2]},{"type":"fort","owner":2,"pos":[29,13]}])"));
+    auto& m = mod(*sim);
+    Entity jeep = spawnAt(*sim, "jeep", 2, 12, 8);
+    Entity sniper = spawnAt(*sim, "sniper", 1, 6, 8);
+    run(*sim, 1.5);
+    CHECK(sim->world().get<Owner>(jeep).player == 0);                     // driver shot, vehicle empty
+    sim->world().get<game::Unit>(sniper).hp = Fixed{};
+    Entity robot = spawnAt(*sim, "robot", 1, 9, 8);
+    Command c; c.player = 1; c.type = game::kCmdSmart; c.units = {robot}; c.target = jeep;
+    sim->submit(c);
+    run(*sim, 3);
+    CHECK(sim->world().get<Owner>(jeep).player == 1 && !sim->world().alive(robot));
+    (void)m;
+}
+
+TEST(orig_infection_and_death_payload) {
+    const char* rules = R"({"victory": "noStructures",
+      "types": {
+        "hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+        "walker": {"tags": ["infected"], "move": {"speed": 2, "radius": 0.3}, "health": {"max": 60}, "weapons": [{"range": 0.5, "damage": 100, "cooldown": 1}]},
+        "colonist": {"move": {"speed": 0.01, "radius": 0.3}, "health": {"max": 30}, "infect": {"by": ["infected"], "spawn": "walker", "count": 1}},
+        "bomb": {"health": {"max": 10}, "onDeath": [{"type": "damage", "amount": 500, "radius": 3, "affects": "any"}]}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[29,13]}])"));
+    spawnAt(*sim, "walker", 2, 10, 8);
+    spawnAt(*sim, "colonist", 1, 11, 8);
+    run(*sim, 2);
+    CHECK(countType(*sim, "colonist", 1) == 0 && countType(*sim, "walker", 2) == 2);   // the victim rose
+    Entity bomb = spawnAt(*sim, "bomb", 1, 20, 4);
+    Entity near = spawnAt(*sim, "colonist", 1, 21, 4);
+    sim->world().get<game::Unit>(bomb).hp = Fixed{};
+    run(*sim, 0.2);
+    CHECK(!sim->world().alive(near));
+}
+
+TEST(orig_garrison_upgrades_capture_level_keep_and_forges) {
+    const char* rules = R"({"victory": "noEntities",
+      "types": {
+        "shroom": {"move": {"speed": 3, "radius": 0.15}, "health": {"max": 1}, "entersGarrison": true},
+        "v1": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 1, "garrison": {"max": 20, "unit": "shroom", "interval": 100, "keep": 1}, "upgrades": ["v2"]},
+        "v2": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 2, "garrison": {"max": 30, "unit": "shroom", "interval": 100, "onCapture": "v1", "keep": 1},
+               "cost": {"garrison": 10, "time": 0.5}},
+        "forge": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "garrison": {"max": 10, "unit": "shroom"},
+                  "playerMods": {"max": 2, "mods": [{"type": "shroom", "stat": "damage", "mul": 1.5}]}}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(32, 16, R"(,"entities":[{"type":"v1","owner":1,"pos":[4,8],"garrison":15},{"type":"v2","owner":2,"pos":[20,8],"garrison":3},{"type":"forge","owner":1,"pos":[4,3]}])"));
+    auto& m = mod(*sim);
+    Entity a = findType(*sim, "v1", 1), b = findType(*sim, "v2", 2);
+    Command u; u.player = 1; u.type = game::kCmdUpgrade; u.units = {a}; u.param = m.rules().findType("v2");
+    sim->submit(u);
+    run(*sim, 1);
+    CHECK(sim->world().get<game::Unit>(a).type == m.rules().findType("v2") && sim->world().get<game::Garrison>(a).count == 5);
+    Command s; s.player = 1; s.type = game::kCmdSend; s.units = {a}; s.target = b; s.param = 100;
+    sim->submit(s);
+    run(*sim, 0.3);
+    CHECK(sim->world().get<game::Garrison>(a).count + sim->world().get<game::Garrison>(a).pendingOut >= 1);   // one stays home
+    CHECK(sim->world().get<game::Garrison>(a).count == 1);
+    run(*sim, 10);
+    // 4 shrooms at x1.5 attack vs 3 defenders: captured, and the level 2 building dropped to level 1
+    CHECK(sim->world().get<Owner>(b).player == 1 && sim->world().get<game::Unit>(b).type == m.rules().findType("v1"));
+}
+
+TEST(orig_faction_only_types) {
+    const char* rules = R"({"victory": "noStructures",
+      "factions": {"atreides": {"name": "A", "start": []}, "harkonnen": {"name": "H", "start": []}},
+      "types": {
+        "yard": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}, "produces": ["sonic", "devastator"]},
+        "sonic": {"move": {"speed": 2}, "health": {"max": 100}, "factions": ["atreides"]},
+        "devastator": {"move": {"speed": 2}, "health": {"max": 100}, "factions": ["harkonnen"]}
+      }})";
+    auto sim = makeSimJson(rules, flatMap(16, 16, R"(,"entities":[{"type":"yard","owner":1,"pos":[3,3]},{"type":"yard","owner":2,"pos":[12,12]}])",
+                                         R"([{"name":"A","team":1,"faction":"atreides"},{"name":"H","team":2,"faction":"harkonnen"}])"));
+    auto& m = mod(*sim);
+    CHECK(m.canTrain(*sim, 1, uint16_t(m.rules().findType("sonic"))) && !m.canTrain(*sim, 1, uint16_t(m.rules().findType("devastator"))));
+    CHECK(m.canTrain(*sim, 2, uint16_t(m.rules().findType("devastator"))) && !m.canTrain(*sim, 2, uint16_t(m.rules().findType("sonic"))));
+}
+
+TEST(sprite_shadow_lighting_sun_dir_and_softness) {
+    const game::Rules rules = game::loadRules(Json::parseFile(kSkirmish + "/rules.json"));
+    game::RtsLights L;
+    L.init(rules);
+    L.configure(Json::parse(R"({"sunDir": [-1.0, 1.2, 0.45], "shadowSoftness": 0.07})"), Json{}, Json{});
+    render::Lighting l;
+    L.updateSky(l, 0);   // time 0.5 = noon: the sun stands at the given azimuth
+    CHECK(l.sunDir.x < -0.5f && l.sunDir.z > 0.1f && l.sunDir.y > 0.5f);
+    CHECK(std::fabs(l.shadowSoftness - 0.07f) < 1e-4f);
+    L.configure(Json::parse("{}"), Json{}, Json{});   // another game: back to the renderer default
+    L.updateSky(l, 0);
+    CHECK(std::fabs(l.shadowSoftness - render::Lighting{}.shadowSoftness) < 1e-5f);
+}
 
 // ---------------- Planets: HPA* on cube-sphere bodies ----------------
 namespace {
@@ -6805,6 +8923,114 @@ TEST(flow_field_group_reaches_goal_deterministic) {
     std::printf("  flow group: arrived %d (fields) %d (per-unit)\n", a1, a0);
     CHECK(h1 == h2 && a1 == a2);
     CHECK(a1 >= 54);
+}
+
+TEST(pack_file_copy_into_existing) {
+    // fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists;
+    // rtsbuild re-stages into the same folders, the editor copies a template over dst/maps.
+    namespace fs = std::filesystem;
+    fs::path dir = fs::temp_directory_path() / "rts_filecopy_test";
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+    fs::create_directories(dir / "src" / "maps" / "sub");
+    std::ofstream(dir / "src" / "a.txt") << "new";
+    std::ofstream(dir / "src" / "maps" / "sub" / "b.txt") << "b";
+    fs::create_directories(dir / "dst" / "maps");
+    std::ofstream(dir / "dst" / "a.txt") << "old-and-longer";
+    CHECK(rts::pack::copyTree(dir / "src", dir / "dst", ec));
+    CHECK(rts::pack::copyTree(dir / "src", dir / "dst", ec));   // twice: every file exists now
+    std::ifstream a(dir / "dst" / "a.txt");
+    std::string av((std::istreambuf_iterator<char>(a)), {});
+    a.close();
+    CHECK(av == "new" && fs::exists(dir / "dst" / "maps" / "sub" / "b.txt"));
+    CHECK(rts::pack::copyFileReplace(dir / "src" / "a.txt", dir / "dst" / "maps" / "a2.txt", ec));
+    CHECK(rts::pack::copyFileReplace(dir / "src" / "a.txt", dir / "dst" / "maps" / "a2.txt", ec));
+    CHECK(!rts::pack::copyFileReplace(dir / "src" / "a.txt", dir / "src" / "." / "a.txt", ec));   // never onto itself
+    CHECK(fs::file_size(dir / "src" / "a.txt", ec) == 3);
+    fs::remove_all(dir, ec);
+}
+
+// ---- agent-mech-tools: JsonAccessLog (rules_lint / rules_schema) and kEvTriggerFired (scenario_run trigger log)
+
+
+#include "tests_mech.inc"   // agent-mech
+
+
+TEST(gen_planet_world_players) {
+    // a whole planet map from a planet preset: players, kit, objects, moons, engine-path fairness, determinism
+    const std::string rules = R"({"victory": "keyUnits", "terrain": {"model": "heightfield", "maxSlope": {"ground": 0.8}},
+      "resources": {"metal": {"start": 500}},
+      "types": {"boss": {"key": true, "move": {"speed": 2, "radius": 0.5}, "builds": ["lab"], "weapons": [{"range": 2, "damage": 5, "cooldown": 1}]},
+                "lab": {"structure": {"footprint": [3, 3]}, "produces": ["ship"]},
+                "ship": {"move": {"speed": 3, "radius": 0.5, "layer": "orbit"}},
+                "spot": {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+                "drill": {"structure": {"footprint": [2, 2], "on": "spot"}, "income": {"metal": 2}},
+                "rock": {"structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "metal", "amount": 100}}}})";
+    Json rj = Json::parse(rules);
+    game::Rules R = game::loadRules(rj);
+    auto make = [&](int players, uint64_t seed, const std::string& layout, Json& out) {
+        gen::GenRequest req;
+        req.preset = "rocky"; req.seed = seed; req.players = players;
+        req.params = Json::object();
+        req.params.set("layout", Json::string(layout));
+        out = Json::parse(R"({"name": "w", "players": []})");
+        std::string err;
+        const bool ok = gen::generateMap(req, R, rj, out, &err);
+        if (!ok) std::printf("  planet gen error: %s\n", err.c_str());
+        return ok;
+    };
+    for (int np : {2, 3, 4}) {
+        Json m;
+        CHECK(make(np, 5, "shared", m));
+        const Json& g = m["generated"];
+        CHECK(g.getBool("connected"));
+        CHECK(int(m["players"].size()) == np);
+        int own[9] = {}, moon = 0;
+        for (auto& e : m["entities"].items()) {
+            const int o = int(e.getInt("owner"));
+            if (o >= 1 && o <= 8) own[o]++;
+            if (e["at"].getStr("body") == "luna") moon++;
+            CHECK(e["at"].isObject());
+        }
+        for (int p = 2; p <= np; ++p) CHECK(own[p] == own[1]);
+        CHECK(own[1] >= 1 && moon > 0);
+        const Json& nr = g["nearResources"];
+        for (size_t p = 1; p < nr.size(); ++p) CHECK(nr[p].integer() == nr[size_t(0)].integer());
+        if (np == 2 || np == 4) CHECK(g.getInt("pathSpread", 99) <= 2);     // exact quarter / half turn symmetry
+        else CHECK(g.getInt("pathSpread", 999) <= 150);
+        // the generated map loads and plays deterministically
+        auto run = [&]() {
+            SimConfig cfg; cfg.seed = 3;
+            Simulation sim(cfg, std::make_unique<game::RtsModule>());
+            sim.setup(rj, m);
+            for (int i = 0; i < 60; ++i) sim.step();
+            return sim.checksum();
+        };
+        CHECK(run() == run());
+        if (np == 2) {
+            std::printf("  planet world 2p %016llx\n", (unsigned long long)gen::mapHash(m));
+            CHECK(gen::mapHash(m) == GEN_GOLD_PLANET_WORLD);
+        }
+    }
+    Json a, b;
+    CHECK(make(3, 9, "separate", a) && make(3, 9, "separate", b));
+    CHECK(gen::mapHash(a) == gen::mapHash(b));
+    CHECK(a["world"]["bodies"].size() >= 4);                      // star + 3 worlds (+ moon)
+    CHECK(a["generated"]["nearResources"][size_t(0)].integer() == a["generated"]["nearResources"][size_t(2)].integer());
+    // match-time: "generate" with a planet preset regenerates from the match seed
+    Json mm = Json::parse(R"({"name": "m", "players": [{}, {}], "generate": {"preset": "moon", "seed": "match", "players": 2}})");
+    CHECK(gen::prepareGenerate(mm, [](const std::string&, std::string&) { return false; }, nullptr));
+    auto runMatch = [&](uint64_t seed) {
+        SimConfig cfg; cfg.seed = seed;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rj, mm);
+        auto* mod = dynamic_cast<game::RtsModule*>(&sim.module());
+        CHECK(mod->surface(sim) != nullptr && mod->generatedMap() != nullptr);
+        for (int i = 0; i < 40; ++i) sim.step();
+        return sim.checksum();
+    };
+    CHECK(runMatch(4) == runMatch(4));
+    CHECK(runMatch(4) != runMatch(5));
 }
 
 int main() {

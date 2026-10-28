@@ -178,6 +178,7 @@ struct MapGrid {
     Vec3 cellCenter(int x, int y) const { if (surf) return surf->cellCenter(index(x, y)); return {Fixed::fromInt(x) + Fixed::fromRatio(1, 2), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}; }
     void block(int x0, int y0, int fw, int fh, int delta);
     void cellChanged(int x, int y);  // terrain of a cell changed at runtime (digging): refresh derived pathing data
+    void invalidatePathing() { clearanceDirty = true; for (auto& G : hpa_) { std::fill(G.dirty.begin(), G.dirty.end(), uint8_t(1)); G.anyDirty = true; } }   // after loading a save
     bool areaBuildable(int x0, int y0, int fw, int fh) const;  // ground, no-build-free, unblocked, flat
     // clearance: cells needed around the path for a body of that size (0 = any walkable cell); narrower
     // cells cost more instead of being forbidden. soft: also route around cells marked in `soft`.

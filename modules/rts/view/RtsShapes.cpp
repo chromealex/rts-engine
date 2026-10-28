@@ -45,6 +45,14 @@ void RtsView::buildShapes(gfx::Device& dev) {
     add("mushroom", "stem", false, [&](MeshBuilder& b) { b.color(cream).cylinder({0, 0, 0}, 0.14f, 0.35f, 8, true, 0.11f); });
     add("mushroom", "cap", true, [&](MeshBuilder& b) { b.transform(mat4::translate({0, 0.36f, 0}) * mat4::scale({1, 0.6f, 1})).sphere({0, 0, 0}, 0.24f, 5, 10); });
     add("generic", "body", true, [&](MeshBuilder& b) { b.cylinder({0, 0, 0}, 0.3f, 0.7f, 10); });
+    // sandworm: a segmented back breaking the sand and a raised maw (Dune)
+    add("worm", "body", false, [&](MeshBuilder& b) {
+        const uint32_t sandSkin = rgba(196, 150, 96), maw = rgba(90, 40, 36);
+        for (int k = 0; k < 6; ++k) b.color(k % 2 ? sandSkin : rgba(176, 132, 84)).sphere({-0.85f + 0.3f * k, 0.12f + 0.03f * k, 0}, 0.2f + 0.02f * k, 6, 10);
+        b.color(sandSkin).cylinder({0.95f, 0.1f, 0}, 0.32f, 0.55f, 12, true, 0.36f);
+        b.color(maw).cylinder({0.95f, 0.64f, 0}, 0.26f, 0.04f, 12);
+        b.color(cream).cone({0.95f, 0.66f, 0.18f}, 0.04f, 0.14f, 5).cone({0.95f, 0.66f, -0.18f}, 0.04f, 0.14f, 5)
+                      .cone({1.13f, 0.66f, 0}, 0.04f, 0.14f, 5).cone({0.77f, 0.66f, 0}, 0.04f, 0.14f, 5); });
 
     // ---- structures (sized to a 1x1 footprint; scaled by the footprint at draw time)
     add("hall", "base", false, [&](MeshBuilder& b) { b.color(stone).box({0, 0.35f, 0}, {0.9f, 0.7f, 0.9f}); b.color(wood).box({0.46f, 0.18f, 0}, {0.04f, 0.35f, 0.2f}); });

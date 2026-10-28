@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Age of Empires II: four resources, villagers, research and rock-paper-scissors units.",
+  "howto.like": "Age of Empires II: four ages, villagers, farms and the blacksmith.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "When the berries run out, build farms around a mill — endless food.",
-  "howto.step1": "Villagers gather food (berries, farms), wood (oaks), gold and stone.",
-  "howto.step2": "Put a mill, lumber camp and mining camp next to resources — shorter trips, faster income. Houses raise population.",
-  "howto.step3": "The town center trains villagers and shoots at raiders.",
-  "howto.step4": "Barracks: militia, spearmen, ram; archery range: archers; stable: knights. Blacksmith and range research upgrades.",
-  "howto.step5": "Spearmen beat knights, knights beat archers, archers beat infantry; rams break buildings."
+  "howto.tip": "Spearmen kill knights cheaply, skirmishers kill archers: keep a mixed army.",
+  "howto.step1": "Villagers gather berries, wood, gold and stone, 10 a trip, and drop them at the town centre, mill or camps.",
+  "howto.step2": "A farm holds 175 food and runs out — build new ones.",
+  "howto.step3": "The next age is researched at the town centre once two different buildings of the current age stand.",
+  "howto.step4": "Two armors — melee and pierce; bonuses vs classes add to the attack."
 }

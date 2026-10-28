@@ -146,8 +146,12 @@ private:
             "KHR_materials_pbrSpecularGlossiness", "KHR_materials_variants"};
         for (const auto& e : doc_["extensionsRequired"].items())
             if (!supported.count(e.str())) fail("required extension " + e.str() + " is not supported (re-export without it)");
+        // optional refinements that don't change how a model reads in an RTS view (assimp's exporter
+        // writes the first three for every material): ignored without a warning
+        static const std::set<std::string> quiet = {"KHR_materials_specular", "KHR_materials_ior", "FB_ngon_encoding",
+                                                    "KHR_materials_volume", "KHR_materials_sheen", "KHR_materials_clearcoat"};
         for (const auto& e : doc_["extensionsUsed"].items())
-            if (!supported.count(e.str())) warn("extension " + e.str() + " is ignored");
+            if (!supported.count(e.str()) && !quiet.count(e.str())) warn("extension " + e.str() + " is ignored");
     }
 
     void loadBuffers() {
