@@ -2,8 +2,10 @@
 // (A* on 8-connected cells with level/ramp rules), road graph, spatial hash. Integer/fixed only.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
+#include "../../engine/data/Json.h"
 #include "../../engine/core/ECS.h"
 #include "../../engine/core/Fixed.h"
 
@@ -23,6 +25,16 @@ enum CellFlags : uint8_t {
 //   '/' ramp     'R' rock (ground, buildable when rules require rock)   '+' road (ground)
 uint8_t cellFlagsFromChar(char c);
 
+constexpr int kMaxMapSize = 2048;   // cells per side
+
+// Heightfield corners of big maps live in a raw file: terrain.cornersFile = "maps/<name>.r16", (w+1)*(h+1)
+// int16 little-endian, row-major. Loaders read it with applyCornersFile (applyTilesToMap does it too), which
+// attaches the bytes to the map JSON as terrain.cornersBlob (in memory only; never written to disk).
+using ContentReader = std::function<bool(const std::string&, std::string&)>;
+bool applyCornersFile(Json& map, const ContentReader& read, std::string* err);
+std::string encodeCorners(const std::vector<int16_t>& corners);  // raw int16 LE bytes
+bool decodeCorners(const Json& terrain, int w, int h, std::vector<int16_t>& out, std::string* err);
+
 struct MapGrid {
     int w = 0, h = 0;
     std::vector<uint8_t> flags;
@@ -34,6 +46,21 @@ struct MapGrid {
     std::vector<int16_t> corner;
     bool hasCorners() const { return !corner.empty(); }
     int cornerIndex(int x, int y) const { return y * (w + 1) + x; }
+    // Heightfield simulation (rules terrain.model "heightfield" + corners): set by enableHeightfield().
+    // Heights are corner / 16 world units. slope: per cell steepness (rise per cell, 1/256 units, derived).
+    bool hf = false;
+    std::vector<uint16_t> slope;
+    uint16_t slopeLimit[16] = {};   // [0]: ground default, [k]: slope class k (layer bits 4..7)
+    uint16_t sandLimit = 0, buildLimit = 0;
+    static uint16_t slopeUnits(Fixed risePerCell);  // Fixed -> 1/256 units, saturating
+    void enableHeightfield(Fixed levelHeight);      // derives slope + cliff levels (floor(h / levelHeight))
+    Fixed surfaceHeight(Fixed x, Fixed z) const;    // bilinear on corners (0 without corners)
+    Fixed cellHeight(int x, int y) const;           // centre of the cell: mean of its 4 corners
+    Vec3 gradient(Fixed x, Fixed z) const;          // dh/dx, 0, dh/dz of the cell under (x, z)
+    uint16_t slopeLimitFor(uint8_t layer) const {
+        const int cls = layer >> 4;
+        return cls ? slopeLimit[cls] : (layer & 8) ? sandLimit : slopeLimit[0];
+    }
     std::vector<uint16_t> blocked;  // structures covering the cell
     std::vector<uint8_t> creep;     // >0: creep present
     std::vector<int16_t> fieldRes;  // resource id of the field in this cell, -1 none

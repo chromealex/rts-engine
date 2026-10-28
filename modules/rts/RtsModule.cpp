@@ -51,7 +51,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     MapGrid& g = gs.grid;
 
     int mw = int(map["size"][0].integer(64)), mh = int(map["size"][1].integer(64));
-    if (mw < 4 || mh < 4 || mw > 1024 || mh > 1024) throw std::runtime_error("map: size must be 4..1024");
+    if (mw < 4 || mh < 4 || mw > kMaxMapSize || mh > kMaxMapSize) throw std::runtime_error("map: size must be 4.." + std::to_string(kMaxMapSize));
     g.init(mw, mh);
     const Json& terrain = map["terrain"];
     const Json& rows = terrain["rows"];
@@ -85,6 +85,18 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     if (corners.size() > 0) {
         g.corner.assign(size_t((mw + 1) * (mh + 1)), 0);
         for (size_t i = 0; i < corners.size() && i < g.corner.size(); ++i) g.corner[i] = int16_t(corners[i].integer());
+    } else if (terrain.has("cornersFile")) { // big maps: raw int16 LE file, attached by applyCornersFile()
+        std::string err;
+        if (!decodeCorners(terrain, mw, mh, g.corner, &err)) throw std::runtime_error(err);
+    }
+    if (rules_.terrain.model == TerrainModel::Flat) std::fill(g.level.begin(), g.level.end(), int8_t(0));
+    if (rules_.terrain.heightfield() && g.hasCorners()) {
+        const TerrainRules& tr = rules_.terrain;
+        g.slopeLimit[0] = MapGrid::slopeUnits(tr.maxSlopeGround);
+        g.sandLimit = MapGrid::slopeUnits(tr.maxSlopeSand.raw < 0 ? tr.maxSlopeGround : tr.maxSlopeSand);
+        g.buildLimit = MapGrid::slopeUnits(tr.buildSlope);
+        for (size_t k = 0; k < tr.slopeClasses.size() && k < 15; ++k) g.slopeLimit[k + 1] = MapGrid::slopeUnits(tr.slopeClasses[k]);
+        g.enableHeightfield(rules_.levelHeight);
     }
 
     // resource fields
@@ -324,6 +336,7 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
         w.add<Footprint>(e, Footprint{x0, y0, t.footprintW, t.footprintH});
         gs.grid.block(x0, y0, t.footprintW, t.footprintH, +1);
     }
+    if (gs.grid.hf) pos.y = gs.grid.surfaceHeight(pos.x, pos.z);
     w.add<Transform>(e, Transform{pos, pos, Fixed{}});
     w.add<Owner>(e, Owner{owner});
     Unit u;
@@ -524,6 +537,26 @@ int RtsModule::membersAlive(Simulation& sim, Entity e) const {
 int RtsModule::levelAt(Simulation& sim, Vec3 p) const {
     auto* gs = sim.world().resource<GameState>();
     return gs->grid.levelAt(gs->grid.cellX(p.x), gs->grid.cellY(p.z));
+}
+
+Fixed RtsModule::groundHeight(Simulation& sim, Vec3 p) const {
+    const MapGrid& g = sim.world().resource<GameState>()->grid;
+    return g.hf ? g.surfaceHeight(p.x, p.z) : Fixed{};
+}
+
+Fixed RtsModule::heightAdvantage(Simulation& sim, Vec3 a, Vec3 b) const {
+    const MapGrid& g = sim.world().resource<GameState>()->grid;
+    if (!g.hf || rules_.levelHeight.raw <= 0) return Fixed::fromInt(levelAt(sim, a) - levelAt(sim, b));
+    return (g.surfaceHeight(a.x, a.z) - g.surfaceHeight(b.x, b.z)) / rules_.levelHeight;
+}
+
+Fixed RtsModule::slopeSpeed(Simulation& sim, Vec3 p, Vec2 dir) const {
+    const MapGrid& g = sim.world().resource<GameState>()->grid;
+    if (!g.hf) return kOne;
+    Vec3 gr = g.gradient(p.x, p.z);
+    Fixed climb = gr.x * dir.x + gr.z * dir.y;   // rise per cell along the move
+    Fixed f = climb.raw > 0 ? kOne - rules_.terrain.uphillSpeed * climb : kOne - rules_.terrain.downhillSpeed * climb;
+    return fxClamp(f, Fixed::fromRatio(1, 4), Fixed::fromInt(2));
 }
 
 int RtsModule::regionAt(Simulation& sim, Vec3 p) const {
@@ -1137,6 +1170,10 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
+        h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
+        for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);
+    }
     for (size_t i = 0; i < gs.grid.fieldAmt.size(); i += 7) h.fx(gs.grid.fieldAmt[i]);
     h.u32(uint32_t(w.count<Unit>()));
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
