@@ -217,7 +217,10 @@ EffectDef EffectParser::effect(const std::string& where, const Json& ej) {
     for (auto& [n, kk] : kinds) if (k == n) { e.kind = kk; known = true; }
     if (!known) fail(where, "unknown effect type '" + k + "'");
     const std::string w = where + " effect '" + k + "'";
-    if (const Json& a = ej["amount"]; a.isArray()) { e.amount = a[0].fx(); e.amountMax = a[1].fx(); }
+    if (const Json& a = ej["amount"]; a.isArray()) {
+        e.amount = a[0].fx(); e.amountMax = a[1].fx(); e.randomAmount = true;
+        if (e.amountMax < e.amount) fail(w, "amount range must be [min, max]");
+    }
     else e.amount = ej.getFx("amount");
     e.percent = ej.getFx("percent");
     e.radius = ej.getFx("radius");

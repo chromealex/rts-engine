@@ -655,7 +655,7 @@ Rules loadRules(const Json& j) {
     if (r.statuses.size() > 60000) fail("statuses", "too many statuses");
     // anything beyond the original instant effects switches the effect engine on (old games stay bit-identical)
     bool adv = r.userStatuses > 0 || r.loadoutSlots > 0;
-    for (auto& pl : r.payloads) for (auto& e : pl) if (e.kind > EffectKind::Blink || e.chance < Fixed::fromInt(1) || e.amountMax.raw > 0 || e.limit > 0 || e.filter.explicitShape) adv = true;
+    for (auto& pl : r.payloads) for (auto& e : pl) if (e.kind > EffectKind::Blink || e.chance < Fixed::fromInt(1) || e.randomAmount || e.limit > 0 || e.filter.explicitShape) adv = true;
     for (auto& rs : r.resources) if (rs.regen.raw != 0) adv = true;
     for (auto& t : r.types) {
         if (!t.statuses.empty() || t.blocksLanes || t.level != 1) adv = true;

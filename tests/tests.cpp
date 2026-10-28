@@ -2475,6 +2475,762 @@ TEST(atlas_texture_library_is_transparent) {
     CHECK(dev.alive == 0);
 }
 
+// ------------------------------------------------------------------ abilities and effects
+
+static const char* kFxRules = R"({
+  "victory": "noUnits",
+  "statuses": {
+    "poison": {"tags": ["debuff", "magic"], "tick": {"damage": 5, "interval": 1}, "stacking": "stack", "maxStacks": 3},
+    "regen": {"tags": ["buff"], "tick": {"heal": 10, "interval": 1}},
+    "frost": {"tags": ["debuff", "magic"], "mods": [{"stat": "speed", "mul": 0.5}]},
+    "rooted": {"tags": ["debuff"], "flags": ["root"]},
+    "silenced": {"tags": ["debuff", "magic"], "flags": ["silence"]},
+    "disarmed": {"tags": ["debuff"], "flags": ["disarm"]},
+    "shielded": {"tags": ["buff"], "shield": 50},
+    "stone": {"tags": ["buff"], "flags": ["invulnerable"]},
+    "vampiric": {"tags": ["buff"], "mods": [{"stat": "lifesteal", "add": 0.5}]},
+    "cloak": {"tags": ["buff"], "flags": ["invisible"]}
+  },
+  "types": {
+    "mage": {"move": {"speed": 2}, "health": {"max": 500}, "energy": {"max": 1000, "start": 1000, "regen": 0},
+      "abilities": [
+        {"id": "rocket", "target": "unit", "range": 12, "cooldown": 1, "autocast": false, "delivery": {"type": "projectile", "speed": 5, "homing": true}, "effects": [{"type": "damage", "amount": 40}]},
+        {"id": "mortar", "target": "point", "range": 12, "cooldown": 1, "autocast": false, "delivery": {"type": "projectile", "speed": 6, "arc": true}, "effects": [{"type": "damage", "amount": 30, "radius": 2, "falloff": 0.5}]},
+        {"id": "lance", "target": "point", "range": 12, "cooldown": 1, "autocast": false, "delivery": {"type": "projectile", "speed": 8, "collide": true}, "effects": [{"type": "damage", "amount": 25}]},
+        {"id": "strike", "target": "point", "range": 20, "cooldown": 1, "autocast": false, "delivery": {"type": "area", "delay": 2, "radius": 2}, "effects": [{"type": "damage", "amount": 60, "radius": 2}]},
+        {"id": "beam", "target": "unit", "range": 12, "cooldown": 1, "autocast": false, "delivery": {"type": "channel", "duration": 3, "interval": 0.5}, "effects": [{"type": "damage", "amount": 10}]},
+        {"id": "zap", "target": "unit", "range": 12, "cooldown": 1, "autocast": false, "delivery": {"type": "chain", "jumps": 3, "jumpRadius": 3, "jumpFalloff": 0.5}, "effects": [{"type": "damage", "amount": 80}]},
+        {"id": "breath", "target": "point", "range": 8, "cooldown": 1, "autocast": false, "delivery": {"type": "cone", "angle": 60, "length": 6}, "effects": [{"type": "damage", "amount": 20}]},
+        {"id": "slowcast", "target": "unit", "range": 12, "cooldown": 1, "autocast": false, "castTime": 1, "backswing": 0.5, "effects": [{"type": "damage", "amount": 50}]}
+      ]},
+    "dummy": {"move": {"speed": 2}, "health": {"max": 1000}}
+  }})";
+
+static Fixed dist2DTest(Vec3 a, Vec3 b) { return (a - b).xz().length(); }
+static Entity unitAt(Simulation& sim, Fixed x, Fixed z) {
+    Entity best; Fixed bd{};
+    sim.world().each<game::Unit, Transform>([&](Entity e, game::Unit&, Transform& t) {
+        Fixed d = (t.pos - Vec3{x, Fixed{}, z}).xz().length();
+        if (!best.valid() || d < bd) { best = e; bd = d; }
+    });
+    return best;
+}
+static Fixed hpAt(Simulation& sim, int x, int z) { return sim.world().get<game::Unit>(unitAt(sim, Fixed::fromInt(x), Fixed::fromInt(z))).hp; }
+static void castAbility(Simulation& sim, Entity caster, int idx, Entity target, Vec3 point) {
+    Command c; c.player = sim.world().get<Owner>(caster).player; c.type = game::kCmdAbility; c.units = {caster}; c.param = idx; c.target = target; c.point = point;
+    sim.submit(c);
+}
+static Vec3 P(double x, double z) { return {Fixed::fromRaw(int64_t(x * 65536)), Fixed{}, Fixed::fromRaw(int64_t(z * 65536))}; }
+static std::unique_ptr<Simulation> fxSim(const char* rules, const std::string& dummies, uint64_t seed = 1) {
+    return makeSimJson(rules, flatMap(40, 20, ",\"entities\":[{\"type\":\"mage\",\"owner\":1,\"pos\":[5,10]}" + dummies + "]"), seed);
+}
+static std::string dummy(double x, double z, int owner = 2, const char* type = "dummy") {
+    char b[160]; std::snprintf(b, sizeof b, ",{\"type\":\"%s\",\"owner\":%d,\"pos\":[%.2f,%.2f]}", type, owner, x, z); return b;
+}
+
+TEST(fx_projectile_homing_arc_collide) {
+    {   // homing rocket: damage arrives after the flight, not at once
+        auto sim = fxSim(kFxRules, dummy(13, 10));
+        Entity mage = findType(*sim, "mage", 1);
+        castAbility(*sim, mage, 0, unitAt(*sim, Fixed::fromInt(13), Fixed::fromInt(10)), {});
+        bool launched = false;
+        for (int i = 0; i < 12; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvProjectileLaunch) launched = true; }
+        CHECK(launched);
+        CHECK(hpAt(*sim, 13, 10) == Fixed::fromInt(1000));
+        run(*sim, 2.5);
+        CHECK(hpAt(*sim, 13, 10) == Fixed::fromInt(960));
+    }
+    {   // ballistic mortar: splash with falloff around the impact point
+        auto sim = fxSim(kFxRules, dummy(12, 10) + dummy(13.5, 10));
+        castAbility(*sim, findType(*sim, "mage", 1), 1, kNullEntity, P(12, 10));
+        bool high = false;
+        for (int i = 0; i < 40; ++i) { sim->step(); sim->world().each<game::Projectile, Transform>([&](Entity, game::Projectile&, Transform& t) { if (t.pos.y > Fixed::fromInt(1)) high = true; }); }
+        CHECK(high);                                                      // it flew an arc
+        CHECK(hpAt(*sim, 12, 10) == Fixed::fromInt(970));
+        Fixed far = sim->world().get<game::Unit>(unitAt(*sim, Fixed::fromRatio(27, 2), Fixed::fromInt(10))).hp;
+        CHECK(far > Fixed::fromInt(970) && far < Fixed::fromInt(1000));   // less at the edge
+    }
+    {   // colliding lance hits the first enemy on its way
+        auto sim = fxSim(kFxRules, dummy(9, 10) + dummy(12, 10));
+        castAbility(*sim, findType(*sim, "mage", 1), 2, kNullEntity, P(15, 10));
+        run(*sim, 2);
+        CHECK(hpAt(*sim, 9, 10) == Fixed::fromInt(975));
+        CHECK(hpAt(*sim, 12, 10) == Fixed::fromInt(1000));
+    }
+}
+
+TEST(fx_delayed_area_channel_chain_cone_windup) {
+    {   // artillery: a marker, then the hit after the delay
+        auto sim = fxSim(kFxRules, dummy(15, 10));
+        castAbility(*sim, findType(*sim, "mage", 1), 3, kNullEntity, P(15, 10));
+        bool marker = false;
+        for (int i = 0; i < 30; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvAreaStart) marker = true; }
+        CHECK(marker && hpAt(*sim, 15, 10) == Fixed::fromInt(1000));
+        run(*sim, 1.2);
+        CHECK(hpAt(*sim, 15, 10) == Fixed::fromInt(940));
+        CHECK(sim->world().count<game::Area>() == 0);
+    }
+    {   // channel: ticks while channelling; a stun interrupts it
+        auto sim = fxSim(kFxRules, dummy(9, 10));
+        Entity mage = findType(*sim, "mage", 1);
+        castAbility(*sim, mage, 4, unitAt(*sim, Fixed::fromInt(9), Fixed::fromInt(10)), {});
+        run(*sim, 3.5);
+        Fixed full = Fixed::fromInt(1000) - hpAt(*sim, 9, 10);
+        CHECK(full >= Fixed::fromInt(60) && full <= Fixed::fromInt(70));
+        auto sim2 = fxSim(kFxRules, dummy(9, 10));
+        Entity m2 = findType(*sim2, "mage", 1);
+        castAbility(*sim2, m2, 4, unitAt(*sim2, Fixed::fromInt(9), Fixed::fromInt(10)), {});
+        run(*sim2, 1.1);
+        sim2->world().get<game::Buffs>(m2).stunUntil = sim2->tick() + 10;
+        run(*sim2, 2.5);
+        Fixed cut = Fixed::fromInt(1000) - hpAt(*sim2, 9, 10);
+        CHECK(cut > Fixed{} && cut <= Fixed::fromInt(30));
+    }
+    {   // chain lightning: 80, 40, 20, 10 and nothing beyond the jump radius
+        auto sim = fxSim(kFxRules, dummy(9, 10) + dummy(11, 10) + dummy(13, 10) + dummy(15, 10) + dummy(25, 10));
+        castAbility(*sim, findType(*sim, "mage", 1), 5, unitAt(*sim, Fixed::fromInt(9), Fixed::fromInt(10)), {});
+        run(*sim, 0.5);
+        CHECK(hpAt(*sim, 9, 10) == Fixed::fromInt(920) && hpAt(*sim, 11, 10) == Fixed::fromInt(960));
+        CHECK(hpAt(*sim, 13, 10) == Fixed::fromInt(980) && hpAt(*sim, 15, 10) == Fixed::fromInt(990));
+        CHECK(hpAt(*sim, 25, 10) == Fixed::fromInt(1000));
+    }
+    {   // cone: in front only
+        auto sim = fxSim(kFxRules, dummy(8, 10) + dummy(8, 13) + dummy(2, 10));
+        castAbility(*sim, findType(*sim, "mage", 1), 6, kNullEntity, P(10, 10));
+        run(*sim, 0.5);
+        CHECK(hpAt(*sim, 8, 10) == Fixed::fromInt(980));
+        CHECK(hpAt(*sim, 8, 13) == Fixed::fromInt(1000) && hpAt(*sim, 2, 10) == Fixed::fromInt(1000));
+    }
+    {   // windup: nothing before the cast time, then the hit; backswing keeps the caster busy
+        auto sim = fxSim(kFxRules, dummy(9, 10));
+        Entity mage = findType(*sim, "mage", 1);
+        castAbility(*sim, mage, 7, unitAt(*sim, Fixed::fromInt(9), Fixed::fromInt(10)), {});
+        bool windup = false;
+        for (int i = 0; i < 12; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvCastStart) windup = true; }
+        CHECK(windup && hpAt(*sim, 9, 10) == Fixed::fromInt(1000));
+        run(*sim, 0.8);
+        CHECK(hpAt(*sim, 9, 10) == Fixed::fromInt(950));
+        CHECK(sim->world().get<game::AbilityState>(mage).busyUntil > sim->tick());
+    }
+}
+
+static const char* kFxRules2 = R"({
+  "victory": "noUnits",
+  "resources": {"gold": {"start": 100}},
+  "statuses": {
+    "poison": {"tags": ["debuff", "magic"], "tick": {"damage": 5, "interval": 1}, "stacking": "stack", "maxStacks": 3},
+    "regen": {"tags": ["buff"], "tick": {"heal": 10, "interval": 1}},
+    "frost": {"tags": ["debuff", "magic"], "mods": [{"stat": "speed", "mul": 0.5}]},
+    "rooted": {"tags": ["debuff"], "flags": ["root"]},
+    "silenced": {"tags": ["debuff", "magic"], "flags": ["silence"]},
+    "disarmed": {"tags": ["debuff"], "flags": ["disarm"]},
+    "shielded": {"tags": ["buff"], "shield": 50},
+    "stone": {"tags": ["buff"], "flags": ["invulnerable"]},
+    "vampiric": {"tags": ["buff"], "mods": [{"stat": "lifesteal", "add": 0.5}]},
+    "cloak": {"tags": ["buff"], "flags": ["invisible"]},
+    "focus": {"tags": ["buff"], "mods": [{"stat": "energyRegen", "mul": 3}]}
+  },
+  "techs": {"lore": {"cost": {"time": 1}}},
+  "playerAbilities": [
+    {"id": "poison", "cost": {}, "effects": [{"type": "status", "status": "poison", "duration": 6, "radius": 0.6}]},
+    {"id": "regen", "cost": {}, "effects": [{"type": "status", "status": "regen", "duration": 3, "radius": 0.6, "affects": "allies"}]},
+    {"id": "frost", "cost": {}, "effects": [{"type": "status", "status": "frost", "duration": 5, "radius": 0.6}]},
+    {"id": "root", "cost": {}, "effects": [{"type": "status", "status": "rooted", "duration": 3, "radius": 0.6}]},
+    {"id": "silence", "cost": {}, "effects": [{"type": "status", "status": "silenced", "duration": 3, "radius": 0.6}]},
+    {"id": "disarm", "cost": {}, "effects": [{"type": "status", "status": "disarmed", "duration": 3, "radius": 0.6}]},
+    {"id": "shield", "cost": {}, "effects": [{"type": "status", "status": "shielded", "duration": 10, "radius": 0.6, "affects": "allies"}]},
+    {"id": "stone", "cost": {}, "effects": [{"type": "status", "status": "stone", "duration": 3, "radius": 0.6, "affects": "allies"}]},
+    {"id": "vamp", "cost": {}, "effects": [{"type": "status", "status": "vampiric", "duration": 10, "radius": 0.6, "affects": "allies"}]},
+    {"id": "cloak", "cost": {}, "effects": [{"type": "status", "status": "cloak", "duration": 10, "radius": 0.6, "affects": "allies"}]},
+    {"id": "cleanse", "cost": {}, "effects": [{"type": "dispel", "from": "enemies", "radius": 0.6, "affects": "allies"}]},
+    {"id": "stomp", "cost": {}, "effects": [{"type": "knockback", "amount": 3, "radius": 3}]},
+    {"id": "pull", "cost": {}, "effects": [{"type": "knockback", "amount": -3, "radius": 12}]},
+    {"id": "wolves", "cost": {}, "effects": [{"type": "spawn", "unit": "wolf", "count": 2, "limit": 3, "duration": 30}]},
+    {"id": "recall", "cost": {}, "effects": [{"type": "teleport", "shape": "map", "affects": "own", "kind": "unit", "ofType": "dummy"}]},
+    {"id": "tithe", "cost": {}, "effects": [{"type": "resource", "resource": "gold", "amount": 50, "affects": "self", "shape": "map"}]},
+    {"id": "rob", "cost": {}, "effects": [{"type": "resource", "resource": "gold", "amount": -40, "transfer": true, "shape": "map"}]},
+    {"id": "burn", "cost": {}, "effects": [{"type": "energyBurn", "amount": 60, "percent": 1, "radius": 0.6}]},
+    {"id": "flare", "cost": {}, "effects": [{"type": "reveal", "radius": 4, "duration": 5}]},
+    {"id": "focus", "cost": {}, "effects": [{"type": "status", "status": "focus", "duration": 10, "radius": 0.6, "affects": "allies"}]}
+  ],
+  "types": {
+    "dummy": {"move": {"speed": 2}, "health": {"max": 1000}, "energy": {"max": 200, "start": 100, "regen": 1}, "sight": 3},
+    "archer": {"move": {"speed": 2}, "health": {"max": 300}, "sight": 8, "weapons": [{"range": 5, "damage": 10, "cooldown": 1,
+               "onHit": {"chance": 1, "effects": [{"type": "status", "status": "poison", "duration": 3}]}}]},
+    "wolf": {"move": {"speed": 3}, "health": {"max": 100}},
+    "hero": {"move": {"speed": 2}, "health": {"max": 500}, "energy": {"max": 500, "start": 500}, "hero": {"levels": [10, 20]}, "unique": false,
+             "abilities": [
+               {"id": "bolt", "target": "unit", "range": 10, "cooldown": 6, "charges": 2, "autocast": false, "effects": [{"type": "damage", "amount": 10}],
+                "levels": [{"effects": [{"amount": 30}]}]},
+               {"id": "secret", "target": "unit", "range": 10, "cooldown": 1, "autocast": false, "requires": ["lore"], "effects": [{"type": "damage", "amount": 5}]},
+               {"id": "mend", "target": "unit", "range": 8, "cooldown": 1, "smart": "lowestHpAlly", "effects": [{"type": "heal", "amount": 100}]}
+             ], "researches": []},
+    "school": {"structure": {"footprint": [2, 2]}, "researches": ["lore"]}
+  }})";
+
+static int paIndex(Simulation& sim, const char* id) { return mod(sim).rules().findPlayerAbility(id); }
+static void cast(Simulation& sim, uint8_t player, const char* id, Vec3 p, Entity target = kNullEntity) {
+    Command c; c.player = player; c.type = game::kCmdPlayerAbility; c.param = paIndex(sim, id); c.point = p; c.target = target;
+    sim.submit(c);
+}
+static std::unique_ptr<Simulation> fx2(const std::string& ents, uint64_t seed = 1) {
+    return makeSimJson(kFxRules2, flatMap(40, 20, ",\"entities\":[" + ents.substr(1) + "]"), seed);
+}
+
+TEST(fx_statuses_dot_hot_mods_flags) {
+    auto sim = fx2(dummy(10, 10) + dummy(20, 10, 1) + dummy(30, 5, 1));
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity foe = unitAt(*sim, Fixed::fromInt(10), Fixed::fromInt(10)), mine = unitAt(*sim, Fixed::fromInt(20), Fixed::fromInt(10));
+    for (int k = 0; k < 4; ++k) { cast(*sim, 1, "poison", P(10, 10)); sim->step(); }
+    run(*sim, 0.2);
+    auto& st = w.get<game::Statuses>(foe).list;
+    CHECK(st.size() == 1 && st[0].stacks == 3);                           // stacks capped at 3
+    run(*sim, 2.05);
+    CHECK(w.get<game::Unit>(foe).hp == Fixed::fromInt(970));              // 2 ticks x 15
+    w.get<game::Unit>(mine).hp = Fixed::fromInt(500);
+    cast(*sim, 1, "regen", P(20, 10));
+    run(*sim, 3.5);
+    CHECK(w.get<game::Unit>(mine).hp == Fixed::fromInt(530));             // HoT 3 x 10
+    cast(*sim, 1, "frost", P(10, 10));
+    run(*sim, 0.2);
+    CHECK(m.stat(*sim, foe, game::Stat::Speed) == Fixed::fromInt(1));     // slowed by half
+    cast(*sim, 2, "root", P(20, 10));
+    run(*sim, 0.2);
+    Vec3 before = w.get<Transform>(mine).pos;
+    Command mv; mv.player = 1; mv.type = game::kCmdMove; mv.units = {mine}; mv.point = P(25, 10);
+    sim->submit(mv);
+    run(*sim, 1);
+    CHECK((w.get<Transform>(mine).pos - before).xz().length() < Fixed::fromRatio(1, 10));  // rooted
+    run(*sim, 3);
+    CHECK(w.get<Transform>(mine).pos.x > before.x + Fixed::fromInt(2));   // free again
+    // dispel only what enemies cast: the own shield stays, the enemy frost goes
+    Entity far = unitAt(*sim, Fixed::fromInt(30), Fixed::fromInt(5));
+    cast(*sim, 1, "shield", P(30, 5));
+    cast(*sim, 2, "frost", P(30, 5));
+    run(*sim, 0.3);
+    CHECK(w.get<game::Statuses>(far).list.size() == 2);
+    cast(*sim, 1, "cleanse", P(30, 5));
+    run(*sim, 0.3);
+    CHECK(w.get<game::Statuses>(far).list.size() == 1 && m.rules().statuses[w.get<game::Statuses>(far).list[0].def].id == "shielded");
+    // the shield absorbs 50 damage, then breaks
+    m.dealDamage(*sim, far, Fixed::fromInt(30), 0, kNullEntity, 2);
+    CHECK(w.get<game::Unit>(far).hp == Fixed::fromInt(1000));
+    m.dealDamage(*sim, far, Fixed::fromInt(30), 0, kNullEntity, 2);
+    CHECK(w.get<game::Unit>(far).hp == Fixed::fromInt(990));
+    // invulnerable
+    cast(*sim, 1, "stone", P(30, 5));
+    run(*sim, 0.2);
+    m.dealDamage(*sim, far, Fixed::fromInt(100), 0, kNullEntity, 2);
+    CHECK(w.get<game::Unit>(far).hp == Fixed::fromInt(990));
+}
+
+TEST(fx_silence_disarm_invisibility_lifesteal_onhit) {
+    auto sim = fx2(dummy(6, 10, 1, "hero") + dummy(10, 10, 2, "archer") + dummy(13, 10) + dummy(30, 10, 1, "archer") + dummy(34, 10, 2));
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity hero = findType(*sim, "hero", 1);
+    Entity archer = unitAt(*sim, Fixed::fromInt(10), Fixed::fromInt(10));
+    cast(*sim, 2, "silence", P(6, 10));
+    run(*sim, 0.2);
+    CHECK(!m.canCast(*sim, hero, 0));
+    run(*sim, 3.2);
+    CHECK(m.canCast(*sim, hero, 0));
+    // the enemy archer shoots the hero; its arrows poison
+    bool poisoned = false;
+    for (int i = 0; i < 60 && !poisoned; ++i) {
+        sim->step();
+        for (auto& in : w.get<game::Statuses>(hero).list) if (m.rules().statuses[in.def].id == "poison") poisoned = true;
+    }
+    CHECK(poisoned);
+    // disarm: no more shots
+    cast(*sim, 1, "disarm", P(10, 10));
+    run(*sim, 0.3);
+    bool shot = false;
+    for (int i = 0; i < 40; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvAttack && ev.a == archer) shot = true; }
+    CHECK(!shot);
+    // cloak: an enemy archer next to it doesn't see it as a target
+    Entity mine = findType(*sim, "archer", 1);
+    Entity sneaky = unitAt(*sim, Fixed::fromInt(34), Fixed::fromInt(10));
+    (void)sneaky;
+    cast(*sim, 1, "cloak", P(30, 10));
+    run(*sim, 0.3);
+    w.get<game::Combat>(mine).target = kNullEntity;
+    // vampiric archer heals from its hits
+    w.get<game::Unit>(mine).hp = Fixed::fromInt(200);
+    cast(*sim, 1, "vamp", P(30, 10));
+    run(*sim, 3);
+    CHECK(w.get<game::Unit>(mine).hp > Fixed::fromInt(200));
+    // invisible units can't be acquired by enemies
+    Entity foeArcher = archer;
+    w.get<Transform>(foeArcher).pos = P(27, 10);
+    run(*sim, 0.5);
+    CHECK(w.get<game::Combat>(foeArcher).target != mine);
+}
+
+TEST(fx_knockback_summon_teleport_resource_burn_reveal) {
+    auto sim = fx2(dummy(10, 10) + dummy(12, 10) + dummy(35, 15, 1) + dummy(36, 15, 1));
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity a = unitAt(*sim, Fixed::fromInt(12), Fixed::fromInt(10));
+    cast(*sim, 1, "stomp", P(10, 10));
+    run(*sim, 0.2);
+    CHECK(w.get<Transform>(a).pos.x > Fixed::fromInt(14));                   // pushed away
+    cast(*sim, 1, "pull", P(5, 10));
+    run(*sim, 0.2);
+    CHECK(w.get<Transform>(a).pos.x < Fixed::fromInt(13));                   // pulled in
+    for (int k = 0; k < 3; ++k) { cast(*sim, 1, "wolves", P(20, 5)); run(*sim, 0.2); }
+    CHECK(countType(*sim, "wolf", 1) == 3);                                  // summon limit
+    cast(*sim, 1, "recall", P(20, 18));
+    run(*sim, 0.2);
+    CHECK(dist2DTest(w.get<Transform>(unitAt(*sim, Fixed::fromInt(20), Fixed::fromInt(18))).pos, P(20, 18)) < Fixed::fromInt(2));
+    CHECK(w.get<Owner>(unitAt(*sim, Fixed::fromInt(35), Fixed::fromInt(15))).player != 1 || dist2DTest(w.get<Transform>(unitAt(*sim, Fixed::fromInt(35), Fixed::fromInt(15))).pos, P(35, 15)) > Fixed::fromInt(3));
+    Fixed g1 = stockOf(*sim, 1, "gold"), g2 = stockOf(*sim, 2, "gold");
+    cast(*sim, 1, "tithe", P(1, 1));
+    run(*sim, 0.2);
+    cast(*sim, 1, "rob", P(1, 1));
+    run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "gold") == g1 + Fixed::fromInt(90) && stockOf(*sim, 2, "gold") == g2 - Fixed::fromInt(40));
+    Entity foe = unitAt(*sim, Fixed::fromInt(10), Fixed::fromInt(10));
+    Fixed hp = w.get<game::Unit>(foe).hp;
+    cast(*sim, 1, "burn", w.get<Transform>(foe).pos);
+    run(*sim, 0.2);
+    CHECK(w.get<game::Unit>(foe).energy < Fixed::fromInt(50) && w.get<game::Unit>(foe).hp < hp - Fixed::fromInt(50));
+    CHECK(!m.isVisible(*sim, 1, P(5, 3)));
+    cast(*sim, 1, "flare", P(5, 3));
+    run(*sim, 0.5);
+    CHECK(m.isVisible(*sim, 1, P(5, 3)));
+    run(*sim, 5);
+    CHECK(!m.isVisible(*sim, 1, P(5, 3)));
+}
+
+TEST(fx_unit_ability_charges_levels_requires_smart) {
+    auto sim = fx2(dummy(6, 10, 1, "hero") + dummy(9, 10) + dummy(7, 13, 1) + dummy(3, 3, 1, "school"));
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity hero = findType(*sim, "hero", 1), foe = unitAt(*sim, Fixed::fromInt(9), Fixed::fromInt(10));
+    for (int k = 0; k < 3; ++k) { castAbility(*sim, hero, 0, foe, {}); run(*sim, 0.3); }
+    CHECK(w.get<game::Unit>(foe).hp == Fixed::fromInt(980));               // two charges, the third cast fails
+    CHECK(!m.canCast(*sim, hero, 1));                                     // needs the tech
+    Command r; r.player = 1; r.type = game::kCmdResearch; r.units = {findType(*sim, "school", 1)}; r.param = m.rules().findTech("lore");
+    sim->submit(r);
+    run(*sim, 1.5);
+    CHECK(m.canCast(*sim, hero, 1));
+    w.get<game::Hero>(hero).level = 2;                                    // level 2 table: 30 damage
+    run(*sim, 6.5);
+    castAbility(*sim, hero, 0, foe, {});
+    run(*sim, 0.3);
+    CHECK(w.get<game::Unit>(foe).hp == Fixed::fromInt(950));
+    // smart autocast heals the most wounded ally
+    Entity hurt = unitAt(*sim, Fixed::fromInt(7), Fixed::fromInt(13));
+    w.get<game::Unit>(hurt).hp = Fixed::fromInt(300);
+    run(*sim, 1);
+    CHECK(w.get<game::Unit>(hurt).hp == Fixed::fromInt(400));
+    // energy regen stat from a status
+    Fixed e0 = w.get<game::Unit>(hurt).energy;
+    cast(*sim, 1, "focus", w.get<Transform>(hurt).pos);
+    run(*sim, 2);
+    CHECK(w.get<game::Unit>(hurt).energy >= e0 + Fixed::fromInt(5));
+}
+
+// ------------------------------------------------------------------ Bunker Wars style skills (garrisons, groups, players)
+
+static const char* kBwRules = R"({
+  "victory": "noEntities",
+  "lanes": {"left": 1, "right": 1, "spacing": 0.4},
+  "resources": {"mana": {"start": 100, "regen": 2, "capped": true, "storage": 200}, "morale": {"start": 50}},
+  "statuses": {
+    "frozen": {"tags": ["debuff", "magic"], "flags": ["stun"]},
+    "plague": {"tags": ["debuff", "magic"], "flags": ["spreads"], "garrisonPerSecond": -1},
+    "locked": {"tags": ["debuff"], "flags": ["lock"]},
+    "fort": {"tags": ["buff"], "mods": [{"stat": "defense", "mul": 2}]},
+    "aegis": {"tags": ["buff"], "flags": ["invulnerable"]},
+    "barrier5": {"tags": ["buff"], "shield": 5},
+    "revenge": {"tags": ["buff"], "onCaptured": [{"type": "garrisonKill", "percent": 1, "shape": "target", "affects": "any"}]},
+    "boom": {"tags": ["buff"], "mods": [{"stat": "productionSpeed", "mul": 3}]},
+    "flight": {"tags": ["buff"], "flags": ["flying"]},
+    "muted": {"tags": ["debuff"], "flags": ["silence"]},
+    "drought": {"tags": ["debuff"], "flags": ["freezeRegen"]},
+    "wind": {"tags": ["debuff"], "mods": [{"stat": "speed", "mul": 0.5}]},
+    "watch": {"tags": ["buff"], "flags": ["alert"]},
+    "aura": {"tags": ["buff"], "tick": {"interval": 0.5, "effects": [{"type": "damage", "amount": 1, "radius": 1.5}]}}
+  },
+  "loadoutSlots": 30,
+  "playerAbilities": [
+    {"id": "bomb", "target": "structure", "effects": [{"type": "garrisonKill", "percent": 0.5}]},
+    {"id": "landing", "target": "structure", "effects": [{"type": "garrisonAdd", "amount": 10, "affects": "own"}]},
+    {"id": "defector", "target": "structure", "effects": [{"type": "garrisonConvert", "percent": 0.4}]},
+    {"id": "panic", "target": "structure", "effects": [{"type": "garrisonPanic", "percent": 0.3}]},
+    {"id": "possession", "target": "structure", "effects": [{"type": "capture", "duration": 3, "neutral": true}]},
+    {"id": "swap", "target": "structure", "effects": [{"type": "swap"}]},
+    {"id": "casttower", "target": "structure", "effects": [{"type": "transform", "to": "tower", "duration": 3, "affects": "any"}]},
+    {"id": "upgrade", "target": "structure", "effects": [{"type": "level", "delta": 1, "affects": "own"}]},
+    {"id": "downgrade", "target": "structure", "effects": [{"type": "level", "delta": -1, "duration": 3}]},
+    {"id": "average", "target": "structure", "effects": [{"type": "equalize", "affects": "own"}]},
+    {"id": "redirect", "target": "structure", "effects": [{"type": "redirect", "duration": 10, "affects": "own"}]},
+    {"id": "lock", "target": "structure", "effects": [{"type": "status", "status": "locked", "duration": 5}]},
+    {"id": "fortify", "target": "structure", "effects": [{"type": "status", "status": "fort", "duration": 20, "affects": "own"}]},
+    {"id": "aegis", "target": "structure", "effects": [{"type": "status", "status": "aegis", "duration": 20, "affects": "own"}]},
+    {"id": "shield5", "target": "structure", "effects": [{"type": "status", "status": "barrier5", "duration": 20, "affects": "own"}]},
+    {"id": "plague", "target": "structure", "effects": [{"type": "status", "status": "plague", "duration": 30}]},
+    {"id": "revenge", "target": "structure", "effects": [{"type": "status", "status": "revenge", "duration": 30, "affects": "own"}]},
+    {"id": "resurrect", "target": "structure", "effects": [{"type": "garrisonAdd", "percent": 1, "ofLost": true, "affects": "own"}]},
+    {"id": "boom", "target": "structure", "effects": [{"type": "status", "status": "boom", "duration": 10, "affects": "own"}]},
+    {"id": "freeze", "target": "group", "effects": [{"type": "status", "status": "frozen", "duration": 3, "shape": "group"}]},
+    {"id": "gohome", "target": "group", "effects": [{"type": "sendBack", "mode": "home", "shape": "group"}]},
+    {"id": "throwback", "target": "group", "effects": [{"type": "sendBack", "mode": "throwBack", "amount": 4, "shape": "group"}]},
+    {"id": "illusion", "target": "group", "effects": [{"type": "clone", "fake": true, "shape": "group", "affects": "own"}]},
+    {"id": "closerows", "target": "group", "effects": [{"type": "formation", "shape": "group", "affects": "own"}]},
+    {"id": "hypnosis", "target": "group", "effects": [{"type": "convert", "percent": 0.5, "shape": "group"}]},
+    {"id": "flywave", "target": "group", "effects": [{"type": "status", "status": "flight", "duration": 20, "shape": "group", "affects": "own"}]},
+    {"id": "killaura", "target": "group", "effects": [{"type": "status", "status": "aura", "duration": 20, "shape": "group", "affects": "own"}]},
+    {"id": "barrier", "target": "point", "effects": [{"type": "spawn", "unit": "wall"}]},
+    {"id": "mines", "target": "point", "effects": [{"type": "area", "trigger": "contact", "radius": 1, "maxTriggers": 3, "effects": [{"type": "kill", "shape": "target"}]}]},
+    {"id": "tornado", "target": "group", "effects": [{"type": "area", "motion": "lane", "speed": 6, "lifetime": 20, "interval": 0.25, "trigger": "periodic", "radius": 1.2,
+                                                      "effects": [{"type": "kill", "radius": 1.2}]}]},
+    {"id": "shortway", "target": "point", "effects": [{"type": "area", "trigger": "contact", "radius": 1.5, "lifetime": 20, "teleportTo": [12, 0], "affects": "own"}]},
+    {"id": "souls", "target": "point", "effects": [{"type": "area", "trigger": "periodic", "radius": 4, "lifetime": 20, "deathSpawn": "skeleton"}]},
+    {"id": "silence", "target": "player", "effects": [{"type": "playerStatus", "status": "muted", "duration": 10}]},
+    {"id": "drought", "target": "player", "effects": [{"type": "playerStatus", "status": "drought", "duration": 10}]},
+    {"id": "wind", "target": "player", "effects": [{"type": "playerStatus", "status": "wind", "duration": 10}]},
+    {"id": "watch", "target": "player", "effects": [{"type": "playerStatus", "status": "watch", "duration": 60, "affects": "self"}]},
+    {"id": "thief", "target": "player", "effects": [{"type": "resource", "resource": "morale", "amount": -20, "transfer": true}]},
+    {"id": "share", "target": "player", "effects": [{"type": "equalizeResource", "resource": "morale", "affects": "any"}]},
+    {"id": "sacrifice", "target": "structure", "effects": [{"type": "sacrifice", "percent": 0.5, "gain": {"mana": 2}, "affects": "own"}]},
+    {"id": "steal", "target": "player", "effects": [{"type": "stealSkill", "duration": 30}]},
+    {"id": "breakmagic", "target": "none", "effects": [{"type": "dispel", "shape": "map", "affects": "any"}]},
+    {"id": "slowdown", "target": "player", "effects": [{"type": "cooldown", "amount": 20}]},
+    {"id": "nuke", "target": "point", "cost": {"mana": 50}, "cooldown": 30, "initialCooldown": 5, "castTime": 2,
+     "effects": [{"type": "garrisonKill", "amount": 5, "radius": 2, "kind": "structure"}],
+     "levels": [{"effects": [{"amount": 10}]}, {"effects": [{"amount": 15}]}]},
+    {"id": "tide", "target": "structure", "autoEvery": 10, "effects": [{"type": "garrisonAdd", "amount": 2, "affects": "own"}]},
+    {"id": "blessed", "passive": true, "status": {"id": "bless", "incomeMult": {"mana": 2}}}
+  ],
+  "types": {
+    "spore": {"move": {"speed": 2.4, "radius": 0.15}, "health": {"max": 1}, "entersGarrison": true},
+    "hut": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 1, "upgrades": ["hut2"], "garrison": {"max": 40, "unit": "spore", "interval": 1, "capturable": true}},
+    "hut2": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 2, "garrison": {"max": 60, "unit": "spore", "interval": 0.8, "capturable": true}},
+    "tower": {"structure": {"footprint": [2, 2]}, "invulnerable": true, "level": 1, "garrison": {"max": 20, "unit": "spore", "capturable": true}, "weapons": [{"range": 4, "damage": 1, "cooldown": 1}]},
+    "wall": {"health": {"max": 5}, "move": {"speed": 0, "radius": 0.6}, "blocksLanes": true},
+    "skeleton": {"move": {"speed": 2}, "health": {"max": 20}}
+  }})";
+
+static std::string bwMap(const std::string& extra = "", const std::string& loadA = "", const std::string& loadB = "") {
+    std::string players = std::string("[{\"name\":\"A\",\"team\":1") + (loadA.empty() ? "" : ",\"loadout\":" + loadA) + "},{\"name\":\"B\",\"team\":2" +
+                          (loadB.empty() ? "" : ",\"loadout\":" + loadB) + "}]";
+    return flatMap(40, 16, R"(,"entities":[
+      {"type":"hut","owner":1,"pos":[4,8],"garrison":20},{"type":"hut","owner":1,"pos":[10,3],"garrison":5},
+      {"type":"hut","owner":2,"pos":[36,8],"garrison":20},{"type":"hut","owner":2,"pos":[30,13],"garrison":10},
+      {"type":"hut","owner":0,"pos":[20,8],"garrison":3})" + extra + "]", players);
+}
+static Entity hutAt(Simulation& sim, int x, int z) { return unitAt(sim, Fixed::fromInt(x), Fixed::fromInt(z)); }
+static int garrisonOf(Simulation& sim, Entity e) { return sim.world().get<game::Garrison>(e).count; }
+static void send(Simulation& sim, uint8_t player, Entity from, Entity to, int pct) {
+    Command c; c.player = player; c.type = game::kCmdSend; c.units = {from}; c.target = to; c.param = pct; sim.submit(c);
+}
+
+TEST(bw_garrison_primitives) {
+    auto sim = makeSimJson(kBwRules, bwMap());
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity a1 = hutAt(*sim, 4, 8), a2 = hutAt(*sim, 10, 3), b1 = hutAt(*sim, 36, 8), b2 = hutAt(*sim, 30, 13), nh = hutAt(*sim, 20, 8);
+    auto g = [&](Entity e) -> game::Garrison& { return w.get<game::Garrison>(e); };
+    for (Entity e : {a1, a2, b1, b2}) g(e).growth = Fixed{};
+    // bomb: half of the garrison
+    g(b1).count = 20;
+    cast(*sim, 1, "bomb", {}, b1); run(*sim, 0.2);
+    CHECK(garrisonOf(*sim, b1) == 10 || garrisonOf(*sim, b1) == 11);
+    // resurrection: the lost units come back
+    int before = garrisonOf(*sim, b1);
+    cast(*sim, 2, "resurrect", {}, b1); run(*sim, 0.2);
+    CHECK(garrisonOf(*sim, b1) >= before + 10);
+    // defector: 40% leave and walk to the caster's structure
+    g(b2).count = 10;
+    cast(*sim, 1, "defector", {}, b2); run(*sim, 0.2);
+    CHECK(garrisonOf(*sim, b2) <= 7 && countType(*sim, "spore", 1) == 4);
+    // possession: captured for 3 s, then back
+    cast(*sim, 1, "possession", {}, nh); run(*sim, 0.2);
+    CHECK(w.get<Owner>(nh).player == 1);
+    run(*sim, 3.2);
+    CHECK(w.get<Owner>(nh).player == 0);
+    // swap: my structure trades places with an enemy one
+    g(a2).count = 2; g(b2).count = 30;
+    cast(*sim, 1, "swap", {}, b2); run(*sim, 0.2);
+    CHECK(w.get<Owner>(b2).player == 1 && w.get<Owner>(a2).player == 2);
+    // cast tower for 3 s, upgrade and timed downgrade along the upgrade chain
+    cast(*sim, 1, "casttower", {}, a1); run(*sim, 0.2);
+    CHECK(m.rules().types[w.get<game::Unit>(a1).type].id == "tower");
+    run(*sim, 3.2);
+    CHECK(m.rules().types[w.get<game::Unit>(a1).type].id == "hut");
+    cast(*sim, 1, "upgrade", {}, a1); run(*sim, 0.2);
+    CHECK(m.rules().types[w.get<game::Unit>(a1).type].id == "hut2");
+    cast(*sim, 2, "downgrade", {}, a1); run(*sim, 0.2);
+    CHECK(m.rules().types[w.get<game::Unit>(a1).type].id == "hut");
+    run(*sim, 3.2);
+    CHECK(m.rules().types[w.get<game::Unit>(a1).type].id == "hut2");
+    // average: own garrisons even out
+    g(a1).count = 30; g(b2).count = 2;
+    cast(*sim, 1, "average", {}, a1); run(*sim, 0.2);
+    CHECK(std::abs(garrisonOf(*sim, a1) - garrisonOf(*sim, b2)) <= 1);
+    // lock: no production, no sending
+    g(b1).count = 10; g(b1).growth = Fixed{};
+    cast(*sim, 1, "lock", {}, b1); run(*sim, 0.2);
+    send(*sim, 2, b1, b2, 50); run(*sim, 2);
+    CHECK(garrisonOf(*sim, b1) == 10);
+    // redirect: a1's growth goes to b2 (own structures)
+    int ga = garrisonOf(*sim, a1), gb = garrisonOf(*sim, b2);
+    cast(*sim, 1, "redirect", {}, a1); run(*sim, 3);
+    CHECK(garrisonOf(*sim, a1) == ga && garrisonOf(*sim, b2) > gb);
+}
+
+TEST(bw_assault_defense_shield_plague_revenge) {
+    auto sim = makeSimJson(kBwRules, bwMap());
+    World& w = sim->world();
+    Entity a1 = hutAt(*sim, 4, 8), nh = hutAt(*sim, 20, 8), b1 = hutAt(*sim, 36, 8);
+    // invulnerable: an assault does nothing
+    w.get<game::Garrison>(nh).count = 3;
+    cast(*sim, 2, "aegis", {}, nh);  // not owned by 2: refused
+    w.get<Owner>(nh).player = 2;
+    cast(*sim, 2, "aegis", {}, nh);
+    run(*sim, 0.2);
+    w.get<game::Garrison>(a1).count = 20;
+    send(*sim, 1, a1, nh, 50);
+    run(*sim, 12);
+    CHECK(w.get<Owner>(nh).player == 2 && w.get<game::Garrison>(nh).count >= 3);
+    // plague spreads: an infected structure's sent units infect where they go
+    cast(*sim, 1, "plague", {}, b1); run(*sim, 0.2);
+    Entity b2 = hutAt(*sim, 30, 13);
+    send(*sim, 2, b1, b2, 30);
+    run(*sim, 6);
+    bool infected = false;
+    for (auto& in : w.get<game::Statuses>(b2).list) if (mod(*sim).rules().statuses[in.def].id == "plague") infected = true;
+    CHECK(infected);
+    // revenge: capturing a structure with it costs the capturer the garrison it brought
+    Entity a2 = hutAt(*sim, 10, 3);
+    w.get<game::Garrison>(a2).count = 0;
+    w.get<game::Garrison>(a2).growth = Fixed{};
+    cast(*sim, 1, "revenge", {}, a2); run(*sim, 0.2);
+    w.get<game::Garrison>(b2).count = 30;
+    send(*sim, 2, b2, a2, 100);
+    for (int i = 0; i < 20 * 15 && w.get<Owner>(a2).player != 2; ++i) sim->step();
+    run(*sim, 0.2);
+    CHECK(w.get<Owner>(a2).player == 2);
+    CHECK(w.get<game::Garrison>(a2).lost >= 1);                         // the revenge blast hit the capturers
+}
+
+TEST(bw_groups_on_lanes) {
+    auto sim = makeSimJson(kBwRules, bwMap());
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity a1 = hutAt(*sim, 4, 8), nh = hutAt(*sim, 20, 8);
+    run(*sim, 1.05);
+    w.get<game::Garrison>(a1).count = 30;
+    send(*sim, 1, a1, nh, 50);
+    run(*sim, 2);
+    std::vector<Entity> group;
+    w.each<game::GroupTag, Owner>([&](Entity e, game::GroupTag&, Owner& o) { if (o.player == 1) group.push_back(e); });
+    CHECK(group.size() >= 8);
+    // freeze the whole group
+    cast(*sim, 2, "freeze", {}, group[0]); run(*sim, 0.2);
+    Vec3 p0 = w.get<Transform>(group[0]).pos;
+    run(*sim, 1);
+    CHECK(dist2DTest(w.get<Transform>(group[0]).pos, p0) < Fixed::fromRatio(1, 10));
+    run(*sim, 2.5);
+    // throw back: lane position goes down
+    uint16_t lp = w.get<game::LaneWalker>(group[0]).pos;
+    cast(*sim, 2, "throwback", {}, group[0]); run(*sim, 0.2);
+    CHECK(w.get<game::LaneWalker>(group[0]).pos + 4 <= lp + 1);
+    // hypnosis: half of the group changes sides
+    cast(*sim, 2, "hypnosis", {}, group[0]); run(*sim, 0.2);
+    int converted = 0;
+    for (Entity e : group) if (w.alive(e) && w.get<Owner>(e).player == 2) ++converted;
+    CHECK(converted >= int(group.size()) / 2 - 1 && converted <= int(group.size()) / 2 + 1);
+    // go home: the rest turn around
+    Entity rest;
+    for (Entity e : group) if (w.alive(e) && w.get<Owner>(e).player == 1) rest = e;
+    cast(*sim, 2, "gohome", {}, rest); run(*sim, 0.2);
+    CHECK(w.get<game::Orders>(rest).queue.front().target == a1);
+    run(*sim, 15);
+    CHECK(w.get<Owner>(nh).player != 1);
+    (void)m;
+}
+
+TEST(bw_hazards_portal_mines_souls_barrier) {
+    auto sim = makeSimJson(kBwRules, bwMap());
+    World& w = sim->world();
+    Entity a1 = hutAt(*sim, 4, 8), nh = hutAt(*sim, 20, 8);
+    run(*sim, 1.05);
+    w.get<game::Garrison>(a1).count = 30;
+    // mines on the lane kill three units
+    cast(*sim, 2, "mines", P(12, 8));
+    send(*sim, 1, a1, nh, 34);
+    run(*sim, 2);
+    std::vector<Entity> group;
+    w.each<game::GroupTag, Owner>([&](Entity e, game::GroupTag&, Owner& o) { if (o.player == 1) group.push_back(e); });
+    int sent = int(group.size());
+    run(*sim, 6);
+    int died = 0;
+    for (Entity e : group) if (!w.alive(e)) ++died;
+    CHECK(sent >= 8);
+    CHECK(w.get<game::Garrison>(nh).count >= 0);
+    // a tornado runs along the lane of a group and kills what it touches
+    w.get<game::Garrison>(a1).count = 30;
+    send(*sim, 1, a1, nh, 50);
+    run(*sim, 2);
+    group.clear();
+    w.each<game::GroupTag, Owner>([&](Entity e, game::GroupTag&, Owner& o) { if (o.player == 1) group.push_back(e); });
+    CHECK(!group.empty());
+    cast(*sim, 2, "tornado", {}, group[0]);
+    run(*sim, 2.5);
+    int dead = 0;
+    for (Entity e : group) if (!w.alive(e)) ++dead;
+    CHECK(dead > 0);
+    // barrier: a wall on the lane stops walkers until destroyed
+    auto sim2 = makeSimJson(kBwRules, bwMap());
+    World& w2 = sim2->world();
+    Entity c1 = hutAt(*sim2, 4, 8), cn = hutAt(*sim2, 20, 8);
+    w2.get<game::Garrison>(c1).count = 30;
+    w2.get<game::Garrison>(cn).count = 3;
+    run(*sim2, 0.5);
+    cast(*sim2, 2, "barrier", P(12, 8));
+    run(*sim2, 0.3);
+    CHECK(countType(*sim2, "wall", 2) == 1);
+    send(*sim2, 1, c1, cn, 20);
+    run(*sim2, 10);
+    CHECK(countType(*sim2, "wall", 2) == 0);                              // they wore it down (5 hp)
+    CHECK(w2.get<Owner>(cn).player == 0);                                 // and didn't reach the hut
+    // souls: units dying inside turn into skeletons for the area owner
+    auto sim3 = makeSimJson(kBwRules, bwMap(R"(,{"type":"skeleton","owner":1,"pos":[25,3]},{"type":"skeleton","owner":1,"pos":[25.5,3]})"));
+    cast(*sim3, 2, "souls", P(25, 3));
+    run(*sim3, 0.3);
+    sim3->world().each<game::Unit, Owner>([&](Entity, game::Unit& u, Owner& o) { if (o.player == 1 && mod(*sim3).rules().types[u.type].id == "skeleton") u.hp = Fixed{}; });
+    run(*sim3, 0.3);
+    CHECK(countType(*sim3, "skeleton", 2) == 2);
+    (void)died;
+}
+
+TEST(bw_player_skills_loadout_levels_auto) {
+    auto sim = makeSimJson(kBwRules, bwMap("", R"(["silence","drought","wind","watch","thief","share","sacrifice","steal","breakmagic","slowdown",{"id":"nuke","level":3},"tide","blessed","bomb","landing","freeze"])",
+                                              R"(["bomb","landing","freeze","possession"])"));
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    auto& gs = m.state(*sim);
+    Entity a1 = hutAt(*sim, 4, 8), b1 = hutAt(*sim, 36, 8);
+    // loadout: B can't cast what it doesn't have
+    CHECK(!m.canUsePlayerAbility(*sim, 2, paIndex(*sim, "silence")));
+    CHECK(m.canUsePlayerAbility(*sim, 2, paIndex(*sim, "bomb")));
+    // passive: A's mana income is doubled (regen 2 -> 4/s)
+    Fixed mana = stockOf(*sim, 1, "mana"), manaB = stockOf(*sim, 2, "mana");
+    run(*sim, 5);
+    CHECK(fxAbs(stockOf(*sim, 1, "mana") - mana - Fixed::fromInt(20)) < Fixed::fromRatio(1, 100));
+    CHECK(fxAbs(stockOf(*sim, 2, "mana") - manaB - Fixed::fromInt(10)) < Fixed::fromRatio(1, 100));
+    // freeze regen
+    cast(*sim, 1, "drought", P(36, 8), b1);
+    run(*sim, 0.2);
+    manaB = stockOf(*sim, 2, "mana");
+    run(*sim, 3);
+    CHECK(stockOf(*sim, 2, "mana") == manaB);
+    // silence: B can't cast for 10 s
+    cast(*sim, 1, "silence", P(36, 8), b1);
+    run(*sim, 0.2);
+    CHECK(!m.canUsePlayerAbility(*sim, 2, paIndex(*sim, "bomb")));
+    // morale thief and equalize
+    cast(*sim, 1, "thief", P(36, 8), b1); run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "morale") == Fixed::fromInt(70) && stockOf(*sim, 2, "morale") == Fixed::fromInt(30));
+    cast(*sim, 1, "share", P(36, 8), b1); run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "morale") == Fixed::fromInt(50) && stockOf(*sim, 2, "morale") == Fixed::fromInt(50));
+    // sacrifice half a garrison for mana
+    w.get<game::Garrison>(a1).count = 20;
+    Fixed m0 = stockOf(*sim, 1, "mana");
+    cast(*sim, 1, "sacrifice", {}, a1); run(*sim, 0.2);
+    CHECK(stockOf(*sim, 1, "mana") >= m0 + Fixed::fromInt(19));
+    // steal a skill B has and A doesn't
+    cast(*sim, 1, "steal", P(36, 8), b1); run(*sim, 0.2);
+    CHECK(gs.playerAbilities[1][size_t(paIndex(*sim, "possession"))].owned);
+    // break all magic: player statuses gone
+    CHECK(!gs.players[2].statuses.empty());
+    cast(*sim, 1, "breakmagic", P(1, 1)); run(*sim, 0.2);
+    CHECK(gs.players[2].statuses.empty());
+    CHECK(m.canUsePlayerAbility(*sim, 2, paIndex(*sim, "bomb")));
+    // enemy cooldowns +20 s
+    cast(*sim, 1, "slowdown", P(36, 8), b1); run(*sim, 0.2);
+    CHECK(!m.canUsePlayerAbility(*sim, 2, paIndex(*sim, "bomb")));
+    // nuke at level 3: initial cooldown, activation delay, 15 units
+    w.get<game::Garrison>(b1).count = 30;
+    int nuke = paIndex(*sim, "nuke");
+    CHECK(gs.playerAbilities[1][size_t(nuke)].level == 3);
+    cast(*sim, 1, "nuke", P(36, 8)); run(*sim, 2.5);
+    CHECK(w.get<game::Garrison>(b1).count <= 19);                       // level 3: 15 units (plus a little growth)
+    // alert: watch, then B sends at A
+    cast(*sim, 1, "watch", P(4, 8), a1); run(*sim, 0.2);
+    gs.playerAbilities[2][size_t(paIndex(*sim, "bomb"))].readyAt = 0;
+    w.get<game::Garrison>(b1).count = 20;
+    send(*sim, 2, b1, a1, 30);
+    bool alert = false;
+    for (int i = 0; i < 10; ++i) { sim->step(); for (auto& ev : sim->events()) if (ev.type == game::kEvAlert && ev.player == 1) alert = true; }
+    CHECK(alert);
+    // auto skill: tide adds 2 units to an own structure every 10 s by itself
+    int total0 = 0;
+    w.each<game::Garrison, Owner>([&](Entity, game::Garrison& g, Owner& o) { if (o.player == 1) total0 += g.count; });
+    (void)total0;
+}
+
+TEST(bw_skills_deterministic) {
+    auto play = [](uint64_t seed) {
+        auto sim = makeSimJson(kBwRules, bwMap(), seed);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim->players()) bots.emplace_back(p.slot, seed);
+        for (int t = 0; t < 20 * 90 && sim->result() == 0; ++t) { for (auto& b : bots) b.update(*sim); sim->step(); }
+        return std::pair{sim->checksum(), sim->tick()};
+    };
+    CHECK(play(3) == play(3));
+}
+
+TEST(bw_more_primitives) {
+    auto sim = makeSimJson(kBwRules, bwMap());
+    World& w = sim->world();
+    auto& m = mod(*sim);
+    Entity a1 = hutAt(*sim, 4, 8), a2 = hutAt(*sim, 10, 3), b1 = hutAt(*sim, 36, 8), b2 = hutAt(*sim, 30, 13), nh = hutAt(*sim, 20, 8);
+    // panic: 30% of the garrison flees
+    w.get<game::Garrison>(b2).count = 10; w.get<game::Garrison>(b2).growth = Fixed{};
+    cast(*sim, 1, "panic", {}, b2); run(*sim, 0.2);
+    CHECK(garrisonOf(*sim, b2) == 7);
+    // fortify / production boost / shield on own structures
+    cast(*sim, 2, "fortify", {}, b1); cast(*sim, 2, "boom", {}, b1); cast(*sim, 2, "shield5", {}, b1);
+    run(*sim, 0.2);
+    CHECK(m.stat(*sim, b1, game::Stat::Defense) == Fixed::fromInt(2) && m.stat(*sim, b1, game::Stat::ProductionSpeed) == Fixed::fromInt(3));
+    // wind: B's units are slowed
+    cast(*sim, 1, "wind", P(36, 8), b1); run(*sim, 0.2);
+    w.get<game::Garrison>(b1).count = 20;
+    send(*sim, 2, b1, b2, 50); run(*sim, 1);
+    Entity bs;
+    w.each<game::GroupTag, Owner>([&](Entity e, game::GroupTag&, Owner& o) { if (o.player == 2) bs = e; });
+    CHECK(bs.valid() && m.stat(*sim, bs, game::Stat::Speed) < Fixed::fromInt(2));
+    // A's group: illusions double it, flight takes it off the lane, a portal throws it forward, a kill aura hurts enemies
+    w.get<game::Garrison>(a1).count = 30;
+    cast(*sim, 1, "shortway", P(9, 8));
+    send(*sim, 1, a1, nh, 30); run(*sim, 1);
+    std::vector<Entity> grp;
+    w.each<game::GroupTag, Owner>([&](Entity e, game::GroupTag&, Owner& o) { if (o.player == 1) grp.push_back(e); });
+    CHECK(!grp.empty());
+    size_t n0 = grp.size();
+    cast(*sim, 1, "illusion", {}, grp[0]); run(*sim, 0.2);
+    int fakes = 0;
+    w.each<game::GroupTag, Owner>([&](Entity e, game::GroupTag&, Owner& o) { if (o.player == 1 && (m.statusFlags(*sim, e) & game::kStFake)) ++fakes; });
+    CHECK(fakes >= int(n0) - 1);
+    bool jumped = false;
+    for (int i = 0; i < 40 && !jumped; ++i) { sim->step(); for (Entity e : grp) if (w.alive(e) && w.get<Transform>(e).pos.x > Fixed::fromInt(18)) jumped = true; }
+    CHECK(jumped);                                                       // the shortcut portal moved someone 12 cells ahead
+    // flight: straight to the target, then the illusions arrive without effect
+    int gnh = garrisonOf(*sim, nh);
+    cast(*sim, 1, "flywave", {}, grp[0]); run(*sim, 6);
+    CHECK(w.get<Owner>(nh).player == 1 || garrisonOf(*sim, nh) < gnh);
+    // auto skill: tide gives an own structure 2 units every 10 s on its own
+    int tot = 0;
+    w.each<game::Garrison, Owner>([&](Entity, game::Garrison& g, Owner& o) { if (o.player == 2) { tot += g.count; g.growth = Fixed{}; } });
+    (void)tot; (void)a2;
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

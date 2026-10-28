@@ -134,7 +134,8 @@ enum class EffectKind : uint8_t {
 struct EffectDef {
     EffectKind kind = EffectKind::Damage;
     Fixed amount{};            // damage / heal / units / resource / distance
-    Fixed amountMax{};         // > amount: random value in [amount, amountMax] (sim RNG)
+    Fixed amountMax{};         // random value in [amount, amountMax] (sim RNG) when `randomAmount`
+    bool randomAmount = false;
     Fixed percent{};           // share (0..1) for garrison / group / resource effects
     Fixed radius{};            // 0 = single target
     Fixed duration{};          // stun / buff / summon lifetime / status / temporary capture
