@@ -323,7 +323,11 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp
     modules/rts/view/RtsFog.cpp
     modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp)
+# visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
+add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
+target_link_libraries(rts_terrain_detail PUBLIC rts_game)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
+target_link_libraries(rts_game_view PUBLIC rts_terrain_detail)
 
 # Helper: package content + platform metadata around an executable.
 function(rts_package_app target)
@@ -419,6 +423,7 @@ if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_game)
+    target_link_libraries(rts_editor_core PUBLIC rts_terrain_detail)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
         target_link_libraries(rts_editor_core PUBLIC ws2_32)
