@@ -449,7 +449,7 @@ def laneclash():
 
 
 def underlord():
-    m = Map("Two Keeps", 48, 32, duel())
+    m = Map("Two Keeps", 48, 32, duel() + [{"name": "Герои", "team": 3, "waves": True}])
     m.rows = [['D'] * 48 for _ in range(32)]
     m.border('#')
     # dungeon pockets around the hearts
@@ -464,6 +464,11 @@ def underlord():
     for i in range(4):
         m.ent("imp", 1, [9 + (i % 2) * 0.8, 13 + i])
     m.ent("portal", 0, [17, 4])
+    # heroes from the surface: a party drops in at the middle cave now and then
+    m.rect(22, 13, 4, 6, '.', sym=False)
+    m.extra["waves"] = [{"time": 420, "player": 3, "at": [24, 16], "spread": 1, "spawn": [{"type": "dwarf", "count": 2}, {"type": "wizard", "count": 1}],
+                         "every": 300, "growth": 1.3, "repeats": 5},
+                        {"time": 900, "player": 3, "at": [24, 16], "spread": 1, "spawn": [{"type": "knight", "count": 2}], "every": 420, "growth": 1.2, "repeats": 3}]
     write("underlord", m, "two_keeps")
 
 
