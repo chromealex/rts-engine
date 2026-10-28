@@ -4727,6 +4727,49 @@ TEST(fog_of_war_modes_and_look) {
     CHECK(!game::parseFogLook(Json::parse(R"({"mode": "none"})"), Json()).show);
 }
 
+TEST(fog_line_of_sight_3d_blockers) {
+    // flat cliff-level map with fogOfWar.lineOfSight: a wall (vision.blocks) hides what is behind it,
+    // a tower's eye height sees over it, seesOver ignores it, a smoke area blocks while it lasts
+    const char* rules = R"({
+      "fogOfWar": {"lineOfSight": true},
+      "victory": "noUnits",
+      "types": {
+        "scout": {"move": {"speed": 2}, "sight": 14},
+        "tower": {"move": {"speed": 2}, "sight": 14, "vision": {"eye": 6}},
+        "drone": {"move": {"speed": 2}, "sight": 14, "vision": {"seesOver": true}},
+        "wall": {"structure": {"footprint": [1, 8]}, "health": {"max": 500}, "vision": {"blocks": 3}},
+        "smoker": {"move": {"speed": 2}, "sight": 2, "abilities": [
+          {"id": "smoke", "target": "point", "range": 30, "cooldown": 1, "autocast": false,
+           "delivery": {"type": "area", "radius": 2, "lifetime": 10, "blocksVision": 4}, "effects": [{"type": "damage", "amount": 0}]}]}
+      }})";
+    auto mk = [&](const char* viewer, bool wall) {
+        std::string ents = std::string(R"(,"entities":[{"type":")") + viewer + R"(","owner":1,"pos":[5.5,4.5]},{"type":"scout","owner":2,"pos":[30.5,4.5]})";
+        if (wall) ents += R"(,{"type":"wall","owner":0,"pos":[10.5,4]})";
+        return makeSimJson(rules, flatMap(32, 8, ents + "]"));
+    };
+    auto vis = [](Simulation& s, int x, int y = 4) { auto& gs = mod(s).state(s); return gs.vision[1][size_t(gs.grid.index(x, y))] == 2; };
+    auto open = mk("scout", false); run(*open, 1);
+    CHECK(vis(*open, 8) && vis(*open, 15) && vis(*open, 18));
+    auto walled = mk("scout", true); run(*walled, 1);
+    CHECK(vis(*walled, 8) && vis(*walled, 9));
+    CHECK(!vis(*walled, 13) && !vis(*walled, 16) && !vis(*walled, 18));
+    auto tower = mk("tower", true); run(*tower, 1);
+    CHECK(vis(*tower, 16) && vis(*tower, 18));      // high eye: sees over the wall (cells right behind it stay hidden)
+    auto drone = mk("drone", true); run(*drone, 1);
+    CHECK(vis(*drone, 11) && vis(*drone, 16));
+    // the wall destroyed: sight opens again
+    Entity w = findType(*walled, "wall", 0);
+    CHECK(w.valid());
+    if (w.valid()) { walled->world().get<game::Unit>(w).hp = Fixed{}; run(*walled, 1); CHECK(vis(*walled, 16)); }
+    // smoke cloud between the eyes and the target
+    auto smoke = makeSimJson(rules, flatMap(32, 8, R"(,"entities":[{"type":"scout","owner":1,"pos":[5.5,4.5]},{"type":"smoker","owner":1,"pos":[5.5,6.5]},{"type":"scout","owner":2,"pos":[30.5,4.5]}])"));
+    run(*smoke, 1);
+    CHECK(vis(*smoke, 16));
+    castAbility(*smoke, findType(*smoke, "smoker", 1), 0, kNullEntity, P(11.5, 4.5));
+    run(*smoke, 1);
+    CHECK(!vis(*smoke, 16) && vis(*smoke, 8));
+}
+
 // ---------------- Lighting (lighting agent): GPU-free logic ----------------
 #include "modules/rts/view/RtsLights.h"
 #include "engine/render/QualityGovernor.h"

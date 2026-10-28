@@ -40,7 +40,7 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `waveClock` | seconds; structures with `waveSpawn` release their units together on this clock (lane battlers) |
 | `autoBuild` | `{"pool": [types], "cost": {res: n}, "growth": 0.5}` — a BUILD button: the sim picks a type from the pool and a spot next to the base automatically; cost grows by `growth` per structure already auto-built |
 | `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}`, `{"mode": "territory", "share": 0.9}` (a team owning that share of all claimable cells wins; a player with no territory is out) |
-| `fogOfWar` | `{"mode": "full"}` — fog of war: `full` (default: unexplored black, explored dim), `explored` (the whole map starts explored, enemies only in sight), `none` (no fog, everyone sees everything); `shareAllies` (true). A map may override `mode`. The other keys are visual, see "Fog of war look" |
+| `fogOfWar` | `{"mode": "full"}` — fog of war: `full` (default: unexplored black, explored dim), `explored` (the whole map starts explored, enemies only in sight), `none` (no fog, everyone sees everything); `shareAllies` (true); `lineOfSight` (false: 3D visibility by heights and blockers, see "3D line of sight"); `rockHeight` (2: undug rock as an occluder). A map may override `mode`. The other keys are visual, see "Fog of war look" |
 | `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage. With `terrain.model: "heightfield"` the advantage is the height difference / `levelHeight` (fractional), `missUphill` scales with it (full chance from one level below) and vision follows real line of sight |
 | `terrain` | `{"model": "heightfield", "maxSlope": {"ground": 0.8, "sand": 0.6}, "buildSlope": 0.35, "uphillSpeed": 0.5, "downhillSpeed": 0.2, "eyeHeight": 1, "targetHeight": 0.5}` — terrain model, see "Heightfield terrain". `model`: `"levels"` (default: cliff levels + ramps), `"flat"` (levels ignored), `"heightfield"`. Other keys of this block are visual (view) and ignored by the simulation |
 | `regions` | `{"claimCost": {"food": 100}, "claimCostGrowth": 0.5, "buildOnlyOwned": true, "productionPerRegion": 0.1}` — territory (Northgard; with flags: Z) |
@@ -1163,3 +1163,20 @@ Visual keys of rules.json `"fogOfWar"` (game.json `"fogOfWar"` overrides key by 
 Weak GPUs (shadow quality off/low) draw `smooth` as `cells` without noise. Heightfield maps draw
 the fog in the terrain shader (colour, transparency, cells, grid; `pattern` and `noise` are
 sheet-only).
+
+### 3D line of sight
+
+With `"fogOfWar": {"lineOfSight": true}` (always on for heightfield maps with `heights.blockVision`)
+each ground unit sees a cell only if the straight line from its eyes to the cell clears every cell in
+between. Heights: heightfield surface, or cliff level × `levelHeight` on level maps; plus dynamic
+occluders, recomputed every vision pass (5 ticks):
+
+| Source | Key | Height above the ground |
+|---|---|---|
+| Unit or structure type (walls, forests, tall buildings) | type `"vision": {"blocks": 3}` | over its footprint (structures) or its cell; gone when it dies |
+| Smoke, dust, wall-of-fog skills | delivery `{"type": "area", "radius": 2, "lifetime": 10, "blocksVision": 4}` | disc of the area while it lasts |
+| Undug rock | `fogOfWar.rockHeight` (2, 0 = transparent) | every rock cell |
+
+Eyes: `terrain.eyeHeight` + type `"vision": {"eye": 6}` (watchtowers see over walls and hills);
+targets count `terrain.targetHeight`. Air units and types with `"vision": {"seesOver": true}` see the
+full circle. Integer math, deterministic; editor: **Туман войны** → "3D: линия видимости".
