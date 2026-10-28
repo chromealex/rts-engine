@@ -2,7 +2,7 @@
 // clips, variants, team colours, quality tiers). For artists checking an export and for CI
 // screenshots of the model pipeline.
 //
-//   rts_modelview a.glb b.gltf@Walk c.obj [--clip Walk] [--time 0.4] [--variant winter]
+//   rts_modelview a.glb b.gltf@Walk c.obj [--clip Walk] [--time 0.4] [--variant winter] [--baked]
 //                 [--team 0.9,0.2,0.2] [--quality low|medium|high] [--height 1.5] [--distance 6]
 //                 [--yaw 20] [--pitch 30] [--spacing 2.2]
 //   file@Clip plays that clip on that instance. Keys: Space next clip, Q quality, V variant,
@@ -47,7 +47,7 @@ struct Viewer {
     float seek = -1, height = 0, spacing = 2.2f, distance = 0, yawDeg = 25, pitchDeg = 32;
     float3 team{0.92f * 0.92f, 0.22f * 0.22f, 0.20f * 0.20f};
     MaterialQuality quality = MaterialQuality::High;
-    bool qualitySet = false, paused = false;
+    bool qualitySet = false, paused = false, baked = false;
     std::string gameDir;
     std::vector<std::string> types;
     float start = 0, fixedDt = 0;
@@ -118,6 +118,8 @@ struct Viewer {
                                   path.c_str(), m->nodes.size(), m->meshes.size(), m->materials.size(), m->images.size(), m->skins.size(), m->clips.size());
                     log.push_back(buf);
                     for (auto& c : m->clips) log.push_back("  clip '" + c.name + "' " + std::to_string(c.duration) + " s");
+                    for (auto& im : m->images) if (im.gpuCompressed) log.push_back("  texture '" + im.name + "' stays GPU-compressed");
+                    if (m->baked.tex.valid() || bakeAnimations(d, *m)) log.push_back("  clips baked: " + std::to_string(m->baked.rows) + " rows at " + std::to_string(int(m->baked.fps)) + " fps");
                     for (auto& v : m->variants) log.push_back("  variant '" + v + "'");
                 } catch (const std::exception& e) { log.push_back(e.what()); }
                 it = models.emplace(path, std::move(m)).first;
@@ -175,8 +177,15 @@ struct Viewer {
             md.model = in.model;
             md.world = in.fix;
             md.nodeWorld = &in.world;
+            md.pose = &in.pose;
             md.team = team;
             md.variant = variant >= 0 ? variant : in.variant;
+            BakedSample bs;
+            if (baked && in.model->baked.tex.valid()) { // skin from the baked clip texture, as crowds do
+                const auto b = in.anim.baseSample();
+                bs = {b.clipA, b.clipB, b.timeA, b.timeB, b.w, b.loopA, b.loopB};
+                md.baked = &bs;
+            }
             r3d.drawModel(md);
         }
         gfx::PassDesc pass;
@@ -189,6 +198,7 @@ struct Viewer {
         ImGui::Text("materials: %s   draw calls: %u", q[int(r3d.materialQuality())], r3d.drawCalls());
         for (auto& in : inst)
             if (in.model) ImGui::Text("%s  %s", in.path.c_str(), in.clip >= 0 ? in.model->clips[size_t(in.clip)].name.c_str() : "(bind pose)");
+        if (gallery) for (auto& ev : gallery->recentEvents()) ImGui::TextColored(ImVec4(1, 0.5f, 0.85f, 1), "event: %s", ev.c_str());
         if (!r3d.modelError().empty()) ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1), "%s", r3d.modelError().c_str());
         ImGui::End();
         gui.render();
@@ -251,6 +261,7 @@ int rtsMain(int argc, char** argv) {
             for (std::string t; std::getline(ss, t, ',');) v.types.push_back(t);
         }
         else if (a == "--start") v.start = std::stof(next());
+        else if (a == "--baked") v.baked = true;
         else if (a == "--fixed-dt") v.fixedDt = std::stof(next());
         else if (a == "--time") v.seek = std::stof(next());
         else if (a == "--variant") v.variantName = next();

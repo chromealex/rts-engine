@@ -467,6 +467,8 @@ void preset(ProcAnim& p, const std::string& type, bool& special, std::string& er
     else if (type == "lean") { p.channel = ProcAnim::Rotate; p.axis = {1, 0, 0}; p.special = ProcAnim::Lean; p.amp = 0.12f; p.limit = 15 * kDeg; p.when = kProcMoving; }
     else if (type == "aim") { p.channel = ProcAnim::Rotate; p.axis = {0, 1, 0}; p.special = ProcAnim::Aim; p.limit = 180 * kDeg; p.turnSpeed = 180 * kDeg; }
     else if (type == "aimPitch") { p.channel = ProcAnim::Rotate; p.axis = {0, 0, 1}; p.special = ProcAnim::AimPitch; p.limit = 30 * kDeg; p.turnSpeed = 90 * kDeg; }
+    else if (type == "look") { p.channel = ProcAnim::Rotate; p.axis = {0, 1, 0}; p.special = ProcAnim::Aim; p.limit = 70 * kDeg; p.turnSpeed = 240 * kDeg; }
+    else if (type == "align") { p.channel = ProcAnim::Rotate; p.special = ProcAnim::Align; p.amp = 1; p.turnSpeed = 8; }
     else if (type == "fall") { p.channel = ProcAnim::Rotate; p.axis = {1, 0, 0}; p.special = ProcAnim::Fall; p.amp = 90 * kDeg; p.on = kProcEvDeath; p.decay = 0.6f; }
     else if (type == "sink") { p.channel = ProcAnim::Translate; p.axis = {0, -1, 0}; p.special = ProcAnim::Fall; p.amp = 0.8f; p.on = kProcEvDeath; p.decay = 2.5f; }
     else if (type == "custom" || type.empty()) special = false;
@@ -481,7 +483,7 @@ void RtsView::parseProcedural(const UnitType& t, const Json& list, ModelChoice& 
         bool isPreset = false;
         std::string err;
         preset(p, j.getStr("type", "custom"), isPreset, err);
-        if (!err.empty()) { warn(t, err + " (bob, hover, sway, spin, wheel, pulse, recoil, lunge, shake, flap, pop, squash, lean, aim, aimPitch, fall, sink, custom)"); continue; }
+        if (!err.empty()) { warn(t, err + " (bob, hover, sway, spin, wheel, pulse, recoil, lunge, shake, flap, pop, squash, lean, aim, aimPitch, look, align, fall, sink, custom)"); continue; }
         p.nodeName = j.getStr("node");
         if (j.has("channel")) {
             std::string ch = j.getStr("channel");

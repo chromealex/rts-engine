@@ -60,6 +60,7 @@ struct Image {
     std::shared_ptr<CompressedImage> compressed;
     bool repeat = true, nearest = false;
     gfx::TextureHandle tex;
+    bool gpuCompressed = false;     // uploaded as GPU blocks (KTX2)
 };
 
 // 60 bytes, one interleaved stream for every model (unskinned meshes leave joints/weights zero).

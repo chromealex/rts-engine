@@ -40,7 +40,8 @@ using PipelineHandle = Handle<struct PipelineTag>;
 enum class Backend { Metal, GLES3, GL33 };
 enum class BufferType { Vertex, Index };
 enum class Usage { Immutable, Dynamic };          // Dynamic: updated (whole or partially) every frame
-enum class PixelFormat { RGBA8, R8, Depth, RGBA32F };   // Depth: 24/32-bit depth render target; RGBA32F: data textures
+enum class PixelFormat { RGBA8, R8, Depth, RGBA32F,
+                         ETC2_RGB8, ETC2_RGBA8, BC1, BC3, BC7, ASTC_4x4 };  // block-compressed: upload levels, check supports()   // Depth: 24/32-bit depth render target; RGBA32F: data textures
                                                         // (bone matrices, morph deltas), nearest only, read with texelFetch / read()
 enum class Filter { Nearest, Linear };
 enum class VertexFormat { Float2, Float3, Float4, UByte4N, UByte4 }; // UByte4: integers 0..255 (GLSL float / MSL uchar4)
@@ -66,6 +67,10 @@ struct TextureDesc {
     bool compare = false;       // depth textures: sampled with hardware depth comparison (shadow maps)
     bool mipmaps = false;       // RGBA8/R8: full mip chain generated from level 0 (trilinear when Linear)
     const void* data = nullptr; // may be null (contents undefined until updated)
+    // Block-compressed formats: every mip level as given (no generation); level i is levelSize[i] bytes.
+    int levelCount = 0;
+    const void* const* levelData = nullptr;
+    const size_t* levelSize = nullptr;
     const char* label = nullptr;
 };
 
@@ -139,6 +144,8 @@ public:
     virtual PipelineHandle createPipeline(const PipelineDesc& d) = 0;
     virtual void destroyPipeline(PipelineHandle h) = 0;
     virtual const std::string& lastError() const = 0;
+    // Formats the GPU samples natively (block-compressed ones vary by GPU and API).
+    virtual bool supports(PixelFormat f) const { return f == PixelFormat::RGBA8 || f == PixelFormat::R8 || f == PixelFormat::Depth || f == PixelFormat::RGBA32F; }
 
     // Frame (driven by the platform layer)
     virtual void beginFrame(int framebufferWidth, int framebufferHeight) = 0;

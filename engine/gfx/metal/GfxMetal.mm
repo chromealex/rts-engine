@@ -3,6 +3,7 @@
 
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include <TargetConditionals.h>
 
 #include <algorithm>
 #include <atomic>
@@ -65,6 +66,34 @@ public:
     }
 
     const DeviceInfo& info() const override { return info_; }
+    bool supports(PixelFormat f) const override {
+        bool apple = false, bc = false;
+#if TARGET_OS_IPHONE
+        apple = true;
+#else
+        if (@available(macOS 11.0, *)) apple = [device_ supportsFamily:MTLGPUFamilyApple2];
+        bc = true;
+#endif
+        if (@available(macOS 11.0, iOS 16.4, *)) bc = bc || device_.supportsBCTextureCompression;
+        switch (f) {
+            case PixelFormat::ETC2_RGB8: case PixelFormat::ETC2_RGBA8: case PixelFormat::ASTC_4x4: return apple;
+            case PixelFormat::BC1: case PixelFormat::BC3: case PixelFormat::BC7: return bc;
+            default: return true;
+        }
+    }
+    static MTLPixelFormat compressedFormat(PixelFormat f) {
+        switch (f) {
+            case PixelFormat::ETC2_RGB8: return MTLPixelFormatETC2_RGB8;
+            case PixelFormat::ETC2_RGBA8: return MTLPixelFormatEAC_RGBA8;
+            case PixelFormat::ASTC_4x4: return MTLPixelFormatASTC_4x4_LDR;
+#if !TARGET_OS_IPHONE
+            case PixelFormat::BC1: return MTLPixelFormatBC1_RGBA;
+            case PixelFormat::BC3: return MTLPixelFormatBC3_RGBA;
+            case PixelFormat::BC7: return MTLPixelFormatBC7_RGBAUnorm;
+#endif
+            default: return MTLPixelFormatInvalid;
+        }
+    }
     const std::string& lastError() const override { return error_; }
 
     // ---------- buffers ----------
@@ -98,6 +127,30 @@ public:
 
     // ---------- textures ----------
     TextureHandle createTexture(const TextureDesc& d) override {
+        if (MTLPixelFormat cf = compressedFormat(d.format); cf != MTLPixelFormatInvalid) {
+            MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:cf
+                width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:d.levelCount > 1 ? YES : NO];
+            td.mipmapLevelCount = NSUInteger(std::max(1, d.levelCount));
+            td.usage = MTLTextureUsageShaderRead;
+            MTTexture t;
+            t.fmt = d.format;
+            t.tex = [device_ newTextureWithDescriptor:td];
+            if (!t.tex) { error_ = "compressed texture not supported by this GPU"; return {}; }
+            const bool bc = d.format == PixelFormat::BC1 || d.format == PixelFormat::BC3 || d.format == PixelFormat::BC7;
+            const NSUInteger blockBytes = d.format == PixelFormat::ETC2_RGB8 || d.format == PixelFormat::BC1 ? 8 : 16;
+            for (int l = 0; l < d.levelCount; ++l) {
+                const NSUInteger w = NSUInteger(std::max(1, d.width >> l)), h = NSUInteger(std::max(1, d.height >> l));
+                [t.tex replaceRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:NSUInteger(l)
+                           withBytes:d.levelData[l] bytesPerRow:((w + 3) / 4) * blockBytes];
+            }
+            (void)bc;
+            MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
+            sd.minFilter = sd.magFilter = d.filter == Filter::Linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+            if (d.levelCount > 1) sd.mipFilter = MTLSamplerMipFilterLinear;
+            sd.sAddressMode = sd.tAddressMode = d.repeat ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
+            t.sampler = [device_ newSamplerStateWithDescriptor:sd];
+            return {textures_.add(t)};
+        }
         MTLPixelFormat pf = d.format == PixelFormat::R8 ? MTLPixelFormatR8Unorm
                           : d.format == PixelFormat::RGBA32F ? MTLPixelFormatRGBA32Float
                           : d.format == PixelFormat::Depth ? MTLPixelFormatDepth32Float
