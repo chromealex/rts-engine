@@ -91,6 +91,7 @@ bool protectedCall(Vm& vm, int nargs, int nresults, std::string* error = nullptr
 // ---- API tables (RtsScriptApi.cpp)
 void openGameApi(Vm& vm);           // `game` table: queries always, actions in Sim mode
 void openStdApi(Vm& vm);            // `rts` table for the standard library (RtsScriptStd.cpp)
+void openFieldApi(Vm& vm);          // `field` table: grid fields (RtsGridFieldsApi.cpp)
 void pushEntity(lua_State* L, Entity e);
 bool argEntity(lua_State* L, int idx, Entity& out); // integer handle (no liveness check)
 

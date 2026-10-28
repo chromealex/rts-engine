@@ -210,6 +210,14 @@ Actions (simulation scripts only):
 
 Not available yet: fog reveal from scripts (use a `reveal` effect in an ability).
 
+### Grid fields: the `field` table
+
+Per-cell layers (fire, water, creep, influence...) defined in rules `"fields"` run as C++ kernels; scripts
+read and write them: `field.get(id, x, z [, player])`, `field.set` / `field.add` / `field.fill_rect` /
+`field.fill_circle`, `field.sum` / `field.max` / `field.count` / `field.find` over a rectangle or disc, and
+`on_field_threshold(id, value, fn [, "rise" | "fall"])` hooks. Values are integers (`int` fields) or `fx`
+(`fixed`). View scripts get the read-only part. Reference: `docs/fields.md`.
+
 ## Data hooks: scripts inside rules
 
 ```json
