@@ -251,15 +251,20 @@ def ironfront():
 
 
 def ambersands():
-    m = Map("Spice Basin", 64, 48, duel())
-    # mostly sand ('.' with spice); rock plateaus for bases
+    # Dune II: Atreides vs Harkonnen; sand everywhere (worms, spice, blooms), rock plateaus for the bases
+    m = Map("Spice Basin", 64, 48, duel("atreides", "harkonnen"))
     m.rect(3, 15, 16, 18, 'R')
     m.rect(28, 20, 8, 8, 'R', sym=False)
-    m.ent("mcv", 1, [10, 24])
-    m.ent("trooper", 1, [14, 26]); m.ent("trooper", 1, [14, 27])
-    m.field("spice", 23, 18, 4)
+    m.players[0]["start"] = [10, 24]
+    m.players[1]["start"] = m.mirror([10, 24])
+    m.field("spice", 24, 18, 4)
     m.field("spice", 12, 40, 4)
+    m.field("spice", 30, 9, 3)
+    m.ent("spice_bloom", 0, [22, 34])
+    m.ent("spice_bloom", 0, [40, 6], sym=False)
     m.ent("sandworm", -1, [32, 4], sym=False)
+    m.ent("sandworm", -1, [32, 44], sym=False)
+    m.extra["areas"] = {"desert_north": [20, 2, 24, 10], "desert_south": [20, 36, 24, 10]}
     write("ambersands", m, "spice_basin")
 
 
