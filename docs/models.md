@@ -39,10 +39,12 @@ match. Keys: Space next clip, Q quality, V variant, T team colour, P pause; drag
 |---|---|
 | glTF 2.0 `.glb`, `.gltf` (+ `.bin`, images, data URIs) | node hierarchy, meshes (triangles / strips / fans, indexed or not), all accessor types incl. normalized and sparse (`KHR_mesh_quantization`), skins (any joint count: meshes are split into palettes of 80 joints), TRS animations with step / linear / cubic-spline keys, metallic-roughness materials with base colour / metallic-roughness / normal / occlusion / emissive textures, alpha modes, double sided, `KHR_texture_transform`, `KHR_materials_unlit`, `KHR_materials_emissive_strength`, `KHR_materials_pbrSpecularGlossiness` (converted), `KHR_materials_variants` |
 | Wavefront `.obj` + `.mtl` | positions, UVs, normals, polygons, negative indices, vertex colours, groups/objects as nodes; `Kd`, `d`/`Tr`, `Ns`, `Ke`, `Pr`/`Pm`, `map_Kd`, `map_Bump`/`norm`, `map_Ke` |
+| Autodesk FBX `.fbx` (binary and ASCII, FBX 6.x / 7.x, via [ufbx](https://github.com/ufbx/ufbx)) | converted on load to Y up, right-handed, metres (unit scale applied to geometry and translations, node scales stay clean; pivots and geometric transforms baked); node hierarchy, polygon meshes (triangulated), normals (generated when missing), UV0, vertex colours, tangents, one primitive per material, skins (cluster bind matrices, 4 strongest influences per vertex, unweighted vertices stay rigid with the mesh node, split into palettes of 80 joints), every animation stack becomes a clip (baked to linear T/R/S keys at 30 fps, constant channels dropped); materials from Lambert / Phong / PBR shaders: base colour × factor, roughness / metalness factors, normal map, emission, opacity (< 1 → `Blend`), double sided, unlit; textures from the file name relative to the `.fbx` (falling back to the bare file name next to it) or embedded in the file |
 | built-in shapes | units `worker soldier ranged vehicle tank flyer mushroom generic`; structures `hall house barracks workshop factory tower mine tree rock mushroomhouse structure` |
 
-Not supported (warning, skipped): morph targets, `TEXCOORD_1`, more than 4 joint influences, cameras,
-lights. Draco / meshopt geometry and KTX2 / WebP textures are an error when the file requires them
+Not supported (warning, skipped): `TEXCOORD_1` / extra FBX UV and colour sets, more than 4 joint
+influences, cameras, lights, FBX blend shapes, vertex caches and non-transform property animation,
+roughness / metalness textures of FBX materials. glTF morph targets are supported (below). Draco / meshopt geometry and KTX2 / WebP textures are an error when the file requires them
 (re-export without compression). Textures: PNG, JPEG, TGA, KTX2 (below).
 
 **KTX2 textures.** Any texture path (OBJ `map_*`, material overrides `texture` / `teamMask` /
