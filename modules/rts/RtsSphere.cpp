@@ -59,14 +59,15 @@ void CubeSphere::faceFromDir(Vec3 d, int& face, Fixed& a, Fixed& b) const {
     else face = d.z.raw >= 0 ? 4 : 5;
     const SphereFace& f = kSphereFaces[face];
     const Fixed dn = dotI(d, f.n);
-    // inverse warp without trigonometry: s' = du / dn, located among the cell-edge values of the table
-    // (the same function dirFromFace uses, so cell membership is consistent), linear inside the cell
+    // inverse warp: the cell comes from the cell-edge table (the values dirFromFace uses, so membership is
+    // consistent with the forward map), the position inside it from atan (clamped into that cell)
     auto unwarp = [&](Fixed du) {
         const Fixed sw = fxClamp(du / dn, warp_.front(), warp_.back());
         int lo = 0, hi = n_;                       // warp_[lo] <= sw < warp_[hi]
         while (hi - lo > 1) { const int mid = (lo + hi) / 2; if (warp_[size_t(mid)] <= sw) lo = mid; else hi = mid; }
-        const Fixed w0 = warp_[size_t(lo)], w1 = warp_[size_t(hi)];
-        return Fixed::fromInt(lo) + fxClamp((sw - w0) / (w1 - w0), Fixed{}, Fixed::fromInt(1));
+        const Fixed ang = fxAtan2Turns(du, dn);    // in [-1/8, 1/8]
+        const Fixed r = Fixed::fromRaw(((8 * ang.raw + Fixed::kOne) * n_) / 2);
+        return fxClamp(r, Fixed::fromInt(lo), Fixed::fromInt(lo + 1) - Fixed::fromRaw(1));
     };
     a = unwarp(dotI(d, f.u));
     b = unwarp(dotI(d, f.v));

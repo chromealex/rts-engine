@@ -11,7 +11,7 @@ inline const Fixed kOne = Fixed::fromInt(1);
 // on different bodies are kBodySpacing apart, so never in range of each other).
 inline Fixed dist2D(Vec3 a, Vec3 b) { return Surface::onSphere(a) ? (a - b).length() : (a - b).xz().length(); }
 inline Vec3 flat(Vec3 v) { v.y = Fixed{}; return v; }
-inline bool canHit(const WeaponDef& w, uint8_t layer) { return (w.targets & layer) != 0; }
+inline bool canHit(const WeaponDef& w, uint8_t layer) { return layerHit(w.targets, layer); }
 inline Fixed maxWeaponRange(const UnitType& t) {
     Fixed r{};
     for (auto& w : t.weapons) r = fxMax(r, w.range);
