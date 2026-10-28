@@ -48,6 +48,7 @@
 #define ICON_TILES          "\xee\x83\xa9"   // grid-3x3 U+E0E9
 #define ICON_TERRAIN        "\xee\x88\xb2"   // mountain-snow U+E232
 #define ICON_LIGHTING       "\xee\x87\x82"   // lightbulb U+E1C2
+#define ICON_FOG            "\xee\x88\x94"   // cloud-fog U+E214
 #define ICON_MODELS         "\xee\x94\xa4"   // cuboid U+E524
 #define ICON_SETTINGS       "\xee\x85\x94"   // settings U+E154
 #define ICON_PALETTE        "\xee\x87\x9d"   // palette U+E1DD
@@ -116,7 +117,7 @@ inline const char* windowIconFor(const char* id) {
         {"scene", ICON_SCENE}, {"game", ICON_GAME}, {"hierarchy", ICON_HIERARCHY}, {"inspector", ICON_INSPECTOR},
         {"tools", ICON_TOOLS}, {"project", ICON_PROJECT}, {"rules", ICON_RULES}, {"stats", ICON_STATS},
         {"agent", ICON_AGENT}, {"console", ICON_CONSOLE}, {"build", ICON_BUILD}, {"effects", ICON_FX},
-        {"tiles", ICON_TILES}, {"terrain", ICON_TERRAIN}, {"lighting", ICON_LIGHTING}, {"models", ICON_MODELS},
+        {"tiles", ICON_TILES}, {"terrain", ICON_TERRAIN}, {"lighting", ICON_LIGHTING}, {"models", ICON_MODELS}, {"fog", ICON_FOG},
     };
     for (auto& m : kMap) if (std::strcmp(m.id, id) == 0) return m.icon;
     return ICON_WINDOW;
