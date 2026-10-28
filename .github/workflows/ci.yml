@@ -213,6 +213,29 @@ jobs:
       - name: Yandex Games plugin protocol
         run: node plugins/yandex-games/web/test.mjs
 
+  # Steamworks SDK is behind a partner login; CI takes the same SDK headers and redistributables
+  # from the steamworks-sys crate (crates.io) to compile, link and test the steam plugin.
+  plugins-steam:
+    name: Plugins (Steam, Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Steamworks SDK (from the steamworks-sys crate)
+        run: |
+          curl -sSfL https://static.crates.io/crates/steamworks-sys/steamworks-sys-0.12.0.crate | tar xz -C "$RUNNER_TEMP"
+          echo "STEAMWORKS_SDK=$RUNNER_TEMP/steamworks-sys-0.12.0/lib/steam" >> "$GITHUB_ENV"
+      - name: Plugin against a fake Steam client
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q ninja-build libx11-dev libegl-dev libgles-dev
+          cmake --preset linux-release -DCMAKE_COMPILE_WARNING_AS_ERROR=ON
+          cmake --build build/linux-release --target rts_plugins rtsbuild
+          plugins/steam/test/run.sh
+      - name: Packaged Linux game with the steam plugin
+        run: |
+          python3 .github/scripts/plugins-testgame.py build/plugins-game
+          build/linux-release/rtsbuild --project build/plugins-game --target linux --out build/plugins-dist --plugins steam
+          for d in build/plugins-dist/linux/*/; do ldd "$d$(basename "$d")" | grep "libsteam_api.so => .*$(basename "$d")/libsteam_api.so"; done
+
   plugins-ios:
     name: Plugins (iOS SDKs)
     runs-on: macos-15

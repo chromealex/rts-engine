@@ -5029,6 +5029,8 @@ struct EchoPlugin : plugins::NativePlugin {
         if (method == "event") plugins::emit("echo", "ping", R"({"n":1})");
         r.ok(args);
     }
+    void update() override { ++updates; }
+    int updates = 0;
 };
 } // namespace
 
@@ -5040,9 +5042,12 @@ TEST(plugin_bridge_calls_replies_events) {
     // desktop mocks exist only when the game lists them (a shipped build must not offer fake purchases)
     if (!std::getenv("RTS_MOCK_PLUGINS")) CHECK(!plugins::available("mock-store") && !plugins::available("mock-ads"));
     std::vector<std::string> got;
+    plugins::pump();
+    CHECK(echo->updates == 0); // no per-frame work before "init"
     plugins::call("echo", "hello", R"({"x":1})", [&](const plugins::Result& r) { got.push_back(r.ok ? r.data : "ERR " + r.error); });
     CHECK(got.empty()); // replies never arrive inside call()
     plugins::pump();
+    CHECK(echo->updates == 1); // then update() every frame
     CHECK(got.size() == 1 && got[0] == R"({"x":1})");
     CHECK(echo->calls.size() == 2 && echo->calls[0] == R"(init {"key":"L"})"); // config first, resolved
     plugins::call("echo", "again", "{}", {});

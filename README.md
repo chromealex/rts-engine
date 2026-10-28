@@ -459,8 +459,8 @@ UI (`UiLayer`) вызывает это сам при фокусе на `<input t
 JavaScript (web) или C++ — через один асинхронный мост `engine/platform/Plugins.h`. Игра пользуется
 общими API `rts::store` (покупки) и `rts::ads` (реклама) из `engine/services`, а провайдер выбирается
 по платформе в `game.json`. Готовые плагины в `plugins/`: **App Store**, **Google Play**, **RuStore**,
-**Яндекс Игры** (web: покупки и реклама), **Yandex Mobile Ads**, **AdMob**, **AppLovin MAX**,
-**ironSource (Unity LevelPlay)**. В билд попадают только выбранные игрой плагины (`"plugins"` в
+**Яндекс Игры** (web: покупки и реклама), **Steam** (покупки через Inventory Service и DLC, Windows/
+Linux/macOS), **Yandex Mobile Ads**, **AdMob**, **AppLovin MAX**, **ironSource (Unity LevelPlay)**. В билд попадают только выбранные игрой плагины (`"plugins"` в
 game.json или `--plugins`): чужих SDK, зависимостей, записей манифеста и ключей Info.plist в нём нет,
 CI это проверяет. Для отладки на десктопе есть заглушки магазина и рекламы (`mock-store`, `mock-ads`;
 `RTS_MOCK_STORE`, `RTS_MOCK_ADS`): весь сценарий покупки проходит без телефона, а в релизные сборки

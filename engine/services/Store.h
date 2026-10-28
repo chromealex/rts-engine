@@ -1,5 +1,5 @@
-// In-app purchases, one API for every store: App Store, Google Play, RuStore, Yandex Games, and a
-// mock store on desktop builds. The store is chosen per platform from game.json:
+// In-app purchases, one API for every store: App Store, Google Play, RuStore, Yandex Games, Steam,
+// and a mock store on desktop dev builds. The store is chosen per platform from game.json:
 //
 //   "store": {
 //     "providers": { "android": ["googleplay"], "ios": ["appstore"], "web": ["yandex-games"] },
@@ -9,7 +9,7 @@
 //     ]
 //   }
 //
-// "providers" is optional (default order: appstore, googleplay, rustore, yandex-games, mock-store —
+// "providers" is optional (default order: appstore, googleplay, rustore, yandex-games, steam, mock-store —
 // the first one built into the app wins). "ids" maps a product to a store-specific id.
 //
 // Purchase flow: purchase() → grant the item → finish() (consumes / acknowledges it). Purchases
@@ -50,7 +50,7 @@ struct Purchase {
 };
 
 bool available();                // a store is built into this app for this platform
-std::string provider();          // "googleplay", "appstore", "rustore", "yandex-games", "mock-store", ""
+std::string provider();          // "googleplay", "appstore", "rustore", "yandex-games", "steam", "mock-store", ""
 
 // Catalog with localized prices. ids empty = all products from game.json.
 void products(std::function<void(bool ok, const std::vector<Product>& products, const std::string& error)> cb,

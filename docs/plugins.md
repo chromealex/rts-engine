@@ -43,6 +43,7 @@ they register only when listed or with `RTS_MOCK_PLUGINS=1`). CI checks this for
 | `googleplay` | Android | store | Google Play Billing 9.1 |
 | `rustore` | Android | store | RuStore Pay SDK 11 (BOM 2026.10.01). The old `billingclient` stopped working on 1 Aug 2026 |
 | `yandex-games` | Web | store + ads | Yandex Games SDK (`/sdk.js`) |
+| `steam` | Windows, Linux, macOS | store | Steamworks SDK (Inventory Service purchases, DLC); C++ |
 | `yandex-ads` | Android, iOS | ads | Yandex Mobile Ads 8.6 |
 | `admob` | Android, iOS | ads | Google Mobile Ads (Android 25.5, iOS 13.11) |
 | `applovin` | Android, iOS | ads | AppLovin MAX 13.6.3 (mediation) |
@@ -63,7 +64,8 @@ they register only when listed or with `RTS_MOCK_PLUGINS=1`). CI checks this for
                   "testDevices": ["<advertising id>"] },
   "ironsource": { "appKey": { "android": "25b63cf85", "ios": "25c43a4a5" },
                   "interstitial": { "android": "h3xw38h9214adgxo", "ios": "obg6ohwts3y690ks" }, "rewarded": {…}, "banner": {…} },
-  "yandex-games": { "signed": false }
+  "yandex-games": { "signed": false },
+  "steam":      { "appId": 480, "items": { "gems_100": 100, "no_ads": 200 }, "dlc": { "expansion": 1234560 } }
 },
 "store": {
   "providers": { "android": ["rustore", "googleplay"], "ios": ["appstore"], "web": ["yandex-games"], "desktop": ["mock-store"] },
@@ -76,7 +78,7 @@ they register only when listed or with `RTS_MOCK_PLUGINS=1`). CI checks this for
 - Any value may be per platform: `{"android": …, "ios": …, "web": …, "desktop": …, "default": …}`
   is replaced by the current platform's value everywhere (plugin config, store, ads).
 - `providers`: the first one built into the app wins. Without it: store = appstore, googleplay,
-  rustore, yandex-games, mock-store; ads = yandex-ads, admob, applovin, ironsource, yandex-games, mock-ads.
+  rustore, yandex-games, steam, mock-store; ads = yandex-ads, admob, applovin, ironsource, yandex-games, mock-ads.
 - **Store policies**: an app published on Google Play must not contain another payment system, and a
   RuStore build should not need Google Play. Build them separately:
   `rtsbuild --target android --plugins googleplay,admob` and `--plugins rustore,yandex-ads`
@@ -92,6 +94,35 @@ Mediation notes: `applovin` and `ironsource` are mediators — adapters for othe
 Unity Ads, Mintegral, …) are extra Gradle/pod dependencies; add them in a copy of the plugin under
 `games/<game>/plugins/` (it overrides the engine one). A LevelPlay rewarded reward may arrive just
 after the ad closes; the plugin waits up to 1.5 s for it before replying.
+
+### Steam
+
+`steam` is a C++ plugin for the desktop builds (Windows, Linux, macOS) on the Steamworks SDK.
+Purchases go through the **Steam Inventory Service**, the way to sell inside a Steam game without
+your own server (MicroTxn needs a backend and a publisher Web API key):
+
+1. Steamworks partner site → your app → Inventory Service: enable it, upload item definitions with
+   prices (`"price_category"` or `"price"`) and `"store_tags"`/`"name"`/`"description"`. Purchasable
+   consumables must not set `auto_stack`: each purchase has to be its own item instance.
+2. game.json: `"steam": { "appId": …, "items": { "<product id>": <item definition id> } }`. DLC are
+   sold as non-consumables: `"dlc": { "<product id>": <DLC app id> }` (overlay store page, ownership
+   via `BIsDlcInstalled`). Store product `"ids"` may also map a product straight to a definition id.
+3. Build with the SDK: download it from partner.steamgames.com and set `STEAMWORKS_SDK=<sdk folder>`
+   (or `"sdk"` in the plugin config). Valve does not allow the SDK in the repo; rtsbuild stops with
+   a hint when it is missing, links `steam_api`, and puts `steam_api64.dll` / `libsteam_api.so` /
+   `libsteam_api.dylib` next to the executable.
+4. Development runs need `steam_appid.txt` with the app id next to the executable and Steam
+   running. Release builds outside the Steam DRM wrapper: `"restartIfNecessary": true`.
+
+How the protocol maps: `products` = `RequestPrices` + `GetItemPrice` (price in the player's
+currency, title/description from the item definition); `purchase` = `StartPurchase`, checkout in the
+Steam overlay, then the new item instance is found by re-reading the inventory when the overlay
+closes (token = item instance id; if nothing arrives within ~8 s the reply is `cancelled`, and a late
+grant still comes as a `purchase` event); `restore` = every item instance in the inventory plus owned
+DLC; `finish` consumes one consumable instance. The overlay sends `app.pause`/`app.resume`, so the
+match pauses while it is open. Receipts carry `steamId`, `appId` and `itemId` for server checks
+(`ISteamInventory` Web API). If Steam is not running, store calls fail with the reason and the game
+keeps working.
 
 ## Using the services (C++)
 
@@ -126,7 +157,7 @@ switching apps, so the game pauses and mutes in one place.
 
 All messages are JSON. Errors are failed replies; `"cancelled"` means the user backed out.
 
-**store** (`appstore`, `googleplay`, `rustore`, `yandex-games`, `mock-store`)
+**store** (`appstore`, `googleplay`, `rustore`, `yandex-games`, `steam`, `mock-store`)
 
 | Method | Args | Reply |
 |---|---|---|
@@ -177,6 +208,11 @@ Folder `plugins/<name>/` (engine-wide) or `games/<game>/plugins/<name>/` (one ga
                "plist": ["<key>MySdkKey</key><string>${appKey}</string>"],
                "skAdNetworks": ["cstr6suwn9"] },        // ad networks: merged into one SKAdNetworkItems
   "macos":   { same keys as ios },
+  "windows": { "sources": ["src/*.cpp"], "includeDirs": ["${sdk}/include"],   // also "linux", "macos":
+               "libraries": ["${sdk}/lib/win64/my.lib"],                     // desktop SDKs installed
+               "runtime": ["${sdk}/bin/win64/my.dll"] },                     // by the developer
+  "defaults": { "sdk": "${env.MY_SDK}" },               // config fallbacks; ${env.X} = environment variable
+  "sdkHint": "Download the SDK from … and set MY_SDK",  // printed when a path above is missing
   "web":     { "scripts": ["https://cdn.example.com/sdk.js"], "js": ["web/my-sdk.js"] }
 }
 ```
@@ -195,7 +231,9 @@ game.json config for that platform (rtsbuild warns about missing keys). rtsbuild
 - Web — copies the scripts and inserts `<script>` tags at `<meta name="rts-plugin-scripts">` in the
   shell, plus `RTSPlugins.config[name]`.
 - C++ sources are compiled into the game executable itself (not a static library), so
-  `RTS_PLUGIN(...)` self-registration works.
+  `RTS_PLUGIN(...)` self-registration works. Desktop `includeDirs`/`libraries` go to the game
+  target, `runtime` files are copied next to the executable (rpath `$ORIGIN` / `@loader_path`).
+  A C++ plugin can override `update()`: it runs every frame on the game thread (SDK callbacks).
 
 Rules for plugin code: answer every call exactly once (the reply objects ignore a second answer);
 call SDKs on their required thread (Java plugins run on the UI thread, Objective-C on the main
@@ -208,6 +246,10 @@ thread); never block; send `app.pause`/`app.resume` around anything that covers 
   protocol test against a fake SDK (`node plugins/yandex-games/web/test.mjs`).
 - ✅ rtsbuild output: Android manifest/Gradle/Java, web script tags, iOS plugins.cmake/Podfile/
   SKAdNetworkItems; isolation check for every plugin (`check-plugin-isolation.py`).
+- ✅ `steam`: builds and links a packaged Linux game with the real SDK redistributables; purchase
+  flow (prices, restore, overlay checkout, consume, DLC, cancel) tested against a fake Steam client
+  (`plugins/steam/test/run.sh`, CI job `plugins-steam`); without Steam the game starts and store
+  calls report why. Not yet run against a real Steam account.
 - ✅ Java plugins compile (javac against API stubs written from the SDKs' bytecode / official samples).
 - ⏳ Real SDKs: Gradle/CocoaPods builds and device runs — CI job `plugins`; Objective-C plugins not
   compiled here (no Xcode). `applovin`/`ironsource`: APIs taken from the official integration
