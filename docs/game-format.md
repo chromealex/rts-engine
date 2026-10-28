@@ -40,7 +40,8 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `waveClock` | seconds; structures with `waveSpawn` release their units together on this clock (lane battlers) |
 | `autoBuild` | `{"pool": [types], "cost": {res: n}, "growth": 0.5}` — a BUILD button: the sim picks a type from the pool and a spot next to the base automatically; cost grows by `growth` per structure already auto-built |
 | `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}`, `{"mode": "territory", "share": 0.9}` (a team owning that share of all claimable cells wins; a player with no territory is out) |
-| `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage |
+| `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage. With `terrain.model: "heightfield"` the advantage is the height difference / `levelHeight` (fractional), `missUphill` scales with it (full chance from one level below) and vision follows real line of sight |
+| `terrain` | `{"model": "heightfield", "maxSlope": {"ground": 0.8, "sand": 0.6}, "buildSlope": 0.35, "uphillSpeed": 0.5, "downhillSpeed": 0.2, "eyeHeight": 1, "targetHeight": 0.5}` — terrain model, see "Heightfield terrain". `model`: `"levels"` (default: cliff levels + ramps), `"flat"` (levels ignored), `"heightfield"`. Other keys of this block are visual (view) and ignored by the simulation |
 | `regions` | `{"claimCost": {"food": 100}, "claimCostGrowth": 0.5, "buildOnlyOwned": true, "productionPerRegion": 0.1}` — territory (Northgard; with flags: Z) |
 | `upkeep` | `[{"supply": 50, "gatherMult": 0.7}, {"supply": 80, "gatherMult": 0.4}]` — gathering yields less with a big army (Warcraft III) |
 | `armorTypes`, `damageTable` | `"damageTable": {"pierce": {"heavy": 0.5, "light": 1.5}}` multipliers by damage type → armor type |
@@ -76,7 +77,10 @@ any tag in `deficitDisables`).
 
 ## Movement and bodies
 
-`"move": {"speed": 2.8, "radius": 0.4, "mass": 0.64, "layer": "ground"}`
+`"move": {"speed": 2.8, "radius": 0.4, "mass": 0.64, "layer": "ground", "maxSlope": 1.6}`
+
+- `maxSlope` (heightfield terrain only): the steepest cell this type can enter (rise per cell); default
+  `terrain.maxSlope` of its layer. At most 15 different values per game.
 
 - `radius` is the real body size (cells): units keep `r1 + r2` apart, weapon and ability ranges are measured
   edge to edge (`range` + both radii, structures by their footprint), and paths keep clearance from walls and
@@ -215,7 +219,9 @@ Map players choose a faction and a `start` point; start objects spawn there.
   "terrain": {
     "rows":   ["....~~~~....", "..."],      // one char per cell: . ground ~ water # blocked , no-build = shallow / ramp R rock
     "levels": ["000011110000", "..."],      // cliff level per cell 0..9; units change level only over / ramps
-    "heights": [0, 0, 16, ...]              // optional fine visual height per cell (1/16 units)
+    "heights": [0, 0, 16, ...],             // optional fine visual height per cell (1/16 units)
+    "corners": [0, 0, 16, ...]              // optional heightfield: (w+1)*(h+1) corner heights, 1/16 units, row-major
+    // or, for big maps: "cornersFile": "maps/<name>.r16"   raw int16 little-endian, (w+1)*(h+1) values
   },
   "fields": [{"resource": "ore", "rows": ["0000999000", "..."]}],   // density digits 1..9 of cellMax (or {"center": [x,z], "radius": 3})
   "regions": {"rows": ["AAAABBBB", "..."], "names": {"A": "Долина", "B": "Холмы"}},
@@ -681,6 +687,40 @@ games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and t
 - **Mushroom Wars 2**: `garrison` villages + `lanes` instead of hand-made `roads`.
 - **Territory war (State.io)**: `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `capturable` towns, barracks with `autoTrain`, `playerAbilities`, repeatable `levels` techs, `victory: territory`.
 
+Map size: 4..2048 cells per side. The editor saves `corners` inline up to 256x256 cells and as
+`cornersFile` (`maps/<map name>.r16`, next to the map) above that; loaders (game, headless, editor, MCP) read
+the file through the content reader, so it also works from packs.
+
+## Heightfield terrain
+
+`rules.terrain.model: "heightfield"` + a map with `terrain.corners` / `cornersFile` (without corners the map
+plays like `"levels"`). Corner `(x, y)` is the top-left corner of cell `(x, y)`; heights in 1/16 world units.
+Everything is integer / fixed point and deterministic.
+
+- **Surface**: ground height at any point is bilinear between the 4 corners of its cell; ground units (and the
+  `y` of every mobile unit) stand on it; projectiles start at the shooter's ground + 0.6 and aim at the
+  target's ground + 0.4.
+- **Slopes**: per cell steepness = max(gradient length, steepest cell edge), in height units per cell.
+  A unit can't enter cells steeper than its `move.maxSlope` (or `terrain.maxSlope` of its layer; `sand` for
+  `layer: "sand"`); pathfinding, local avoidance and spawning follow the same rule. Cliff/ramp rules
+  (`levels`, `/`) are replaced by slopes. Structures need cells no steeper than `terrain.buildSlope`.
+- **Speed**: `speed * (1 - uphillSpeed * climb)` going up, `* (1 + downhillSpeed * descent)` going down, where
+  climb/descent = height change per cell along the move; clamped to 0.25..2.
+- **Vision**: line of sight from `eyeHeight` above the unit's cell to `targetHeight` above each cell in sight
+  range; a cell behind a ridge is hidden (`heights.blockVision: false` turns this off, air units see over).
+  Targeting only picks enemies in a cell the player sees.
+- **Cliff level** of a cell = floor(cell height / `levelHeight`) (0..9), so level-based rules and triggers keep
+  working. Range / damage / miss bonuses use the exact height difference (see `heights`).
+- **Checksums**: corners and the model are part of the state hash only for heightfield games.
+- **Big maps** (256x256 cells and more): long paths use hierarchical pathfinding (16x16 clusters with border
+  entrances, refined with A*), built at match start and rebuilt only around structures that block cells.
+  `rts_headless --project DIR --bench-paths N` times path queries; `python3 games/_tools/mapgen.py --big 1024
+  <scratch>/maps/big.json` writes a 1024x1024 test map (keep it out of `games/`).
+
+MCP: `map_info.heightfield` (`corners`, `min`, `max`, `storage`, `model`), `map_heightfield {"enabled"}` adds a flat
+heightfield or removes it, `map_validate` warns when the model is heightfield but the map has no corners and flags
+units/structures standing on slopes too steep for them. Sculpting tools: see `docs/terrain.md` (agent-terrain).
+
 ## Sample games (data only, `games/<id>/`; maps from `games/_tools/mapgen.py`)
 
 | id | like | recipe |
@@ -689,7 +729,7 @@ games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and t
 | `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
 | `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
 | `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
-| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim |
+| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim, `terrain.model: heightfield` (ridge that blocks sight, too steep for the commander and hammers - `maxSlope` 0.8 - but climbable by constructors and peewees with `move.maxSlope` 1.6; two gentle saddles), height bonuses via `heights` |
 | `fourages` | Age of Empires II | four stocks, camps as dropoffs, farms (infinite `ownerOnly` nodes), ages as techs, blacksmith tech effects, rams vs buildings |
 | `holdtheline` | Company of Heroes | `squad` infantry with reinforcement, `victoryPoint` capture points + `victory: tickets`, fuel/munition points with `income` |
 | `lastcolony` | They Are Billions | `victory: survive`, map `waves` from a `waves` player with growth, `buildRadius`, towers and walls |
