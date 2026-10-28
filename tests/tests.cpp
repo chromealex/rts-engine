@@ -1142,7 +1142,6 @@ TEST(audio_decode_and_stream_ogg_vorbis) {
     std::tie(l, r) = renderRms(*a, 0.3f);
     CHECK(l > 0.05 && r > 0.05);
 }
-
 // ------------------------------------------------------------------ unpacker plugins (foreign archives)
 
 #include <filesystem>
@@ -1334,6 +1333,48 @@ TEST(unpacker_westwood_pak) {
     CHECK(w.writeToString(bytes, WriteOptions{}));
     auto p = Pack::open(memorySource(bytes));
     CHECK(p && p->read("A.CPS", out) && out == a && p->read("B.VOC", out) && out == b);
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
+// ------------------------------------------------------------------ importers (tools/importers)
+
+TEST(importer_dune2_rules_and_synthetic_scenario) {
+    if (!havePython()) return;
+    CHECK(std::system("python3 " RTS_SOURCE_DIR "/tools/importers/lib/selftest.py >/dev/null") == 0);
+    tfs::path d = testDir("dune2");
+    // A made-up scenario in the Dune II INI layout (no game data): two houses, a base, units, spice.
+    std::string ini = "[BASIC]\nMapScale=1\nWinFlags=6\n[MAP]\nField=1300\nBloom=2409\nSeed=353\n"
+                      "[Atreides]\nQuota=500\nCredits=1000\nBrain=Human\n[Ordos]\nCredits=500\nBrain=CPU\n"
+                      "[UNITS]\nID001=Atreides,Trike,256,1501,64,Guard\nID002=Ordos,Quad,256,2600,64,Hunt\nID003=Fremen,Sandworm,256,2000,64,Ambush\n"
+                      "ID004=Ordos,Frigate,256,2000,64,Guard\n"
+                      "[STRUCTURES]\nID000=Atreides,Const Yard,256,1630\nID001=Ordos,Windtrap,256,2660\nGEN2662=Ordos,Wall\nGEN2663=Ordos,Concrete\n";
+    std::string pak = le32(4 + 13 + 4) + std::string("SCENA001.INI\0", 13) + le32(0) + ini;
+    writeFile(d / "src" / "SCENARIO.PAK", pak);
+    std::string cmd = "python3 " RTS_SOURCE_DIR "/tools/importers/dune2/import.py --maps-only --json --source '" + (d / "src").string() +
+                      "' --out '" + (d / "out").string() + "' > '" + (d / "report.json").string() + "'";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile((d / "report.json").string());
+    CHECK(rep.getBool("ok") && rep.getInt("maps") == 1 && rep["skipped"].getInt("Frigate") == 1);
+    Json game = Json::parseFile((d / "out" / "game.json").string());
+    CHECK(game.getBool("external") && game["maps"].size() == 1);
+    // The importer's rules and map must load into the real simulation and run.
+    SimConfig cfg; cfg.seed = 4;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    bool loaded = true;
+    try {
+        sim->setup(Json::parseFile((d / "out" / "rules.json").string()), Json::parseFile((d / "out" / "maps" / "scena001.json").string()));
+    } catch (const std::exception& e) { std::printf("  %s\n", e.what()); loaded = false; }
+    CHECK(loaded);
+    if (loaded) {
+        CHECK(countType(*sim, "const_yard", 1) == 1 && countType(*sim, "windtrap", 2) == 1 && countType(*sim, "trike", 1) == 1);
+        CHECK(countType(*sim, "wall", 2) == 1 && countType(*sim, "spice_bloom", 0) == 1);
+        Fixed spice{};
+        for (auto a : mod(*sim).state(*sim).grid.fieldAmt) spice += a;
+        CHECK(spice > Fixed{});                                       // Field= became a spice field
+        run(*sim, 20);
+        CHECK(sim->result() == 0);                                   // Ordos still has units: no instant win
+    }
     std::error_code ec;
     tfs::remove_all(d, ec);
 }
