@@ -123,7 +123,7 @@ void RtsModule::moveAgents(Simulation& sim) {
     const Fixed invDt = kOne / dt;
     const int K = rules_.movement.neighbors;
 
-    struct Agent { Entity e; Vec2 p, v, pref, nv; Fixed r, speed; uint8_t layer, owner; bool moving, idle; };
+    struct Agent { Entity e; Vec2 p, v, pref, nv; Fixed r, speed; uint8_t layer, owner; bool moving, idle; int32_t goal = -1, arrived = -1; };
     std::vector<Agent> agents;
     std::vector<int32_t> byIndex;
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
@@ -153,6 +153,8 @@ void RtsModule::moveAgents(Simulation& sim) {
             a.moving = m.moving;
         }
         if (!a.moving) { m.vel = {}; a.v = {}; }
+        if (a.moving && m.flow) a.goal = m.flowGoalCell;   // flow-field crowds (movement.flowField only)
+        if (!a.moving) a.arrived = m.flowArrived;
         auto* ord = w.tryGet<Orders>(e);
         a.idle = !a.moving && (!ord || ord->queue.empty()) && !(u.flags & kUnitHold) && !(w.tryGet<Combat>(e) && w.alive(w.get<Combat>(e).target));
         if (byIndex.size() <= e.index) byIndex.resize(e.index + 1, -1);
@@ -191,6 +193,14 @@ void RtsModule::moveAgents(Simulation& sim) {
             if (used >= K) break;
             const Agent& b = agents[size_t(bi)];
             const bool ally = b.owner == a.owner || (b.owner != 0 && a.owner != 0 && b.owner != kHostileNeutral && a.owner != kHostileNeutral && sim.allied(a.owner, b.owner));
+            // same flow-field goal: no velocity obstacle between followers (they move the same way; separation keeps
+            // bodies apart), and those that already arrived are not asked to yield (arrival contagion stops the mover)
+            if (a.goal >= 0 && ally && b.goal == a.goal) continue;
+            if (a.goal >= 0 && ally && b.arrived == a.goal) {   // settled part of the crowd: a static obstacle to go around
+                ++used;
+                lines.push_back(orcaLine(a.p, a.v, a.r, b.p, b.v, b.r, invTH, invDt, kOne));
+                continue;
+            }
             if (ally && b.idle && !air) {
                 // idle ally in the way: ask it to step aside, push through meanwhile (separation)
                 Vec2 rel = b.p - a.p;
@@ -268,6 +278,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         last = y.who;
         Mobile& m = w.get<Mobile>(y.who);
         if (m.yieldUntil > tick || m.moving) continue;
+        if (m.flowArrived >= 0) continue;   // settled flow-field crowd: a soft obstacle (pushed by separation), never yields
         Vec3 p = w.get<Transform>(y.who).pos;
         int cx, cy; g.cellXY(p, cx, cy);
         const UnitType& t = rules_.types[w.get<Unit>(y.who).type];

@@ -203,7 +203,12 @@ struct Mobile {
     // flow field following (RtsFlowField.cpp): the field is keyed by (goal cell, radius, path layer, clearance)
     bool flow = false;
     uint8_t flowRadius = 0;
-    uint8_t flowStuck = 0;       // stuck events while on the field: the first re-samples it, the second falls back to A*
+    uint8_t flowStuck = 0;       // stuck events while on the field: re-sample first, A* after repeated stalls
+    int32_t flowGoalCell = -1;   // goal cell of the field this unit follows / followed
+    Fixed flowArea{};            // goal area radius of the order (contagion reaches out to twice that)
+    uint16_t flowNear = 0;       // ticks spent near the settled crowd without settling (lets it settle farther out)
+    int32_t flowArrived = -1;    // goal cell this unit arrived at (stopped there): followers of the same goal that
+                                 // touch it arrive too ("arrival contagion"), so a crowd settles instead of jamming
 };
 
 struct Orders { std::vector<Order> queue; };
