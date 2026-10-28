@@ -24,6 +24,7 @@
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
 #include "RtsFog.h"
+#include "RtsPlanetRender.h"
 #include "RtsTerrainRender.h"
 
 namespace rts::game {
@@ -50,6 +51,9 @@ struct SceneObject {
     render::float3 target;
     Entity source;               // projectiles: who fired (muzzle point)
     uint16_t shooterType = UINT16_MAX; // projectiles: type of the unit that fired it (lights)
+    // planets: body index (PlanetWorld) and pos / facing / target body-local (origin = body centre);
+    // -1 = flat map coordinates (on planet maps the view projects them onto the start body, RtsPlanetView.cpp)
+    int16_t body = -1;
 };
 
 struct RtsScene {
@@ -135,6 +139,26 @@ public:
     bool spriteHit(const render::RTSCamera& cam, const SceneObject& o, const MapGrid& grid, float sx, float sy, float w, float h) const;
     RtsLights& lights() { return lights_; }
     const FogLook& fogLook() const { return fog_.look(); }
+
+    // ---- planets (RtsPlanetView.cpp): maps with a `world` block (docs/planets.md)
+    // Reads map["world"]; no block = the flat view, unchanged. Call before buildTerrain().
+    void setWorld(const Json& map);
+    bool planetMode() const { return planets_.active(); }
+    PlanetCamera& planetCamera() { return planetCam_; }
+    const PlanetCamera& planetCamera() const { return planetCam_; }
+    PlanetRenderer& planets() { return planets_; }
+    // Per frame before beginScene: orbit camera smoothing; returns the RTSCamera to render with (view world).
+    const render::RTSCamera& updatePlanetCamera(double seconds, float dt, int viewH);
+    // Screen point -> body + body-local surface point (terrain / ocean picking).
+    bool pickPlanet(const render::RTSCamera& cam, float sx, float sy, float w, float h, int& body, render::float3& local) const;
+    // Until the simulation has bodies, the flat sim map lives on the start body's face 2 (centred):
+    bool flatToBody(render::float3 flat, int& body, render::float3& local) const;
+    bool bodyToFlat(int body, render::float3 local, render::float3& flat) const;
+    // Where the view draws an object (view world), `lift` above its ground point. Flat maps: {x, lift, z}.
+    render::float3 objectViewPos(const SceneObject& o, float lift) const;
+    render::float3 bodyToView(int body, render::float3 local) const;
+    // Object frame in the view world (columns: east, up, south, ground point); false when not on a body.
+    bool planetPlacement(const SceneObject& o, render::mat4& out) const;
     void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }
 
 private:
@@ -235,8 +259,14 @@ private:
     void warn(const UnitType& t, const std::string& msg);
     void handleEvents(const RtsScene& s);
     EntityAnim& stateFor(uint64_t key, const SceneObject& o);
-    void animate(EntityAnim& st, const SceneObject& o, float dt, const MapGrid* grid);
-    void drawObject(render::Renderer3D& r, EntityAnim& st, const SceneObject& o, float ground, float alpha, const render::float4* tintOverride = nullptr);
+    // viewPos (planets): where the object is drawn (animation LOD); o is then in its body's tangent frame
+    void animate(EntityAnim& st, const SceneObject& o, float dt, const MapGrid* grid, const render::float3* viewPos = nullptr);
+    void drawPlanets(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid);
+    // body-local placement of an object: ground point, unit up, tangent frame (east, south)
+    bool placeObject(const SceneObject& o, int& body, render::float3& ground, render::float3& up, render::float3& east, render::float3& south, float& lift) const;
+    // placement (planets): object frame in the view world (local +Y = up); null = flat (pos, ground)
+    void drawObject(render::Renderer3D& r, EntityAnim& st, const SceneObject& o, float ground, float alpha, const render::float4* tintOverride = nullptr,
+                    const render::mat4* placement = nullptr);
     void drawProjectile(render::Renderer3D& r, uint64_t key, const SceneObject& o, float dt);
     void emitClipEvents(EntityAnim& st, const ModelChoice& ch, const SceneObject& o);
     render::float3 nodeWorldPos(const EntityAnim& st, const ModelChoice& ch, int node, render::float3 offset) const;
@@ -267,6 +297,16 @@ private:
     bool fogMeshDirty_ = false;
     render::mat4 viewProj_;
     render::float3 camPos_;
+    // planets
+    PlanetRenderer planets_;
+    PlanetCamera planetCam_;
+    PlanetViewFrame pframe_;
+    double planetSeconds_ = 0;
+    std::vector<uint8_t> barOk_, planetVision_;
+    // flat sim map on the start body (until the sim has bodies): face 2, centred, scaled to fit
+    int demoBody_ = -1, demoW_ = 0, demoH_ = 0;
+    float demoOff_[2] = {0, 0}, demoScale_ = 1;
+    bool planetNoShadow_ = false;
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters
