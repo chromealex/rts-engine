@@ -33,6 +33,54 @@ death / collision play other effects, nesting stops at depth 3), ribbon `trail` 
 Trails start at `minQuality: medium` (medium draws every other ribbon point), particle lights are capped
 at 32 (8 on low) and go through the light map like any other light.
 
+## The rest of Unity's ParticleSystem
+
+Every module of Unity's ParticleSystem now has an engine key (exact list: second block at the top of
+`engine/fx/FxEffect.h`), so imported effects are no longer flattened:
+
+- **Curves everywhere**: any range (`life`, `speed`, `size`, `rate`, `spin`, `drag`, `speedLimit`, noise
+  strength, velocity / force axes, ...) also takes `{ "curve": [[t, v], ...], "curveMin": [...] }` (or the
+  shorthand `[[t, v], ...]`) — Unity's MinMaxCurve modes 1:1. Start values and rates follow the emitter time,
+  over-lifetime values the particle age; random-between-two-curves keeps one random per particle.
+- **Main / emission**: `prewarm`, random `delay`, burst `chance` and endless `cycles: 0`, 3D size
+  (`sizeY`/`sizeZ`), 3D rotation, `gravityScale`, start colour gradient over time or between two gradients,
+  `ringBuffer`.
+- **Shape**: `donut`, cone `length` (volume), box `emitFrom` shell / edge, `mesh` (built-in primitives or
+  model files: vertex / edge / triangle), `shapeRotation`, arc modes (loop, ping-pong, burst spread, step),
+  `randomDirection`, `sphericalDirection`, `randomPosition`, `alignToDirection`.
+- **Over lifetime / by speed**: `velocityOverLife` (linear, orbital, offset, radial, speed modifier),
+  `force` (random per frame), speed limit per axis with `limitDampen`, drag by size / speed,
+  `inheritVelocity` (initial / current), `lifeBySpeed`, `colorMin` / `sizeOverLifeMin` (two gradients /
+  curves), separate size axes, `spin` curves, `spin3D`, `spinBySpeed`.
+- **External forces**: `externalForces` + effect-level `forceFields` (sphere / cylinder: direction, gravity
+  with focus, vortex with attraction, drag) and `ParticleSystem::setWind`.
+- **Noise**: octaves, per-axis strength, damping, remap curve, rotation and size amounts.
+- **Flipbook**: single / random `row`, `frameOverTime`, `framesBySpeed`, `flip`, `sprites` (one sprite per
+  frame; sprites of one atlas page still share a draw call).
+- **Collision / triggers / sub-emitters**: up to 6 `planes` + ground, particle `radius`, `maxKillSpeed`;
+  `trigger` volumes (inside / outside / enter / exit: kill or fire `"on": "trigger"` sub-emitters);
+  sub-emitters `trigger` / `manual` (`ParticleSystem::emitManual`), `inherit` color / size / rotation /
+  lifetime / duration, up to 8.
+- **Trails**: `mode: "ribbon"` (particles of an emitter connected, `ribbons`), `lifeColor`, `ratio`,
+  `lifeFraction`, `minDistance`, `textureMode` stretch / tile / distribute, `dieWithParticles: false`
+  (trails fade out after their particle).
+- **Lights**: radius / intensity curves over the lifetime.
+- **Renderer**: `align` world / local, `pivot`, `cameraStretch`, `sort` (distance, oldest / youngest in
+  front, none), `sortOrder`, `minScreenSize` / `maxScreenSize`, **mesh particles** (`meshes`: up to 4,
+  `builtin:cube|sphere|capsule|cylinder|plane|quad` or FBX / OBJ / glTF through the model loader,
+  `fx::meshFromModelFile` in `engine/fx/FxModelMesh.h`; lit by the sun on the CPU), blends `multiply`,
+  `subtract`, `opaque` (`gfx::BlendMode::Multiply` / `Subtract`).
+
+Not supported on purpose (they need what OpenGL ES 3.0 weak GPUs can't afford or what the engine doesn't
+have): soft particles and distortion (depth / grab textures), custom vertex streams and custom data (only
+feed custom shaders), custom simulation space (effects have no transform hierarchy), VFX Graph.
+
+Cost control for the new modules, per tier: noise octaves 1 / 2 / 4 (low / medium / high); mesh particle
+vertices per frame 4 000 / 16 000 / 64 000 (the rest are skipped); trails and ribbons start at `medium` by
+default (medium draws every other point); prewarm runs in 1/8 s steps on low (1/15 s otherwise); particle
+lights 8 on low; alpha sorting (also `sort: "distance"`) is off on low. Mesh particles are expanded on the
+CPU like quads (no instancing), one draw per texture and blend.
+
 ## Weak GPUs (OpenGL ES 3.0 is the floor)
 
 | Tier (`FxQuality`) | budget | spawn | max on-screen size | alpha sort | default for |

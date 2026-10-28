@@ -247,7 +247,7 @@ add_library(rts_game_audio STATIC modules/rts/audio/RtsAudio.cpp)
 target_link_libraries(rts_game_audio PUBLIC rts_game rts_audio)
 
 # Particles: CPU simulation + RHI rendering (presentation only), and the RTS event bridge.
-add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp)
+add_library(rts_fx STATIC engine/fx/FxEffect.cpp engine/fx/ParticleSystem.cpp engine/fx/FxEmit.cpp engine/fx/FxRender.cpp engine/fx/FxMeshes.cpp)
 target_link_libraries(rts_fx PUBLIC rts_engine)
 add_library(rts_game_fx STATIC modules/rts/fx/RtsFx.cpp)
 target_link_libraries(rts_game_fx PUBLIC rts_game rts_fx)
