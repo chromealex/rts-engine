@@ -52,6 +52,30 @@ struct Clip {
     float seconds() const { return sampleRate > 0 ? float(frames()) / float(sampleRate) : 0.0f; }
 };
 
+// How a positional sound fades with distance (world units, e.g. map cells).
+enum class Rolloff : uint8_t { Inverse, Linear, Exponential };
+
+struct DistanceDef {
+    Rolloff model = Rolloff::Inverse;
+    float minDistance = 12;   // full volume closer than this
+    float maxDistance = 60;   // silent beyond this (the last 20 % of the range fades to zero)
+    float rolloff = 1;        // steepness of the curve
+    float air = 1;            // multiplier of the environment's air absorption (0 = keeps its highs)
+    float reverb = 1;         // multiplier of the distance-dependent reverb send (0 = dry)
+};
+
+// "Distant sounds": the environment of a bank (its "spatial" section).
+struct Environment {
+    DistanceDef defaults;     // for sounds that don't override
+    float airCutoff = 2500;   // Hz of the low-pass at max distance; 0 = no air absorption
+    float rear = 0;           // 0..1: sources behind the listener get duller and a bit quieter
+    float speedOfSound = 0;   // world units per second; > 0 delays distant sounds; 0 = off
+    bool reverb = true;
+    float reverbSize = 0.5f, reverbDamping = 0.5f;  // 0..1
+    float reverbWet = 0.35f;                         // output level of the reverb
+    float reverbNear = 0.05f, reverbFar = 0.6f;      // send at min / max distance
+};
+
 struct SoundDef {
     std::string name;
     std::vector<std::shared_ptr<const Clip>> clips;  // variations, one picked per play
@@ -63,21 +87,27 @@ struct SoundDef {
     int priority = 0;       // when all voices are busy, lower priority is stolen first
     bool loop = false;
     bool spatial = true;    // attenuated and panned around the listener when played at a position
-};
-
-struct MusicDef {
-    std::string name;
-    std::vector<std::string> files;
-    bool shuffle = false;
-    bool loop = true;       // loop the playlist
-    float volume = 1.0f;
+    DistanceDef distance;   // from the bank's "spatial" defaults plus the sound's own keys
+    SoundId far = kNoSound; // distant variant crossfaded in towards max distance ("far")
+    float duckMusic = 0;    // music is lowered by this fraction while the sound plays (voice: 0.4)
+    uint8_t sync = 0;       // stingers: 0 now, 1 next beat, 2 next bar of the playing music
+    float farFrom = 0.3f;   // fraction of the distance range where the crossfade starts
 };
 
 struct PlayParams {
     float volume = 1.0f;
     float pitch = 1.0f;     // multiplied with the sound's random pitch
     bool positional = false;
-    float x = 0, z = 0;     // world position on the ground plane
+    float x = 0, y = 0, z = 0;  // world position (y = height)
+};
+
+// The ear: position and orientation in the world. `hearing` scales every sound's distances (an
+// RTS raises it when the camera zooms out, so the whole visible battlefield stays audible).
+struct ListenerPose {
+    float pos[3] = {0, 0, 0};
+    float forward[3] = {0, 0, -1};
+    float up[3] = {0, 1, 0};
+    float hearing = 1;
 };
 
 struct AudioConfig {
@@ -85,6 +115,7 @@ struct AudioConfig {
     int sampleRate = 0;      // 0 = device native (usually 48000)
     int maxVoices = 32;
     int periodMs = 0;        // 0 = backend default (~10 ms; larger on web)
+    bool reverb = true;      // distance reverb (switch off on the weakest devices)
     bool nullBackend = false; // real audio thread without hardware (CI): miniaudio's null device
     std::string capturePath;  // debug: record everything the device plays into this WAV on shutdown
 };
@@ -122,18 +153,29 @@ public:
     VoiceId play(std::string_view name, const PlayParams& p = {}) { return play(find(name), p); }
     void stop(VoiceId v, float fadeSeconds = 0.05f);
     void stopAll(float fadeSeconds = 0.1f);
-    void setVoicePosition(VoiceId v, float x, float z);
+    void setVoicePosition(VoiceId v, float x, float z) { setVoicePosition(v, x, 0, z); }
+    void setVoicePosition(VoiceId v, float x, float y, float z);
 
-    // Listener for positional sounds: a point on the ground (camera target), camera yaw and the
-    // radius inside which sounds are heard at full volume (fades out to 2x radius).
+    // Listener for positional sounds (3D).
+    void setListener(const ListenerPose& pose);
+    // Shortcut for a top-down view: an ear on the ground at (x, z) turned by `yaw`; `radius` is
+    // where sounds with the default distances start to fade (hearing = radius / minDistance).
     void setListener(float x, float z, float yaw, float radius);
-    // 0..1 for a sound at that position (used to skip inaudible sounds before decoding effort).
-    float audibility(float x, float z) const;
+    const ListenerPose& listener() const;
+    const Environment& environment() const;
+    // 0..1: how loud a sound would be at that position (`id`: with its own distances, including
+    // its far variant). Used to skip inaudible sounds.
+    float audibility(float x, float z) const { return audibility(kNoSound, x, 0, z); }
+    float audibility(SoundId id, float x, float y, float z) const;
 
     // ---- music (named playlists from the bank's "music" section, crossfaded)
     bool playMusic(std::string_view name, float fadeSeconds = 1.5f);
     void stopMusic(float fadeSeconds = 1.5f);
     const std::string& currentMusic() const;
+    bool musicHasLayers(std::string_view name) const;
+    // Adaptive music: 0..1 (smoothed over ~1.5 s). Layers fade in as it passes their "intensity".
+    void setMusicIntensity(float v);
+    float musicIntensity() const;
 
     // ---- volumes: user settings on top of the bank's mix (0..1)
     void setMasterVolume(float v);
@@ -162,5 +204,8 @@ private:
 
 // Decodes WAV/OGG/MP3/FLAC bytes into a Clip. Returns false with a reason.
 bool decodeClip(const std::string& bytes, Clip& out, std::string& error);
+// Same, converted on the way: `channels` 1 or 2 (0 = keep, surround is downmixed to stereo),
+// `sampleRate` (0 = keep). Used by the build tools to downmix and resample before encoding.
+bool decodeClipAs(const std::string& bytes, int channels, int sampleRate, Clip& out, std::string& error);
 
 } // namespace rts::audio
