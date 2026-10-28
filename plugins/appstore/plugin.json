@@ -1,0 +1,7 @@
+{
+  "name": "appstore",
+  "description": "App Store in-app purchases (StoreKit, iOS and macOS). Protocol: store (docs/plugins.md). Uses the original StoreKit API: deprecated since iOS 18 but working; StoreKit 2 is Swift-only.",
+  "provides": ["store"],
+  "ios":   { "sources": ["apple/*.mm"], "classes": { "appstore": "RTSAppStorePlugin" }, "frameworks": ["StoreKit"] },
+  "macos": { "sources": ["apple/*.mm"], "classes": { "appstore": "RTSAppStorePlugin" }, "frameworks": ["StoreKit"] }
+}

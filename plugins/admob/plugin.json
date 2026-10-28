@@ -1,0 +1,22 @@
+{
+  "name": "admob",
+  "description": "Google AdMob (Google Mobile Ads SDK): interstitial, rewarded, adaptive banner, Android and iOS. Protocol: ads (docs/plugins.md). Config: appId (required by the SDK at startup), interstitial / rewarded / banner ad unit ids — per platform.",
+  "provides": ["ads"],
+  "android": {
+    "java": "android/java",
+    "classes": { "admob": "com.rtsengine.plugins.AdMobPlugin" },
+    "dependencies": ["com.google.android.gms:play-services-ads:25.5.0"],
+    "manifest": {
+      "application": ["<meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"${appId}\" />"]
+    }
+  },
+  "ios": {
+    "sources": ["ios/*.mm"],
+    "classes": { "admob": "RTSAdMobPlugin" },
+    "pods": ["pod 'Google-Mobile-Ads-SDK', '~> 13.11'"],
+    "plist": [
+      "<key>GADApplicationIdentifier</key><string>${appId}</string>",
+      "<key>SKAdNetworkItems</key><array><dict><key>SKAdNetworkIdentifier</key><string>cstr6suwn9.skadnetwork</string></dict></array>"
+    ]
+  }
+}
