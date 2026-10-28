@@ -188,7 +188,26 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) { stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10)); }
+        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
+            if (nt.maxGatherers > 0 && gatherersAt(sim, o.target) >= nt.maxGatherers) {
+                // node full (WC3 mine: 5 inside, SC patch: one at a time): try a free node close by, else wait
+                Vec3 at = w.get<Transform>(e).pos;
+                Entity alt;
+                Fixed bd = Fixed::fromInt(7);
+                const int16_t nres = w.get<ResourceStock>(o.target).res;
+                w.each<ResourceStock, Unit, Transform>([&](Entity n, ResourceStock& rs, Unit& nu, Transform& ntr) {
+                    if (n == o.target || rs.res != nres || nu.hp.raw <= 0) return;
+                    const UnitType& at2 = rules_.types[nu.type];
+                    if (at2.ownerOnly && w.get<Owner>(n).player != owner) return;
+                    if (at2.maxGatherers > 0 && gatherersAt(sim, n) >= at2.maxGatherers) return;
+                    Fixed d = dist2D(ntr.pos, at);
+                    if (d < bd) { bd = d; alt = n; }
+                });
+                if (alt.valid()) { o.target = alt; o.state = 0; }
+                return false;
+            }
+            stopMoving(sim, e); o.state = 2; o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
+        }
         else if (m && !m->moving) o.state = 0;
         return false;
     }
@@ -207,7 +226,7 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         }
         if (rules_.resources[size_t(res)].kind == ResourceKind::Flow || nt.dropoffMask & (1u << res)) {
             // reclaim (TA) or gather-in-place (farm that is its own dropoff): credit directly
-            addResource(sim, owner, uint16_t(res), take * gs.players[owner].gatherMult);
+            addResource(sim, owner, uint16_t(res), take * (rules_.originals ? gatherMultFor(sim, owner, res) : gs.players[owner].gatherMult));
             sim.emit({kEvGathered, owner, e, o.target, res, nodePos});
             o.state = 2;
             o.timer = gd->time / fxMax(stat(sim, e, Stat::GatherRate), Fixed::fromRatio(1, 10));
@@ -355,7 +374,7 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         }
         if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10)) {
             stopMoving(sim, e);
-            addResource(sim, owner, uint16_t(cargo->res), cargo->amount * state(sim).players[owner].gatherMult);
+            addResource(sim, owner, uint16_t(cargo->res), cargo->amount * (rules_.originals ? gatherMultFor(sim, owner, cargo->res) : state(sim).players[owner].gatherMult));
             sim.emit({kEvGathered, owner, e, o.target, cargo->res, w.get<Transform>(e).pos});
             cargo->amount = Fixed{};
             Order g;
@@ -465,7 +484,8 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (m && !m->moving) o.state = 0;
             return false;
         }
-        // arrived: reinforce, assault or capture
+        // arrived: man an empty vehicle (Z), reinforce, assault or capture
+        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
         if (rules_.advancedEffects) { enterGarrison(sim, e, o.target); return true; }
         auto* g = w.tryGet<Garrison>(o.target);
         const uint8_t me = w.get<Owner>(e).player;
@@ -475,14 +495,17 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (to.player == me || (to.player != 0 && to.player != kHostileNeutral && sim.allied(to.player, me))) {
                 ++g->count;
             } else if (g->count > 0) {
-                g->damageAcc += kOne / fxMax(tt.garrisonDefense, Fixed::fromRatio(1, 10));
+                Fixed atk = rules_.originals ? stat(sim, e, Stat::Damage) / fxMax(stat(sim, o.target, Stat::Defense), Fixed::fromRatio(1, 10)) : kOne;
+                g->damageAcc += atk / fxMax(tt.garrisonDefense, Fixed::fromRatio(1, 10));
                 while (g->damageAcc >= kOne && g->count > 0) { --g->count; g->damageAcc -= kOne; }
+                if (rules_.originals) assaultOriginals(sim, e, o.target);
             } else if (tt.capturable) {
                 uint8_t old = to.player;
                 to.player = me;
                 g->count = 1; g->damageAcc = Fixed{}; g->growth = Fixed{}; g->pendingOut = 0;
                 if (auto* p = w.tryGet<Production>(o.target)) p->queue.clear();
                 sim.emit({kEvCaptured, me, o.target, e, old, w.get<Transform>(o.target).pos});
+                if (rules_.originals) captureOriginals(sim, o.target, old, me);
             }
         }
         Unit& uu = w.get<Unit>(e);

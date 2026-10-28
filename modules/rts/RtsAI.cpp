@@ -43,6 +43,7 @@ void RtsAI::update(Simulation& sim) {
         if (sim.world().has<Garrison>(e) && t.spawnUnit != kNoType) hasGarrisons = true;
         else hasOther = true;
     });
+    if (m->rules().originals) originals(sim, *m);
     if (hasGarrisons) garrisonPlay(sim, *m);
     if (hasOther) {
         special(sim, *m);

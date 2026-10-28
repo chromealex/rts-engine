@@ -87,7 +87,10 @@ add_library(rts_game STATIC
     modules/rts/RtsEffectsData.cpp
     modules/rts/RtsEffects.cpp
     modules/rts/RtsSkills.cpp
-    modules/rts/RtsAI.cpp)
+    modules/rts/RtsAI.cpp
+    modules/rts/RtsOriginalsData.cpp
+    modules/rts/RtsOriginals.cpp
+    modules/rts/RtsAIOriginals.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 
 # Localization: string tables, plurals, language choice (presentation only, no sim dependency).
