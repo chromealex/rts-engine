@@ -120,6 +120,12 @@ public:
     // Cleared by beginScene.
     using CustomDraw = std::function<void(gfx::Device&)>;
     void drawCustom(CustomDraw fn) { custom_.push_back(std::move(fn)); }
+    // Inside a custom draw: bind what the lit shaders share (U1 frame, U2 + tex1 point lights, tex0
+    // shadow map), so custom lit shaders built on RTS_*_SHADOW / RTS_*_LIGHTS get the same lighting.
+    void bindLitFrame();
+    // Opaque custom renderers (terrain): run first in the main pass, before meshes and models, so
+    // translucent meshes (water) blend over them. Same lifetime rules as drawCustom.
+    void drawCustomOpaque(CustomDraw fn) { customOpaque_.push_back(std::move(fn)); }
     const RTSCamera& camera() const { return cam_; }
     int sceneWidth() const { return sceneW_; }
     int sceneHeight() const { return sceneH_; }
@@ -161,7 +167,7 @@ private:
     ShadowQuality quality_ = ShadowQuality::Medium;
     std::vector<DrawItem> items_;
     std::vector<ColorVertex> lines_, tris_;
-    std::vector<CustomDraw> custom_;
+    std::vector<CustomDraw> custom_, customOpaque_;
     RTSCamera cam_;
     mat4 viewProj_, lightViewProj_;
     float3 camPos_;

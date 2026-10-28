@@ -1,0 +1,8 @@
+// A faint streak behind arrows and hammers. Skipped on "low": many projectiles, little to gain.
+{
+  "emitters": [
+    { "texture": "builtin:soft", "blend": "additive", "perMeter": 6, "loop": true,
+      "life": [0.12, 0.2], "speed": 0, "size": [0.12, 0.16], "sizeOverLife": [[0, 1], [1, 0.3]],
+      "color": [[0, "#fff6e060"], [1, "#fff6e000"]], "minQuality": "medium" }
+  ]
+}

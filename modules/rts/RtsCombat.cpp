@@ -31,6 +31,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
         for (auto& wd : t.weapons) layers |= wd.targets;
         Fixed sight = stat(sim, e, Stat::Sight);
         int myLevel = levelAt(sim, tr.pos);
+        const bool hf = gs.grid.hf;
         Entity best;
         Fixed bestD{};
         gs.hash.query(tr.pos, sight, [&](Entity cand) {
@@ -44,7 +45,8 @@ void RtsModule::sysTargeting(Simulation& sim) {
             Fixed d = dist2D(cp, tr.pos);
             if (d > sight) return;
             // high ground hides units from those below unless revealed (any ally vision of that cell)
-            if (rules_.heights.blockVision && !(ct.layer & kLayerAir) && levelAt(sim, cp) > myLevel && !isVisible(sim, o.player, cp)) return;
+            // (heightfield: vision already follows line of sight, so the target must simply be in sight)
+            if (rules_.heights.blockVision && !(ct.layer & kLayerAir) && (hf || levelAt(sim, cp) > myLevel) && !isVisible(sim, o.player, cp)) return;
             if (ct.weapons.empty()) d += Fixed::fromInt(4); // prefer things that can shoot back
             if (!best.valid() || d < bestD) { best = cand; bestD = d; }
         });
@@ -93,8 +95,9 @@ void RtsModule::sysWeapons(Simulation& sim) {
         auto* m = w.tryGet<Mobile>(e);
         Fixed dist = contactDistance(sim, e, c.target);
         Vec3 tp = w.get<Transform>(c.target).pos;
-        const int adv = (t.layer & kLayerAir) || (tt.layer & kLayerAir) ? 0 : levelAt(sim, tr.pos) - levelAt(sim, tp);
-        Fixed rangeBonus = stat(sim, e, Stat::Range) + (adv > 0 ? rules_.heights.rangePerLevel * adv : Fixed{});
+        // height advantage in levels: whole cliff levels, or height difference / levelHeight on heightfields
+        const Fixed adv = (t.layer & kLayerAir) || (tt.layer & kLayerAir) ? Fixed{} : heightAdvantage(sim, tr.pos, tp);
+        Fixed rangeBonus = stat(sim, e, Stat::Range) + (adv.raw > 0 ? rules_.heights.rangePerLevel * adv : Fixed{});
         Fixed range = maxWeaponRange(t) + rangeBonus;
         // idle units with an automatic target chase it (unless holding / guarding a structure)
         if (c.autoTarget && ord && ord->queue.empty() && m && !(u.flags & kUnitHold) && dist > range) {
@@ -108,7 +111,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
         // damage scaling: techs/buffs, squad members alive, height advantage
         Fixed mult = stat(sim, e, Stat::Damage);
         if (t.members > 1) mult = mult * membersAlive(sim, e) / t.members;
-        if (adv > 0) mult = mult * (kOne + rules_.heights.damagePerLevel * adv);
+        if (adv.raw > 0) mult = mult * (kOne + rules_.heights.damagePerLevel * adv);
         for (size_t i = 0; i < t.weapons.size() && i < 4; ++i) {
             const WeaponDef& wd = t.weapons[i];
             if (!canHit(wd, tt.layer) || c.cooldown[i].raw > 0 || dist > wd.range + rangeBonus || dist < wd.minRange) continue;
@@ -116,7 +119,8 @@ void RtsModule::sysWeapons(Simulation& sim) {
             c.cooldown[i] = wd.cooldown;
             sim.emit({kEvAttack, o.player, e, c.target, int64_t(i), tr.pos});
             // shooting uphill can miss (StarCraft); the roll uses the shared deterministic RNG
-            if (adv < 0 && rules_.heights.missUphill.raw > 0 && sim.rng().unit() < rules_.heights.missUphill) {
+            // (a full level or more below: the whole chance; less on a heightfield slope: proportionally less)
+            if (adv.raw < 0 && rules_.heights.missUphill.raw > 0 && sim.rng().unit() < rules_.heights.missUphill * fxMin(kOne, -adv)) {
                 sim.emit({kEvMiss, o.player, e, c.target, 0, tp});
                 continue;
             }
@@ -135,7 +139,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 pr.target = c.target; pr.source = e; pr.aim = tp; pr.speed = wd.projectileSpeed;
                 pr.damage = dmg; pr.splash = wd.splash; pr.damageType = wd.damageType; pr.owner = o.player; pr.layers = wd.targets;
                 Vec3 start = tr.pos;
-                start.y = Fixed::fromRatio(6, 10);
+                start.y = groundHeight(sim, tr.pos) + Fixed::fromRatio(6, 10);
                 shots.push_back({pr, start});
             }
         }
@@ -154,7 +158,7 @@ void RtsModule::sysProjectiles(Simulation& sim) {
     const Fixed dt = sim.dt();
     w.each<Projectile, Transform>([&](Entity p, Projectile& pr, Transform& tr) {
         tr.prevPos = tr.pos;
-        if (w.alive(pr.target) && w.has<Unit>(pr.target)) { pr.aim = w.get<Transform>(pr.target).pos; pr.aim.y = Fixed::fromRatio(4, 10); }
+        if (w.alive(pr.target) && w.has<Unit>(pr.target)) { pr.aim = w.get<Transform>(pr.target).pos; pr.aim.y = groundHeight(sim, pr.aim) + Fixed::fromRatio(4, 10); }
         if (!moveTowards(tr.pos, pr.aim, pr.speed * dt)) return;
         if (w.alive(pr.target) && w.has<Unit>(pr.target)) dealDamage(sim, pr.target, pr.damage, pr.damageType, pr.source, pr.owner);
         if (pr.splash.raw > 0) {
@@ -253,7 +257,7 @@ void RtsModule::applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint
             auto& g = state(sim).grid;
             int x = g.cellX(point.x), y = g.cellY(point.z);
             const UnitType& ct = rules_.types[w.get<Unit>(caster).type];
-            if (g.passable(x, y, ct.layer)) {
+            if (g.passable(x, y, ct.pathLayer)) {
                 Transform& tr = w.get<Transform>(caster);
                 tr.pos = flat(point);
                 tr.prevPos = tr.pos;

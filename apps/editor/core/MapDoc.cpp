@@ -7,6 +7,8 @@
 #include <set>
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsModule.h"
+#include <filesystem>
+#include <iterator>
 
 namespace rts::editor {
 
@@ -40,9 +42,33 @@ void MapDoc::reset(int w, int h) {
     undo_.clear(); redo_.clear();
 }
 
+std::string MapDoc::cornersPath(const std::string& mapFile, const std::string& rel) {
+    namespace fs = std::filesystem;
+    fs::path r(rel);
+    if (r.is_absolute()) return rel;
+    fs::path dir = fs::path(mapFile).parent_path();
+    // "maps/x.r16" is relative to the game folder; a map outside maps/ keeps it next to itself
+    if (dir.filename() == "maps" && !rel.empty() && rel.rfind("maps/", 0) == 0) return (dir.parent_path() / r).string();
+    return (dir / r.filename()).string();
+}
+
+std::string MapDoc::cornersFileName() const {
+    if (!data.cornersFile.empty()) return data.cornersFile;
+    std::string stem = path.empty() ? "map" : std::filesystem::path(path).stem().string();
+    return "maps/" + stem + ".r16";
+}
+
 bool MapDoc::load(const std::string& file, std::string* err) {
     try {
-        if (!loadJson(Json::parseFile(file), err)) return false;
+        Json j = Json::parseFile(file);
+        auto read = [&](const std::string& rel, std::string& out) {
+            std::ifstream f(cornersPath(file, rel), std::ios::binary);
+            if (!f) return false;
+            out.assign(std::istreambuf_iterator<char>(f), {});
+            return true;
+        };
+        if (!game::applyCornersFile(j, read, err)) return false;
+        if (!loadJson(j, err)) return false;
         path = file;
         return true;
     } catch (const std::exception& e) {
@@ -55,8 +81,8 @@ bool MapDoc::loadJson(const Json& j, std::string* err) {
     try {
         MapData d;
         d.name = j.getStr("name", "Untitled");
-        d.w = std::clamp(int(j["size"][0].integer(64)), 4, 1024);
-        d.h = std::clamp(int(j["size"][1].integer(48)), 4, 1024);
+        d.w = std::clamp(int(j["size"][0].integer(64)), 4, game::kMaxMapSize);
+        d.h = std::clamp(int(j["size"][1].integer(48)), 4, game::kMaxMapSize);
         d.roadsOnly = j.getBool("roadsOnly", false);
         const size_t n = size_t(d.w * d.h);
         d.cells.assign(n, '.'); d.levels.assign(n, 0); d.heights.assign(n, 0);
@@ -77,6 +103,15 @@ bool MapDoc::loadJson(const Json& j, std::string* err) {
             for (size_t x = 0; x < r.size() && int(x) < d.w; ++x) if (r[x] >= '0' && r[x] <= '9') d.levels[d.idx(int(x), int(y))] = int8_t(r[x] - '0');
         }
         for (size_t i = 0; i < t["heights"].size() && i < n; ++i) d.heights[i] = int16_t(t["heights"][i].integer());
+        if (t["corners"].size() > 0) {
+            d.corners.assign(size_t((d.w + 1) * (d.h + 1)), 0);
+            for (size_t i = 0; i < t["corners"].size() && i < d.corners.size(); ++i) d.corners[i] = int16_t(t["corners"][i].integer());
+        } else if (t.has("cornersFile")) {
+            d.cornersFile = t.getStr("cornersFile");
+            std::string cerr;  // load() attached the bytes (cornersBlob); without them the heightfield is dropped
+            if (!t["cornersBlob"].isString()) throw std::runtime_error("terrain.cornersFile '" + d.cornersFile + "' was not loaded");
+            if (!game::decodeCorners(t, d.w, d.h, d.corners, &cerr)) throw std::runtime_error(cerr);
+        }
         // fields: digit rows per resource, or legacy circles (converted to digits)
         for (auto& f : j["fields"].items()) {
             std::string res = f.getStr("resource");
@@ -199,6 +234,14 @@ Json MapDoc::toJson() const {
         for (auto v : d.heights) hs.push(Json::number(int64_t(v)));
         terrain.set("heights", hs);
     }
+    if (d.corners.size() > kInlineCornersMax) {
+        terrain.set("cornersFile", Json::string(cornersFileName()));
+        terrain.set("cornersBlob", Json::string(game::encodeCorners(d.corners)));
+    } else if (!d.corners.empty()) {
+        Json cs = Json::array();
+        for (auto v : d.corners) cs.push(Json::number(int64_t(v)));
+        terrain.set("corners", cs);
+    }
     j.set("terrain", terrain);
     Json fields = Json::array();
     for (size_t ri = 0; ri < d.fieldResources.size(); ++ri) {
@@ -257,11 +300,25 @@ Json MapDoc::toJson() const {
 bool MapDoc::save(const std::string& file, std::string* err) {
     for (auto [a, b] : data.roads) // roads need ids on their endpoints
         for (int i : {a, b}) if (data.entities[size_t(i)].id.empty()) data.entities[size_t(i)].id = uniqueId(data.entities[size_t(i)].type);
+    const std::string oldPath = path, oldCorners = data.cornersFile;
+    path = file;  // the default corners file name follows the map file
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (!oldPath.empty() && !fs::equivalent(oldPath, file, ec)) data.cornersFile.clear(); // "save as": own .r16
+    Json j = toJson();
+    if (Json* t = j.find("terrain"); t && t->has("cornersBlob")) {
+        const std::string cf = cornersPath(file, t->getStr("cornersFile"));
+        std::ofstream c(cf, std::ios::binary);
+        const std::string& blob = (*t)["cornersBlob"].str();
+        c.write(blob.data(), std::streamsize(blob.size()));
+        if (!c) { if (err) *err = "cannot write " + cf; path = oldPath; data.cornersFile = oldCorners; return false; }
+        t->erase("cornersBlob");
+        data.cornersFile = t->getStr("cornersFile");
+    }
     std::ofstream f(file, std::ios::binary);
-    if (!f) { if (err) *err = "cannot write " + file; return false; }
-    f << toJson().dump() << "\n";
+    if (!f) { if (err) *err = "cannot write " + file; path = oldPath; return false; }
+    f << j.dump() << "\n";
     if (!f) { if (err) *err = "write failed"; return false; }
-    path = file;
     dirty = false;
     return true;
 }
@@ -269,7 +326,10 @@ bool MapDoc::save(const std::string& file, std::string* err) {
 void MapDoc::beginEdit() {
     ensureLayers(); // a map that was never created/loaded still has layers sized to w*h
     undo_.push_back(data);
-    if (undo_.size() > 200) undo_.erase(undo_.begin());
+    // whole-document snapshots: keep ~256 MB at most (a 2048x2048 map is ~36 MB per snapshot)
+    const size_t snap = size_t(data.w * data.h) * 8 + data.corners.size() * 2 + 1024;
+    const size_t keep = std::clamp<size_t>((size_t(256) << 20) / snap, 4, 200);
+    while (undo_.size() > keep) undo_.erase(undo_.begin());
     redo_.clear();
     touched();
 }
@@ -321,7 +381,7 @@ void MapDoc::removeRoad(size_t i) {
 }
 
 void MapDoc::resize(int w, int h) {
-    w = std::clamp(w, 8, 1024); h = std::clamp(h, 8, 1024);
+    w = std::clamp(w, 8, game::kMaxMapSize); h = std::clamp(h, 8, game::kMaxMapSize);
     beginEdit();
     MapData& d = data;
     auto remap = [&](auto& v, auto fill) {
@@ -332,7 +392,21 @@ void MapDoc::resize(int w, int h) {
     };
     remap(d.cells, '.'); remap(d.levels, int8_t(0)); remap(d.heights, int16_t(0));
     remap(d.fieldRes, int8_t(-1)); remap(d.fieldAmt, uint8_t(0)); remap(d.regions, '.');
+    if (!d.corners.empty()) {
+        std::vector<int16_t> out(size_t((w + 1) * (h + 1)), 0);
+        // keep the overlap; new rows / columns continue the old edge height (no cliff at the seam)
+        for (int y = 0; y <= h; ++y)
+            for (int x = 0; x <= w; ++x) out[size_t(y * (w + 1) + x)] = d.corners[size_t(std::min(y, d.h) * (d.w + 1) + std::min(x, d.w))];
+        d.corners.swap(out);
+    }
     d.w = w; d.h = h;
+}
+
+void MapDoc::setCorners(bool on) {
+    if (on == !data.corners.empty()) return;
+    beginEdit();
+    if (on) data.corners.assign(size_t((data.w + 1) * (data.h + 1)), 0);
+    else { data.corners.clear(); data.cornersFile.clear(); }
 }
 
 namespace {
@@ -508,6 +582,41 @@ std::vector<Issue> MapDoc::validate(const game::Rules& rules, const Json& rulesJ
         }
     }
     if (d.roadsOnly && d.roads.empty()) out.push_back({true, "Карта «только дороги», но дорог нет"});
+    // heightfield terrain (rules terrain.model)
+    if (rules.terrain.heightfield() && d.corners.empty())
+        out.push_back({false, "Правила: terrain.model = heightfield, но у карты нет высот углов (terrain.corners) - рельеф будет плоским"});
+    if (!rules.terrain.heightfield() && !d.corners.empty())
+        out.push_back({false, "У карты есть высоты углов, но terrain.model не heightfield - рельеф только визуальный"});
+    if (rules.terrain.heightfield() && !d.corners.empty() && d.corners.size() == size_t((d.w + 1) * (d.h + 1))) {
+        game::MapGrid g;  // same slope math as the simulation
+        g.init(d.w, d.h);
+        g.corner = d.corners;
+        g.slopeLimit[0] = game::MapGrid::slopeUnits(rules.terrain.maxSlopeGround);
+        g.sandLimit = game::MapGrid::slopeUnits(rules.terrain.maxSlopeSand.raw < 0 ? rules.terrain.maxSlopeGround : rules.terrain.maxSlopeSand);
+        g.buildLimit = game::MapGrid::slopeUnits(rules.terrain.buildSlope);
+        for (size_t k = 0; k < rules.terrain.slopeClasses.size() && k < 15; ++k) g.slopeLimit[k + 1] = game::MapGrid::slopeUnits(rules.terrain.slopeClasses[k]);
+        g.enableHeightfield(rules.levelHeight);
+        for (size_t i = 0; i < d.entities.size(); ++i) {
+            int ti = rules.findType(d.entities[i].type);
+            if (ti < 0) continue;
+            const auto& t = rules.types[size_t(ti)];
+            int x = int(std::floor(d.entities[i].x)), y = int(std::floor(d.entities[i].z));
+            if (!d.inside(x, y) || (t.layer & game::kLayerAir)) continue;
+            std::string nm = d.entities[i].id.empty() ? d.entities[i].type : d.entities[i].id;
+            if (t.structure) {
+                int x0 = 0, y0 = 0;
+                game::RtsModule::footprintAt(t, game::RtsModule::snapToFootprint(t, {Fixed::fromRaw(int64_t(std::lround(double(d.entities[i].x) * 65536))), Fixed{},
+                                                                         Fixed::fromRaw(int64_t(std::lround(double(d.entities[i].z) * 65536)))}), x0, y0);
+                bool steep = false;
+                for (int yy = y0; yy < y0 + t.footprintH; ++yy)
+                    for (int xx = x0; xx < x0 + t.footprintW; ++xx)
+                        if (g.inside(xx, yy) && g.slope[size_t(g.index(xx, yy))] > g.buildLimit) steep = true;
+                if (steep) out.push_back({false, nm + ": склон круче terrain.buildSlope под зданием", int(i)});
+            } else if (!g.passable(x, y, t.pathLayer)) {
+                out.push_back({true, nm + ": склон слишком крутой для этого юнита (maxSlope)", int(i)});
+            }
+        }
+    }
     // the real loader is the final judge (waves, triggers, regions, factions, victory...)
     bool anyError = std::any_of(out.begin(), out.end(), [](const Issue& i) { return i.error; });
     if (!anyError) {

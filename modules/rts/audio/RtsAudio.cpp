@@ -1,6 +1,7 @@
 #include "RtsAudio.h"
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include "../RtsModule.h"
 
 namespace rts::game {
@@ -28,6 +29,8 @@ constexpr double kAlertCooldown = 12.0;  // seconds between "under attack" annou
 constexpr int kMaxCombatSoundsPerFrame = 16;
 constexpr float kBattleEnter = 8.0f;     // intensity = decaying count of hostile hits near the camera
 constexpr double kBattleLeave = 15.0;    // seconds of calm before leaving battle music
+
+constexpr float kFlyHeight = 2.4f;     // matches RtsView's flying height
 
 float fl(Fixed f) { return float(f.toDouble()); }
 
@@ -134,18 +137,27 @@ SoundId RtsAudio::cueFor(int type, Cue c) const {
     return global_[size_t(c)];
 }
 
-bool RtsAudio::playAt(SoundId s, const Vec3& pos, bool positional) {
+bool RtsAudio::playAt(SoundId s, const Vec3& pos, bool positional, float height) {
     if (s == kNoSound || !engine_) return false;
     audio::PlayParams p;
     p.positional = positional;
     p.x = fl(pos.x);
+    p.y = height;
     p.z = fl(pos.z);
     if (engine_->play(s, p) == audio::kNoVoice) return false;
     ++played_;
     return true;
 }
 
-void RtsAudio::attach(Simulation& sim, uint8_t viewer) {
+std::string RtsAudio::musicName(const char* base) const {
+    if (engine_ && !map_.empty()) {
+        std::string own = std::string(base) + "." + map_;
+        if (engine_->hasMusic(own)) return own;
+    }
+    return base;
+}
+
+void RtsAudio::attach(Simulation& sim, uint8_t viewer, const std::string& map) {
     detach();
     viewer_ = viewer;
     collector_ = std::make_shared<Collector>();
@@ -161,7 +173,10 @@ void RtsAudio::attach(Simulation& sim, uint8_t viewer) {
     calmSince_ = 0;
     inBattle_ = false;
     played_ = 0;
-    if (engine_ && !engine_->playMusic("match")) engine_->stopMusic(1.0f);
+    map_ = std::filesystem::path(map).stem().string();
+    if (!engine_) return;
+    engine_->setMusicIntensity(0);
+    if (!engine_->playMusic(musicName("match"))) engine_->stopMusic(1.0f);
 }
 
 void RtsAudio::detach() {
@@ -183,8 +198,12 @@ void RtsAudio::handle(Simulation& sim, const SimEvent& ev, bool worldSounds) {
         return o ? int(o->player) : -1;
     };
     auto seen = [&](const Vec3& p) { return viewer_ == 0 || mine || mod->isVisible(sim, viewer_, p); };
-    auto world = [&](SoundId s) { if (worldSounds && seen(ev.pos)) playAt(s, ev.pos, true); };
-    auto own = [&](Cue c, int type, bool positional) { if (mine) playAt(cueFor(type, c), ev.pos, positional); };
+    // the sim is flat: height comes from the cliff level (like the view draws it) and flying units
+    const int heightType = ev.type == kEvDied ? int(ev.value) : typeOf(ev.a);
+    float y = float(mod->levelAt(sim, ev.pos)) * fl(rules_->levelHeight);
+    if (heightType >= 0 && size_t(heightType) < rules_->types.size() && (rules_->types[size_t(heightType)].layer & kLayerAir)) y += kFlyHeight;
+    auto world = [&](SoundId s) { if (worldSounds && seen(ev.pos)) playAt(s, ev.pos, true, y); };
+    auto own = [&](Cue c, int type, bool positional) { if (mine) playAt(cueFor(type, c), ev.pos, positional, y); };
     auto either = [&](Cue first, Cue fallback) { SoundId s = cueFor(-1, first); return s != kNoSound ? s : cueFor(-1, fallback); };
 
     switch (ev.type) {
@@ -201,7 +220,7 @@ void RtsAudio::handle(Simulation& sim, const SimEvent& ev, bool worldSounds) {
         if (src >= 0) for (auto& ws : types_[size_t(src)].weapons) if (ws.hit != kNoSound) { s = ws.hit; break; }
         world(s != kNoSound ? s : cueFor(src, Cue::Hit));
         if (!engine_) break;
-        const float heard = engine_->audibility(fl(ev.pos.x), fl(ev.pos.z));
+        const float heard = engine_->audibility(audio::kNoSound, fl(ev.pos.x), y, fl(ev.pos.z));
         if (heard > 0.3f && seen(ev.pos)) intensity_ += 1.0f;
         // the viewer's unit is hit by an enemy somewhere the camera isn't looking
         const int victim = ownerOf(ev.a);
@@ -277,11 +296,15 @@ void RtsAudio::update(Simulation& sim, double dt) {
     // battle music: in when fighting is heavy near the camera, out after a calm period
     intensity_ *= float(std::exp(-dt / 4.0));
     if (intensity_ > 1.0f) calmSince_ = time_;
-    if (!inBattle_ && intensity_ > kBattleEnter && engine_->hasMusic("battle") && engine_->currentMusic() == "match") {
-        inBattle_ = engine_->playMusic("battle", 2.0f);
+    const std::string match = musicName("match"), battle = musicName("battle");
+    if (engine_->musicHasLayers(engine_->currentMusic())) {
+        // adaptive music: fighting near the camera fades the stems in, calm fades them out
+        engine_->setMusicIntensity(std::clamp(intensity_ / (1.5f * kBattleEnter), 0.0f, 1.0f));
+    } else if (!inBattle_ && intensity_ > kBattleEnter && engine_->hasMusic(battle) && engine_->currentMusic() == match) {
+        inBattle_ = engine_->playMusic(battle, 2.0f);
     } else if (inBattle_ && time_ - calmSince_ > kBattleLeave) {
         inBattle_ = false;
-        engine_->playMusic("match", 4.0f);
+        engine_->playMusic(match, 4.0f);
     }
 }
 
@@ -311,11 +334,23 @@ void RtsAudio::onCommand(Simulation& sim, Entity firstUnit, uint16_t commandType
 void RtsAudio::onMatchEnd(bool won) {
     play(won ? Cue::Victory : Cue::Defeat);
     if (!engine_) return;
-    const char* m = won ? "victory" : "defeat";
+    const std::string m = musicName(won ? "victory" : "defeat");
     if (engine_->hasMusic(m)) engine_->playMusic(m, 1.0f);
     else engine_->stopMusic(2.0f);
 }
 
 void RtsAudio::play(Cue c) { playAt(cueFor(-1, c), {}, false); }
+
+audio::ListenerPose RtsAudio::cameraListener(const float target[3], const float eye[3], float referenceDistance) {
+    float v[3] = {eye[0] - target[0], eye[1] - target[1], eye[2] - target[2]};
+    const float dist = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    audio::ListenerPose pose;
+    if (dist < 1e-4f) { std::copy(target, target + 3, pose.pos); return pose; }
+    for (float& c : v) c /= dist;
+    const float h = std::clamp(dist * 0.55f, 3.0f, 60.0f);
+    for (int i = 0; i < 3; ++i) { pose.pos[i] = target[i] + v[i] * h; pose.forward[i] = -v[i]; }
+    pose.hearing = std::max(1.0f, std::sqrt(dist / std::max(1.0f, referenceDistance)));
+    return pose;
+}
 
 } // namespace rts::game

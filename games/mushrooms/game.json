@@ -11,6 +11,7 @@
   "maps": [
     { "file": "maps/duel.json", "title": "Duel" }
   ],
+  "lighting": { "time": 0.8, "nightLevel": 0.85 },
   "orientation": "landscape",
   "icon": "icon.png"
 }

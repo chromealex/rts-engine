@@ -98,7 +98,13 @@ void GameClient::initUi() {
     c.Bind("card", &b.card); c.Bind("overTitle", &b.overTitle); c.Bind("overTime", &b.overTime);
     c.Bind("modeHint", &b.modeHint); c.Bind("hintStyle", &b.hintStyle); c.Bind("boxStyle", &b.boxStyle);
     c.Bind("minimapStyle", &b.minimapStyle); c.Bind("lines", &b.lines); c.Bind("touch", &b.touch); c.Bind("showCard", &b.showCard);
-    c.Bind("languages", &b.languages);
+    c.Bind("languages", &b.languages); c.Bind("lang", &b.lang);
+    // Static text in documents:  {{ 'menu.map' | tr(lang) }}. The `lang` argument is unused by the
+    // function but makes each expression depend on that variable, so all text follows a language
+    // switch in place (no document reload: open screens keep their state).
+    c.RegisterTransformFunc("tr", [this](const Rml::VariantList& a) -> Rml::Variant {
+        return a.empty() ? Rml::Variant() : Rml::Variant(loc_.tr(a[0].Get<Rml::String>()));
+    });
     c.Bind("lobby", &b.lobby); c.Bind("netStatus", &b.netStatus); c.Bind("netError", &b.netError);
     c.Bind("roomTitle", &b.roomTitle); c.Bind("roomInfo", &b.roomInfo); c.Bind("spectators", &b.spectators); c.Bind("waitHint", &b.waitHint);
     c.Bind("queues", &b.queues); c.Bind("rooms", &b.rooms); c.Bind("createMaps", &b.createMaps); c.Bind("slots", &b.slots);
@@ -108,6 +114,8 @@ void GameClient::initUi() {
     c.Bind("difficulty", &difficulty_);
     c.Bind("spectator", &spectator_);
     c.Bind("shadows", &shadowQuality_);
+    c.Bind("materials", &matQuality_);
+    c.Bind("particles", &fxQuality_);
     c.Bind("volume", &volume_);
     c.Bind("music", &musicVolume_);
     c.Bind("netAddress", &netAddress_);
@@ -136,13 +144,15 @@ void GameClient::initUi() {
     model_ = c.GetModelHandle();
 
     shadowQuality_ = boundShadowQuality_ = int(r3d_.shadowQuality());
+    fxQuality_ = boundFxQuality_ = fx_.quality();
+    matQuality_ = boundMatQuality_ = int(r3d_.materialQuality());
     ui_.setTranslator([this](const std::string& key) { return tr(key); });
     minimapListener_ = std::make_unique<MinimapListener>(*this);
     loadDocuments();
 }
 
-// (Re)loads every document: "@key" texts in them are translated at load, so a language change
-// reloads them. The data model survives; documents rebind to it.
+// Loads every document (once; also usable to pick up edited documents). The data model survives
+// a reload; documents rebind to it.
 void GameClient::loadDocuments() {
     if (minimapEl_) {
         minimapEl_->RemoveEventListener(Rml::EventId::Mousedown, minimapListener_.get());
@@ -192,6 +202,7 @@ void GameClient::updateUi() {
     s.gameName = gameName_;
     s.error = error_;
     s.platformInfo = std::string(platform::name()) + " · " + dev_->info().name;
+    s.lang = loc_.language() + (loc_.pseudo() ? "-qps" : "");
     for (auto& m : maps_) s.maps.push_back(m.title);
     s.touch = platform::isTouchDevice();
     s.showCard = !spectator_;
@@ -202,7 +213,7 @@ void GameClient::updateUi() {
             a.label = langNames_[i];
             a.active = langs_.available[i] == loc_.language();
             const std::string tag = langs_.available[i];
-            a.id = addAction([this, tag] { applyLanguage(tag, true); reloadDocs_ = true; }, !a.active);
+            a.id = addAction([this, tag] { applyLanguage(tag, true); }, !a.active);
             s.languages.push_back(a);
         }
     if (screen_ == Screen::Lobby || net_) buildLobby(s);
@@ -243,16 +254,23 @@ void GameClient::updateUi() {
         RTS_SYNC(top) RTS_SYNC(topActions) RTS_SYNC(clock) RTS_SYNC(notices) RTS_SYNC(hasSelection) RTS_SYNC(ownSelection)
         RTS_SYNC(selTitle) RTS_SYNC(emptyHint) RTS_SYNC(selInfo) RTS_SYNC(card) RTS_SYNC(overTitle) RTS_SYNC(overTime)
         RTS_SYNC(modeHint) RTS_SYNC(hintStyle) RTS_SYNC(boxStyle) RTS_SYNC(minimapStyle) RTS_SYNC(lines) RTS_SYNC(touch) RTS_SYNC(showCard)
-        RTS_SYNC(languages) RTS_SYNC(lobby) RTS_SYNC(netStatus) RTS_SYNC(netError) RTS_SYNC(roomTitle) RTS_SYNC(roomInfo)
+        RTS_SYNC(languages) RTS_SYNC(lang) RTS_SYNC(lobby) RTS_SYNC(netStatus) RTS_SYNC(netError) RTS_SYNC(roomTitle) RTS_SYNC(roomInfo)
         RTS_SYNC(spectators) RTS_SYNC(waitHint) RTS_SYNC(queues) RTS_SYNC(rooms) RTS_SYNC(createMaps) RTS_SYNC(slots) RTS_SYNC(chat)
         RTS_SYNC(isHost) RTS_SYNC(myReady) RTS_SYNC(canStart) RTS_SYNC(netMatch) RTS_SYNC(searching)
         if (shadowQuality_ != boundShadowQuality_) { // changed from the pause menu
             r3d_.setShadowQuality(ShadowQuality(std::clamp(shadowQuality_, 0, 3)));
             boundShadowQuality_ = shadowQuality_;
         }
+        if (matQuality_ != boundMatQuality_) { // changed from the pause menu
+            r3d_.setMaterialQuality(rts::render::MaterialQuality(std::clamp(matQuality_, 0, 2)));
+            boundMatQuality_ = matQuality_;
+        }
+        if (fxQuality_ != boundFxQuality_) { // changed from the pause menu
+            fx_.setQuality(fxQuality_);
+            boundFxQuality_ = fxQuality_;
+        }
     }
 #undef RTS_SYNC
-    if (reloadDocs_) { reloadDocs_ = false; loadDocuments(); }
     ui_.update();
 }
 
@@ -390,10 +408,10 @@ void GameClient::buildCommandCard(UiState& s) {
             UiAction a; a.label = label; a.hotkey = key; a.active = active; a.id = addAction(std::move(fn));
             sec.actions.push_back(a);
         };
-        if (anyWeapon) add(tr("card.attack"), "", mode_ == Mode::AttackMove, [this] { mode_ = Mode::AttackMove; });
-        add(tr("card.stop"), "", false, simple(kCmdStop, selection_));
-        add(tr("card.hold"), "", false, simple(kCmdHold, selection_));
-        add(tr("card.patrol"), "", mode_ == Mode::Patrol, [this] { mode_ = Mode::Patrol; });
+        if (anyWeapon) add(tr("card.attack"), "A", mode_ == Mode::AttackMove, [this] { mode_ = Mode::AttackMove; });
+        add(tr("card.stop"), "S", false, simple(kCmdStop, selection_));
+        add(tr("card.hold"), "H", false, simple(kCmdHold, selection_));
+        add(tr("card.patrol"), "P", mode_ == Mode::Patrol, [this] { mode_ = Mode::Patrol; });
         pushSection(s, sec);
     }
     if (!buildable.empty()) {

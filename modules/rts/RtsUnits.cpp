@@ -52,7 +52,7 @@ void RtsModule::moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bo
     m->goalRadius = radius;
     m->stuck = Fixed{};
     m->pathPos = 0;
-    state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.layer, m->path, 40000, MapGrid::clearanceFor(t.radius), aroundAllies);
+    state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.pathLayer, m->path, 40000, MapGrid::clearanceFor(t.radius), aroundAllies);
     m->moving = !m->path.empty();
 }
 
@@ -95,7 +95,7 @@ bool RtsModule::attackSlot(Simulation& sim, Entity e, Entity target, Fixed range
         int k = ((k0 + ((step + 1) / 2) * ((step & 1) ? 1 : -1)) % n + n) % n;
         int dirIdx = k * stride;
         Vec3 p = tp + dir32(dirIdx) * ring;
-        if (!g.passable(g.cellX(p.x), g.cellY(p.z), t.layer)) continue;
+        if (!g.passable(g.cellX(p.x), g.cellY(p.z), t.pathLayer)) continue;
         bool taken = false;
         for (auto& cl : slotClaims_) if (cl.target == target.packed() && cl.slot == dirIdx && cl.claimer != e.packed()) taken = true;
         if (taken) continue;
@@ -261,7 +261,7 @@ bool RtsModule::runBuild(Simulation& sim, Entity e, Order& o) {
             auto& f = w.get<Footprint>(s);
             Transform& tr = w.get<Transform>(e);
             int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
-            if (cx >= f.x && cx < f.x + f.w && cy >= f.y && cy < f.y + f.h) tr.pos = freeSpotNear(sim, s, t.layer);
+            if (cx >= f.x && cx < f.x + f.w && cy >= f.y && cy < f.y + f.h) tr.pos = freeSpotNear(sim, s, t.pathLayer);
             return true;
         }
         o.target = s;
@@ -269,7 +269,7 @@ bool RtsModule::runBuild(Simulation& sim, Entity e, Order& o) {
         auto& f = w.get<Footprint>(s);
         Transform& tr = w.get<Transform>(e);
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
-        if (cx >= f.x && cx < f.x + f.w && cy >= f.y && cy < f.y + f.h) tr.pos = freeSpotNear(sim, s, t.layer);
+        if (cx >= f.x && cx < f.x + f.w && cy >= f.y && cy < f.y + f.h) tr.pos = freeSpotNear(sim, s, t.pathLayer);
         return false;
     }
     // state 2: building (progress is applied by sysConstruction)
@@ -289,8 +289,8 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
 
     auto rangeTo = [&](Entity target) {
         Fixed r = maxWeaponRange(t) + stat(sim, e, Stat::Range);
-        int adv = levelAt(sim, w.get<Transform>(e).pos) - levelAt(sim, w.get<Transform>(target).pos);
-        if (adv > 0 && !(t.layer & kLayerAir)) r += rules_.heights.rangePerLevel * adv;
+        Fixed adv = heightAdvantage(sim, w.get<Transform>(e).pos, w.get<Transform>(target).pos);
+        if (adv.raw > 0 && !(t.layer & kLayerAir)) r += rules_.heights.rangePerLevel * adv;
         return r;
     };
     auto chase = [&](Entity target) -> bool { // true while the target is valid
@@ -492,12 +492,12 @@ void RtsModule::sysOrders(Simulation& sim) {
     });
     // soft obstacles (standing ground units) and the melee slot claims of this tick
     MapGrid& g = state(sim).grid;
-    std::fill(g.soft.begin(), g.soft.end(), 0);
+    g.clearSoft();
     slotClaims_.clear();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
         if (m.moving || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & kLayerGround)) return;
         int x = g.cellX(tr.pos.x), y = g.cellY(tr.pos.z);
-        if (g.inside(x, y)) g.soft[size_t(g.index(x, y))] = 1;
+        if (g.inside(x, y)) g.markSoft(x, y);
         (void)e;
     });
     w.each<Combat>([&](Entity e, Combat& c) {
@@ -546,13 +546,18 @@ void RtsModule::sysMovement(Simulation& sim) {
         if (rules_.roadNetwork.enabled && g.inside(g.cellX(tr.pos.x), g.cellY(tr.pos.z)) && (g.flags[size_t(g.index(g.cellX(tr.pos.x), g.cellY(tr.pos.z)))] & kCellRoad))
             step = step * rules_.roadNetwork.speed;
         const bool ignoreGrid = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison); // road walkers pass through buildings
+        if (g.hf && (t.layer & kLayerGround) && m.pathPos < m.path.size()) { // uphill slower, downhill faster
+            Vec2 d = (m.path[m.pathPos] - tr.pos).xz();
+            Fixed len = d.length();
+            if (len.raw > 0) step = step * slopeSpeed(sim, tr.pos, d / len);
+        }
         while (m.pathPos < m.path.size() && step.raw > 0) {
             Vec3 wp = m.path[m.pathPos];
             Vec3 d = flat(wp - tr.pos);
             Fixed len = d.length();
             Vec3 next = len <= step ? Vec3{wp.x, tr.pos.y, wp.z} : tr.pos + d * (step / len);
             int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(next.x), cy = g.cellY(next.z);
-            if (!ignoreGrid && (cx != cx0 || cy != cy0) && g.passable(cx0, cy0, t.layer) && !g.canStep(cx0, cy0, cx, cy, t.layer)) {
+            if (!ignoreGrid && (cx != cx0 || cy != cy0) && g.passable(cx0, cy0, t.pathLayer) && !g.canStep(cx0, cy0, cx, cy, t.pathLayer)) {
                 m.stuck += dt;
                 break;
             }
@@ -563,7 +568,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         if (m.pathPos >= m.path.size()) { m.moving = false; m.path.clear(); }
         if (m.stuck > kOne) { // blocked by a new structure: re-path
             m.stuck = Fixed{};
-            g.findPath(tr.pos, m.goal, t.layer, m.path);
+            g.findPath(tr.pos, m.goal, t.pathLayer, m.path);
             m.pathPos = 0;
         }
     });
@@ -632,9 +637,15 @@ void RtsModule::sysMovement(Simulation& sim) {
         Vec3 np = tr.pos + p.d;
         int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(np.x), cy = g.cellY(np.z);
         bool ok = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison) ||
-                  ((cx == cx0 && cy == cy0) ? g.passable(cx, cy, t.layer) || !g.passable(cx0, cy0, t.layer) : g.canStep(cx0, cy0, cx, cy, t.layer));
+                  ((cx == cx0 && cy == cy0) ? g.passable(cx, cy, t.pathLayer) || !g.passable(cx0, cy0, t.pathLayer) : g.canStep(cx0, cy0, cx, cy, t.pathLayer));
         if (ok) tr.pos = np;
     }
+    // heightfield: everything stands on the surface (air units too: their flight height is presentation)
+    if (g.hf)
+        w.each<Mobile, Transform>([&](Entity, Mobile&, Transform& tr) {
+            Fixed y = g.surfaceHeight(tr.pos.x, tr.pos.z);
+            tr.pos.y = y;
+        });
 }
 
 } // namespace rts::game

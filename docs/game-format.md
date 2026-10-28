@@ -40,7 +40,8 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `waveClock` | seconds; structures with `waveSpawn` release their units together on this clock (lane battlers) |
 | `autoBuild` | `{"pool": [types], "cost": {res: n}, "growth": 0.5}` — a BUILD button: the sim picks a type from the pool and a spot next to the base automatically; cost grows by `growth` per structure already auto-built |
 | `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}`, `{"mode": "territory", "share": 0.9}` (a team owning that share of all claimable cells wins; a player with no territory is out) |
-| `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage |
+| `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage. With `terrain.model: "heightfield"` the advantage is the height difference / `levelHeight` (fractional), `missUphill` scales with it (full chance from one level below) and vision follows real line of sight |
+| `terrain` | `{"model": "heightfield", "maxSlope": {"ground": 0.8, "sand": 0.6}, "buildSlope": 0.35, "uphillSpeed": 0.5, "downhillSpeed": 0.2, "eyeHeight": 1, "targetHeight": 0.5}` — terrain model, see "Heightfield terrain". `model`: `"levels"` (default: cliff levels + ramps), `"flat"` (levels ignored), `"heightfield"`. Other keys of this block are visual (view) and ignored by the simulation |
 | `regions` | `{"claimCost": {"food": 100}, "claimCostGrowth": 0.5, "buildOnlyOwned": true, "productionPerRegion": 0.1}` — territory (Northgard; with flags: Z) |
 | `upkeep` | `[{"supply": 50, "gatherMult": 0.7}, {"supply": 80, "gatherMult": 0.4}]` — gathering yields less with a big army (Warcraft III) |
 | `armorTypes`, `damageTable` | `"damageTable": {"pierce": {"heavy": 0.5, "light": 1.5}}` multipliers by damage type → armor type |
@@ -76,7 +77,10 @@ any tag in `deficitDisables`).
 
 ## Movement and bodies
 
-`"move": {"speed": 2.8, "radius": 0.4, "mass": 0.64, "layer": "ground"}`
+`"move": {"speed": 2.8, "radius": 0.4, "mass": 0.64, "layer": "ground", "maxSlope": 1.6}`
+
+- `maxSlope` (heightfield terrain only): the steepest cell this type can enter (rise per cell); default
+  `terrain.maxSlope` of its layer. At most 15 different values per game.
 
 - `radius` is the real body size (cells): units keep `r1 + r2` apart, weapon and ability ranges are measured
   edge to edge (`range` + both radii, structures by their footprint), and paths keep clearance from walls and
@@ -215,7 +219,9 @@ Map players choose a faction and a `start` point; start objects spawn there.
   "terrain": {
     "rows":   ["....~~~~....", "..."],      // one char per cell: . ground ~ water # blocked , no-build = shallow / ramp R rock
     "levels": ["000011110000", "..."],      // cliff level per cell 0..9; units change level only over / ramps
-    "heights": [0, 0, 16, ...]              // optional fine visual height per cell (1/16 units)
+    "heights": [0, 0, 16, ...],             // optional fine visual height per cell (1/16 units)
+    "corners": [0, 0, 16, ...]              // optional heightfield: (w+1)*(h+1) corner heights, 1/16 units, row-major
+    // or, for big maps: "cornersFile": "maps/<name>.r16"   raw int16 little-endian, (w+1)*(h+1) values
   },
   "fields": [{"resource": "ore", "rows": ["0000999000", "..."]}],   // density digits 1..9 of cellMax (or {"center": [x,z], "radius": 3})
   "regions": {"rows": ["AAAABBBB", "..."], "names": {"A": "Долина", "B": "Холмы"}},
@@ -241,10 +247,14 @@ stays silent.
 ```json
 {
   "volume": {"master": 1, "sfx": 0.9, "ui": 0.7, "voice": 1, "music": 0.6, "ambient": 0.7},
+  "spatial": {"minDistance": 10, "maxDistance": 55, "airAbsorption": 1500, "speedOfSound": 150,
+              "reverb": {"size": 0.6, "damping": 0.45, "wet": 0.4, "near": 0.04, "far": 0.65}},
   "sounds": {
     "swing": {"files": ["sfx/swing1.ogg", "sfx/swing2.ogg"], "pitch": [0.9, 1.1], "maxInstances": 4, "cooldown": 0.05},
     "alarm": {"file": "voice/under_attack.ogg", "bus": "voice", "priority": 10},
-    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"}
+    "blip":  {"synth": {"wave": "square", "freq": [880, 440], "duration": 0.08}, "bus": "ui"},
+    "boom":  {"file": "sfx/boom.ogg", "minDistance": 14, "maxDistance": 80, "far": {"sound": "boom_far", "from": 0.25}},
+    "boom_far": {"file": "sfx/boom_far.ogg", "maxDistance": 120, "air": 0.5}
   },
   "music": {
     "menu":  "music/menu.ogg",
@@ -261,6 +271,26 @@ stays silent.
 
 `volume`: mix level per bus, 0..4 (default 1); the player's own volume settings multiply on top.
 
+### spatial — 3D sound and distance
+
+Positional sounds are placed in 3D around the listener (the RTS client puts the ear on the view
+ray above the camera's focus; units on cliffs and flyers are higher). Distances are world units
+(map cells). Zooming out raises the ear, so the battle sounds farther away; the audible area
+grows with the square root of the zoom.
+
+| key | meaning |
+|---|---|
+| `model` | distance curve: `inverse` (default, natural), `linear`, `exponential` |
+| `minDistance`, `maxDistance` | full volume up to min, silent at max (12, 60); the last 20 % of the range always fades out |
+| `rolloff` | steepness of the curve (1) |
+| `airAbsorption` | Hz of the low-pass at max distance: far sounds lose their highs (2500; `false` = off) |
+| `reverb` | `false`, or `{"size": 0.5, "damping": 0.5, "wet": 0.35, "near": 0.05, "far": 0.6}` — `near` / `far` = reverb send at min / max distance: far sounds get roomy and lose their attack |
+| `speedOfSound` | world units per second; distant sounds arrive late (0 = off; capped at 3 s) |
+| `rear` | 0..1: sources behind the listener get duller and a bit quieter (0) |
+
+The distance keys (`model`, `minDistance`, `maxDistance`, `rolloff`) are defaults for every sound;
+a sound can override them and add `air` / `reverb` multipliers (below).
+
 ### sounds
 
 | key | meaning |
@@ -274,6 +304,13 @@ stays silent.
 | `cooldown` | seconds between two starts (0) — 40 archers firing together make a few sounds, not 40 |
 | `priority` | -100..100 (0): when all voices are busy, the lowest priority (oldest first) is stopped; a new sound below everything playing is dropped |
 | `loop` | loops until stopped (false) |
+| `model`, `minDistance`, `maxDistance`, `rolloff` | override the `spatial` defaults: small sounds (footsteps, swords) fade early, explosions carry far |
+| `air` | multiplier of the air absorption, 0..4 (1; 0 = keeps its highs at any distance) |
+| `reverb` | multiplier of the distance reverb send, 0..4 (1; 0 = always dry) |
+| `duckMusic` | 0..1: music is lowered by this fraction while the sound plays (0.4 on the `voice` bus, else 0) |
+| `sync` | `now` (default), `beat`, `bar`: start on the music's grid (stingers) |
+| `compress`, `quality` | build-time codec for this sound's files (see "Compression at build time") |
+| `far` | a distant variant: `"boom_far"` or `{"sound": "boom_far", "from": 0.3}` — both play together and crossfade from `from` (fraction of this sound's distance range) to max distance; the far sound keeps its own distances, so it can carry farther (a low rumble instead of a crack) |
 
 `synth` — a sound made from parameters instead of a file (prototypes, playables); an object or an
 array of layers that are mixed:
@@ -293,10 +330,68 @@ array of layers that are mixed:
 
 ### music
 
-A playlist: a file name, an array of files, or `{"files": [...], "shuffle": false, "loop": true,
-"volume": 1}`. Changes crossfade. Playlists the client plays by name: `menu` (main menu), `match`,
-`battle` (replaces `match` while heavy fighting happens near the camera, back after ~15 s of calm),
-`victory`, `defeat`. All optional.
+Music streams from the files (OGG Vorbis recommended); changes crossfade. Playlists the client
+plays by name, all optional: `menu`, `match`, `battle` (replaces `match` while heavy fighting
+happens near the camera, back after ~15 s of calm), `victory`, `defeat`. A playlist named
+`match.<map>` (map file name without extension, e.g. `match.valley`) wins over `match` on that
+map; the same for `battle`, `victory`, `defeat`.
+
+```json
+"music": {
+  "menu":  "music/menu.ogg",
+  "match": {"files": ["music/a.ogg", {"file": "music/b.ogg", "loopStart": 12.0}], "shuffle": true,
+            "bpm": 96, "beatsPerBar": 4, "transition": "bar"},
+  "match.valley": {"layers": [{"file": "music/valley_base.ogg"},
+                              {"file": "music/valley_drums.ogg", "intensity": 0.3},
+                              {"file": "music/valley_brass.ogg", "intensity": 0.7}],
+                   "loopStart": 4.0, "loopEnd": 68.0, "bpm": 112}
+}
+```
+
+A playlist is a file name, an array of entries, or an object:
+
+| key | meaning |
+|---|---|
+| `files` | entries played in order: a file name or `{"file", "loopStart", "loopEnd"}` (seconds). With `loopStart` the track plays its intro once and then loops from `loopStart` to `loopEnd` (default: the end) seamlessly until the music changes |
+| `layers` | adaptive music instead of `files`: synchronized stems of equal length, looping together (`loopStart` / `loopEnd` on the playlist). A layer with `"intensity": x` fades in as the music intensity passes x; in a match the intensity follows the fighting near the camera, so a layered `match` builds up instead of switching to `battle` |
+| `shuffle`, `loop` | shuffle the entries (no immediate repeats) / start over after the last one (false, true) |
+| `volume` | 0..4 (1) |
+| `bpm`, `beatsPerBar`, `offset` | beat grid (`offset`: seconds before the first beat); used by `transition` and by synced stingers |
+| `transition` | switching away from this playlist waits for the next `beat` or `bar` (default `bar` when `bpm` is set, else `now`) |
+
+Stingers are sounds on the `music` bus: `"sync": "beat"` or `"bar"` starts them on the playing
+music's grid. Any sound can duck the music while it plays: `"duckMusic": 0.5` lowers it by half
+(default 0.4 for the `voice` bus, so announcements are always heard; 0 otherwise).
+
+### Compression at build time
+
+`rtsbuild` re-encodes the referenced sound and music files for each target before packing; the
+project folder is never changed. Profiles: `desktop` (macOS, Windows, Linux), `mobile` (iOS,
+Android), `web`. `--audio mobile` forces a profile, `--audio off` ships the files as they are;
+`rts_audiopack --project <game> --profile mobile` shows what a profile would do.
+
+```json
+"build": {
+  "desktop": {"sounds": "keep", "music": "vorbis", "musicQuality": 0.6},
+  "mobile":  {"sounds": "adpcm", "music": "vorbis", "musicQuality": 0.3, "maxRate": 32000},
+  "web":     {"musicQuality": 0.25}
+}
+```
+
+| key | meaning |
+|---|---|
+| `sounds`, `music` | codec: `keep` (file as is), `pcm` (16-bit WAV), `adpcm` (IMA ADPCM WAV: 4:1, nearly free to decode — short effects), `vorbis` (OGG: music, long sounds) |
+| `soundQuality`, `musicQuality` | Vorbis quality -0.1..1 (0.5 / 0.4; mobile 0.4 / 0.3, web 0.4 / 0.25) |
+| `maxRate` | resample anything above this rate (0 = never; mobile and web 32000) |
+| `monoSounds` | positional sounds become mono: the mixer pans them anyway (true) |
+| `longSound` | seconds: longer sounds (ambient loops, stingers) use the music codec (8) |
+| `reencodeLossy` | also re-encode files that are already OGG/MP3 (false: lossy to lossy only loses quality) |
+
+Defaults without a `build` section: `desktop` keeps everything; `mobile` and `web` use ADPCM for
+sounds and Vorbis for music at 32 kHz. Sounds on the `music` bus count as music. A sound or a
+playlist can override with `"compress"` and `"quality"`. Re-encoded files get the extension of
+their codec and audio.json in the build points at them; a result that isn't smaller keeps the
+original. Loop points stay exact (Vorbis is sample-accurate; ADPCM pads a loop with its own start).
 
 ### events, types, weapons, abilities
 
@@ -417,6 +512,37 @@ around obstacles and other buildings, smooths it into a fixed-point Catmull-Rom 
 cell) and adds `left` + `right` parallel lanes `spacing` cells apart (pulled back towards the main lane where they
 would hit an obstacle). Sent units are spread over the lanes round-robin and follow their lane exactly. Lanes are
 rebuilt when garrison buildings or obstacles change (`GameState::lanes`, `lanesDirty`, event `kEvLanesChanged`).
+
+## Terrain overlays (visual `terrain` block)
+
+Presentation only (`modules/rts/view/RtsGroundFx.*`): the view reads the territory, dig, room and road layers and
+the lanes and never writes them. All keys are optional; put them under `terrain` in rules.json or game.json (game.json
+wins per block; sim keys like `model` live in the same block). Each block may be `false` to switch the overlay off.
+Colours are `[r, g, b]` (0..1) or `"#rrggbb"`. `texture` paths go through `TextureCache::resolve` (atlases work);
+the texture is mapped in world space every `textureScale` units and mixed by `textureStrength` (0..1).
+
+```json
+"terrain": {
+  "territory": {"fill": 0.28, "border": 0.26, "glow": 0.85, "pulse": true, "colors": [[0.2,0.45,0.95], "#e83a33"],
+                "rooms": {"lair": [0.62,0.32,0.22]}, "roomFill": 0.5, "texture": "terrain/floor.png", "textureScale": 2},
+  "dig":       {"height": 1.15, "mark": [1,0.8,0.22], "progress": true,
+                "kinds": {"D": {"rock": [0.4,0.35,0.3]}, "G": {"style": "vein", "vein": "#f9c238"}, "J": {"style": "gem", "vein": [0.35,0.85,0.95], "glow": 0.55}}},
+  "lanes":     {"color": [0.74,0.63,0.44], "edge": [0.5,0.4,0.27], "alpha": 0.75, "width": 0, "sideLanes": false, "all": false},
+  "roads":     {"color": [0.72,0.63,0.48], "edge": [0.4,0.33,0.24], "width": 0.7, "alpha": 0.96, "cobbles": true, "texture": ""}
+}
+```
+
+| Block | What is drawn | Keys |
+|---|---|---|
+| `territory` | owner colour on owned cells, a glowing (pulsing on high quality) border along edges between owners, painted rooms as a floor tint | `fill` alpha, `border` width (cells), `glow` emissive, `pulse`, `colors` per player slot from 1 (default: player colours), `rooms` tint per room id, `roomFill` alpha, `texture*` |
+| `dig` | diggable cells as raised rock blocks with walls (the terrain under them stays flat and shows when dug); `style` per diggable character: `plain`, `vein` (gold-tinted top, nuggets, streaks on walls), `gem` (glowing crystals). Default style: no `yields` = plain, `yields` = vein, `infinite` = gem. The local player's dig marks (framed highlight) and digging progress (cracks + bar) | `height` 0.2..1.25, `mark` colour, `progress`, `kinds.<char>`: `rock`, `vein`, `style`, `glow` |
+| `lanes` | lanes (`lanes` rules) as one soft path ribbon per pair of neighbouring buildings (a pair is skipped when a third building lies between them), map `roads` between buildings as ribbons | `color`, `edge`, `alpha`, `width` (0: covers every lane of the pair), `sideLanes` thin tracks per lane, `all` draw every pair |
+| `roads` | road cells (map `+`, `roadNetwork` building) as road surfaces with edges, joins, crossings, rounded corners and dead ends; cobbles on high quality | `color`, `edge`, `width` 0.2..1, `alpha`, `cobbles`, `texture*` |
+
+What the viewer sees follows fog of war: territory, rooms, rock and roads are updated only where the cell is visible
+(remembered elsewhere). Weak GPUs (`MaterialQuality::Low`; testing: `RTS_GROUNDFX=low`) get no border pulse, no
+vein/gem geometry (a tint instead), no rock bevels, no road edges, cobbles or lane tracks. 2D tile maps are not
+overlaid.
 
 ## Player abilities
 
@@ -592,6 +718,90 @@ games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and t
 - **Mushroom Wars 2**: `garrison` villages + `lanes` instead of hand-made `roads`.
 - **Territory war (State.io)**: `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `capturable` towns, barracks with `autoTrain`, `playerAbilities`, repeatable `levels` techs, `victory: territory`.
 
+Map size: 4..2048 cells per side. The editor saves `corners` inline up to 256x256 cells and as
+`cornersFile` (`maps/<map name>.r16`, next to the map) above that; loaders (game, headless, editor, MCP) read
+the file through the content reader, so it also works from packs.
+
+## Terrain materials (visual `terrain` block)
+
+Presentation only (`modules/rts/view/RtsTerrainRender.*`). Optional keys in the same `terrain` block as the overlays
+(rules.json or game.json; game.json wins per key). **Without them every game looks exactly as before** (vertex
+colours per cell kind, plateaus with sharp cliff walls, ramps, soft colour transitions, apron, one water sheet).
+
+```json
+"terrain": {
+  "layers": [                                   // up to 4 tiling splat layers (world-space, mipmapped, wrap)
+    {"id": "snow",  "texture": "textures/terrain/snow_repeat.png", "normal": "textures/terrain/snow_n_repeat.png", "scale": 6, "tint": [1, 1, 1]},
+    {"id": "earth", "texture": "textures/terrain/earth_repeat.png", "scale": 4}
+  ],
+  "cells": {"grass": {"layer": "snow", "color": [0.9, 0.93, 0.97]},  // layer id, or {layer, color (vertex colour override)}
+            "sand": "earth", "ramp": "earth", "rock": "earth", "blocked": "earth", "lakebed": "earth", "shallows": "earth", "dug": "earth"},
+  "cliff": {"texture": "textures/terrain/rock_repeat.png", "normal": "textures/terrain/rock_n_repeat.png",
+            "scale": 3, "tint": [1, 1, 1], "slope": [0.3, 0.55]},     // blended in where 1 - normal.y is in that range
+  "splatStrength": 1,                           // 0..1: mix of the textures over the vertex colours
+  "water": {"mode": "auto", "color": [0.22, 0.45, 0.62, 0.78], "offset": -0.12},
+  "lod": "auto", "lodRange": 128                // heightfield maps: CDLOD on above 256 cells per side ("on"/"off")
+}
+```
+
+| key | meaning |
+|---|---|
+| `layers` | splat layers (≤ 4): `texture` albedo (sRGB), optional `normal` (tangent-space, +Y up), `scale` world units per repeat, `tint`. Loaded with `TextureCache::resolve(path, …, tiling)`: **never taken from an atlas page** (name them `*_repeat.png` so the packer skips them too) |
+| `cells` | cell kind → layer id or index; kinds: `grass` (.), `sand` (, no-build), `ramp` (/), `rock` (R), `blocked` (#), `lakebed` (~), `shallows` (=), `dug` (diggable rock floor). `color` overrides the vertex colour of the kind on every tier |
+| `cliff` | texture on cliff walls and steep slopes (Medium: one projection, High: triplanar + normal map) |
+| `water.mode` | `sheet` = one plane under the whole map (classic, default for cliff-level maps), `bodies` = each connected water area gets its own surface just below its lowest shore (lakes on plateaus, valleys of heightfield maps; default for heightfield maps), `auto` |
+| `lod`, `lodRange` | big heightfield maps: chunks drawn with 2^k cell steps (k ≤ 4) by camera distance, geomorphing in the vertex shader, skirts against cracks |
+
+**Map key `terrainMaterial`** (optional, visual): rows of `0`..`3` (layer index) per cell, other characters = by cell
+kind. Painted with the editor's **Рельеф** window or `terrain_material`.
+
+**Quality tiers** (pause menu *Ground textures*, `Renderer3D::materialQuality()`, capped by the device default;
+`RTS_TERRAIN=low|medium|high` overrides for testing): Low = vertex colours (weak Mali / Adreno / PowerVR, also every
+game without `layers`), Medium = splat textures + cliff texture, High = + normal maps and triplanar cliffs. Shaders:
+`modules/rts/view/RtsTerrainShaders.h` (GLSL + MSL, sun + soft shadows + point lights + clouds as the lit shader).
+
+**Performance**: the terrain is cut into 32x32-cell chunks, frustum-culled; the editor rebuilds only chunks whose cells
+changed; during a match nothing is rebuilt: resource fields, creep and (heightfield maps) fog of war are read by the
+shader from small per-cell textures. `RTS_TERRAIN_STATS=1` prints chunks / triangles / frame time. Sample:
+`games/frostcrown` (generated CC0 textures, `tools/terrain/make_textures.py`).
+
+**Editor / MCP** (heightfield maps, `apps/editor/core/TerrainOps.cpp`, window **Рельеф**):
+`terrain_sculpt {op: raise|lower|smooth|flatten|noise|set, x, y | points, radius, strength, seed}` (the first sculpt
+creates corners from the visible surface: cliff levels, ramps, fine heights), `terrain_heights {points | grid}`,
+`terrain_material {layer, x, y, radius}`, `heightmap_export {file, scale?}` / `heightmap_import {file, scale, offset}`
+(16-bit grayscale PNG, `(w+1) x (h+1)` pixels, height = offset + value / 65535 * scale). Corners are visual unless
+rules `terrain.model` is `heightfield` (see below).
+
+## Heightfield terrain
+
+`rules.terrain.model: "heightfield"` + a map with `terrain.corners` / `cornersFile` (without corners the map
+plays like `"levels"`). Corner `(x, y)` is the top-left corner of cell `(x, y)`; heights in 1/16 world units.
+Everything is integer / fixed point and deterministic.
+
+- **Surface**: ground height at any point is bilinear between the 4 corners of its cell; ground units (and the
+  `y` of every mobile unit) stand on it; projectiles start at the shooter's ground + 0.6 and aim at the
+  target's ground + 0.4.
+- **Slopes**: per cell steepness = max(gradient length, steepest cell edge), in height units per cell.
+  A unit can't enter cells steeper than its `move.maxSlope` (or `terrain.maxSlope` of its layer; `sand` for
+  `layer: "sand"`); pathfinding, local avoidance and spawning follow the same rule. Cliff/ramp rules
+  (`levels`, `/`) are replaced by slopes. Structures need cells no steeper than `terrain.buildSlope`.
+- **Speed**: `speed * (1 - uphillSpeed * climb)` going up, `* (1 + downhillSpeed * descent)` going down, where
+  climb/descent = height change per cell along the move; clamped to 0.25..2.
+- **Vision**: line of sight from `eyeHeight` above the unit's cell to `targetHeight` above each cell in sight
+  range; a cell behind a ridge is hidden (`heights.blockVision: false` turns this off, air units see over).
+  Targeting only picks enemies in a cell the player sees.
+- **Cliff level** of a cell = floor(cell height / `levelHeight`) (0..9), so level-based rules and triggers keep
+  working. Range / damage / miss bonuses use the exact height difference (see `heights`).
+- **Checksums**: corners and the model are part of the state hash only for heightfield games.
+- **Big maps** (256x256 cells and more): long paths use hierarchical pathfinding (16x16 clusters with border
+  entrances, refined with A*), built at match start and rebuilt only around structures that block cells.
+  `rts_headless --project DIR --bench-paths N` times path queries; `python3 games/_tools/mapgen.py --big 1024
+  <scratch>/maps/big.json` writes a 1024x1024 test map (keep it out of `games/`).
+
+MCP: `map_info.heightfield` (`corners`, `min`, `max`, `storage`, `model`), `map_heightfield {"enabled"}` adds a flat
+heightfield or removes it, `map_validate` warns when the model is heightfield but the map has no corners and flags
+units/structures standing on slopes too steep for them. Sculpting: `terrain_sculpt`, heightmap PNG import/export (see Terrain materials). The view draws the relief from the corners (two triangles per cell, diagonal (0,0)-(1,1)); `RtsView::heightAt` follows the same triangles, so models and overlays sit on the drawn ground.
+
 ## Sample games (data only, `games/<id>/`; maps from `games/_tools/mapgen.py`)
 
 | id | like | recipe |
@@ -600,7 +810,7 @@ games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and t
 | `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
 | `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
 | `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
-| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim |
+| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim, `terrain.model: heightfield` (ridge that blocks sight, too steep for the commander and hammers - `maxSlope` 0.8 - but climbable by constructors and peewees with `move.maxSlope` 1.6; two gentle saddles), height bonuses via `heights` |
 | `fourages` | Age of Empires II | four stocks, camps as dropoffs, farms (infinite `ownerOnly` nodes), ages as techs, blacksmith tech effects, rams vs buildings |
 | `holdtheline` | Company of Heroes | `squad` infantry with reinforcement, `victoryPoint` capture points + `victory: tickets`, fuel/munition points with `income` |
 | `lastcolony` | They Are Billions | `victory: survive`, map `waves` from a `waves` player with growth, `buildRadius`, towers and walls |

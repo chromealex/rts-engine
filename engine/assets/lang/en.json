@@ -36,7 +36,7 @@
     "wave_in": { "one": "Next wave in {count} second", "other": "Next wave in {count} seconds" },
     "regions": "Regions: {count}",
     "claim": "Claim",
-    "auto_build": "BUILD",
+    "auto_build": "Build",
     "menu": "Menu"
   },
 
@@ -57,16 +57,16 @@
     "stock": "Amount: {amount}",
     "garrison": "Garrison: {count} / {max}",
     "supply_cost": "{count} supply",
-    "send": "Send:",
+    "send": "Send",
     "send_hint": "Drag from a building to the target",
-    "attack": "Attack (A)",
-    "stop": "Stop (S)",
-    "hold": "Hold (H)",
-    "patrol": "Patrol (P)",
-    "build": "Build:",
+    "attack": "Attack",
+    "stop": "Stop",
+    "hold": "Hold",
+    "patrol": "Patrol",
+    "build": "Build",
     "requires": "Requires: {list}",
     "aura": "Aura: {name}",
-    "energy_cost": "({count} energy)",
+    "energy_cost": "{count} energy",
     "place": "Place: {name}",
     "charges": "Charges: {count} / {max}",
     "research": "Research: {name}",
@@ -96,7 +96,12 @@
     "to_menu": "Main menu",
     "sound": "Sound:",
     "music": "Music:",
-    "off": "off"
+    "off": "off",
+    "particles": "Particles:",
+    "materials": "Ground textures:",
+    "low": "low",
+    "medium": "medium",
+    "high": "high"
   },
 
   "ui": {
