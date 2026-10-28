@@ -81,6 +81,11 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     }
     const Json& heights = terrain["heights"];
     for (size_t i = 0; i < heights.size() && i < g.height.size(); ++i) g.height[i] = int16_t(heights[i].integer());
+    const Json& corners = terrain["corners"];  // heightfield: (w+1)*(h+1) corner heights, 1/16 units
+    if (corners.size() > 0) {
+        g.corner.assign(size_t((mw + 1) * (mh + 1)), 0);
+        for (size_t i = 0; i < corners.size() && i < g.corner.size(); ++i) g.corner[i] = int16_t(corners[i].integer());
+    }
 
     // resource fields
     for (auto& f : map["fields"].items()) {
