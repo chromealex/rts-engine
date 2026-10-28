@@ -23,9 +23,12 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("fields", [this](Simulation& s) { sysFields(s); });
     sim.addSystem("production", [this](Simulation& s) { sysProduction(s); });
     sim.addSystem("construction", [this](Simulation& s) { sysConstruction(s); });
+    if (rules_.settlers) sim.addSystem("settlers", [this](Simulation& s) { sysSettlers(s); });
+    if (rules_.lanes.enabled) sim.addSystem("lanes", [this](Simulation& s) { sysLanes(s); });
     sim.addSystem("garrison", [this](Simulation& s) { sysGarrison(s); });
     sim.addSystem("waves", [this](Simulation& s) { sysWaves(s); });
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
+    if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
@@ -54,7 +57,12 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     const Json& rows = terrain["rows"];
     for (size_t y = 0; y < rows.size() && int(y) < mh; ++y) {
         std::string row = rows[y].str();
-        for (size_t x = 0; x < row.size() && int(x) < mw; ++x) g.flags[size_t(g.index(int(x), int(y)))] = cellFlagsFromChar(row[x]);
+        for (size_t x = 0; x < row.size() && int(x) < mw; ++x) {
+            size_t i = size_t(g.index(int(x), int(y)));
+            int dk = rules_.findDiggable(row[x]);
+            if (dk >= 0) { g.flags[i] = 0; g.dig[i] = uint8_t(dk + 1); g.digHp[i] = rules_.diggables[size_t(dk)].hardness; }
+            else g.flags[i] = cellFlagsFromChar(row[x]);
+        }
     }
     for (auto& r : terrain["rects"].items()) {
         int x0 = int(r["rect"][0].integer()), y0 = int(r["rect"][1].integer());
@@ -73,6 +81,11 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     }
     const Json& heights = terrain["heights"];
     for (size_t i = 0; i < heights.size() && i < g.height.size(); ++i) g.height[i] = int16_t(heights[i].integer());
+    const Json& corners = terrain["corners"];  // heightfield: (w+1)*(h+1) corner heights, 1/16 units
+    if (corners.size() > 0) {
+        g.corner.assign(size_t((mw + 1) * (mh + 1)), 0);
+        for (size_t i = 0; i < corners.size() && i < g.corner.size(); ++i) g.corner[i] = int16_t(corners[i].integer());
+    }
 
     // resource fields
     for (auto& f : map["fields"].items()) {
@@ -204,6 +217,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
 
     // placed entities
     std::vector<std::pair<std::string, Entity>> ids;
+    std::vector<Entity> placed;
     for (auto& ej : map["entities"].items()) {
         int t = rules_.findType(ej.getStr("type"));
         if (t < 0) throw std::runtime_error("map entity: unknown type '" + ej.getStr("type") + "'");
@@ -211,6 +225,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         if (owner == -1) owner = kHostileNeutral;
         if ((owner < 0 || owner > int(np)) && owner != kHostileNeutral) throw std::runtime_error("map entity: owner out of range");
         Entity e = spawn(sim, uint16_t(t), uint8_t(owner), readPos(ej["pos"]));
+        placed.push_back(e);
         if (auto* gg = w.tryGet<Garrison>(e)) gg->count = int(ej.getInt("garrison", 0));
         if (auto* rs = w.tryGet<ResourceStock>(e); rs && ej.has("amount")) rs->amount = ej.getFx("amount");
         if (ej.has("id")) ids.emplace_back(ej.getStr("id"), e);
@@ -258,6 +273,31 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         wd.repeats = int(wj.getInt("repeats", 0));
         gs.waves.push_back(wd);
         if (std::find(gs.wavePlayers.begin(), gs.wavePlayers.end(), wd.player) == gs.wavePlayers.end()) gs.wavePlayers.push_back(wd.player);
+    }
+    setupDungeon(sim, map);
+    if (rules_.buildingStorage) {
+        // starting goods are put into the storehouses (map entities may also set "inventory": {res: n})
+        for (size_t p = 1; p < gs.players.size(); ++p)
+            for (size_t r = 0; r < rules_.resources.size(); ++r) {
+                if (!isGood(uint16_t(r))) continue;
+                Fixed amt = gs.players[p].stock[r];
+                gs.players[p].stock[r] = Fixed{};
+                if (amt.raw > 0) addResource(sim, uint8_t(p), uint16_t(r), amt);
+            }
+        size_t k = 0;
+        for (auto& ej : map["entities"].items()) {
+            ++k;
+            if (!ej.has("inventory")) continue;
+            Entity e = placed[k - 1];
+            auto* inv = w.tryGet<Inventory>(e);
+            if (!inv) throw std::runtime_error("map entity: 'inventory' on a type without one");
+            for (auto& [rid, v] : ej["inventory"].members()) {
+                int ri = rules_.findResource(rid);
+                if (ri < 0) throw std::runtime_error("map entity inventory: unknown resource '" + rid + "'");
+                inv->have[size_t(ri)] += v.fx();
+            }
+        }
+        syncStorehouses(sim);
     }
 }
 
@@ -307,6 +347,16 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (t.members > 1) w.add<Squad>(e);
     if (!t.abilities.empty()) w.add<AbilityState>(e);
     if (t.captureTime.raw > 0) w.add<Capture>(e);
+    if (t.hasNeeds) { Needs n; n.happiness = t.needs.happyStart; w.add<Needs>(e, n); }
+    if (t.portalInterval.raw > 0) w.add<PortalState>(e);
+    if (t.autoTrainUnit != kNoType) w.add<AutoTrainState>(e);
+    if (t.claimRate.raw > 0) w.add<ClaimState>(e);
+    const size_t nres = rules_.resources.size();
+    const bool needsInventory = t.storeCapacity.raw > 0 || t.recipe.enabled ||
+                                (underConstruction && rules_.buildingStorage && upfrontCost(t.cost).size() != t.cost.size());
+    if (needsInventory) w.add<Inventory>(e, Inventory{std::vector<Fixed>(nres), std::vector<Fixed>(nres), std::vector<Fixed>(nres)});
+    if (t.recipe.enabled) w.add<Workshop>(e);
+    if (t.carrierCapacity.raw > 0) w.add<Carrier>(e);
     w.add<Buffs>(e);
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
@@ -365,7 +415,11 @@ bool RtsModule::pay(Simulation& sim, uint8_t player, const std::vector<Amount>& 
     auto& gs = state(sim);
     if (player == 0 || player >= gs.players.size()) return true;
     auto& eco = gs.players[player];
-    for (auto& c : cost) if (rules_.resources[c.res].kind != ResourceKind::Capacity) eco.stock[c.res] -= c.value;
+    for (auto& c : cost) {
+        if (rules_.resources[c.res].kind == ResourceKind::Capacity) continue;
+        eco.stock[c.res] -= c.value;
+        if (isGood(c.res)) withdrawGoods(sim, player, c.res, c.value); // goods leave the storehouses
+    }
     eco.supplyUsed += supply; // reserved until the next economy pass
     return true;
 }
@@ -379,7 +433,22 @@ void RtsModule::refund(Simulation& sim, uint8_t player, const std::vector<Amount
 void RtsModule::addResource(Simulation& sim, uint8_t player, uint16_t res, Fixed amount) {
     auto& gs = state(sim);
     if (player == 0 || player >= gs.players.size()) return;
+    if (rules_.resources[res].convertTo >= 0) { addResource(sim, player, uint16_t(rules_.resources[res].convertTo), amount * rules_.resources[res].convertRate); return; }
     auto& eco = gs.players[player];
+    if (isGood(res)) {
+        // goods go into storehouses; the stock is their sum
+        Fixed before = Fixed{};
+        sim.world().each<Inventory, Unit, Owner>([&](Entity, Inventory& inv, Unit& u, Owner& o) {
+            if (o.player == player && rules_.types[u.type].storeCapacity.raw > 0) before += inv.have[res];
+        });
+        depositGoods(sim, player, res, amount);
+        Fixed after = Fixed{};
+        sim.world().each<Inventory, Unit, Owner>([&](Entity, Inventory& inv, Unit& u, Owner& o) {
+            if (o.player == player && rules_.types[u.type].storeCapacity.raw > 0) after += inv.have[res];
+        });
+        eco.stock[res] += after - before;
+        return;
+    }
     eco.stock[res] += amount;
     const ResourceDef& rd = rules_.resources[res];
     bool capped = rd.kind == ResourceKind::Flow || (rd.kind == ResourceKind::Stock && rd.capped);
@@ -394,13 +463,13 @@ void RtsModule::recomputeMods(Simulation& sim, uint8_t player) {
     eco.mods.assign(rules_.types.size(), {});
     for (auto& m : eco.mods) for (size_t s = 0; s < size_t(Stat::Count); ++s) { m.add[s] = Fixed{}; m.mul[s] = kOne; }
     for (size_t k = 0; k < rules_.techs.size(); ++k) {
-        if (!eco.researched[k]) continue;
-        for (auto& [target, mod] : rules_.techs[k].effects)
-            for (size_t ti = 0; ti < rules_.types.size(); ++ti)
-                if (rules_.matches(target, uint16_t(ti))) {
-                    eco.mods[ti].add[size_t(mod.stat)] += mod.add;
-                    eco.mods[ti].mul[size_t(mod.stat)] *= mod.mul;
-                }
+        for (int lv = 0; lv < int(eco.researched[k]); ++lv) // repeatable techs apply once per level
+            for (auto& [target, mod] : rules_.techs[k].effects)
+                for (size_t ti = 0; ti < rules_.types.size(); ++ti)
+                    if (rules_.matches(target, uint16_t(ti))) {
+                        eco.mods[ti].add[size_t(mod.stat)] += mod.add;
+                        eco.mods[ti].mul[size_t(mod.stat)] *= mod.mul;
+                    }
     }
 }
 
@@ -425,6 +494,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
         case Stat::Sight: base = t.sight; break;
         case Stat::GatherRate: base = kOne; break;
         case Stat::AttackSpeed: base = kOne; break;
+        case Stat::ProductionSpeed: base = kOne; break;
         default: break;
     }
     uint8_t owner = w.get<Owner>(e).player;
@@ -527,10 +597,14 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
             int ri = regionAt(sim, centre);
             if (ri < 0 || gs.regionOwner[size_t(ri)] != player) return fail("region not owned");
         }
+        if (rules_.territory.enabled && rules_.territory.buildOnlyOwned)
+            for (int y = y0; y < y0 + t.footprintH; ++y)
+                for (int x = x0; x < x0 + t.footprintW; ++x)
+                    if (g.territory[size_t(g.index(x, y))] != player) return fail("territory not owned");
     }
     bool clear = true;
     w.each<Unit, Transform, Mobile>([&](Entity e, Unit& u, Transform& tr, Mobile&) {
-        if (e == ignore || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
+        if (e == ignore || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
         if (cx >= x0 && cx < x0 + t.footprintW && cy >= y0 && cy < y0 + t.footprintH) {
             // own units step aside (they will be pushed); enemies block
@@ -552,7 +626,7 @@ Entity RtsModule::findNearestFieldCell(Simulation& sim, Vec3 p, int res, Vec3& o
                 int x = cx + dx, y = cy + dy;
                 if (!g.inside(x, y)) continue;
                 size_t i = size_t(g.index(x, y));
-                if (g.fieldAmt[i].raw > 0 && (res < 0 || g.fieldRes[i] == res) && !g.blocked[i]) {
+                if (g.fieldAmt[i] >= kOne && (res < 0 || g.fieldRes[i] == res) && !g.blocked[i]) { // skip regrowth crumbs
                     out = g.cellCenter(x, y);
                     return Entity{uint32_t(i), 0}; // marker: valid() == true
                 }
@@ -655,6 +729,14 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
+    if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
+    if (cmd.type == kCmdBuildRoad || cmd.type == kCmdConnectRoad) { applySettlersCommand(sim, cmd); return; }
+
+    if (cmd.type == kCmdSurrender) {
+        pi->alive = false; // hashed with the player table; result() then reports the remaining team
+        sim.emit({kEvPlayerDefeated, cmd.player, kNullEntity, kNullEntity, kDefeatSurrendered, {}});
+        return;
+    }
 
     if (cmd.type == kCmdClaim) {
         int ri = regionAt(sim, cmd.point);
@@ -689,6 +771,8 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         auto* o = w.tryGet<Owner>(e);
         auto* u = w.tryGet<Unit>(e);
         if (!o || !u || o->player != cmd.player || u->hp.raw <= 0) continue;
+        if (u->flags & (kUnitInHand | kUnitPossessed)) continue; // off the map / directly controlled
+        if (auto* nd = w.tryGet<Needs>(e); nd && nd->leaving) continue;
         if ((u->flags & kUnitUnderConstruction) && cmd.type != kCmdCancelTrain) continue;
         if (std::find(sel.begin(), sel.end(), e) != sel.end()) continue;
         sel.push_back(e);
@@ -698,6 +782,34 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     for (Entity e : sel) if (w.has<Mobile>(e)) ++movers;
     Vec3 target = cmd.point;
     if (w.alive(cmd.target)) if (auto* t = w.tryGet<Transform>(cmd.target)) target = t->pos;
+    // attack-move of a group: spread into an arc facing the goal, flanks ahead (they wrap around the enemy)
+    std::vector<std::pair<Entity, Vec3>> arc;
+    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3) {
+        Vec3 c{};
+        Fixed maxR{};
+        std::vector<Entity> ms;
+        for (Entity e : sel) if (w.has<Mobile>(e)) { ms.push_back(e); c += w.get<Transform>(e).pos; maxR = fxMax(maxR, rules_.types[w.get<Unit>(e).type].radius); }
+        c = c / Fixed::fromInt(int64_t(ms.size()));
+        Vec3 dir = flat(target - c);
+        Fixed dl = dir.length();
+        if (dl > Fixed::fromInt(2)) {
+            dir = dir / dl;
+            Vec3 perp{-dir.z, Fixed{}, dir.x};
+            // order the units by their current lateral position so paths don't cross
+            std::sort(ms.begin(), ms.end(), [&](Entity a, Entity b) {
+                Fixed la = (w.get<Transform>(a).pos - c).dot(perp), lb = (w.get<Transform>(b).pos - c).dot(perp);
+                return la != lb ? la < lb : a.index < b.index;
+            });
+            const Fixed spacing = maxR * 2 + Fixed::fromRatio(2, 5);
+            const int n = int(ms.size());
+            const Fixed R = fxMax(Fixed::fromInt(4), spacing * n / 2);
+            for (int i = 0; i < n; ++i) {
+                Fixed lat = spacing * (2 * i - (n - 1)) / 2;
+                Vec3 p = target + perp * lat + dir * (lat * lat / (R * 2));
+                arc.push_back({ms[size_t(i)], flat(p)});
+            }
+        }
+    }
 
     for (Entity e : sel) {
         if (!w.alive(e)) continue;
@@ -711,6 +823,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             issue(sim, e, o, queue); break;
         case kCmdAttack:
             o.type = o.target.valid() ? OrderType::Attack : OrderType::AttackMove; o.param = movers;
+            for (auto& [ae, ap] : arc) if (ae == e) { o.point = ap; o.param = 1; }
             if (t.weapons.empty()) { o.type = OrderType::Move; o.target = kNullEntity; }
             issue(sim, e, o, queue); break;
         case kCmdPatrol:
@@ -745,7 +858,19 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!canTrain(sim, cmd.player, ut) || int(prod->queue.size()) >= rules_.maxQueue) break;
             if (prod->ready != kNoType && rules_.types[ut].structure) break; // place the finished one first
             if (t.chargesMax > 0 && prod->charges <= 0) break;
+            Entity recruit;
+            if (rules_.types[ut].trainFrom != kNoType) {
+                // made from an idle own unit standing near the producer (recruit + goods)
+                Vec3 at = w.get<Transform>(e).pos;
+                w.each<Unit, Owner, Transform>([&](Entity r, Unit& ru, Owner& ro, Transform& rt) {
+                    if (recruit.valid() || ro.player != cmd.player || ru.type != rules_.types[ut].trainFrom || ru.hp.raw <= 0 || (ru.flags & (kUnitInHand | kUnitPossessed))) return;
+                    if (auto* ord = w.tryGet<Orders>(r); ord && !ord->queue.empty()) return;
+                    if (dist2D(rt.pos, at) <= Fixed::fromInt(15)) recruit = r;
+                });
+                if (!recruit.valid()) break;
+            }
             if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, rules_.types[ut].cost, rules_.types[ut].supplyUsed)) break;
+            if (recruit.valid()) { Unit& ru = w.get<Unit>(recruit); ru.hp = Fixed{}; ru.flags |= kUnitSilent; }
             if (rules_.costModel == CostModel::Progressive && !canAfford(sim, cmd.player, {}, rules_.types[ut].supplyUsed)) {
                 sim.emit({kEvNotEnough, cmd.player, kNullEntity, kNullEntity, 255, {}});
                 break;
@@ -762,16 +887,18 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             uint16_t k = uint16_t(cmd.param);
             if (std::find(t.researches.begin(), t.researches.end(), k) == t.researches.end()) break;
             auto& eco = gs.players[cmd.player];
-            if (eco.researched[k] || eco.researching[k] || !requirementsMet(sim, cmd.player, rules_.techs[k].requires_)) break;
+            if (int(eco.researched[k]) >= rules_.techs[k].levels || eco.researching[k] || !requirementsMet(sim, cmd.player, rules_.techs[k].requires_)) break;
             if (int(prod->queue.size()) >= rules_.maxQueue) break;
-            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, rules_.techs[k].cost, {})) break;
+            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, techCost(sim, cmd.player, k), {})) break;
             eco.researching[k] = 1;
             prod->queue.push_back({~int32_t(k), Fixed{}, Fixed{}});
             break;
         }
         case kCmdCancelTrain: {
             if (auto* c = w.tryGet<Construction>(e)) {
-                refund(sim, cmd.player, t.cost, fxMin(kOne, c->paid));
+                refund(sim, cmd.player, upfrontCost(t.cost), fxMin(kOne, c->paid));
+                if (auto* inv = w.tryGet<Inventory>(e)) // delivered materials go back to the storehouses
+                    for (size_t r = 0; r < inv->have.size(); ++r) if (inv->have[r].raw > 0) addResource(sim, cmd.player, uint16_t(r), inv->have[r]);
                 w.get<Unit>(e).hp = Fixed{};
                 w.get<Unit>(e).flags |= kUnitSilent;
                 break;
@@ -780,7 +907,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!prod || prod->queue.empty()) break;
             size_t slot = cmd.param < 0 || size_t(cmd.param) >= prod->queue.size() ? prod->queue.size() - 1 : size_t(cmd.param);
             ProdItem it = prod->queue[slot];
-            const std::vector<Amount>& cost = it.item >= 0 ? rules_.types[size_t(it.item)].cost : rules_.techs[size_t(~it.item)].cost;
+            const std::vector<Amount> cost = it.item >= 0 ? rules_.types[size_t(it.item)].cost : techCost(sim, cmd.player, uint16_t(~it.item));
             refund(sim, cmd.player, cost, rules_.costModel == CostModel::Upfront ? kOne : it.paid);
             if (it.item >= 0) gs.players[cmd.player].typeCountAll[size_t(it.item)]--;
             else gs.players[cmd.player].researching[size_t(~it.item)] = 0;
@@ -1000,6 +1127,14 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     for (auto t : gs.tickets) h.fx(t);
     for (auto t : gs.score) h.fx(t);
     for (auto& [k, v] : gs.trig.vars) { h.str(k); h.fx(v); }
+    if (rules_.dungeon) hashDungeon(sim, h);
+    if (rules_.settlers) hashSettlers(sim, h);
+    if (rules_.lanes.enabled) {
+        h.u32(gs.laneSignature); h.u32(uint32_t(gs.lanes.size()));
+        for (auto& l : gs.lanes) { h.u32(uint32_t(l.points.size())); if (!l.points.empty()) h.v3(l.points[l.points.size() / 2]); }
+        w.each<LaneWalker>([&](Entity e, LaneWalker& lw) { h.u64(e.packed()); h.i32(lw.lane); h.u32(lw.pos); h.u32(lw.reverse); });
+        for (auto rr : gs.laneRoundRobin) h.u32(rr);
+    }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
     for (size_t i = 0; i < gs.grid.fieldAmt.size(); i += 7) h.fx(gs.grid.fieldAmt[i]);
@@ -1007,7 +1142,8 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         h.u64(e.packed()); h.u32(u.type); h.fx(u.hp); h.u32(u.flags); h.u32(o.player); h.v3(t.pos); h.fx(u.energy);
         if (auto* ord = w.tryGet<Orders>(e)) { h.u32(uint32_t(ord->queue.size())); if (!ord->queue.empty()) { h.u32(uint32_t(ord->queue.front().type)); h.u32(ord->queue.front().state); } }
-        if (auto* c = w.tryGet<Combat>(e)) h.u64(c->target.packed());
+        if (auto* c = w.tryGet<Combat>(e)) { h.u64(c->target.packed()); h.i32(c->slot); h.u64(c->slotTarget.packed()); }
+        if (auto* mb = w.tryGet<Mobile>(e)) { h.v3(mb->vel); h.u32(mb->yielded); h.u32(mb->yieldUntil); h.u32(mb->pathPos); h.u32(mb->moving); }
         if (auto* g = w.tryGet<Garrison>(e)) { h.i32(g->count); h.fx(g->growth); h.i32(g->pendingOut); }
         if (auto* p = w.tryGet<Production>(e)) { h.u32(uint32_t(p->queue.size())); if (!p->queue.empty()) h.fx(p->queue[0].progress); h.u32(p->ready); h.i32(p->charges); }
         if (auto* r = w.tryGet<ResourceStock>(e)) h.fx(r->amount);

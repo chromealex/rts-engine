@@ -3,6 +3,7 @@
 // per-file compression independent of thread count).
 #pragma once
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@ struct WriteOptions {
     int level = 19;          // zstd level (1..22); 19 is a good size/time trade-off for release
     unsigned threads = 0;    // 0 = hardware concurrency
     bool compress = true;    // false: everything stored (debugging, fastest builds)
+    bool external = false;   // set kFlagExternal (also set automatically by addPack of an external pack)
 };
 
 struct WriteStats {
@@ -52,7 +54,13 @@ public:
     bool addData(const std::string& packPath, std::string data, std::string* error = nullptr);
     // Adds a directory tree under `prefix` ("" for the root, "engine" for engine assets).
     // Applies `<dir>/.rpakignore` on top of `rules`. Returns the number of files added, -1 on error.
-    int addDirectory(const std::string& dir, const std::string& prefix, const IgnoreRules& rules, std::string* error = nullptr);
+    // Symlinks are skipped when `followSymlinks` is false (untrusted trees, e.g. unpacker output).
+    int addDirectory(const std::string& dir, const std::string& prefix, const IgnoreRules& rules, std::string* error = nullptr,
+                     bool followSymlinks = true);
+    // Adds every entry of an existing pack under `prefix` (merging imported or prebuilt packs).
+    int addPack(Pack& pack, const std::string& prefix, std::string* error = nullptr);
+    void markExternal() { external_ = true; }
+    bool external() const { return external_; }
 
     bool write(const std::string& outPath, const WriteOptions& opt, WriteStats* stats = nullptr, std::string* error = nullptr);
     // Same, into memory (tests).
@@ -60,9 +68,17 @@ public:
 
     size_t size() const { return inputs_.size(); }
 
+    // Build steps that transform content before write() (texture atlases): list the inputs
+    // (pack paths, insertion order), read one input's bytes, drop inputs by pack path.
+    std::vector<std::string> paths() const;
+    bool readInput(const std::string& packPath, std::string& out) const;
+    size_t remove(const std::vector<std::string>& packPaths);
+
 private:
     struct Input { std::string path, disk, data; bool inMemory = false; };
     std::vector<Input> inputs_;
+    std::set<std::string> paths_;
+    bool external_ = false;
 };
 
 // Human-readable size: 1.2 MB, 340 KB, 12 B.

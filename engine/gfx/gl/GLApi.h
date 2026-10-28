@@ -78,6 +78,7 @@
     X(GLuint, glGetUniformBlockIndex, (GLuint p, const GLchar* n)) \
     X(void, glUniformBlockBinding, (GLuint p, GLuint i, GLuint b)) \
     X(void, glActiveTexture, (GLenum t)) \
+    X(void, glGenerateMipmap, (GLenum t)) \
     X(void, glBlendFuncSeparate, (GLenum a, GLenum b, GLenum c, GLenum d)) \
     X(void, glBlendEquation, (GLenum m)) \
     X(void, glGenFramebuffers, (GLsizei n, GLuint* f)) \

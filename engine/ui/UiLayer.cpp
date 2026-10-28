@@ -3,6 +3,7 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Debugger.h>
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 
@@ -26,7 +27,20 @@ public:
         if (!path.empty() && path[0] == '#') { out = path; return; } // dynamic texture name
         Rml::SystemInterface::JoinPath(out, documentPath, path);
     }
+    int TranslateString(Rml::String& out, const Rml::String& input) override {
+        // only whole "@key" strings (surrounding whitespace allowed): plain text stays untouched
+        const size_t b = input.find_first_not_of(" \t\r\n"), e = input.find_last_not_of(" \t\r\n");
+        if (!translate || b == Rml::String::npos || input[b] != '@' || e == b) { out = input; return 0; }
+        for (size_t i = b + 1; i <= e; ++i) {
+            const char c = input[i];
+            if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '_' || c == '-')) { out = input; return 0; }
+        }
+        out = translate(input.substr(b + 1, e - b));
+        return 1;
+    }
     void SetClipboardText(const Rml::String& text) override { platform::setClipboardText(text); }
+
+    std::function<std::string(const std::string&)> translate;
     void GetClipboardText(Rml::String& text) override { text = platform::clipboardText(); }
 
 private:
@@ -166,6 +180,14 @@ Rml::ElementDocument* UiLayer::loadDocument(const std::string& name) {
 
 void UiLayer::setDynamicTexture(const std::string& name, gfx::TextureHandle tex, int w, int h) {
     if (impl_) impl_->renderer.setDynamicTexture(name, tex, w, h);
+}
+
+void UiLayer::setTranslator(std::function<std::string(const std::string&)> fn) {
+    if (impl_) impl_->system.translate = std::move(fn);
+}
+
+void UiLayer::setImageSource(ImageSource source) {
+    if (impl_) impl_->renderer.setImageSource(std::move(source));
 }
 
 float UiLayer::dpRatio() const { return context() ? impl_->context->GetDensityIndependentPixelRatio() : 1.0f; }

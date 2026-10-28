@@ -3,11 +3,13 @@
 //   rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>
 //            [--engine <engine dir>] [--out <dir>] [--config Debug|Release]
 //            [--generate-only] [--team <Apple team id>] [--jobs N]
-//            [--no-pack] [--pack-level N]
+//            [--no-pack] [--pack-level N] [--no-atlas]
 //
 // Content (game folder + engine/assets) ships as one compressed resource pack
 // content/content.rpak; --no-pack ships the loose folder instead (debugging). Every build prints
-// a size report and writes it to <out>/<target>/size-report.txt.
+// a size report and writes it to <out>/<target>/size-report.txt (+ size-report.json for the
+// editor). Small 2D images are packed into texture atlases per platform profile (= target; page
+// size limit from game.json "atlas", see docs/game-format.md); --no-atlas ships them as is.
 //
 // Outputs (default <project>/../dist/<target>):
 //   macos    <Name>.app                     (universal arm64+x86_64, ad-hoc signed)
@@ -27,6 +29,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -34,6 +37,8 @@
 
 #include "engine/data/Json.h"
 #include "engine/pack/PackWriter.h"
+#include "engine/pack/Unpacker.h"
+#include "tools/atlas/AtlasBuild.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -62,7 +67,10 @@ struct Options {
     bool generateOnly = false;
     bool pack = true;
     int packLevel = 0;        // 0 = by config: 19 for Release, 3 for Debug
-    fs::path packFile;        // built once, shared by all targets
+    bool atlas = true;
+    std::string profile;      // current target: selects the atlas page size
+    Json gameJson;
+    std::map<std::string, fs::path> packFiles; // atlas settings key -> built pack (shared by targets with equal settings)
     unsigned jobs = std::max(2u, std::thread::hardware_concurrency());
 };
 
@@ -137,27 +145,131 @@ std::string sanitize(const std::string& s) {
 }
 
 // ------------------------------------------------------------------ content pack
-// Builds <out>/_pack/content.rpak from the game folder and engine assets (once per run).
+// "~/x", "${HOME}/x" and paths relative to the project.
+fs::path expandPath(const std::string& p, const fs::path& base) {
+    std::string s = p;
+    for (size_t a; (a = s.find("${")) != std::string::npos;) {
+        size_t b = s.find('}', a);
+        if (b == std::string::npos) break;
+        const char* v = std::getenv(s.substr(a + 2, b - a - 2).c_str());
+        s.replace(a, b - a + 1, v ? v : "");
+    }
+    if (!s.empty() && s[0] == '~') if (const char* h = std::getenv("HOME")) s = h + s.substr(1);
+    fs::path r(s);
+    return r.is_relative() ? base / r : r;
+}
+
+// game.json "imports": third-party archives unpacked into the pack at build time, e.g.
+//   {"source": "~/Games/war2/DATA/MAINDAT.WAR", "prefix": "imported/war2", "optional": true}
+// Optional sources may be missing (CI, other machines); the build then goes without them.
+void addImports(const Options& o, rts::pack::PackWriter& w, rts::pack::IgnoreRules& rules, std::vector<std::string>& notes) {
+    Json m;
+    try { m = Json::parseFile((o.project / "game.json").string()); } catch (const std::exception&) { return; }
+    const Json& imports = m["imports"];
+    if (imports.size() == 0) return;
+    rts::pack::UnpackerRegistry reg;
+    reg.addDefaultDirs(o.engine.string(), o.project.string());
+    for (auto& e : reg.errors()) info("предупреждение: плагин пропущен: " + e);
+    for (auto& im : imports.items()) {
+        std::string src = im.getStr("source");
+        if (src.empty()) die("game.json: imports: у элемента нет \"source\"");
+        fs::path path = expandPath(src, o.project);
+        std::error_code ec;
+        if (!fs::exists(path, ec)) {
+            if (im.getBool("optional")) { info("импорт пропущен (нет файла): " + path.string()); notes.push_back("пропущен импорт: " + src); continue; }
+            die("game.json: imports: не найден " + path.string() + " (добавьте \"optional\": true, если его может не быть)");
+        }
+        // An archive kept inside the game folder must not also land in the pack as a raw file.
+        fs::path rel = fs::relative(path, o.project, ec);
+        if (!ec && !rel.empty() && rel.native()[0] != '.') rules.add(rel.generic_string());
+        rts::pack::ImportOptions io;
+        io.format = im.getStr("format");
+        io.prefix = im.getStr("prefix");
+        io.external = im.getBool("external");
+        for (auto& g : im["include"].items()) io.include.push_back(g.str());
+        rts::pack::ImportResult r;
+        std::string err;
+        if (!rts::pack::importArchive(reg, path.string(), io, w, &r, &err)) die("импорт " + src + ": " + err);
+        info("импорт: " + src + " (" + r.format + ") -> " + (io.prefix.empty() ? "/" : io.prefix + "/") + ", файлов " + std::to_string(r.files) +
+             (r.external ? ", внешний контент" : ""));
+    }
+}
+
+rts::atlas::AtlasConfig atlasConfig(const Options& o) {
+    try {
+        rts::atlas::AtlasConfig c = rts::atlas::AtlasConfig::fromGame(o.gameJson, o.profile);
+        if (!o.atlas) c.enabled = false;
+        return c;
+    } catch (const std::exception& e) {
+        die(e.what());
+    }
+}
+
+// Machine-readable build report (editor Build window): pack totals, heaviest entries, atlases.
+Json packReportJson(const rts::pack::WriteStats& st, const rts::atlas::AtlasStats& as) {
+    Json j = Json::object();
+    j.set("rawBytes", Json::number(int64_t(st.rawBytes)));
+    j.set("packBytes", Json::number(int64_t(st.packBytes)));
+    j.set("entries", Json::number(int64_t(st.items.size())));
+    j.set("duplicates", Json::number(int64_t(st.duplicates)));
+    std::vector<const rts::pack::WriteStats::Item*> top;
+    for (auto& it : st.items) top.push_back(&it);
+    std::stable_sort(top.begin(), top.end(), [](auto* a, auto* b) { return a->storedSize > b->storedSize; });
+    Json t = Json::array();
+    for (size_t i = 0; i < top.size() && i < 15; ++i) {
+        Json e = Json::object();
+        e.set("path", Json::string(top[i]->path));
+        e.set("rawBytes", Json::number(int64_t(top[i]->rawSize)));
+        e.set("storedBytes", Json::number(int64_t(top[i]->storedSize)));
+        t.push(std::move(e));
+    }
+    j.set("top", std::move(t));
+    Json r = Json::object();
+    r.set("pack", std::move(j));
+    r.set("atlas", as.toJson());
+    return r;
+}
+
+// Builds <out>/_pack[/<atlas key>]/content.rpak from the game folder and engine assets, once per
+// distinct atlas setting (targets with the same page size share one pack).
+fs::path packDir(const Options& o) {
+    std::string key = atlasConfig(o).key();
+    return key == "off" ? o.out / "_pack" : o.out / "_pack" / key;
+}
+
 fs::path contentPack(Options& o) {
-    if (!o.packFile.empty()) return o.packFile;
-    step("Контент: сборка ресурс-пака");
+    rts::atlas::AtlasConfig ac = atlasConfig(o);
+    std::string key = ac.key();
+    if (auto it = o.packFiles.find(key); it != o.packFiles.end()) return it->second;
+    step("Контент: сборка ресурс-пака" + (key == "off" ? std::string() : " (атласы: " + o.profile + ", страница до " + std::to_string(ac.pack.maxPage) + ")"));
     rts::pack::PackWriter w;
     rts::pack::IgnoreRules rules;
+    rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
+    std::vector<std::string> notes;
+    addImports(o, w, rules, notes);
     std::string err;
-    if (w.addDirectory(o.project.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rules, &err) < 0)
+    if (w.addDirectory(o.project.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
         die(err);
+    rts::atlas::AtlasStats as;
+    if (!rts::atlas::applyAtlas(w, ac, as, &err)) die(err);
+    for (auto& m : as.warnings) info("предупреждение: " + m);
     rts::pack::WriteOptions wo;
     wo.level = o.packLevel ? o.packLevel : (o.config == "Debug" ? 3 : 19);
     wo.threads = o.jobs;
     rts::pack::WriteStats st;
-    fs::path out = o.out / "_pack" / "content.rpak";
+    fs::path dir = packDir(o), out = dir / "content.rpak";
     if (!w.write(out.string(), wo, &st, &err)) die(err);
+    rts::atlas::finishStats(as, st);
     for (auto& m : st.warnings) info("предупреждение: " + m);
-    std::string report = rts::pack::sizeReport(st, 15);
+    std::string report = rts::pack::sizeReport(st, 15) + as.report();
+    for (auto& n : notes) report += n + "\n";
+    if (w.external())
+        report += "ВНИМАНИЕ: сборка содержит внешний контент (импорт из сторонних архивов) — только для личного использования, не распространять.\n";
     std::stringstream ss(report);
     for (std::string line; std::getline(ss, line);) info(line);
-    writeText(o.out / "_pack" / "size-report.txt", report);
-    o.packFile = out;
+    writeText(dir / "size-report.txt", report);
+    writeText(dir / "size-report.json", packReportJson(st, as).dump(2) + "\n");
+    o.packFiles[key] = out;
     return out;
 }
 
@@ -187,8 +299,20 @@ void reportSize(const Options& o, const std::string& target, const fs::path& art
     std::string line = target + ": " + artifact.filename().string() + " — " + rts::pack::formatBytes(treeSize(artifact));
     info("размер: " + line);
     std::string report = line + "\n";
-    if (o.pack && fs::exists(o.out / "_pack" / "size-report.txt", ec)) report += "\nконтент (content.rpak):\n" + readText(o.out / "_pack" / "size-report.txt");
+    if (o.pack && fs::exists(packDir(o) / "size-report.txt", ec)) report += "\nконтент (content.rpak):\n" + readText(packDir(o) / "size-report.txt");
     writeText(o.out / target / "size-report.txt", report);
+    Json j = Json::object();
+    j.set("target", Json::string(target));
+    j.set("artifact", Json::string(artifact.filename().string()));
+    j.set("artifactBytes", Json::number(int64_t(treeSize(artifact))));
+    if (o.pack && fs::exists(packDir(o) / "size-report.json", ec)) {
+        try {
+            Json c = Json::parse(readText(packDir(o) / "size-report.json"));
+            j.set("pack", c["pack"]);
+            j.set("atlas", c["atlas"]);
+        } catch (const std::exception&) {}
+    }
+    writeText(o.out / target / "size-report.json", j.dump(2) + "\n");
 }
 
 std::string packVar(Options& o) { return o.pack ? " -DRTS_CONTENT_PACK=" + quote(contentPack(o)) : std::string(" -DRTS_CONTENT_PACK="); }
@@ -541,7 +665,7 @@ void buildLinux(const Game& g, Options& o) {
 void usage() {
     std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
                  "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
-                 "                [--no-pack] [--pack-level 1..22]\n";
+                 "                [--no-pack] [--pack-level 1..22] [--no-atlas]\n";
 }
 
 } // namespace
@@ -562,6 +686,7 @@ int main(int argc, char** argv) {
         else if (a == "--generate-only") o.generateOnly = true;
         else if (a == "--no-pack") o.pack = false;
         else if (a == "--pack-level") o.packLevel = std::atoi(next().c_str());
+        else if (a == "--no-atlas") o.atlas = false;
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { usage(); return 2; }
     }
@@ -578,6 +703,7 @@ int main(int argc, char** argv) {
     Game g;
     try {
         Json m = Json::parseFile((o.project / "game.json").string());
+        o.gameJson = m;
         g.name = m.getStr("name", g.name);
         g.id = m.getStr("id", g.id);
         g.version = m.getStr("version", g.version);
@@ -600,6 +726,7 @@ int main(int argc, char** argv) {
     if (o.target == "all") targets = {"macos", "ios", "android", "web", "windows", "linux"};
     else targets = {o.target};
     for (auto& t : targets) {
+        o.profile = t;
         if (t == "macos") buildMac(g, o);
         else if (t == "ios") buildIOS(g, o);
         else if (t == "android") buildAndroid(g, o);

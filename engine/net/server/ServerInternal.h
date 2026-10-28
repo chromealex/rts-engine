@@ -104,7 +104,7 @@ struct Server::Impl {
     Client* client(uint32_t id) { auto it = clients.find(id); return it == clients.end() ? nullptr : it->second.get(); }
     Room* room(uint32_t id) { auto it = rooms.find(id); return it == rooms.end() ? nullptr : it->second.get(); }
     void send(Client& c, const Bytes& b) { if (c.conn) c.conn->send(b); }
-    void sendError(Client& c, ErrorCode code, const std::string& text) { ErrorMsg e; e.code = code; e.text = text; send(c, encode(e)); }
+    void sendError(Client& c, ErrorCode code, NetText text) { ErrorMsg e; e.code = code; e.text = std::move(text); send(c, encode(e)); }
     void handle(Client& c, const Bytes& msg);
     void onHello(Client& c, ByteReader& r);
     void onDisconnect(Client& c);
@@ -131,7 +131,7 @@ struct Server::Impl {
     void memberDropped(Room& r, uint32_t clientId, bool left);
     void memberResumed(Room& r, Client& c);
     void reassignBots(Room& r);
-    void endMatch(Room& r, int32_t result, const std::string& reason);
+    void endMatch(Room& r, int32_t result, const NetText& reason);
     void saveReplay(Room& r, uint32_t endTick, uint64_t endHash);
     Member* member(Room& r, uint32_t clientId);
 
