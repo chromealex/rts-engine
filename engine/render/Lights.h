@@ -63,7 +63,8 @@ struct LightUniforms {
     float info[4];               // x per-pixel light count, y map range, z uv flipY, w night glow
     float cloud[4];              // noise offset.xz, noise scale, coverage 0..1
     float sky[4];                // x cloud shadow strength 0..1, y water reflection strength, zw 1 / view size
-    float env[4];                // x environment reflections (glossy materials sample the light map)
+    float env[4];                // x environment reflections (glossy materials sample the light map),
+                                 // yzw day/night tint for unlit (2D sprite) shaders
     float pos[8][4];             // xyz, radius
     float col[8][4];             // rgb * intensity, spot cosInner
     float spot[8][4];            // spot direction xyz, cosOuter (< -1.5: point light)
@@ -90,6 +91,7 @@ public:
     LightQuality quality() const { return quality_; }
     static LightQuality defaultQualityFor(const gfx::Device& dev, bool mobile);
     void setNightGlow(float g) { nightGlow_ = g; }   // extra emissive multiplier (0 by day)
+    void setUnlitTint(float3 t) { unlitTint_ = t; }  // 2D sprites have no sun: day/night is a tint
     float nightGlow() const { return nightGlow_; }
     // Cloud shadows on the sun: coverage 0..1, strength 0..1 (0 = off), drift offset in world units.
     void setClouds(float coverage, float strength, float scale, float offsetX, float offsetZ);
@@ -172,6 +174,7 @@ private:
     LightUniforms u_{};
     LightStats stats_;
     float nightGlow_ = 0;
+    float3 unlitTint_{1, 1, 1};
     uint32_t mapFrame_ = 0;
     bool mapReady_ = false, mapHasLights_ = false;
 };

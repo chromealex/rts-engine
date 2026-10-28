@@ -737,6 +737,7 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
     const UnitType& t = rules_.types[type];
     auto fail = [&](const char* m) { if (why) *why = m; return false; };
     if (!t.structure) return fail("not a structure");
+    if (rules_.mech.power && t.mech.needsPower && !mechPowered(sim, player, centre)) return fail("needs a power field");   // agent-mech
     World& w = sim.world();
     GameState& gs = state(sim);
     MapGrid& g = gs.grid;
