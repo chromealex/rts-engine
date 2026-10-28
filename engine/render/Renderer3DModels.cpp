@@ -157,7 +157,7 @@ void Renderer3D::drawModel(const ModelDraw& d) {
                           boxVisible(lightViewProj_ * d.world, c - e, c + e);
     if (!inView && !inShadow) return;
     const std::vector<mat4>& world = d.nodeWorld && d.nodeWorld->size() == m->nodes.size() ? *d.nodeWorld : m->bindWorld;
-    const std::vector<Material>& mats = d.materials && d.materials->size() == m->materials.size() ? *d.materials : m->materials;
+    const std::vector<Material>& mats = d.materials && d.materials->size() >= m->materials.size() ? *d.materials : m->materials;
     const bool usePose = d.pose && d.pose->size() == m->nodes.size();
     float4 anim{0, 0, 0, 0};
     const bool canBake = d.baked && m->baked.tex.valid();
@@ -172,6 +172,7 @@ void Renderer3D::drawModel(const ModelDraw& d) {
             if (p.indexCount == 0) continue;
             int mi = p.material;
             if (d.variant >= 0 && d.variant < int(p.variantMaterial.size()) && p.variantMaterial[size_t(d.variant)] >= 0) mi = p.variantMaterial[size_t(d.variant)];
+            if (d.nodeMaterial && size_t(n) < d.nodeMaterial->size() && (*d.nodeMaterial)[size_t(n)] >= 0 && &mats == d.materials) mi = (*d.nodeMaterial)[size_t(n)];
             ModelItem it;
             it.model = m; it.prim = &p; it.mat = &mats[size_t(std::clamp(mi, 0, int(mats.size()) - 1))];
             it.tint = d.tint; it.team = d.team; it.flash = d.flash; it.flags = d.flags;
