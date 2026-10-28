@@ -193,6 +193,16 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
             std::fprintf(stderr, "[planet] body %zu fog visible %d raw %d of %d (grid %dx%d)\n", bi, vis, raw, 6 * N * N, grid.w, grid.h);
         }
     }
+    if (std::getenv("RTS_PLANET_DEBUG")) { // RTS_PLANET_DEBUG: what the scene holds (screenshot set-ups)
+        int tr = 0, orbit = 0, moon = 0;
+        for (auto& o : s.objects) {
+            if (o.isProjectile) continue;
+            if (o.body == SceneObject::kBodyTransit) ++tr;
+            else if (o.body >= 0 && o.body != Wd.start) ++moon;
+            else if (o.type < rules_->types.size() && (rules_->types[o.type].layer & kLayerOrbit)) ++orbit;
+        }
+        std::fprintf(stderr, "[planet] t=%.0f transit %d orbit-units %d on-other-bodies %d\n", s.seconds, tr, orbit, moon);
+    }
     planets_.draw(r, pframe_, s.seconds, planetCam_.body(), blend);
     handleEvents(s);
     const float3 eye = r.camera().eye();
