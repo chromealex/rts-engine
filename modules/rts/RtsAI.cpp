@@ -514,7 +514,6 @@ void RtsAI::military(Simulation& sim, RtsModule& m) {
                 opts.push_back(ut);
                 if (cand.hero) { opts.assign(1, ut); break; } // heroes first
             }
-            if (getenv("AIDBG") && !t.produces.empty()) std::printf("ai%d tick %u %s opts=%zu save=%d\n", player_, sim.tick(), t.id.c_str(), opts.size(), int(saveForWorkers_));
             if (!opts.empty()) { Command c; c.type = kCmdTrain; c.units = {e}; c.param = opts[rng_.below(uint32_t(opts.size()))]; send(sim, c); }
         }
     });
