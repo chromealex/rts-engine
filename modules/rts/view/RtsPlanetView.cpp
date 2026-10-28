@@ -186,12 +186,6 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
                     pv[(size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x)] = c < fld.size() ? fld[c] : 0;
                 }
         planets_.setVision(int(bi), &pv, fog_.look());
-        if (std::getenv("RTS_PLANET_DEBUG")) {
-            int vis = 0, raw = 0;
-            for (uint8_t v : pv) vis += v > 200;
-            for (int f = 0; f < 6; ++f) for (int y = 0; y < N; ++y) for (int x = 0; x < N; ++x) raw += (*vision)[size_t(Wd.sim->gridCell(int(bi), f, x, y))] == 2;
-            std::fprintf(stderr, "[planet] body %zu fog visible %d raw %d of %d (grid %dx%d)\n", bi, vis, raw, 6 * N * N, grid.w, grid.h);
-        }
     }
     if (std::getenv("RTS_PLANET_DEBUG")) { // RTS_PLANET_DEBUG: what the scene holds (screenshot set-ups)
         int tr = 0, orbit = 0, moon = 0;
