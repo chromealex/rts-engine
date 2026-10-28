@@ -59,8 +59,9 @@ bool RtsModule::mechToggle(Simulation& sim, Entity caster, int ability) {
 
 // ================================================================= veterancy
 
-void RtsModule::mechOnHit(Simulation& sim, Entity target, Entity source) {
+void RtsModule::mechOnHit(Simulation& sim, Entity target, Entity source, Fixed dmg) {
     if (auto* v = sim.world().tryGet<Veteran>(target)) v->lastHit = source;
+    if (rules_.mech.morale) mechMoraleHit(sim, target, source, dmg);
 }
 
 void RtsModule::mechVeteranKill(Simulation& sim, Entity victim) {
@@ -202,6 +203,7 @@ void RtsModule::mechTick(Simulation& sim) {
     mechTickCombat(sim);
     mechTickTactics(sim);
     mechTickSociety(sim);
+    mechTickBattle(sim);
     World& w = sim.world();
     const Fixed dt = sim.dt();
     std::vector<Entity> addVet;

@@ -114,7 +114,10 @@ add_library(rts_game STATIC
     modules/rts/RtsAI.cpp
     modules/rts/RtsOriginalsData.cpp
     modules/rts/RtsOriginals.cpp
-    modules/rts/RtsAIOriginals.cpp)
+    modules/rts/RtsFidelityData.cpp
+    modules/rts/RtsFidelity.cpp
+    modules/rts/RtsAIOriginals.cpp
+    modules/rts/RtsAIFidelity.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 # agent-mech: mechanics of the top-100 strategy games plan (stances, transports, ...)
 file(GLOB RTS_MECH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/RtsMech*.cpp)
@@ -290,7 +293,8 @@ add_library(rts_models STATIC
     engine/render/Model3do.cpp
     engine/render/ModelW3d.cpp
     engine/render/ImageBlp.cpp
-    engine/render/ImageDds.cpp)
+    engine/render/ImageDds.cpp
+    engine/render/TextureGen.cpp)
 # ufbx (MIT / public domain): FBX parser, compiled as its own C library without warnings.
 # RTS_FBX=OFF keeps it out of size-sensitive builds (FBX files then fail with a readable error).
 option(RTS_FBX "FBX import in the runtime (ufbx, ~0.5 MB of code)" ON)
@@ -658,6 +662,7 @@ if(RTS_BUILD_TESTS)
         target_link_libraries(rts_tests PRIVATE rts_modelconv)
         target_compile_definitions(rts_tests PRIVATE RTS_TEST_MODELCONV=1)
     endif()
+    target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
     if(TARGET rts_editor_core)   # planet map documents (MapDoc world block)
         target_link_libraries(rts_tests PRIVATE rts_editor_core)
         target_compile_definitions(rts_tests PRIVATE RTS_TESTS_EDITOR_CORE=1)
@@ -699,7 +704,7 @@ endif()
 target_sources(rts_game PRIVATE modules/rts/RtsTiles.cpp)
 # terrain / map generator (agent-terrain-gen): integer noise, erosion, biomes, fair starts, presets, planets
 target_sources(rts_game PRIVATE modules/rts/gen/GenNoise.cpp modules/rts/gen/GenField.cpp modules/rts/gen/GenTerrain.cpp
-    modules/rts/gen/GenContent.cpp modules/rts/gen/GenPlanet.cpp modules/rts/gen/MapGen.cpp)
+    modules/rts/gen/GenContent.cpp modules/rts/gen/GenPlanet.cpp modules/rts/gen/GenWorld.cpp modules/rts/gen/MapGen.cpp)
 add_library(rts_render2d STATIC engine/render/SpriteBatch.cpp engine/render/TextureCache.cpp)
 target_include_directories(rts_render2d PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsSprites.cpp modules/rts/view/RtsTileView.cpp modules/rts/view/RtsSpriteShadow.cpp)
@@ -822,4 +827,14 @@ endif()
 if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/BrandingOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_branding)
+endif()
+
+# Material library and procedural textures (models agent): material_* / texture_* editor operations
+# (materials.json, rules view "materials" / "assign"); the Materials window previews them.
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/MaterialOps.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_models)
+endif()
+if(TARGET rtsmcp)   # KTX2 zstd in rts_models: rtsmcp links no pack writer, so it takes the decoder
+    target_link_libraries(rtsmcp PRIVATE rts_models rts_zstd_dec)
 endif()

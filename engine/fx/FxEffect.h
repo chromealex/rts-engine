@@ -57,10 +57,11 @@
 //   "prewarm": true                             // looping: starts as if it had run one duration
 //   "bursts": [{ "time": 0, "count": 5, "cycles": 0, "interval": 0.2, "chance": 0.5 }]   // cycles 0 = forever
 //   "shape": "donut" | "mesh", "donutRadius": 0.2, "length": 2, "emitFrom": "volume" | "shell" | "edge" | "vertex" | "triangle",
-//   "mesh": "builtin:cube" | "models/rock.fbx",  "shapeRotation": [0, 0, 0],
+//   "mesh": "builtin:cube" | "models/rock.fbx",  "shapeRotation": [0, 0, 0],   // mesh shape scale: "box"
 //   "randomDirection": 0.3, "sphericalDirection": 0, "randomPosition": 0.1, "alignToDirection": true,
 //   "arcMode": "random" | "loop" | "pingpong" | "spread", "arcSpeed": 1, "arcSpread": 0.1
 //   "sizeY": [0.5, 1], "sizeZ": 1, "rotation3D": { "x": [0, 360], "y": 0 }, "gravityScale": [0.5, 1]
+//   "flipRotation": 0.5                         // chance to mirror a particle's rotation and spin
 //   "startColor": { "gradient": [[t, "#.."], ...], "gradientMin": [...], "overTime": true }
 //   "colorMin": [[t, "#.."], ...], "sizeOverLifeMin": [[t, k], ...], "sizeOverLifeY": [...], "sizeOverLifeZ": [...]
 //   "spin3D": { "x": 90, "y": [-30, 30] }, "spinBySpeed": { "speed": [0, 5], "spin": [[0, 0], [1, 360]] }
@@ -288,6 +289,7 @@ struct EmitterDef {
     float3 shapeRotation{0, 0, 0};             // degrees
     float randomDirection = 0, sphericalDirection = 0, randomPosition = 0;
     bool alignToDirection = false;
+    float flipRotation = 0;
     FxArcMode arcMode = FxArcMode::Random;
     float arcSpeed = 1, arcSpread = 0;
     bool size3D = false;
