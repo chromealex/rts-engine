@@ -386,3 +386,23 @@ Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"e
 - **Knights and Merchants / Settlers**: `"storage": "buildings"`, storehouses, `recipe` chains (woodcutter → sawmill, farm → mill → bakery), `carrier` serfs, `roadNetwork`, materials delivered to sites, `trainFrom` recruits, inn food `needs` with `starve`.
 - **Mushroom Wars 2**: `garrison` villages + `lanes` instead of hand-made `roads`.
 - **Territory war (State.io)**: `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `capturable` towns, barracks with `autoTrain`, `playerAbilities`, repeatable `levels` techs, `victory: territory`.
+
+## Sample games (data only, `games/<id>/`; maps from `games/_tools/mapgen.py`)
+
+| id | like | recipe |
+|---|---|---|
+| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, creep camps (`neutral.leash`, `bounty`), siege demolisher |
+| `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
+| `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
+| `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
+| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim |
+| `fourages` | Age of Empires II | four stocks, camps as dropoffs, farms (infinite `ownerOnly` nodes), ages as techs, blacksmith tech effects, rams vs buildings |
+| `holdtheline` | Company of Heroes | `squad` infantry with reinforcement, `victoryPoint` capture points + `victory: tickets`, fuel/munition points with `income` |
+| `lastcolony` | They Are Billions | `victory: survive`, map `waves` from a `waves` player with growth, `buildRadius`, towers and walls |
+| `clanlands` | Northgard | 3x3 map `regions`, `regions.claimCost` + growth, `buildOnlyOwned` |
+| `flagsectors` | Z | sector `regions`, flags with `capture.region`, `capturable` factories, `productionPerRegion` |
+| `laneclash` | lane battler | `autoBuild` pool, `waveClock` + `waveSpawn`, `upgrades`, `victory: score` with `keyLoses` |
+| `underlord` | Dungeon Keeper | `diggable` rock/gold/gem, imps with `digs` + `claimer`, `rooms`, neutral `portal` + `claimedByTerritory`, creatures with `attractedBy`, `needs` and hero levels from training, `hand`, `possession`, leveled tech paid in research |
+| `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
+| `hearthhaul` | Knights and Merchants | `storage: buildings`, storehouse, recipe chains (woodcutter → sawmill, farm → mill → bakery, armoury), serf `carrier`s, `roadNetwork`, delivered construction materials, `trainFrom: recruit`, inn `needs` with `starve` |
+| `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |

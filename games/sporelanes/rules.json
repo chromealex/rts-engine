@@ -1,0 +1,18 @@
+// "Spore Lanes" — Mushroom Wars 2-like: villages grow spores; send a share of a village to another one and
+// the sim generates smooth lanes around obstacles, spreading the column over parallel lanes. Towers shoot
+// passing enemies. Take every building to win.
+{
+  "victory": "noEntities",
+  "lanes": {"left": 3, "right": 2, "spacing": 0.35},
+  "resources": {},
+  "types": {
+    "spore": {"name": "Спора", "health": {"max": 1}, "move": {"speed": 2.4, "radius": 0.15}, "sight": 3, "entersGarrison": true, "view": {"shape": "mushroom", "scale": 0.5}},
+    "hive": {"name": "Улей", "structure": {"footprint": [3, 3]}, "invulnerable": true, "sight": 6,
+             "garrison": {"max": 40, "unit": "spore", "interval": 0.8, "capturable": true, "defense": 1.2}, "view": {"shape": "mushroomhouse", "scale": 1.4}},
+    "hut": {"name": "Хижина", "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 5,
+            "garrison": {"max": 20, "unit": "spore", "interval": 1.4, "capturable": true, "defense": 1.0}, "view": {"shape": "mushroomhouse"}},
+    "tower": {"name": "Башня", "structure": {"footprint": [2, 2]}, "invulnerable": true, "sight": 6,
+              "garrison": {"max": 15, "unit": "spore", "capturable": true, "defense": 1.6},
+              "weapons": [{"range": 4, "damage": 1, "cooldown": 0.6, "projectileSpeed": 12}], "view": {"shape": "tower"}}
+  }
+}
