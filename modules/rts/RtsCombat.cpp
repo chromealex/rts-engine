@@ -14,6 +14,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
     GameState& gs = state(sim);
     w.each<Combat, Unit, Owner, Transform>([&](Entity e, Combat& c, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || (u.flags & (kUnitUnderConstruction | kUnitDisabled | kUnitInHand | kUnitPossessed))) return;
+        if (mechOn(sim) && !mechCanAcquire(sim, e)) { if (c.autoTarget && w.alive(c.target)) { c.target = kNullEntity; if (!w.has<Orders>(e) || w.get<Orders>(e).queue.empty()) stopMoving(sim, e); } return; }   // agent-mech
         if (++c.acquireTimer < 4) return;
         if (rules_.advancedEffects && (statusFlags(sim, e) & (kStBlind | kStStun | kStDisarm))) return;
         c.acquireTimer = 0;
@@ -68,6 +69,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     Fixed raw = dmg * rules_.damageMult(dmgType, t.armorType);
     Fixed armor = stat(sim, target, Stat::Armor);
     Fixed fin = fxMax(raw - armor, raw / 5);
+    if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target);   // agent-mech (retreat)
     if (rules_.advancedEffects) {
         uint32_t fl = statusFlags(sim, target);
         if (fl & kStInvulnerable) return;
@@ -114,7 +116,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
         if (u.flags & (kUnitUnderConstruction | kUnitDisabled | kUnitInHand)) return;
         if (auto* b = w.tryGet<Buffs>(e); b && b->stunUntil > sim.tick()) return;
         if (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStDisarm))) return;
-        if (!w.alive(c.target) || !w.has<Unit>(c.target) || (w.get<Unit>(c.target).flags & kUnitInHand)) { c.target = kNullEntity; return; }
+        if (!w.alive(c.target) || !w.has<Unit>(c.target) || (w.get<Unit>(c.target).flags & kUnitOffMap)) { c.target = kNullEntity; return; }
         const Unit& tu = w.get<Unit>(c.target);
         const UnitType& tt = rules_.types[tu.type];
         if (tu.hp.raw <= 0) return;
@@ -127,8 +129,9 @@ void RtsModule::sysWeapons(Simulation& sim) {
         Fixed rangeBonus = stat(sim, e, Stat::Range) + (adv.raw > 0 ? rules_.heights.rangePerLevel * adv : Fixed{});
         Fixed range = maxWeaponRange(t) + rangeBonus;
         // idle units with an automatic target chase it (unless holding / guarding a structure)
-        if (c.autoTarget && ord && ord->queue.empty() && m && !(u.flags & kUnitHold) && dist > range) {
+        if (c.autoTarget && ord && ord->queue.empty() && m && !(u.flags & (kUnitHold | kUnitInCargo)) && dist > range) {
             if (dist > stat(sim, e, Stat::Sight) + Fixed::fromInt(2)) { c.target = kNullEntity; return; }
+            if (mechOn(sim) && !mechMayChase(sim, e, tp)) { c.target = kNullEntity; return; }   // defensive stance
             if (!m->moving || (sim.tick() + e.index) % 20 == 0) moveTo(sim, e, tp, range);
             return;
         }
@@ -340,7 +343,7 @@ void RtsModule::applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint
         if (ef.radius.raw > 0) {
             state(sim).hash.query(point, ef.radius, [&](Entity s) {
                 auto* su = w.tryGet<Unit>(s);
-                if (!su || su->hp.raw <= 0 || (su->flags & kUnitInHand) || dist2D(w.get<Transform>(s).pos, point) > ef.radius) return;
+                if (!su || su->hp.raw <= 0 || (su->flags & kUnitOffMap) || dist2D(w.get<Transform>(s).pos, point) > ef.radius) return;
                 uint8_t so = w.get<Owner>(s).player;
                 bool enemy = hostile(sim, owner, so);
                 bool ally = so == owner || (so != 0 && so != kHostileNeutral && owner != kHostileNeutral && sim.allied(so, owner));
@@ -556,6 +559,7 @@ void RtsModule::sysDeath(Simulation& sim) {
         const Vec3 pos = w.get<Transform>(e).pos;
         const bool silent = u.flags & kUnitSilent;
         if (auto* f = w.tryGet<Footprint>(e)) gs.grid.block(f->x, f->y, f->w, f->h, -1);
+        if (rules_.mech.transports) mechOnDeath(sim, e);   // agent-mech: passengers
         if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty() && gs.players[owner].typeCountAll[u.type] > 0)
             gs.players[owner].typeCountAll[u.type]--;
         if (auto* ex = w.tryGet<Extractor>(e)) {

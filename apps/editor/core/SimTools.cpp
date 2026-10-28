@@ -22,10 +22,10 @@ const char* const kEventNames[] = {
     "roadBuilt", "lanesChanged",
     "statusStart", "statusEnd", "areaStart", "areaTrigger", "areaEnd", "projectileLaunch", "impact",
     "chainJump", "castStart", "channelStart", "channelEnd", "alert", "garrisonChanged",
-    "triggerFired",
+    "triggerFired", "loaded", "unloaded",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
-static_assert(kEventCount == size_t(kEvTriggerFired) + 1, "kEventNames must list every GameEvent");
+static_assert(kEventCount == size_t(kEvUnloaded) + 1, "kEventNames must list every GameEvent");
 
 struct CmdName { const char* name; uint16_t type; };
 const CmdName kCommands[] = {
@@ -37,6 +37,7 @@ const CmdName kCommands[] = {
     {"dig", kCmdDig}, {"paint_room", kCmdPaintRoom}, {"pick_up", kCmdPickUp}, {"drop", kCmdDrop}, {"slap", kCmdSlap},
     {"possess", kCmdPossess}, {"direct", kCmdDirect}, {"player_ability", kCmdPlayerAbility},
     {"build_road", kCmdBuildRoad}, {"connect_road", kCmdConnectRoad},
+    {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
 };
 
 Vec3 readPoint(const Json& p) {
@@ -71,7 +72,7 @@ std::string simEventNames() {
 }
 const char* orderName(OrderType t) {
     static const char* const n[] = {"move", "attackMove", "attack", "patrol", "gather", "return", "build", "repair",
-                                    "enter", "cast", "dig", "claimCell", "need", "haul"};
+                                    "enter", "cast", "dig", "claimCell", "need", "haul", "board", "unload"};
     size_t i = size_t(t);
     return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
 }
@@ -173,7 +174,8 @@ const char* kCommandHelp =
     "units: object references (packed id numbers from play_units, names from map/scenario 'id', or a filter "
     "{type, owner, tags, kind, area [x,z,w,h], near [x,z] + radius}); target: one reference; point: 'at' [x, z] or x, z. "
     "param by name: 'type' (build/train/upgrade/place), 'tech' (research), 'ability' (ability id of the first unit's type), "
-    "'player_ability' (id), 'room' (paint_room), 'percent' (send); or a raw 'param'. Rect commands (dig, paint_room, "
+    "'player_ability' (id), 'room' (paint_room), 'percent' (send), 'stance' (aggressive/defensive/hold/passive); or a raw 'param'. "
+    "load: units board the target transport; unload: units = transports, with a point they drive there first. Rect commands (dig, paint_room, "
     "build_road): 'rect' [w, h] at the point with 'extra' (dig: 1 unmark; build_road: 1 remove). 'queue': true appends "
     "to the current orders (Shift).";
 
@@ -181,7 +183,7 @@ const char* commandSchemaProps() {
     return R"("command": {"type": "string"}, "player": {"type": "integer"},
         "units": {"description": "references: id numbers, names or a filter object"}, "target": {"description": "one reference"},
         "at": {"type": "array", "items": {"type": "number"}}, "x": {"type": "number"}, "z": {"type": "number"},
-        "type": {"type": "string"}, "tech": {"type": "string"}, "ability": {"type": "string"}, "room": {"type": "string"},
+        "type": {"type": "string"}, "tech": {"type": "string"}, "ability": {"type": "string"}, "room": {"type": "string"}, "stance": {"type": "string"},
         "player_ability": {"type": "string"}, "percent": {"type": "integer"}, "param": {"type": "integer"},
         "rect": {"type": "array", "items": {"type": "integer"}}, "extra": {"type": "integer"}, "queue": {"type": "boolean"})";
 }
@@ -209,6 +211,13 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
         return idx;
     };
     if (p.has("percent")) c.param = p["percent"].integer(50);
+    if (p.has("stance")) {
+        static const char* const st[] = {"aggressive", "defensive", "hold", "passive"};
+        int idx = -1;
+        for (int i = 0; i < 4; ++i) if (p.getStr("stance") == st[i]) idx = i;
+        c.param = need(idx, "stance (aggressive, defensive, hold, passive)", p.getStr("stance"));
+    }
+    if (c.type == kCmdUnload && (p.has("at") || p.has("x"))) c.param = 1;   // drive there first
     if (p.has("type")) c.param = need(R.findType(p.getStr("type")), "type", p.getStr("type"));
     if (p.has("tech")) c.param = need(R.findTech(p.getStr("tech")), "tech", p.getStr("tech"));
     if (p.has("player_ability")) c.param = need(R.findPlayerAbility(p.getStr("player_ability")), "player ability", p.getStr("player_ability"));

@@ -339,6 +339,8 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         return false;
     case OrderType::Gather:
         return runGather(sim, e, o);
+    case OrderType::Board: return runBoard(sim, e, o);     // agent-mech
+    case OrderType::Unload: return runUnload(sim, e, o);
     case OrderType::Return: {
         auto* cargo = w.tryGet<Cargo>(e);
         if (!cargo || cargo->res < 0 || cargo->amount.raw <= 0) return true;
@@ -498,14 +500,14 @@ void RtsModule::sysOrders(Simulation& sim) {
     World& w = sim.world();
     std::vector<Entity> ents;
     w.each<Orders, Unit>([&](Entity e, Orders& ord, Unit& u) {
-        if (!ord.queue.empty() && u.hp.raw > 0 && !(u.flags & (kUnitInHand | kUnitPossessed))) ents.push_back(e);
+        if (!ord.queue.empty() && u.hp.raw > 0 && !(u.flags & (kUnitOffMap | kUnitPossessed))) ents.push_back(e);
     });
     // soft obstacles (standing ground units) and the melee slot claims of this tick
     MapGrid& g = state(sim).grid;
     g.clearSoft();
     slotClaims_.clear();
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (m.moving || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & kLayerGround)) return;
+        if (m.moving || (u.flags & kUnitOffMap) || !(rules_.types[u.type].layer & kLayerGround)) return;
         int x = g.cellX(tr.pos.x), y = g.cellY(tr.pos.z);
         if (g.inside(x, y)) g.markSoft(x, y);
         (void)e;
@@ -546,12 +548,12 @@ void RtsModule::sysMovement(Simulation& sim) {
     const Fixed dt = sim.dt();
 
     gs.hash.reset(g.w, g.h, 4);
-    w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitInHand)) gs.hash.insert(e, t.pos); });
+    w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& t) { t.prevPos = t.pos; if (!(u.flags & kUnitOffMap)) gs.hash.insert(e, t.pos); });
 
     // 1) desired movement along paths
     if (rules_.movement.rvo) moveAgents(sim);
     else w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (!m.moving || (u.flags & (kUnitInHand | kUnitPossessed))) return;
+        if (!m.moving || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
         auto* b = w.tryGet<Buffs>(e);
         if (b && b->stunUntil > sim.tick()) return;
         if (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStRoot))) return;
@@ -613,7 +615,7 @@ void RtsModule::sysMovement(Simulation& sim) {
     });
     const Fixed deadZone = Fixed::fromRatio(3, 100);
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (u.flags & kUnitInHand) return;
+        if (u.flags & kUnitOffMap) return;
         if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return; // lane walkers keep strictly to their lane
         const UnitType& t = rules_.types[u.type];
         Vec3 acc{};
@@ -627,7 +629,7 @@ void RtsModule::sysMovement(Simulation& sim) {
             if (!(ot.layer & t.layer) && !((ot.layer | t.layer) == (kLayerGround | kLayerSandOnly))) return;
             Vec3 d = flat(tr.pos - w.get<Transform>(o).pos);
             Fixed len = d.length();
-            if (w.get<Unit>(o).flags & kUnitInHand) return;
+            if (w.get<Unit>(o).flags & kUnitOffMap) return;
             Fixed overlap = t.radius + ot.radius - len - deadZone;
             if (overlap.raw <= 0) return;
             if (len.raw == 0) { // exact overlap: deterministic direction from entity indices

@@ -12,6 +12,7 @@
 #include <vector>
 #include "../../engine/core/Fixed.h"
 #include "../../engine/data/Json.h"
+#include "RtsMechData.h"
 
 namespace rts::game {
 
@@ -142,6 +143,7 @@ struct AttractDef {
 
 // ------------------------------------------------------------------ type
 struct UnitType {
+    MechType mech;                             // agent-mech blocks (RtsMechData.h)
     std::string id, name;
     uint64_t tags = 0;
     bool structure = false;
@@ -387,6 +389,7 @@ struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing 
 enum class CostModel : uint8_t { Upfront, Progressive };
 
 struct Rules {
+    MechRules mech;                           // agent-mech rules (RtsMechData.h)
     std::vector<ResourceDef> resources;
     std::vector<std::string> tagNames;
     std::vector<std::string> armorTypes, damageTypes;
@@ -445,6 +448,7 @@ struct Rules {
 };
 
 Rules loadRules(const Json& j);        // throws std::runtime_error with a readable message
+void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loadRules after types are parsed
 VictoryRules loadVictory(const Json& j, const VictoryRules& def);
 
 } // namespace rts::game

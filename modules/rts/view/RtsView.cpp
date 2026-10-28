@@ -198,6 +198,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.laneSignature = gs.laneSignature;
     out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+        if (u.flags & kUnitInCargo) return;   // inside a transport (agent-mech)
         SceneObject so;
         so.entity = e; so.type = u.type; so.owner = o.player;
         float3 a = toF(t.prevPos), b = toF(t.pos);
@@ -207,6 +208,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
         so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
         if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
         if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
+        if (auto* tp = w.tryGet<Transport>(e); tp && !tp->cargo.empty()) so.garrison = int(tp->cargo.size());   // passengers
         if (auto* c = w.tryGet<Cargo>(e)) { so.carry = float(c->amount.toDouble()); so.carryRes = c->res; }
         if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) so.order = uint8_t(od->queue.front().type) + 1;
         if (auto* mb = w.tryGet<Mobile>(e)) so.moving = mb->moving;
