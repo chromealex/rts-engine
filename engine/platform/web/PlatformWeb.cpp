@@ -11,6 +11,61 @@
 #include <memory>
 #include <sys/stat.h>
 
+// ------------------------------------------------------------------ on-screen keyboard
+// Mobile browsers open their keyboard only for a focused editable element, so a transparent
+// <input> is placed over the UI field and focused. Its `input` events carry the final text after
+// IME composition (Cyrillic, CJK, autocorrect, swipe typing). The input always holds one sentinel
+// space: if it disappears the user pressed Backspace, anything after it is typed text.
+// Desktop browsers keep using the canvas key events (no hidden input, no double characters).
+EM_JS(void, rts_web_text_input, (int show, float x, float y, float w, float h, int touch), {
+    var R = Module.rtsText || (Module.rtsText = {});
+    if (!R.el) {
+        var el = document.createElement('input');
+        el.type = 'text';
+        el.setAttribute('autocomplete', 'off'); el.setAttribute('autocorrect', 'off');
+        el.setAttribute('autocapitalize', 'off'); el.setAttribute('spellcheck', 'false');
+        el.setAttribute('enterkeyhint', 'done'); el.setAttribute('aria-hidden', 'true');
+        // 16px: iOS Safari zooms the page into inputs with a smaller font
+        el.style.cssText = 'position:fixed;opacity:0;font-size:16px;border:0;padding:0;margin:0;' +
+                           'background:transparent;color:transparent;caret-color:transparent;outline:none;z-index:-1';
+        var sentinel = function () { el.value = ' '; el.setSelectionRange(1, 1); };
+        var flush = function () {
+            var v = el.value;
+            if (v.length === 0) _rts_web_key(8);
+            else for (var t of v.substring(1)) _rts_web_char(t.codePointAt(0));
+            sentinel();
+        };
+        el.addEventListener('input', function (e) { if (!e.isComposing) flush(); });
+        el.addEventListener('compositionend', flush);
+        el.addEventListener('blur', function () { if (R.active) { R.active = false; _rts_web_ended(); } });
+        var vv = window.visualViewport;
+        var report = function () {
+            var covered = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+            _rts_web_keyboard(R.active ? covered : 0);
+        };
+        if (vv) { vv.addEventListener('resize', report); vv.addEventListener('scroll', report); }
+        document.body.appendChild(el);
+        R.el = el; R.sentinel = sentinel; R.report = report;
+    }
+    var coarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (show && (touch || coarse)) {
+        var r = Module.canvas.getBoundingClientRect();
+        var s = R.el.style;
+        s.left = (r.left + x) + 'px'; s.top = (r.top + y) + 'px';
+        s.width = Math.max(1, w) + 'px'; s.height = Math.max(1, h) + 'px';
+        R.active = true;
+        if (document.activeElement !== R.el) { R.el.focus({preventScroll: true}); R.sentinel(); }
+    } else if (!show && R.active) {
+        R.active = false;
+        R.el.blur();
+        Module.canvas.focus();
+        R.report();
+    }
+});
+EM_JS(int, rts_web_text_focused, (), {
+    return Module.rtsText && Module.rtsText.el && document.activeElement === Module.rtsText.el ? 1 : 0;
+});
+
 namespace rts::platform {
 using detail::state;
 
@@ -70,6 +125,19 @@ EM_BOOL onWheel(int, const EmscriptenWheelEvent* w, void*) {
     return EM_TRUE;
 }
 EM_BOOL onKey(int type, const EmscriptenKeyboardEvent* k, void*) {
+    if (rts_web_text_focused()) {
+        // The hidden input produces the text and Backspace itself; only pass navigation/Enter/Escape
+        // and let the browser deliver the key to the input (no preventDefault).
+        Key key = mapCode(k->code);
+        bool passthrough = key == Key::Enter || key == Key::Escape || key == Key::Tab || key == Key::Left ||
+                           key == Key::Right || key == Key::Up || key == Key::Down || key == Key::Home || key == Key::End;
+        if (passthrough) {
+            Event e; e.type = type == EMSCRIPTEN_EVENT_KEYDOWN ? EventType::KeyDown : EventType::KeyUp;
+            e.key = key; e.mods = modsOf(k->shiftKey, k->ctrlKey, k->altKey, k->metaKey); e.repeat = k->repeat;
+            detail::dispatch(e);
+        }
+        return passthrough ? EM_TRUE : EM_FALSE;
+    }
     Event e;
     e.type = type == EMSCRIPTEN_EVENT_KEYDOWN ? EventType::KeyDown : EventType::KeyUp;
     e.key = mapCode(k->code);
@@ -121,6 +189,12 @@ void frame(void*) {
 }
 } // namespace
 
+namespace detail {
+void showSoftKeyboard(bool show, const TextInputArea& a) {
+    rts_web_text_input(show ? 1 : 0, a.x, a.y, a.w, a.h, state().touch ? 1 : 0);
+}
+} // namespace detail
+
 const char* name() { return "web"; }
 void setTitle(const std::string& t) { emscripten_set_window_title(t.c_str()); }
 
@@ -159,5 +233,18 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
 }
 
 } // namespace rts::platform
+
+// Called from the hidden input's JS handlers.
+extern "C" {
+EMSCRIPTEN_KEEPALIVE void rts_web_char(int cp) {
+    rts::platform::Event e; e.type = rts::platform::EventType::Char; e.codepoint = uint32_t(cp);
+    rts::platform::detail::dispatch(e);
+}
+EMSCRIPTEN_KEEPALIVE void rts_web_key(int code) {
+    if (code == 8) rts::platform::detail::dispatchKeyPress(rts::platform::Key::Backspace);
+}
+EMSCRIPTEN_KEEPALIVE void rts_web_ended() { rts::platform::detail::textInputEndedByUser(); }
+EMSCRIPTEN_KEEPALIVE void rts_web_keyboard(float h) { rts::platform::detail::setKeyboardHeight(h); }
+}
 
 int main(int argc, char** argv) { return rtsMain(argc, argv); }

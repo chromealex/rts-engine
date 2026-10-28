@@ -264,6 +264,12 @@ node platform/web/smoke.mjs build/web
 ```
 
 Параметры командной строки в web-сборке задаются через URL: `index.html?map=0&spectate` = `--map 0 --spectate`.
+
+Экранная клавиатура: `platform::startTextInput(area)` / `stopTextInput()` открывают и закрывают её на iOS,
+Android и в мобильных браузерах (на десктопе — ничего не делают). Текст приходит событиями `Char`
+на любом языке, Backspace/Enter — как `KeyDown`/`KeyUp`; `softKeyboardHeight()` и событие `KeyboardChanged`
+сообщают, сколько экрана закрыто снизу, `TextInputEnded` — что пользователь сам закрыл клавиатуру.
+UI (`UiLayer`) вызывает это сам при фокусе на `<input type="text|password|search|email|number">` и `<textarea>`.
 Режим скриншота (`RTS_SCREENSHOT`, `RTS_EXIT_AFTER_FRAMES`) шагает ровно по 1/60 с на кадр, поэтому
 кадр N одинаков на любой машине.
 
