@@ -53,7 +53,30 @@ struct Args {
     int benchPaths = 0;   // >0: time that many path queries (HPA* vs plain A*) and exit
     int benchBody = -1;   // planets: body index for --bench-paths (default: first surface body)
     bool quiet = false;
+    bool dump = false;    // print every player's objects by type at the end (data debugging)
 };
+
+static void dumpTypes(Simulation& sim) {
+    auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
+    for (auto& p : sim.players()) {
+        std::map<std::string, int> n;
+        sim.world().each<game::Unit, Owner>([&](Entity, game::Unit& u, Owner& o) { if (o.player == p.slot) n[m->rules().types[u.type].id]++; });
+        std::printf("  %s:", p.name.c_str());
+        for (auto& [k, v] : n) std::printf(" %s=%d", k.c_str(), v);
+        std::printf("\n    income:");
+        for (size_t r = 0; r < m->rules().resources.size(); ++r)
+            std::printf(" %s=%.2f/s", m->rules().resources[r].id.c_str(), m->state(sim).players[p.slot].income[r].toDouble());
+        std::printf("  supply %d/%d\n", int(m->state(sim).players[p.slot].supplyUsed.toInt()), int(m->state(sim).players[p.slot].supplyCap.toInt()));
+        sim.world().each<game::Unit, Owner, game::Footprint>([&](Entity, game::Unit& u, Owner& o, game::Footprint& f) {
+            if (o.player == p.slot) std::printf("    %s [%d,%d %dx%d]\n", m->rules().types[u.type].id.c_str(), f.x, f.y, f.w, f.h);
+        });
+        sim.world().each<game::Unit, Owner, Transform, game::Orders>([&](Entity, game::Unit& u, Owner& o, Transform& t, game::Orders& ord) {
+            if (o.player != p.slot || !m->rules().types[u.type].worker) return; // workers
+            std::printf("    %s at (%.1f, %.1f) order=%d state=%d\n", m->rules().types[u.type].id.c_str(), t.pos.x.toDouble(), t.pos.z.toDouble(),
+                        ord.queue.empty() ? -1 : int(ord.queue.front().type), ord.queue.empty() ? -1 : int(ord.queue.front().state));
+        });
+    }
+}
 
 static void status(Simulation& sim) {
     auto* m = dynamic_cast<game::RtsModule*>(&sim.module());
@@ -219,6 +242,7 @@ static int play(const Args& a) {
     std::printf("Events: spawned=%d died=%d attacks=%d trained=%d built=%d gathered=%d captured=%d\n",
                 ev[game::kEvSpawned], ev[game::kEvDied], ev[game::kEvAttack], ev[game::kEvTrainDone], ev[game::kEvBuildDone],
                 ev[game::kEvGathered], ev[game::kEvCaptured]);
+    if (a.dump) dumpTypes(sim);
     std::printf("Checksum: %016llx\n", (unsigned long long)rep.finalChecksum);
     if (!a.record.empty()) {
         if (!rep.save(a.record)) return 2;
@@ -265,6 +289,7 @@ int main(int argc, char** argv) {
         else if (k == "--load") a.loadFile = next();
         else if (k == "--replay") a.replay = next();
         else if (k == "--quiet") a.quiet = true;
+        else if (k == "--dump") a.dump = true;
         else if (k == "--bench-paths") a.benchPaths = std::stoi(next());
         else if (k == "--bench-body") a.benchBody = std::stoi(next());
         else if (k == "--planet-hpa") setenv("RTS_PLANET_HPA", next() == "off" ? "0" : "1", 1);   // force planet HPA* on / off

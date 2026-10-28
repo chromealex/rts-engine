@@ -109,8 +109,8 @@ Everything else that [assimp](https://github.com/assimp/assimp) imports — Blen
 the host into a glTF binary **sidecar** next to the source:
 
 ```
-games/mygame/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
-games/mygame/models/ship.lwo.glb   <- what the game loads
+templates/mygame/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
+templates/mygame/models/ship.lwo.glb   <- what the game loads
 ```
 
 `render::loadModel` reads `<path>.glb` for any path whose format the runtime doesn't read, so
@@ -121,7 +121,7 @@ games/mygame/models/ship.lwo.glb   <- what the game loads
 - **rtsbuild**: every build converts the game's convertible models that have no sidecar yet, ships
   only the `.glb` and leaves the sources out of the pack (`модель models/ship.lwo: converted to …`);
 - **by hand / agents**: `modelconv models/ship.lwo` (one file; `--json` for scripts and MCP),
-  `modelconv --project games/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
+  `modelconv --project templates/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
 
 The converter triangulates, generates missing normals, keeps 4 bone weights per vertex, names
 unnamed clips (`Default`, `Clip1`, …), and rewrites texture paths from the authoring machine

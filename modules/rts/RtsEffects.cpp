@@ -29,7 +29,7 @@ const AbilityDef& RtsModule::abilityFor(Simulation& sim, Entity e, int index) co
     World& w = sim.world();
     const AbilityDef& base = rules_.types[w.get<Unit>(e).type].abilities[size_t(index)];
     int level = 1;
-    if (auto* h = w.tryGet<Hero>(e)) level = h->level;
+    if (auto* h = w.tryGet<Hero>(e)) level = rules_.heroes.skills ? std::max<int>(1, h->skill[index & 7]) : h->level;   // learned skill level (WC3)
     if (level >= 2 && !base.levels.empty()) return base.levels[size_t(std::min<int>(level - 2, int(base.levels.size()) - 1))];
     return base;
 }

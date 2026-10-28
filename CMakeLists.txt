@@ -37,9 +37,9 @@ option(RTS_BUILD_SERVER "Build the network game server and the network bot clien
 
 # Game being built (rtsbuild overrides these).
 set(RTS_CONTENT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/templates/skirmish" CACHE PATH "Game content folder (contains game.json)")
-# build folders configured before games/ became templates/ keep the old cached path
-if(NOT EXISTS "${RTS_CONTENT_DIR}/game.json" AND RTS_CONTENT_DIR MATCHES "/games/")
-    string(REPLACE "/games/" "/templates/" _rts_content "${RTS_CONTENT_DIR}")
+# build folders configured before templates/ became templates/ keep the old cached path
+if(NOT EXISTS "${RTS_CONTENT_DIR}/game.json" AND RTS_CONTENT_DIR MATCHES "/templates/")
+    string(REPLACE "/templates/" "/templates/" _rts_content "${RTS_CONTENT_DIR}")
     if(EXISTS "${_rts_content}/game.json")
         set(RTS_CONTENT_DIR "${_rts_content}" CACHE PATH "Game content folder (contains game.json)" FORCE)
     endif()
@@ -111,7 +111,10 @@ add_library(rts_game STATIC
     modules/rts/RtsEffectsData.cpp
     modules/rts/RtsEffects.cpp
     modules/rts/RtsSkills.cpp
-    modules/rts/RtsAI.cpp)
+    modules/rts/RtsAI.cpp
+    modules/rts/RtsOriginalsData.cpp
+    modules/rts/RtsOriginals.cpp
+    modules/rts/RtsAIOriginals.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 # agent-mech: mechanics of the top-100 strategy games plan (stances, transports, ...)
 file(GLOB RTS_MECH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/RtsMech*.cpp)

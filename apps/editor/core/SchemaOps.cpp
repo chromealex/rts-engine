@@ -4,7 +4,7 @@
 // - rules_lint: keys in rules.json / the map that nothing reads (typos, misplaced blocks), with the
 //   closest key the loader asked for at that place.
 // - rules_schema: the doc text plus, per block path ("types.*.weapons[]"), every key the loader
-//   asks for there, collected over all games in games/; keys missing from docs/game-format.md are
+//   asks for there, collected over all games in templates/; keys missing from docs/game-format.md are
 //   listed as undocumented.
 // Presentation-only blocks (view, sprite, visual terrain/fog keys, lights, ...) are read by the
 // view, not the simulation loader, so they are skipped.
@@ -234,7 +234,7 @@ Json schemaJson(Workspace& ws, const std::string& prefix) {
     for (auto& id : s.games) g.push(str(id));
     r.set("fromGames", g);
     r.set("note", str("Keys the real loader asks for at each block path ('*' = any id, '[]' = array items), collected by loading every game "
-                      "in games/. Blocks no game uses yet show only their top key; their fields are in the doc text."));
+                      "in templates/. Blocks no game uses yet show only their top key; their fields are in the doc text."));
     return r;
 }
 

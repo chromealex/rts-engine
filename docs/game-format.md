@@ -1444,21 +1444,59 @@ Games add presets in rules.json: `"mapgen": {"presets": {"my_valley": {"title": 
 Editor: window **Генерация** (preset, seed, players, symmetry, params; *Сгенерировать* bakes, *При старте матча* writes
 `"seed": "match"`). MCP: `gen_presets`, `map_generate {preset, seed, players, symmetry, params, mode: bake | match | fixed,
 useTemplate, keepSize}`.
+## Fidelity mechanics (play like the original)
+
+Optional blocks that make the sample games play like their originals (`modules/rts/RtsOriginals*.cpp`). A game that
+uses none of them keeps its exact checksums.
+
+| block | where | meaning |
+|---|---|---|
+| `armor` | rules | `{"model": "subtract" \| "percent", "perPoint": 0.06, "minDamage": 1, "minShare": 0.2}` — `percent`: Warcraft III (reduction = a·k / (1 + a·k)); `subtract`: StarCraft / AoE with a floor |
+| `health.armor` object | type | `{"melee": 1, "pierce": 2}` (or `health.pierceArmor`): two armors; weapons pick one with `"armorClass": "pierce"`; stat `pierceArmor` / `armor2` for techs |
+| weapon `bonus` | type | `{"cavalry": 15, "armored": 10}` extra damage vs types with the tag, added before armor (AoE / SC2 bonuses) |
+| `health.shields` | type | shields soak damage first (`shieldArmor`), recharge `shieldRegen` per second after `shieldDelay` seconds without hits (StarCraft) |
+| `heroes` | rules | `{"skills": true, "max": 3, "freeFirst": true, "tiers": ["hall", "keep", "castle"], "revive": {"costShare": 0.4, "perLevel": 0.1, "timeShare": 0.6, "maxTime": 110, "maxCost": {"gold": 700}}}` — skill points (one at start, one per level; command `kCmdLearn`), ability `"learnAt": [1, 3, 5]` (default) / `[6]` (ultimate); hero n needs a structure from `tiers[n-1..]`; a dead hero is trained again as a revive (its level and skills, cheaper) |
+| `upkeep[].resources`, `incomeMult` | rules | upkeep only on some resources (WC3 gold) and / or on per-second income (CoH manpower) |
+| `resourceNode.maxGatherers` | type | workers harvesting at once (WC3 mine 5, SC patch 1); the others wait or take a free node nearby |
+| `powerField` / `structure.needsField` | type | `{"id": 0, "radius": 6.5}` on pylons; structures with `needsField` are placed and work only inside an own field |
+| `queueSlots` | type | items produced at once (reactor) |
+| `cost.garrison` | type | upgrading / converting into this type costs units of the garrison (Mushroom Wars 2) |
+| `garrison.onCapture`, `garrison.keep` | type | type it drops to when captured (loses a level); units that always stay home when sending (State.io) |
+| `clash` | type | units in transit fight hostile units they meet |
+| `playerMods` | type | `{"max": 4, "mods": [{"tags": [...], "stat": "damage", "mul": 1.08}]}` — every completed one modifies the owner's types (forges) |
+| resource `gain`, `perUnit`, `min` | rules | `"gain": {"kill": 1, "capture": 0.3, "captured": -0.4, "upgrade": 0.2, "lost": 0.45, "defended": 0.01}`; `"perUnit": [{"tags": [...], "stat": "damage", "mul": 1.06}]` per whole unit held (morale suns) |
+| `crew` / `crews` / weapon `killsCrew` | type | vehicles and guns need a driver of that type; `killsCrew` (chance) empties them (owner 0); units with `crews` man any empty one (Z) |
+| `infect` | type | `{"by": ["infected"], "spawn": "walker", "count": 3}` — killed by a unit with the tag: rises as the spawn type for the killer (They Are Billions) |
+| `neutral.eats`, `neutral.resurface` | type | an eater submerges after that many kills and comes back somewhere on its layer later (Dune sandworm) |
+| `crush` | type | `{"tags": ["infantry"]}` — moving over such units kills them (tanks over infantry, units over spice blooms) |
+| `deathField` | type | `{"resource": "spice", "radius": 4, "amount": 120}` — dying spreads a resource field (spice bloom) |
+| `onDeath` | type | payload where it dies (commander explosion) |
+| `factions` | type | only these factions may train / build it (Dune houses, RA sides) |
+| `requiresRegions` | type | trainable only with this many own regions (Z factory levels) |
+| `ownsRegion` | type | its region (and the territory cells) take its owner's colour (State.io) |
+| `autoTrain.advance` | type | `false`: auto-trained units stay home (Northgard births) |
+| `cost.growth` | type | cost × (1 + growth × owned) (Dungeon Keeper imps) |
+| tech `requiresAny` | rules | `{"count": 2, "of": [types]}` — that many different buildings (AoE ages) |
+| `regions.requireExplored`, `clearFirst`, `supplyLines` | rules | claim only scouted / creep-free regions (Northgard); points pay only in sectors linked to an own key structure (CoH) |
+| `territory.incomePerCell` | rules | income per owned cell (Dungeon Keeper mana) |
+
+Recipes of `storage: "player"` games (no goods in buildings) take their inputs from the player stock and credit the
+outputs to it: buildings that gather around them (They Are Billions sawmills, Northgard lodges).
 
 ## Sample games (data only, `<project>/`; maps from `templates/_tools/mapgen.py`)
 
 | id | like | recipe |
 |---|---|---|
-| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, chain lightning (`chain` delivery, `levels`), rejuvenation (HoT status, `charges`, `smart`), bloodlust; hunters with frost-arrow `onHit`, demolisher artillery strike (delayed `area`), creep camps (`neutral.leash`, `bounty`), siege demolisher |
-| `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
-| `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
-| `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
-| `metaltide` | Total Annihilation | `flow` metal/energy, `costModel: progressive`, commander `key` + `victory: keyUnits`, extractors on metal spots, rock/wreck reclaim, `terrain.model: heightfield` (ridge that blocks sight, too steep for the commander and hammers - `maxSlope` 0.8 - but climbable by constructors and peewees with `move.maxSlope` 1.6; two gentle saddles), height bonuses via `heights` |
-| `fourages` | Age of Empires II | four stocks, camps as dropoffs, farms (infinite `ownerOnly` nodes), ages as techs, blacksmith tech effects, rams vs buildings |
-| `holdtheline` | Company of Heroes | `squad` infantry with reinforcement, `victoryPoint` capture points + `victory: tickets`, fuel/munition points with `income` |
-| `lastcolony` | They Are Billions | `victory: survive`, map `waves` from a `waves` player with growth, `buildRadius`, towers and walls |
-| `clanlands` | Northgard | 3x3 map `regions`, `regions.claimCost` + growth, `buildOnlyOwned` |
-| `flagsectors` | Z | sector `regions`, flags with `capture.region`, `capturable` factories, `productionPerRegion` |
+| `frostcrown` | Warcraft III (Orcs) | percent armor, upkeep on gold, hall tiers, 3 heroes with learned skills / free first / revive, 5 peons per mine, creeps |
+| `starfall` | StarCraft II | Protoss warp + shields + pylon fields, Zerg morph + larva + creep, Terran add-ons (tech lab / reactor), attribute bonuses, 1 worker per patch |
+| `ironfront` | Red Alert | Allies / Soviets, sidebar, ore + gems, silos, power, engineers, Tanya, superweapons, crush |
+| `ambersands` | Dune II | houses, bases on rock (no concrete yet), spice without regrowth, blooms, sandworms that eat and resurface, crush, palaces |
+| `metaltide` | Total Annihilation | Arm / Core, flows, progressive cost, D-gun, commander explosion, metal makers, heightfield |
+| `fourages` | Age of Empires II | four ages (requiresAny), melee / pierce armor and bonuses, AoE II gather rates, finite farms, techs |
+| `holdtheline` | Company of Heroes | US / Wehrmacht, sectors with supply lines, tickets, squads, manpower upkeep |
+| `lastcolony` | They Are Billions | buildings gather, workers / food / energy, tesla grid, infection, final wave |
+| `clanlands` | Northgard | scouted and cleared regions, births, production in buildings, warband from villagers, happiness |
+| `flagsectors` | Z | flags, free factories with levels, drivers and empty vehicles / guns, fort |
 | `laneclash` | lane battler | `autoBuild` pool, `waveClock` + `waveSpawn`, `upgrades`, `victory: score` with `keyLoses` |
 | `underlord` | Dungeon Keeper | `diggable` rock/gold/gem, imps with `digs` + `claimer`, `rooms`, neutral `portal` + `claimedByTerritory`, creatures with `attractedBy`, `needs` and hero levels from training, `hand`, `possession`, leveled tech paid in research |
 | `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
@@ -1466,6 +1504,7 @@ useTemplate, keepSize}`.
 | `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |
 | `planets` | Total Annihilation on planets | metaltide rules on a planet + moon (`world` block, `at` positions), `orbital_yard` → `gunship` (`move.layer: orbit`, `transitSpeed`), defender weapons with `targets: orbit`; map from `templates/_tools/planetgen.py` |
 | `spellbunkers` | Bunker Wars / Mushroom Wars 2 skills | sporelanes + mana/morale `regen`, named `statuses`, 26 player skills (structure / group / player targets, areas moving along lanes, chains over structures), per-player `loadout` of 16, an `autoEvery` map skill and a `passive` |
+| `shroomwars` | Mushroom Wars 2 | levels and conversions paid with units, forges, clashes, morale, energy, hero skill sets |
 
 ## 2D games
 
