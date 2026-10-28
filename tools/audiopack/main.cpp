@@ -1,6 +1,6 @@
 // rts_audiopack — build-time audio compression outside rtsbuild (preview, CI, single files).
 //
-//   rts_audiopack --project games/skirmish --profile mobile [--out dir]
+//   rts_audiopack --project templates/skirmish --profile mobile [--out dir]
 //       converts the game's audio for a profile; without --out only prints what it would do
 //   rts_audiopack --encode in.wav out.ogg --codec vorbis [--quality 0.4] [--mono] [--rate 32000]
 #include <cstdio>

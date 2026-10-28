@@ -457,7 +457,8 @@ struct RoadNetworkRules {
 };
 
 // Local avoidance between moving units.
-struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2); };
+struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2);
+                       int planetHpaCells = 256 * 256; };   // planets: HPA* on bodies with >= this many cells (0 = all)
 
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
 struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing = Fixed::fromRatio(35, 100); };
