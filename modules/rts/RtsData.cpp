@@ -1,4 +1,5 @@
 #include "RtsData.h"
+#include "RtsEffectsData.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -33,7 +34,9 @@ Stat parseStat(const std::string& s, bool* ok) {
     static const struct { const char* n; Stat s; } t[] = {
         {"maxHp", Stat::MaxHp}, {"hp", Stat::MaxHp}, {"armor", Stat::Armor}, {"damage", Stat::Damage}, {"range", Stat::Range},
         {"speed", Stat::Speed}, {"sight", Stat::Sight}, {"gatherRate", Stat::GatherRate}, {"attackSpeed", Stat::AttackSpeed},
-        {"productionSpeed", Stat::ProductionSpeed}, {"workRate", Stat::GatherRate},
+        {"productionSpeed", Stat::ProductionSpeed}, {"workRate", Stat::GatherRate}, {"energyRegen", Stat::EnergyRegen},
+        {"defense", Stat::Defense}, {"garrisonCap", Stat::GarrisonCap}, {"cooldownRate", Stat::CooldownRate}, {"upgradeCost", Stat::UpgradeCost},
+        {"lifesteal", Stat::Lifesteal}, {"damageTaken", Stat::DamageTaken}, {"scale", Stat::Scale},
     };
     for (auto& e : t) if (s == e.n) { if (ok) *ok = true; return e.s; }
     if (ok) *ok = false;
@@ -54,6 +57,14 @@ int Rules::findRoom(const std::string& id) const {
 }
 int Rules::findDiggable(char c) const {
     for (size_t i = 0; i < diggables.size(); ++i) if (diggables[i].ch == c) return int(i);
+    return -1;
+}
+int Rules::findStatus(const std::string& id) const {
+    for (size_t i = 0; i < statuses.size(); ++i) if (statuses[i].id == id) return int(i);
+    return -1;
+}
+int Rules::findPlayerAbility(const std::string& id) const {
+    for (size_t i = 0; i < playerAbilities.size(); ++i) if (playerAbilities[i].id == id) return int(i);
     return -1;
 }
 int Rules::findTech(const std::string& id) const {
@@ -131,6 +142,7 @@ Rules loadRules(const Json& j) {
         d.fieldRegrow = rj.getFx("regrow");
         d.fieldCellMax = rj.getFx("cellMax", d.fieldCellMax);
         d.global = rj.getBool("global", false);
+        d.regen = rj.getFx("regen");
         r.resources.push_back(d);
     }
     if (r.resources.size() > 32) fail("resources", "at most 32 resources are supported");
@@ -228,29 +240,17 @@ Rules loadRules(const Json& j) {
         m.mul = e.getFx("mul", Fixed::fromInt(1));
         return m;
     };
-    auto effect = [&](const std::string& where, const Json& ej) {
-        EffectDef e;
-        std::string k = ej.getStr("type", "damage");
-        e.kind = k == "heal" ? EffectKind::Heal : k == "stun" ? EffectKind::Stun : k == "buff" ? EffectKind::Buff
-               : k == "spawn" ? EffectKind::Spawn : k == "blink" ? EffectKind::Blink : EffectKind::Damage;
-        if (k != "damage" && k != "heal" && k != "stun" && k != "buff" && k != "spawn" && k != "blink") fail(where, "unknown effect type '" + k + "'");
-        e.amount = ej.getFx("amount");
-        e.radius = ej.getFx("radius");
-        e.duration = ej.getFx("duration");
-        e.damageType = damageIdx(ej.getStr("damageType", "normal"));
-        if (e.kind == EffectKind::Buff) e.mod = statMod(where, ej);
-        if (e.kind == EffectKind::Spawn) e.spawnType = typeRef(where, ej.getStr("unit"));
-        e.count = int(ej.getInt("count", 1));
-        std::string aff = ej.getStr("affects", e.kind == EffectKind::Heal || (e.kind == EffectKind::Buff && e.mod.mul >= Fixed::fromInt(1) && e.mod.add.raw >= 0) ? "allies" : "enemies");
-        e.enemies = aff == "enemies" || aff == "all";
-        e.allies = aff == "allies" || aff == "all";
-        return e;
-    };
     auto tagsOf = [&](const Json& arr) {
         uint64_t m = 0;
         for (auto& t : arr.items()) m |= r.tagMask(t.str());
         return m;
     };
+
+    // ---- effects parser (abilities, statuses, payloads)
+    EffectParser ep{r, typeRef, resRef, [&](const std::string& d) { return damageIdx(d); }, statMod, tagsOf,
+                    [&](const std::string& where, const std::string& id) { Requirement q = requirement(where, id); return q.tech ? (0x8000 | q.index) : int(q.index); }};
+    ep.namedStatuses(j["statuses"]);
+    r.loadoutSlots = int(j.getInt("loadoutSlots", 0));
 
     // ---- dungeon: diggable terrain and rooms (types reference rooms)
     for (auto& [ch, dj] : j["diggable"].members()) {
@@ -337,6 +337,12 @@ Rules loadRules(const Json& j) {
             w.projectileSpeed = wj.getFx("projectileSpeed");
             w.splash = wj.getFx("splash");
             w.damageType = damageIdx(wj.getStr("damageType", "normal"));
+            w.chargeTime = wj.getFx("chargeTime");
+            if (wj.has("onHit")) {
+                const Json& oh = wj["onHit"];
+                w.onHit = int16_t(ep.payload(where + " weapon " + w.id + " onHit", oh.isObject() && oh.has("effects") ? oh["effects"] : oh));
+                if (oh.isObject() && oh.has("effects")) w.onHitChance = oh.getFx("chance", w.onHitChance);
+            }
             t.weapons.push_back(w);
         }
         if (const Json& e = tj["energy"]; e.isObject()) {
@@ -346,20 +352,13 @@ Rules loadRules(const Json& j) {
         }
         for (auto& aj : tj["abilities"].items()) {
             AbilityDef a;
-            a.id = aj.getStr("id", "ability");
-            a.name = aj.getStr("name", a.id);
-            std::string tg = aj.getStr("target", "none");
-            a.target = tg == "unit" ? TargetKind::Unit : tg == "point" ? TargetKind::Point : tg == "self" ? TargetKind::Self : TargetKind::None;
-            a.range = aj.getFx("range", a.range);
-            a.cooldown = aj.getFx("cooldown", a.cooldown);
-            a.energyCost = aj.getFx("energy");
-            a.requiredLevel = int(aj.getInt("level", 1));
-            a.autocast = aj.getBool("autocast", true);
-            a.aura = aj.getBool("aura", false);
-            a.auraRadius = aj.getFx("radius", Fixed::fromInt(6));
-            for (auto& ej : aj["effects"].items()) a.effects.push_back(effect(where + " ability " + a.id, ej));
-            t.abilities.push_back(a);
+            ep.ability(where, aj, a);
+            t.abilities.push_back(std::move(a));
         }
+        if (t.abilities.size() > 8) fail(where, "at most 8 abilities per type");
+        for (auto& st : tj["statuses"].items()) t.statuses.push_back(int16_t(ep.status(where + " statuses", st)));
+        t.level = int(tj.getInt("level", 1));
+        t.blocksLanes = tj.getBool("blocksLanes", false);
         if (const Json& h = tj["hero"]; h.isObject()) {
             t.hero = true;
             t.unique = true;
@@ -603,25 +602,11 @@ Rules loadRules(const Json& j) {
     for (auto& pj : j["playerAbilities"].items()) {
         PlayerAbilityDef a;
         a.id = pj.getStr("id", "ability" + std::to_string(r.playerAbilities.size()));
-        const std::string where = "playerAbility '" + a.id + "'";
-        a.name = pj.getStr("name", a.id);
-        amounts(where + " cost", pj["cost"], a.cost, {});
-        a.cooldown = pj.getFx("cooldown");
-        if (const Json& c = pj["charges"]; c.isObject()) {
-            a.chargesMax = int(c.getInt("max", 1));
-            amounts(where + " charges.rearmCost", c["rearmCost"], a.rearmCost, {});
-            a.rearmTime = c.getFx("rearmTime", a.rearmTime);
-        }
-        std::string tg = pj.getStr("target", "point");
-        if (tg != "point" && tg != "none") fail(where, "target must be point or none");
-        a.target = tg == "none" ? TargetKind::None : TargetKind::Point;
-        for (auto& ej : pj["effects"].items()) {
-            a.effects.push_back(effect(where, ej));
-            if (a.effects.back().kind == EffectKind::Blink) fail(where, "blink needs a caster");
-        }
-        r.playerAbilities.push_back(a);
+        if (r.findPlayerAbility(a.id) >= 0) fail("playerAbility '" + a.id + "'", "defined twice");
+        ep.playerAbility("playerAbility", pj, a);
+        r.playerAbilities.push_back(std::move(a));
     }
-    if (r.playerAbilities.size() > 16) fail("playerAbilities", "at most 16");
+    if (r.playerAbilities.size() > 64) fail("playerAbilities", "at most 64");
     std::string storage = j.getStr("storage", "player");
     if (storage != "player" && storage != "buildings") fail("storage", "expected 'player' or 'buildings', got '" + storage + "'");
     r.buildingStorage = storage == "buildings";
@@ -656,6 +641,33 @@ Rules loadRules(const Json& j) {
         // claimers / portals imply a territory layer
         for (auto& t : r.types) if (t.claimerTime.raw > 0 || t.claimRate.raw > 0 || t.claimedByTerritory) r.territory.enabled = true;
     }
+    // built-in statuses (internal ids start with '_')
+    r.userStatuses = r.statuses.size();
+    auto builtin = [&](const char* id, uint32_t flags) {
+        StatusDef s; s.id = id; s.name = id; s.flags = flags; s.stacking = Stacking::Independent;
+        r.statuses.push_back(s);
+        return int16_t(r.statuses.size() - 1);
+    };
+    r.stTemp = builtin("_temporary", 0);
+    r.stLink = builtin("_link", 0);
+    r.stRedirect = builtin("_redirect", 0);
+    r.stFake = builtin("_illusion", kStFake);
+    if (r.statuses.size() > 60000) fail("statuses", "too many statuses");
+    // anything beyond the original instant effects switches the effect engine on (old games stay bit-identical)
+    bool adv = r.userStatuses > 0 || r.loadoutSlots > 0;
+    for (auto& pl : r.payloads) for (auto& e : pl) if (e.kind > EffectKind::Blink || e.chance < Fixed::fromInt(1) || e.randomAmount || e.limit > 0 || e.filter.explicitShape) adv = true;
+    for (auto& rs : r.resources) if (rs.regen.raw != 0) adv = true;
+    for (auto& t : r.types) {
+        if (!t.statuses.empty() || t.blocksLanes || t.level != 1) adv = true;
+        for (auto& wd : t.weapons) if (wd.onHit >= 0 || wd.chargeTime.raw > 0) adv = true;
+        for (auto& a : t.abilities)
+            if (a.castTime.raw > 0 || a.backswing.raw > 0 || a.channel || a.chargesMax > 0 || !a.levels.empty() || a.initialCooldown.raw > 0 ||
+                !a.cost.empty() || !a.requires_.empty() || a.smart != SmartRule::Auto || a.target > TargetKind::Point) adv = true;
+    }
+    for (auto& a : r.playerAbilities)
+        if (!a.levels.empty() || a.passive || a.autoEvery.raw > 0 || a.castTime.raw > 0 || !a.requires_.empty() || a.initialCooldown.raw > 0 ||
+            (a.target != TargetKind::Point && a.target != TargetKind::None) || a.smart != SmartRule::Auto) adv = true;
+    r.advancedEffects = adv;
     r.dungeon = anyDungeonType || r.territory.enabled || !r.diggables.empty() || !r.rooms.empty() || r.hand.max > 0 ||
                 r.possession.enabled || !r.playerAbilities.empty();
     return r;
