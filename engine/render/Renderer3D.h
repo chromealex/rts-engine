@@ -82,6 +82,19 @@ enum class MaterialQuality { Low, Medium, High };
 
 struct NodePose;
 
+// Post-processing hook (engine/render/PostFx.h implements it). With an active hook, render() draws
+// the scene into the hook's offscreen target instead of `screenPass`; resolvePostFx() then runs the
+// effect chain into `screenPass` and leaves that pass open (UI and overlays drawn after it are not
+// post-processed). Without a hook, or with no active effect, nothing changes and it costs nothing.
+struct PostFrame { mat4 viewProj; float3 cameraPos; Lighting lighting; int width = 0, height = 0; };
+class PostProcess {
+public:
+    virtual ~PostProcess() = default;
+    virtual bool active() const = 0;
+    virtual gfx::PassDesc scenePass(const gfx::PassDesc& out, int w, int h) = 0;
+    virtual void resolve(gfx::Device& dev, const gfx::PassDesc& out, const PostFrame& frame) = 0;
+};
+
 // Baked skinning sample (Animator::baseSample()): clip A blends to clip B by `mix`; clip -1 = bind pose.
 struct BakedSample { int clipA = -1, clipB = -1; float timeA = 0, timeB = 0, mix = 1; bool loopA = true, loopB = true; };
 
@@ -124,7 +137,10 @@ public:
     void quadXZ(float3 a, float3 b, float width, uint32_t color, float y = 0.02f);
     void circleXZ(float3 c, float radius, uint32_t color, int segments = 40, float y = 0.03f);
     void drawModel(const ModelDraw& d);
-    void render(const gfx::PassDesc& screenPass); // shadow pass + opens the main pass and draws everything
+    void render(const gfx::PassDesc& screenPass, PostProcess* post = nullptr); // shadow pass + opens the main pass and draws everything
+    // With a post hook: ends the scene pass, runs the effects into screenPass (left open). No-op otherwise.
+    // Call after everything that belongs to the 3D scene (particles), before UI.
+    void resolvePostFx();
     // Extra renderers (sprites, tiles) that draw with their own pipelines inside the main pass: run
     // after opaque and translucent meshes, before overlays (fog of war stays on top).
     // Cleared by beginScene.
@@ -195,6 +211,8 @@ private:
     float3 camPos_;
     uint32_t drawCalls_ = 0;
     int sceneW_ = 0, sceneH_ = 0;
+    PostProcess* post_ = nullptr;      // set by render() when the hook is active, cleared by resolvePostFx()
+    gfx::PassDesc postOut_;
 
     // models
     MaterialQuality matQuality_ = MaterialQuality::High;
