@@ -4,6 +4,7 @@
 // and effects are skipped: a riverbed mirrored above the surface would cover everything, and the
 // sky colour behind the objects reads as the reflected sky anyway.
 #include "Renderer3D.h"
+#include <chrono>
 #include <cstring>
 
 namespace rts::render {
@@ -14,6 +15,7 @@ struct DrawUniformsR { float model[16]; float color[4]; float params[4]; };   //
 
 void Renderer3D::renderReflection() {
     if (!lights.reflectionsWanted()) return;
+    const auto t0 = std::chrono::steady_clock::now();
     // the water: the flat translucent glossy mesh (the terrain draws it with specular ~0.9)
     const DrawItem* water = nullptr;
     for (const auto& it : items_)
@@ -59,6 +61,7 @@ void Renderer3D::renderReflection() {
     }
     viewProj_ = savedVP;
     camPos_ = savedCam;
+    lights.noteReflectionTime(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count());
 }
 
 } // namespace rts::render

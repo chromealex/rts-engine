@@ -55,6 +55,16 @@ public:
         const char* tiers[] = {"выкл", "низкое (старые Android)", "среднее", "высокое"};
         if (ImGui::Combo("Качество света", &q, tiers, 4)) ls.setQuality(render::LightQuality(q));
         ImGui::TextDisabled("Источников в кадре: %zu, ночь %.2f", ls.count(), ed.view().lights().night());
+        if (ImGui::TreeNode("Стоимость кадра")) {
+            const render::LightStats& st = ls.stats();
+            ImGui::Text("Источники: %d (попиксельно %d), квадов в карте: %d", st.lights, st.perPixel, st.mapQuads);
+            ImGui::Text("Световая карта: %d² %s, CPU %.2f мс", st.mapSize, st.mapDrawn ? "" : "(пусто, проход пропущен)", st.mapMs);
+            ImGui::Text("Ореолы: %d, лучи: %d, контактные тени: %d", st.halos, st.beams, st.decals);
+            if (st.reflection) ImGui::Text("Отражение воды: %d×%d, CPU %.2f мс", st.reflW, st.reflH, st.reflMs);
+            else ImGui::TextDisabled("Отражение воды: нет (только High и только с водой в кадре)");
+            ui::help("Время — подготовка и отправка проходов на CPU. Цену на GPU меряет tools/perf/lighting_bench.sh.");
+            ImGui::TreePop();
+        }
 
         ImGui::SeparatorText("Блок \"lighting\" карты");
         Json& extra = ed.doc().data.extra;

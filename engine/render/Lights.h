@@ -65,6 +65,15 @@ struct LightUniforms {
     float spot[8][4];            // spot direction xyz, cosOuter (< -1.5: point light)
 };
 
+// What the lights cost this frame (Lighting window, benchmarks). Times are CPU (building and
+// submitting the passes); the RHI has no GPU timers.
+struct LightStats {
+    int lights = 0, perPixel = 0, mapQuads = 0, halos = 0, beams = 0, decals = 0;
+    int mapSize = 0, reflW = 0, reflH = 0;
+    bool mapDrawn = false, reflection = false;
+    float mapMs = 0, reflMs = 0;
+};
+
 class LightSystem {
 public:
     static constexpr int kMaxPixelLights = 8;
@@ -85,6 +94,8 @@ public:
     void add(const PointLight& l);
     void add(float3 pos, float radius, float3 color, float intensity = 1) { add(PointLight{pos, radius, color, intensity}); }
     size_t count() const { return lights_.size(); }
+    const LightStats& stats() const { return stats_; }
+    void noteReflectionTime(float ms) { stats_.reflMs = ms; }
 
     void renderMap();            // Renderer3D::render, before the main pass (own render pass)
     // After setPipeline() of a lit pipeline: light uniforms + light map texture (+ the water
@@ -144,6 +155,7 @@ private:
     float viewW_ = 1, viewH_ = 1;
     bool reflectOn_ = true, reflReady_ = false;
     LightUniforms u_{};
+    LightStats stats_;
     float nightGlow_ = 0;
     uint32_t mapFrame_ = 0;
     bool mapReady_ = false, mapHasLights_ = false;

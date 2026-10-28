@@ -1,6 +1,7 @@
 #include "Lights.h"
 #include "LightShaders.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -226,7 +227,14 @@ void LightSystem::pickPixelLights() {
 }
 
 void LightSystem::renderMap() {
+    const auto t0 = std::chrono::steady_clock::now();
+    stats_ = LightStats{};
+    stats_.mapSize = mapSize_;
+    struct Done { LightSystem& s; std::chrono::steady_clock::time_point t0;
+        ~Done() { s.stats_.mapMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count(); } } done{*this, t0};
     pickPixelLights();
+    stats_.lights = int(lights_.size());
+    stats_.perPixel = int(u_.info[0]);
     if (quality_ == LightQuality::Off || !map_.valid() || !pipe_.valid()) { mapReady_ = false; return; }
     // Low: refresh every other frame; the old map stays valid because it is world-aligned.
     // Only when the map already covers this view's area: two views a frame (editor) differ.
@@ -253,6 +261,8 @@ void LightSystem::renderMap() {
     mapReady_ = true;
     mapX_ = originX_; mapZ_ = originZ_; mapExtent_ = extent_;
     mapHasLights_ = !verts_.empty();
+    stats_.mapQuads = int(verts_.size() / 6);
+    stats_.mapDrawn = mapHasLights_;
     if (!mapHasLights_) return; // nothing in the map: no pass, the shaders skip the fetch
     gfx::PassDesc p;
     p.colorTarget = map_;
@@ -303,6 +313,7 @@ bool LightSystem::beginReflection(int viewW, int viewH, float3 clear) {
 void LightSystem::endReflection() {
     dev_->endPass();
     reflReady_ = true;
+    stats_.reflection = true; stats_.reflW = reflW_; stats_.reflH = reflH_;
 }
 
 void LightSystem::bind(int uniformSlot, int textureSlot, int reflectionSlot) {
@@ -369,6 +380,7 @@ void LightSystem::drawHalos(const mat4& viewProj, bool decals) {
                          v2{b1.x, b1.y, b1.z, 1, 1, cr, cg, cb, a}, v3{b0.x, b0.y, b0.z, -1, 1, cr, cg, cb, a};
         beams_.insert(beams_.end(), {v0, v1, v2, v0, v2, v3});
     }
+    if (decals) { stats_.beams = int(beams_.size() / 6); stats_.halos = int(halos_.size() / 6); stats_.decals = int(decals_.size() / 6); }
     if (!beams_.empty() && beamPipe_.valid()) {
         dev_->setPipeline(beamPipe_);
         dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);
