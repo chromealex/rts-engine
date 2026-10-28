@@ -292,6 +292,7 @@ struct UnitType {
     Fixed costGrowth{};                        // cost * (1 + growth * owned) (Dungeon Keeper imps)
     uint64_t crushTags = 0;                    // moving over units with these tags kills them (Dune / C&C tanks)
     uint32_t factionMask = 0;                  // "factions": only these factions may train / build it (0 = all)
+    bool autoTrainAdvance = true;              // autoTrain.advance: false = the new units stay home (Northgard births)
     int16_t deathFieldRes = -1;                // dying spreads a resource field (Dune spice bloom)
     Fixed deathFieldRadius = Fixed::fromInt(3), deathFieldAmount = Fixed::fromInt(100);
     Json view;
@@ -399,6 +400,7 @@ struct RegionRules {
     Fixed productionPerRegion{};              // production speed bonus per owned region beyond the first (Z)
     bool requireExplored = false;             // a region must have been seen before it can be claimed (Northgard)
     bool supplyLines = false;                 // income of points counts only in sectors linked to an own key structure (CoH)
+    bool clearFirst = false;                  // a region with hostile creatures in it can't be claimed (Northgard)
 };
 
 // Diggable terrain: map character -> hardness and what digging it yields (gold veins, gems).

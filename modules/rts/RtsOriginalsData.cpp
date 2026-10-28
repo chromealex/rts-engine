@@ -93,6 +93,8 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
     if (const Json& rg = j["regions"]; rg.isObject()) {
         r.regions.requireExplored = rg.getBool("requireExplored", false);
         r.regions.supplyLines = rg.getBool("supplyLines", false);
+        r.regions.clearFirst = rg.getBool("clearFirst", false);
+        if (r.regions.clearFirst) any = true;
         if (r.regions.supplyLines) any = true;
     }
     if (const Json& tr = j["territory"]; tr.isObject())
@@ -197,6 +199,7 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             t.factionMask |= 1u << fi;
             any = true;
         }
+        if (const Json& at = tj["autoTrain"]; at.isObject() && at.has("advance")) { t.autoTrainAdvance = at.getBool("advance", true); any = true; }
         t.clash = tj.getBool("clash", false);
         if (t.clash || t.crews || t.queueSlots > 1) any = true;
         if (const Json& pm = tj["playerMods"]; !pm.isNull()) {

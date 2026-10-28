@@ -403,13 +403,18 @@ def clanlands():
             m.region_rect(rx * 16, ry * 12, 16, 12, letters[ry][rx])
     m.region_names = names
     m.rect(15, 4, 1, 5, '#'); m.rect(31, 4, 1, 5, '#')
-    m.ent("longhouse", 1, [7, 6])
-    for i in range(3):
-        m.ent("thrall", 1, [11, 4 + i])
+    m.ent("town_hall", 1, [7, 6])
+    for i in range(4):
+        m.ent("villager", 1, [11, 4 + i])
     m.ent("deer_herd", 0, [24, 6]); m.ent("deer_herd", 0, [8, 18])
     m.ent("deer_herd", 0, [24, 18], sym=False)
     for x in range(18, 26):
         m.ent("birch", 0, [x + 0.5, 2.5])
+    for y in range(2, 9):
+        m.ent("birch", 0, [2.5, y + 0.5])
+    m.ent("stone_deposit", 0, [12, 10]); m.ent("iron_deposit", 0, [40, 18], sym=False)
+    m.ent("wolf", -1, [24, 8]); m.ent("wolf", -1, [25, 8])
+    m.ent("draugr", -1, [24, 16], sym=False); m.ent("draugr", -1, [25, 17], sym=False)
     write("clanlands", m, "fjords")
 
 
