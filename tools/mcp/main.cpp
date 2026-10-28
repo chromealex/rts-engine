@@ -183,6 +183,12 @@ const char* kInstructions =
     "Phones: device_list {filter} (iPhone, iPad, Pixel, Galaxy, Redmi, desktops: sizes, safe areas, cut-outs) -> "
     "device_set {device, orientation, safeArea: true} -> view_screenshot {window: game}. "
     "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
+    "Look of the game: own meshes / textures via asset_import, then the type's \"view\" block with rules_merge "
+    "(model, materials overrides per material name, team colour, clips: docs/models.md; model_info lists nodes, clips, materials); "
+    "lighting: lighting_set (sun, sky, day/night, presets), light_add / light_update (point lights on the map); "
+    "fog of war: rules_merge {path: \"fogOfWar\"} (mode, colour, style, softness, grid, lineOfSight for 3D visibility by heights, "
+    "vision.blocks on wall types, delivery.blocksVision on smoke skills); "
+    "game UI: ui_contract (documents, data bindings, events) -> game_file_write ui/hud.rml, ui/skin.rcss ... (the game's ui/ overrides the engine's). "
     "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";
 
