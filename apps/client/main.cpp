@@ -184,6 +184,7 @@ void GameClient::startMatch(size_t idx) {
         cfg.seed = uint64_t(std::time(nullptr));
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
+        view_.lights().configure(manifest_["lighting"], map["lighting"]); // day/night
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
     }

@@ -47,8 +47,28 @@ bool LightSystem::init(gfx::Device& dev) {
     const uint8_t zero[4] = {0, 0, 0, 0};
     gfx::TextureDesc td; td.width = td.height = 1; td.data = zero; td.label = "nolight";
     black_ = dev.createTexture(td);
+
+    gfx::ShaderDesc hs;
+    hs.glslVertex = shaders::kHaloVS; hs.glslFragment = shaders::kHaloFS; hs.msl = shaders::kHaloMSL;
+    hs.uniformSlots = 1; hs.label = "halo";
+    haloShader_ = dev.createShader(hs);
+    if (!haloShader_.valid()) return false;
+    gfx::PipelineDesc hp;
+    hp.shader = haloShader_;
+    hp.attrs[0] = {0, gfx::VertexFormat::Float3, 0};
+    hp.attrs[1] = {1, gfx::VertexFormat::Float2, 12};
+    hp.attrs[2] = {2, gfx::VertexFormat::Float4, 20};
+    hp.attrCount = 3; hp.stride = sizeof(HaloVertex);
+    hp.indexType = gfx::IndexType::None;
+    hp.cull = gfx::CullMode::None;
+    hp.blend = gfx::BlendMode::Additive;
+    hp.depthTest = true; hp.depthWrite = false;
+    hp.label = "halo";
+    haloPipe_ = dev.createPipeline(hp);
+    gfx::BufferDesc hb; hb.usage = gfx::Usage::Dynamic; hb.size = 256 * 6 * sizeof(HaloVertex); hb.label = "halos";
+    haloVB_ = dev.createBuffer(hb);
     setQuality(quality_);
-    return pipe_.valid() && vb_.valid() && black_.valid();
+    return pipe_.valid() && vb_.valid() && black_.valid() && haloPipe_.valid() && haloVB_.valid();
 }
 
 void LightSystem::createMap(int size) {
@@ -57,6 +77,7 @@ void LightSystem::createMap(int size) {
     if (mapDepth_.valid()) dev_->destroyTexture(mapDepth_);
     map_ = mapDepth_ = {};
     mapSize_ = size;
+    mapReady_ = false;
     if (size == 0) return;
     gfx::TextureDesc td;
     td.width = td.height = size;
@@ -81,15 +102,22 @@ void LightSystem::shutdown() {
     createMap(0);
     dev_->destroyTexture(black_);
     dev_->destroyBuffer(vb_);
+    dev_->destroyBuffer(haloVB_);
     dev_->destroyPipeline(pipe_);
+    dev_->destroyPipeline(haloPipe_);
     dev_->destroyShader(shader_);
+    dev_->destroyShader(haloShader_);
     dev_ = nullptr;
 }
 
 void LightSystem::begin(const RTSCamera& cam, float aspect) {
     lights_.clear();
-    mapReady_ = false;
     focus_ = cam.target;
+    {
+        const mat4 v = cam.view();   // rows 0/1 of the view matrix: camera right / up in world space
+        camRight_ = {v.at(0, 0), v.at(0, 1), v.at(0, 2)};
+        camUp_ = {v.at(1, 0), v.at(1, 1), v.at(1, 2)};
+    }
     // Cover the ground the camera sees (same idea as the shadow frustum fit).
     const float w = 1000.0f, h = w / std::max(aspect, 0.1f);
     const float sx[4] = {0, w, 0, w}, sy[4] = {0, 0, h, h};
@@ -143,7 +171,9 @@ void LightSystem::pickPixelLights() {
 
 void LightSystem::renderMap() {
     pickPixelLights();
-    if (quality_ == LightQuality::Off || !map_.valid() || !pipe_.valid()) return;
+    if (quality_ == LightQuality::Off || !map_.valid() || !pipe_.valid()) { mapReady_ = false; return; }
+    // Low: refresh every other frame; the old map stays valid because it is world-aligned.
+    if (quality_ == LightQuality::Low && (++mapFrame_ & 1u) && mapReady_) return;
     verts_.clear();
     const float inv = 2.0f / extent_, k = 1.0f / kMapRange;
     for (size_t i = 0; i < lights_.size(); ++i) {
@@ -157,7 +187,10 @@ void LightSystem::renderMap() {
                         c{cx + r, cy + r, 1, 1, cr, cg, cb, 1}, d{cx - r, cy + r, -1, 1, cr, cg, cb, 1};
         verts_.insert(verts_.end(), {a, b, c, a, c, d});
     }
-    if (verts_.empty()) return; // nothing in the map: the lit shader skips the fetch
+    mapReady_ = true;
+    mapX_ = originX_; mapZ_ = originZ_; mapExtent_ = extent_;
+    mapHasLights_ = !verts_.empty();
+    if (!mapHasLights_) return; // nothing in the map: no pass, the shaders skip the fetch
     gfx::PassDesc p;
     p.colorTarget = map_;
     p.depthTarget = mapDepth_;
@@ -171,17 +204,40 @@ void LightSystem::renderMap() {
     dev_->setVertexBuffer(vb_);
     dev_->draw(uint32_t(verts_.size()));
     dev_->endPass();
-    mapReady_ = true;
 }
 
-void LightSystem::bind() {
+void LightSystem::bind(int uniformSlot, int textureSlot) {
     if (!dev_) return;
-    u_.map[0] = originX_; u_.map[1] = originZ_; u_.map[2] = 1.0f / extent_; u_.map[3] = mapReady_ ? 1.0f : 0.0f;
+    const bool useMap = mapReady_ && mapHasLights_ && quality_ != LightQuality::Off;
+    u_.map[0] = mapX_; u_.map[1] = mapZ_; u_.map[2] = 1.0f / mapExtent_; u_.map[3] = useMap ? 1.0f : 0.0f;
     u_.info[1] = kMapRange;
     u_.info[2] = dev_->info().renderTargetFlipY ? 1.0f : 0.0f;
+    u_.info[3] = nightGlow_;
     if (quality_ == LightQuality::Off) u_.info[0] = 0;
-    dev_->setUniforms(2, &u_, sizeof u_);
-    dev_->setTexture(1, mapReady_ ? map_ : black_);
+    dev_->setUniforms(uniformSlot, &u_, sizeof u_);
+    dev_->setTexture(textureSlot, useMap ? map_ : black_);
+}
+
+void LightSystem::drawHalos(const mat4& viewProj) {
+    if (!dev_ || quality_ == LightQuality::Off || !haloPipe_.valid()) return;
+    halos_.clear();
+    for (const PointLight& l : lights_) {
+        if (l.halo <= 0 || l.haloAlpha <= 0) continue;
+        const float3 r = camRight_ * l.halo, u = camUp_ * l.halo;
+        // colour in display space: keep the hue, cap the brightness
+        const float m = std::max({l.color.x, l.color.y, l.color.z, 1e-3f});
+        const float cr = l.color.x / m, cg = l.color.y / m, cb = l.color.z / m, a = std::min(l.haloAlpha, 1.5f);
+        const float3 p0 = l.pos - r - u, p1 = l.pos + r - u, p2 = l.pos + r + u, p3 = l.pos - r + u;
+        const HaloVertex v0{p0.x, p0.y, p0.z, -1, -1, cr, cg, cb, a}, v1{p1.x, p1.y, p1.z, 1, -1, cr, cg, cb, a},
+                         v2{p2.x, p2.y, p2.z, 1, 1, cr, cg, cb, a}, v3{p3.x, p3.y, p3.z, -1, 1, cr, cg, cb, a};
+        halos_.insert(halos_.end(), {v0, v1, v2, v0, v2, v3});
+    }
+    if (halos_.empty()) return;
+    dev_->setPipeline(haloPipe_);
+    dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);
+    dev_->updateBuffer(haloVB_, halos_.data(), halos_.size() * sizeof(HaloVertex));
+    dev_->setVertexBuffer(haloVB_);
+    dev_->draw(uint32_t(halos_.size()));
 }
 
 } // namespace rts::render
