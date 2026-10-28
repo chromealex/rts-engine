@@ -46,6 +46,14 @@ input.text:focus { border-color: #ffd98a; }
 #kb .key:active { border-color: #ffd98a; }
 #kb .key.on { border-color: #ffd98a; color: #ffe9b5; }
 
+/* the game's own screens (ui/screens, screens.rcss) */
+.screen { decorator: vertical-gradient(#4c623eff #161c12ff); }
+.screen-title { color: #ffd98a; }
+.currency { color: #ffe1a0; }
+.badge, .avatar, .progress-fill { background-color: #ffd98a; }
+.card, .list-row, .stat { border-color: #ffffff18; }
+.stat-value { color: #ffd98a; }
+
 /* eight goods: a compact resource bar */
 #topbar { padding: 4dp 8dp; }
 #topbar .item { margin: 0 5dp; font-size: 13dp; }

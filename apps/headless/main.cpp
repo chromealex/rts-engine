@@ -1,6 +1,7 @@
 // Headless runner: bot-vs-bot matches, replay recording and verification for any game project.
 //   rts_headless --project templates/skirmish [--map maps/valley.json] --seed 7 --record m.rpl
 //   rts_headless --replay m.rpl
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -78,6 +79,7 @@ struct Args {
     uint32_t saveAt = 0;              // seconds
     int benchPaths = 0;   // >0: time that many path queries (HPA* vs plain A*) and exit
     int benchBody = -1;
+    bool profile = false;   // --profile: per-system wall time at the end of the match
     int benchGroup = 0;   // >0: spawn that many units of player 1, order them to one far goal, time movement (--bench-flow on|off)
     int benchFlow = -1;   // -1: rules default, 0: off, 1: on (minGroup 1)   // planets: body index for --bench-paths (default: first surface body)
     bool quiet = false;
@@ -190,6 +192,19 @@ static int benchPaths(Simulation& sim, const Args& a) {
 }
 
 
+static void printProfile(Simulation& sim) {
+    int64_t tot = 0;
+    for (size_t i = 0; i < sim.systemCount(); ++i) tot += sim.systemTime(i);
+    std::printf("Profile (%u ticks, systems %.0f ms, %.3f ms/tick):\n", sim.tick(), tot / 1e6, sim.tick() ? tot / 1e6 / sim.tick() : 0.0);
+    std::vector<size_t> order(sim.systemCount());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t x, size_t y) { return sim.systemTime(x) > sim.systemTime(y); });
+    for (size_t i : order)
+        if (sim.systemTime(i) * 200 >= tot)
+            std::printf("  %-16s %8.0f ms  %6.3f ms/tick  %5.1f%%\n", sim.systemName(i).c_str(), sim.systemTime(i) / 1e6,
+                        sim.systemTime(i) / 1e6 / std::max<uint32_t>(1, sim.tick()), tot ? 100.0 * sim.systemTime(i) / tot : 0.0);
+}
+
 // Group movement benchmark: N units of the first mobile combat type of player 1 spread over a block, one move order to
 // the far corner (flat) / the antipode (planet). Reports ticks/s, path ms per tick, arrivals and the field cache size.
 static int benchGroup(Simulation& sim, const Args& a) {
@@ -218,7 +233,8 @@ static int benchGroup(Simulation& sim, const Args& a) {
     } else {
         for (int y = 4; y < g.h && int(cells.size()) < a.benchGroup * 3; ++y)
             for (int x = 4; x < 4 + side && x < g.w; ++x) if (g.passable(x, y, layer)) cells.push_back(g.index(x, y));
-        for (int r = 4; r < g.w / 2 && goal < 0; ++r) if (g.passable(g.w - r, g.h - r, layer)) goal = g.index(g.w - r, g.h - r);
+        // goal well inside the map (a crowd needs room around it), the start block in the opposite corner
+        for (int r = g.w / 8; r < g.w / 2 && goal < 0; ++r) if (g.passable(g.w - r, g.h - r, layer)) goal = g.index(g.w - r, g.h - r);
     }
     if (goal < 0 || int(cells.size()) < a.benchGroup) { std::printf("no room for %d units\n", a.benchGroup); return 1; }
     Command c;
@@ -260,7 +276,17 @@ static int benchGroup(Simulation& sim, const Args& a) {
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     int near = 0;
     for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < arriveR) ++near;
+    if (std::getenv("RTS_BENCH_HIST")) {   // where the stragglers are: distance histogram, moving / stopped
+        int hist[12][2] = {};
+        for (Entity e : c.units) {
+            if (!sim.world().alive(e)) continue;
+            const int b = std::min(11, int((sim.world().get<Transform>(e).pos - goalPos).length().toInt() / 10));
+            hist[b][sim.world().get<game::Mobile>(e).moving ? 1 : 0]++;
+        }
+        for (int b = 0; b < 12; ++b) std::printf("  dist %3d-%3d: stopped %d moving %d\n", b * 10, b * 10 + 10, hist[b][0], hist[b][1]);
+    }
     (void)movementNs;
+    if (a.profile) printProfile(sim);
     std::printf("Group %d x %s on %dx%d%s: %u ticks %.0f ms = %.0f ticks/s | path total %.0f ms, %.3f ms/tick, worst tick %.1f ms | arrived %d/%d (90%% at %.0f s) | fields peak %zu, %.2f MB | %016llx\n",
                 a.benchGroup, m->rules().types[size_t(type)].id.c_str(), g.w, g.h, g.surf ? " planet" : "", ticks, ms, ticks / (ms / 1000.0),
                 double(g.pathNs) / 1e6, double(g.pathNs) / 1e6 / ticks, double(peakPathNs) / 1e6, near, a.benchGroup, done ? double(done) / sim.tickRate() : -1.0,
@@ -324,6 +350,7 @@ static int play(const Args& a) {
     }
     if (a.maxSeconds == 0) return 0;   // --max-seconds 0: set up (and generate) only
 
+    if (a.profile) sim.setProfileClock([] { return int64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); });
     if (a.benchPaths > 0) return benchPaths(sim, a);
     if (a.benchGroup > 0) return benchGroup(sim, a);
     std::vector<game::RtsAI> bots;
@@ -370,6 +397,7 @@ static int play(const Args& a) {
                 ev[game::kEvSpawned], ev[game::kEvDied], ev[game::kEvAttack], ev[game::kEvTrainDone], ev[game::kEvBuildDone],
                 ev[game::kEvGathered], ev[game::kEvCaptured]);
     if (a.dump) dumpTypes(sim);
+    if (a.profile) printProfile(sim);
     std::printf("Checksum: %016llx\n", (unsigned long long)rep.finalChecksum);
     if (!a.record.empty()) {
         if (!rep.save(a.record)) return 2;
@@ -420,6 +448,7 @@ int main(int argc, char** argv) {
         else if (k == "--load") a.loadFile = next();
         else if (k == "--replay") a.replay = next();
         else if (k == "--quiet") a.quiet = true;
+        else if (k == "--profile") a.profile = true;
         else if (k == "--dump") a.dump = true;
         else if (k == "--bench-paths") a.benchPaths = std::stoi(next());
         else if (k == "--bench-body") a.benchBody = std::stoi(next());

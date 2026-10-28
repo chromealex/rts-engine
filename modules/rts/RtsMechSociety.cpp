@@ -1,6 +1,5 @@
 // agent-mech stage 3, society: buildings run by their staff (workers inside), population growth, power fields
-// (pylons), autonomous heroes and bounties (Majesty), rounds (auto-battlers: prepare / fight / reset), upgrades paid
-// with garrison units (Mushroom Wars 2).
+// (pylons), autonomous heroes and bounties (Majesty), rounds (auto-battlers: prepare / fight / reset).
 #include "RtsInternal.h"
 #include <algorithm>
 
@@ -201,24 +200,6 @@ bool RtsModule::applyMechSocietyCommand(Simulation& sim, const Command& cmd) {
         b.player = cmd.player; b.res = int16_t(res); b.reward = reward; b.pos = flat(cmd.point);
         if (w.alive(cmd.target) && w.has<Unit>(cmd.target) && hostile(sim, cmd.player, w.get<Owner>(cmd.target).player)) { b.target = cmd.target; b.pos = w.get<Transform>(cmd.target).pos; }
         if (gs.mech.bounties.size() < 64) gs.mech.bounties.push_back(b);
-        return true;
-    }
-    case kCmdUpgrade: {
-        // Mushroom Wars 2: upgrading into a type with upgradeGarrison costs that many units from the garrison
-        if (inMechUpgrade_ || cmd.param < 0 || size_t(cmd.param) >= rules_.types.size()) return false;
-        const int cost = rules_.types[size_t(cmd.param)].mech.upgradeGarrison;
-        if (cost <= 0) return false;
-        Command sub = cmd;
-        sub.units.clear();
-        for (Entity e : cmd.units) {
-            auto* g = w.alive(e) ? w.tryGet<Garrison>(e) : nullptr;
-            if (!g || w.get<Owner>(e).player != cmd.player || g->count < cost) continue;
-            auto& ups = rules_.types[w.get<Unit>(e).type].upgrades;
-            if (std::find(ups.begin(), ups.end(), uint16_t(cmd.param)) == ups.end()) continue;
-            g->count -= cost;
-            sub.units.push_back(e);
-        }
-        if (!sub.units.empty()) { inMechUpgrade_ = true; applyCommand(sim, sub); inMechUpgrade_ = false; }
         return true;
     }
     default: return false;

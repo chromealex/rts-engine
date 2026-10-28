@@ -1,0 +1,36 @@
+<rml>
+<head>
+    <title>$NAME</title>
+    <link type="text/rcss" href="../theme.rcss"/>
+    <link type="text/rcss" href="../screens.rcss"/>
+    <link type="text/rcss" href="../skin.rcss"/>
+    <style>
+        .home-body { display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .home-menu { width: 300dp; max-width: 90%; }
+        .home-name { font-size: 34dp; margin-bottom: 24dp; text-align: center; }   /* h1: font and colour from the skin */
+    </style>
+</head>
+<body>
+<div class="root" data-model="meta">
+    <div id="menu-bg"></div>
+    <div class="screen" data-attr-style="safeStyle">
+        <div class="screen-header">
+            <div class="screen-title">{{profile.name}}</div>
+            <div class="currencies">
+                <span class="currency">{{profile.gold}} <span class="muted">@currency.gold</span></span>
+                <span class="currency">{{profile.gems}} <span class="muted">@currency.gems</span></span>
+            </div>
+        </div>
+        <div class="screen-body home-body">
+            <h1 class="home-name">{{game.name}}</h1>
+            <div class="home-menu">
+                <button class="big primary" onclick="ui.open('levels')">@meta.play</button>
+                <button class="big" onclick="ui.open('shop')">@meta.shop</button>
+                <button class="big" onclick="ui.open('profile')">@meta.profile</button>
+                <button class="big" onclick="ui.open('settings')">@meta.settings</button>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</rml>

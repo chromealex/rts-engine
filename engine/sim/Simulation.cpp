@@ -84,9 +84,19 @@ void Simulation::step() {
         world_.flush();
     }
 
-    for (auto& s : systems_) {
-        s.fn(*this);
-        world_.flush();
+    if (profClock_) {
+        profNs_.resize(systems_.size(), 0);
+        for (size_t i = 0; i < systems_.size(); ++i) {
+            const int64_t t0 = profClock_();
+            systems_[i].fn(*this);
+            world_.flush();
+            profNs_[i] += profClock_() - t0;
+        }
+    } else {
+        for (auto& s : systems_) {
+            s.fn(*this);
+            world_.flush();
+        }
     }
     ++tick_;
 }
@@ -125,7 +135,7 @@ void Simulation::loadState(const SimSnapshot& in) {
 // ---------------------------------------------------------------- save states
 namespace {
 constexpr uint32_t kSaveMagic = 0x56535452;   // "RTSV"
-constexpr uint32_t kSaveVersion = 1;
+constexpr uint32_t kSaveVersion = 2;   // 2: agent-mech MechShield / Abandoned pools merged into Shield / crews
 } // namespace
 void io(Archive& a, Command& c) { a(c.tick, c.player, c.flags, c.type, c.seq, c.units, c.target, c.point, c.param); }   // found by ADL
 void io(Archive& a, PlayerInfo& p) { a(p.slot, p.name, p.team, p.alive); }

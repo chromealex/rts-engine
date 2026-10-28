@@ -414,7 +414,7 @@ def lastcolony_horde():
     for y in range(20, 108, 2):
         for x in (3, 5):
             m.ent("tree", 0, [x + 0.5, y + 0.5], sym=False)
-    m.extra["movement"] = {"flowField": {"waves": True, "minGroup": 12}}
+    m.extra["movement"] = {"flowField": {"waves": True, "minGroup": 12}, "blockedGoals": "nearest"}
     m.extra["waves"] = [
         {"time": 90, "player": 2, "at": [184, 64], "spread": 8, "spawn": [{"type": "walker", "count": 12}], "every": 50, "growth": 1.15, "repeats": 14},
         {"time": 240, "player": 2, "at": [184, 16], "spread": 6, "spawn": [{"type": "runner", "count": 6}], "every": 80, "growth": 1.15, "repeats": 9},

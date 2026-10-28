@@ -1,6 +1,7 @@
 #include "RtsMap.h"
 #include "../../engine/sim/CommonComponents.h"
 #include <algorithm>
+#include <climits>
 #include <cstdlib>
 #include <queue>
 
@@ -81,7 +82,6 @@ void MapGrid::init(int width, int h_) {
     room.assign(n, -1);
     clearance.assign(n, 0);
     clearanceDirty = true;
-    ++pathVersion_;
     soft.assign(n, 0);
     softCells.clear();
 }
@@ -122,7 +122,6 @@ void MapGrid::enableHeightfield(Fixed levelHeight) {
             level[size_t(index(x, y))] = int8_t(std::clamp(lv, 0, 9));
         }
     clearanceDirty = true;
-    ++pathVersion_;
 }
 
 Fixed MapGrid::cellHeight(int x, int y) const {
@@ -220,7 +219,6 @@ void MapGrid::block(int x0, int y0, int fw, int fh, int delta) {
     for (int y = y0; y < y0 + fh; ++y)
         for (int x = x0; x < x0 + fw; ++x)
             if (inside(x, y)) { auto& b = blocked[size_t(index(x, y))]; b = uint16_t(int(b) + delta); }
-    ++pathVersion_;
     // clearance is capped at 3, so only cells within 3 of the footprint change: patch them (same values as a
     // full recompute) instead of a whole-map pass on the next path query
     if (surf) clearanceDirty = true; // planet cells: rows are not geometric neighbours across seams
@@ -240,7 +238,6 @@ void MapGrid::cellChanged(int x, int y) {
     clearanceDirty = true;
     ++flowStamp_;
     if (inside(x, y)) flowTouch(index(x, y));
-    ++pathVersion_;
     if (surf && inside(x, y)) markSphereDirty(index(x, y));
     for (auto& G : hpa_)
         if (inside(x, y)) { G.dirty[size_t((y / HpaGraph::kC) * G.cw + x / HpaGraph::kC)] = 1; G.anyDirty = true; }
@@ -338,14 +335,32 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
     pathEndB_ = inside(gx, gy) ? index(gx, gy) : -1;
     struct Reset { MapGrid* g; ~Reset() { g->pathClear_ = 0; g->pathSoft_ = false; g->pathEndA_ = g->pathEndB_ = -1; } } reset{this};
     bool goalOk = passable(gx, gy, layer);
+    if (!goalOk && blockedGoalNearest && inside(gx, gy)) {
+        // goal inside a structure / obstacle (attacking a building, walking up to it): aim at the free cell around
+        // it nearest to the start instead of letting A* search the whole reachable area for the closest cell.
+        // Opt-in (rules / map movement.blockedGoals: "nearest"): the classic search picks other cells.
+        int best = -1, bestD = INT32_MAX;
+        for (int r = 1; r <= 6 && best < 0; ++r)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    if (std::abs(dx) != r && std::abs(dy) != r) continue;
+                    const int x = gx + dx, y = gy + dy;
+                    if (!passable(x, y, layer)) continue;
+                    const int ddx = std::abs(x - sx), ddy = std::abs(y - sy);
+                    const int d = 10 * (ddx + ddy) - 6 * std::min(ddx, ddy);
+                    if (d < bestD) { bestD = d; best = index(x, y); }
+                }
+        if (best >= 0) {
+            const bool ok = findPath(from, cellCenter(best % w, best / w), layer, out, maxNodes, clear, useSoft);
+            (void)ok;
+            return false;   // as before: the goal itself is not reachable
+        }
+    }
     if (sx == gx && sy == gy) { out.push_back(to); return true; }
     if (goalOk && lineWalkable(sx, sy, gx, gy, layer)) { out.push_back(to); return true; }
 
     std::vector<int> cells;
     bool found = false, routed = false;
-    // agent-mech BA: long ground trips follow the goal's flow field (one Dijkstra per goal cell for a whole army)
-    if (flowFields && goalOk && !pathSoft_ && (layer & 1) && std::max(std::abs(gx - sx), std::abs(gy - sy)) >= flowMinCells)
-        routed = found = flowCells(sx, sy, gx, gy, layer, cells);
     // long trips on big maps: HPA* route refined with A* (plain A* would run out of nodes)
     if (!routed && bigMap() && goalOk && std::max(std::abs(gx - sx), std::abs(gy - sy)) > 2 * HpaGraph::kC) {
         routed = found = hpaPath(sx, sy, gx, gy, layer, cells);

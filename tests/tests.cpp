@@ -1,5 +1,10 @@
 #include <chrono>
 // Dependency-free unit tests. Run: ctest  (or ./rts_tests)
+#include "engine/ui/UiLua.h"
+extern "C" {
+#include <lauxlib.h>
+#include <lua.h>
+}
 #include <filesystem>
 #include <cstdio>
 #include <functional>
@@ -9094,6 +9099,109 @@ TEST(flow_field_cache_lru_and_sharing) {
     CHECK(g.flowBytes() > 0);
 }
 
+// ---------------- Crowds (flow-field groups settle instead of jamming) ----------------
+namespace {
+Json crowdMap(int n, uint64_t seed) {
+    Random rng(seed, 21);
+    std::vector<std::string> rows(size_t(n), std::string(size_t(n), '.'));
+    for (int k = 0; k < n * n / 120; ++k) {
+        const int x = int(rng.below(uint32_t(n))), y = int(rng.below(uint32_t(n))), r = 1 + int(rng.below(2));
+        for (int dy = -r; dy <= r; ++dy) for (int dx = -r; dx <= r; ++dx)
+            if (x + dx >= 0 && y + dy >= 0 && x + dx < n && y + dy < n && dx * dx + dy * dy <= r * r) rows[size_t(y + dy)][size_t(x + dx)] = '#';
+    }
+    for (int y = 0; y < n; ++y) if (y % 19 > 3) rows[size_t(y)][size_t(n / 2)] = '#';   // a wall with gaps: funnels
+    for (int y = 0; y < 24; ++y) for (int x = 0; x < 24; ++x) rows[size_t(y)][size_t(x)] = '.';
+    for (int y = n - 20; y < n - 4; ++y) for (int x = n - 20; x < n - 4; ++x) rows[size_t(y)][size_t(x)] = '.';
+    Json m = Json::object();
+    m.set("name", Json::string("crowd"));
+    Json size = Json::array(); size.push(Json::number(int64_t(n))); size.push(Json::number(int64_t(n))); m.set("size", size);
+    Json pl = Json::array();
+    for (int p = 0; p < 2; ++p) { Json pj = Json::object(); pj.set("name", Json::string("P")); pj.set("team", Json::number(int64_t(p + 1))); pl.push(pj); }
+    m.set("players", pl);
+    Json t = Json::object(), rj = Json::array();
+    for (auto& r : rows) rj.push(Json::string(r));
+    t.set("rows", rj); m.set("terrain", t);
+    Json ents = Json::array();
+    for (int p = 1; p <= 2; ++p) {   // keep both players alive
+        Json e = Json::object(); e.set("type", Json::string("farm")); e.set("owner", Json::number(int64_t(p)));
+        Json pos = Json::array(); pos.push(Json::number(int64_t(p == 1 ? 20 : n - 8))); pos.push(Json::number(int64_t(p == 1 ? 3 : 3))); e.set("pos", pos);
+        ents.push(e);
+    }
+    m.set("entities", ents);
+    Json mv = Json::object(), ff = Json::object(); ff.set("minGroup", Json::number(int64_t(8))); mv.set("flowField", ff); m.set("movement", mv);
+    return m;
+}
+struct CrowdRun { int arrived = 0, settled = 0; double t90 = -1; uint64_t sum = 0; std::vector<Command> cmds; };
+CrowdRun crowdRun(int units, uint64_t seed, const std::vector<Command>* replay = nullptr) {
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(Json::parseFile(kSkirmish + "/rules.json"), crowdMap(96, seed));
+    auto& m = mod(*sim);
+    const int ft = m.rules().findType("footman");
+    auto& g = m.state(*sim).grid;
+    Command c; c.player = 1; c.type = game::kCmdMove;
+    for (int i = 0; c.units.size() < size_t(units) && i < 24 * 24 * 4; ++i) {
+        const int x = 2 + (i % 40) / 2, y = 2 + i / 40;
+        if (!g.passable(x, y, game::kLayerGround)) continue;
+        c.units.push_back(m.spawn(*sim, uint16_t(ft), 1, {Fixed::fromInt(x) + Fixed::fromRatio((i & 1) ? 3 : 1, 4), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}));
+    }
+    c.point = {Fixed::fromInt(84), Fixed{}, Fixed::fromInt(84)};
+    if (replay) for (const Command& rc : *replay) sim->submit(rc); else sim->submit(c);
+    // window from distance and speed: the mean straight distance at walking speed, x1.6, + 20 s to settle
+    Fixed mean{};
+    for (Entity e : c.units) mean += (sim->world().get<Transform>(e).pos - c.point).xz().length();
+    mean = mean / int64_t(c.units.size());
+    const Fixed speed = m.rules().types[size_t(ft)].speed;
+    const int window = int((mean / speed * Fixed::fromRatio(16, 10)).toInt()) + 20;
+    const Fixed arriveR = Fixed::fromRatio(int64_t(std::sqrt(double(units)) * 60) + 600, 100);
+    CrowdRun r;
+    for (int t = 0; t < window * 20; ++t) {
+        sim->step();
+        if (t % 20 == 0 && r.t90 < 0) {
+            int near = 0;
+            for (Entity e : c.units) if ((sim->world().get<Transform>(e).pos - c.point).xz().length() < arriveR) ++near;
+            if (near * 10 >= units * 9) r.t90 = t / 20.0;
+        }
+    }
+    for (Entity e : c.units) {
+        if ((sim->world().get<Transform>(e).pos - c.point).xz().length() < arriveR) ++r.arrived;
+        if (sim->world().get<game::Mobile>(e).flowArrived >= 0) ++r.settled;
+    }
+    r.sum = sim->checksum();
+    r.cmds = sim->executedCommands();
+    std::printf("  crowd %d: window %d s, arrived %d, settled %d, 90%% at %.0f s\n", units, window, r.arrived, r.settled, r.t90);
+    return r;
+}
+} // namespace
+
+TEST(crowd_flow_group_arrives_and_settles) {
+    const CrowdRun a = crowdRun(200, 3);
+    CHECK(a.arrived * 10 >= 200 * 9);    // >= 90% inside the crowd disc within the window
+    CHECK(a.settled * 10 >= 200 * 9);    // and they stopped there (no circling)
+    CHECK(a.t90 > 0);
+    const CrowdRun b = crowdRun(200, 3);
+    CHECK(a.sum == b.sum);               // deterministic
+    const CrowdRun rp = crowdRun(200, 3, &a.cmds);
+    CHECK(rp.sum == a.sum);              // replaying the executed commands gives the same state
+}
+
+TEST(crowd_blocked_goal_nearest) {
+    // movement.blockedGoals: "nearest" - a path to a goal inside a structure ends next to it, without a full search
+    game::MapGrid g;
+    g.init(80, 80);
+    g.block(60, 60, 4, 4, +1);
+    std::vector<Vec3> p1, p2;
+    const Vec3 from{Fixed::fromInt(5), Fixed{}, Fixed::fromInt(5)}, to{Fixed::fromInt(62), Fixed{}, Fixed::fromInt(62)};
+    g.findPath(from, to, game::kLayerGround, p1);
+    g.blockedGoalNearest = true;
+    CHECK(!g.findPath(from, to, game::kLayerGround, p2));    // the goal itself stays unreachable
+    CHECK(!p2.empty());
+    const Vec3 end = p2.back();
+    const int ex = int(end.x.floorInt()), ey = int(end.z.floorInt());
+    CHECK(g.passable(ex, ey, game::kLayerGround) && ex >= 59 && ex <= 64 && ey >= 59 && ey <= 64);   // next to the footprint
+    CHECK(ex <= 61 || ey <= 61);   // on the side facing the start
+}
+
 TEST(pack_file_copy_into_existing) {
     // fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists;
     // rtsbuild re-stages into the same folders, the editor copies a template over dst/maps.
@@ -9757,6 +9865,81 @@ TEST(lua_lab_prototypes) {
         return s->checksum();
     };
     CHECK(run(3) == run(3));
+}
+
+
+// ---- UI Lua sandbox (engine/ui/UiLua.h): game UI scripts can't reach files, the OS or bytecode
+TEST(ui_lua_sandbox) {
+    std::map<std::string, std::string> files = {
+        {"ui/shop.lua", "local M = {n = 0} function M.buy() M.n = M.n + 1 return M.n end return M"},
+        {"ui/menu/tabs.lua", "return {count = 3}"},
+    };
+    auto read = [&](const std::string& p, std::string& out) { auto it = files.find(p); if (it == files.end()) return false; out = it->second; return true; };
+    lua_State* L = luaL_newstate();
+    ui::luaSandbox(L, read, {"ui/"});
+    std::string err;
+    auto truthy = [&](const char* expr) {
+        std::string code = std::string("assert(") + expr + ")";
+        bool ok = ui::luaRunString(L, code, "=test", &err);
+        if (!ok) std::printf("    lua: %s\n", err.c_str());
+        return ok;
+    };
+    CHECK(truthy("io == nil and package == nil and debug == nil"));
+    CHECK(truthy("dofile == nil and loadfile == nil and string.dump == nil"));
+    CHECK(truthy("os.execute == nil and os.remove == nil and os.getenv == nil and os.exit == nil"));
+    CHECK(truthy("type(os.time()) == 'number' and type(os.clock()) == 'number' and type(os.date('%Y')) == 'string'"));
+    CHECK(truthy("load('return 1 + 2')() == 3"));
+    CHECK(truthy("select(2, load(string.char(27) .. 'LuaT')):find('binary') ~= nil"));
+    CHECK(truthy("load('return x', 'c', 'bt', {x = 7})() == 7"));            // env kept, mode forced to text
+    CHECK(truthy("require('shop').buy() == 1 and require('shop').buy() == 2")); // loaded once, state kept
+    CHECK(truthy("require('menu.tabs').count == 3"));
+    CHECK(truthy("not pcall(require, 'missing') and not pcall(require, '../secret')"));
+    CHECK(!ui::luaRunString(L, "error('boom')", "=test", &err) && err.find("boom") != std::string::npos);
+    CHECK(!ui::luaRunString(L, std::string("\x1bLua"), "=bin", &err));
+    CHECK(ui::luaRunFile(L, read, "ui/shop.lua") && !ui::luaRunFile(L, read, "ui/none.lua", &err));
+    lua_close(L);
+}
+
+
+// ---- UI meta layer: engine/ui/lib/meta.lua and the screen templates compile; JSON <-> Lua round trip
+TEST(ui_lua_meta_and_templates) {
+    auto readFile = [](const std::string& p, std::string& out) {
+        std::ifstream f(p, std::ios::binary);
+        if (!f) return false;
+        std::stringstream ss; ss << f.rdbuf(); out = ss.str();
+        return true;
+    };
+    const std::string root = RTS_SOURCE_DIR;
+    lua_State* L = luaL_newstate();
+    std::string code, err;
+    CHECK(readFile(root + "/engine/assets/ui/lib/meta.lua", code));
+    CHECK(luaL_loadbufferx(L, code.data(), code.size(), "@meta.lua", "t") == LUA_OK);
+    lua_settop(L, 0);
+    int scripts = 0;
+    for (auto& e : std::filesystem::directory_iterator(root + "/engine/ui/templates")) {
+        if (e.path().extension() != ".rml") continue;
+        std::string rml;
+        CHECK(readFile(e.path().string(), rml));
+        for (size_t at = rml.find("<script>"); at != std::string::npos; at = rml.find("<script>", at + 1)) {
+            const size_t end = rml.find("</script>", at);
+            std::string body = rml.substr(at + 8, end - at - 8);
+            for (size_t k = body.find("$NAME"); k != std::string::npos; k = body.find("$NAME")) body.replace(k, 5, "x");
+            const bool ok = luaL_loadbufferx(L, body.data(), body.size(), e.path().filename().string().c_str(), "t") == LUA_OK;
+            if (!ok) std::printf("    %s\n", lua_tostring(L, -1));
+            CHECK(ok);
+            lua_settop(L, 0);
+            ++scripts;
+        }
+    }
+    CHECK(scripts >= 6);
+    // JSON round trip: integers stay integers, floats floats, arrays arrays, keys sorted
+    Json j = Json::parse(R"({"b": [1, 2, 3], "a": {"x": 1.5, "y": true, "s": "привет"}, "e": {}})");
+    ui::luaPushJson(L, j);
+    Json back = ui::luaToJson(L, -1);
+    CHECK(back["b"].isArray() && back["b"].items().size() == 3 && back["b"].items()[2].numberLiteral() == "3");
+    CHECK(back["a"]["x"].numberLiteral() == "1.5" && back["a"].getBool("y") && back["a"].getStr("s") == "привет");
+    CHECK(back.members().front().first == "a");
+    lua_close(L);
 }
 
 int main() {

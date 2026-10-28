@@ -2,6 +2,7 @@
 // reclaim, upkeep), construction in walk/warp/morph modes, repair, entering garrisons, casting.
 #include "RtsInternal.h"
 #include <algorithm>
+#include <map>
 
 namespace rts::game {
 using namespace detail;
@@ -53,8 +54,11 @@ void RtsModule::moveToFlow(Simulation& sim, Entity e, Vec3 goal, Fixed radius) {
     const int rc = std::clamp(int((radius / cs).floorInt()), 0, 32);
     const int fi = g.flowAcquire(goal, rc, t.pathLayer, MapGrid::clearanceFor(t.radius), sim.tick());
     if (fi < 0) { moveTo(sim, e, goal, radius); return; }
-    m->goal = goal; m->goalRadius = radius; m->stuck = Fixed{}; m->pathPos = 0;
+    // the crowd settles from the goal outward: the first followers stop at the goal point, the others when they touch
+    // one that arrived (sysFlowFields); radius stays the size of the field's goal area and the contagion limit
+    m->goal = goal; m->goalRadius = fxMin(radius, kOne); m->flowArea = radius; m->stuck = Fixed{}; m->pathPos = 0;
     m->flow = true; m->flowRadius = uint8_t(rc); m->flowStuck = 0;
+    m->flowGoalCell = g.cellOf(goal); m->flowArrived = -1; m->flowNear = 0;
     bool arrived = false;
     if (!g.flowSteer(fi, w.get<Transform>(e).pos, goal, m->path, arrived)) { m->flow = false; moveTo(sim, e, goal, radius); return; }
     if (arrived || m->path.empty()) m->path = {goal};
@@ -66,14 +70,52 @@ void RtsModule::moveToFlow(Simulation& sim, Entity e, Vec3 goal, Fixed radius) {
 // entity index). Field references (LRU) are counted here. Deterministic: ECS order, fields are pure functions.
 void RtsModule::sysFlowFields(Simulation& sim) {
     World& w = sim.world();
-    MapGrid& g = state(sim).grid;
+    GameState& gs = state(sim);
+    MapGrid& g = gs.grid;
     if (!rules_.movement.flow.enabled()) return;
     struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{g, g.clockNs ? g.clockNs() : 0};
     g.flowResetRefs();
     const uint32_t tick = sim.tick();
+    std::map<int32_t, int> settled;   // goal cell -> units that arrived there (ordered map: deterministic)
+    w.each<Mobile>([&](Entity, Mobile& m) { if (m.flowArrived >= 0) ++settled[m.flowArrived]; });
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (!m.flow || !m.moving || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
+        // followers that fell back to their own path (stuck) still settle with the crowd
+        if (m.flowGoalCell < 0 || m.flowArrived >= 0 || (u.flags & (kUnitOffMap | kUnitPossessed))) return;
+        if (!m.moving) {   // stopped on the way (end of its path near the goal): settled; far away: no longer part of it
+            if (dist2D(tr.pos, m.goal) <= m.flowArea * 2 + Fixed::fromInt(2)) { m.flowArrived = m.flowGoalCell; ++settled[m.flowGoalCell]; }
+            else m.flowGoalCell = -1;
+            return;
+        }
         const UnitType& t = rules_.types[u.type];
+        // arrival: in the goal radius, or touching a unit that already arrived at the same goal (within twice the
+        // radius): it stops, and the crowd settles from the goal outward instead of pushing into the ones in front
+        const Fixed dg = dist2D(tr.pos, m.goal);
+        bool arrive = m.goalRadius.raw > 0 && dg <= m.goalRadius;
+        // inside the compact disc of the crowd (~ the goal area) touching settles at once; farther out only a unit
+        // that can't get on (slowed down: stuck time) settles, so the crowd fills the area around the goal instead
+        // of growing a tail along the approach
+        // the settled disc grows with the units that settled: radius of k packed bodies ~ 0.53 * diameter * sqrt(k)
+        const auto it = settled.find(m.flowGoalCell);
+        const int k = it == settled.end() ? 0 : it->second;
+        const Fixed disc = (t.radius * 2 + Fixed::fromRatio(1, 10)) * Fixed::fromRatio(53, 100) * fxSqrt(Fixed::fromInt(k + 1));
+        // stuck, or circling the crowd for 20 s without finding a gap: settle wherever it touches it
+        const Fixed base = disc * 13 / 10 + Fixed::fromInt(2);
+        if (dg <= m.flowArea * 2 + Fixed::fromInt(2)) { if (m.flowNear < 65535) ++m.flowNear; } else m.flowNear = 0;
+        // nobody settled yet (the goal point itself is taken / blocked): the first unit hovering in the goal area settles
+        if (k == 0 && dg <= m.flowArea && m.flowNear > 2 * sim.tickRate()) arrive = true;
+        const bool late = m.stuck > Fixed::fromRatio(1, 2) || m.flowNear > 20 * sim.tickRate();
+        const Fixed limit = late ? fxMax(base, m.flowArea * 2 + Fixed::fromInt(2)) : base;
+        if (!arrive && m.goalRadius.raw > 0 && dg <= limit) {
+            gs.hash.query(tr.pos, t.radius + Fixed::fromInt(2), [&](Entity o) {
+                if (arrive || o == e) return;
+                auto* om = w.tryGet<Mobile>(o);
+                if (!om || om->moving || om->flowArrived != m.flowGoalCell) return;
+                const Fixed touch = t.radius + rules_.types[w.get<Unit>(o).type].radius + Fixed::fromRatio(3, 10);
+                if (dist2D(w.get<Transform>(o).pos, tr.pos) <= touch) arrive = true;
+            });
+        }
+        if (arrive) { m.moving = false; m.path.clear(); m.pathPos = 0; m.flow = false; m.flowArrived = m.flowGoalCell; ++settled[m.flowGoalCell]; return; }
+        if (!m.flow) return;
         const int fi = g.flowFind(g.cellOf(m.goal), m.flowRadius, t.pathLayer, g.flowHierFor(g.cellOf(m.goal)) ? 0 : MapGrid::clearanceFor(t.radius));
         if (fi < 0) { m.flow = false; return; }   // evicted: plain path from here
         g.flowRef(fi, tick);
@@ -108,6 +150,8 @@ void RtsModule::moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bo
     m->stuck = Fixed{};
     m->pathPos = 0;
     m->flow = false;
+    m->flowArrived = -1;
+    m->flowGoalCell = -1;
     state(sim).grid.findPath(w.get<Transform>(e).pos, goal, t.pathLayer, m->path, 40000, MapGrid::clearanceFor(t.radius), aroundAllies);
     m->moving = !m->path.empty();
 }
@@ -249,7 +293,6 @@ bool RtsModule::runGather(Simulation& sim, Entity e, Order& o) {
         o.state = 1;
     }
     if (o.state == 1) {
-        if (contactDistance(sim, e, o.target) <= Fixed::fromRatio(6, 10) && rules_.mech.workerCaps && !mechNodeHasRoom(sim, o.target, e)) { stopMoving(sim, e); return false; }   // agent-mech: waits for a free place
         const Fixed cd = contactDistance(sim, e, o.target);
         // limited nodes (one worker per patch): a worker that can't get to the patch because others stand there
         // waits close by instead of asking for a new path every tick
@@ -566,13 +609,13 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             if (!state(sim).roadsOnly && !near) moveTo(sim, e, tp, Fixed{});
             o.state = 1;
         }
-        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target);
+        const bool crewing = rules_.originals && rules_.types[w.get<Unit>(o.target).type].crewed && !w.has<Garrison>(o.target);
         if (contactDistance(sim, e, o.target) > (crewing ? Fixed::fromRatio(6, 10) : Fixed::fromRatio(2, 10))) {
             if (m && !m->moving) o.state = 0;
             return false;
         }
         // arrived: man an empty vehicle (Z), reinforce, assault or capture
-        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crew != kNoType && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
+        if (rules_.originals && rules_.types[w.get<Unit>(o.target).type].crewed && !w.has<Garrison>(o.target)) { crewEnter(sim, e, o.target); return true; }
         if (rules_.advancedEffects) { enterGarrison(sim, e, o.target); return true; }
         auto* g = w.tryGet<Garrison>(o.target);
         const uint8_t me = w.get<Owner>(e).player;

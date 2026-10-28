@@ -2,6 +2,7 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Debugger.h>
+#include <RmlUi/Lua.h>
 
 #include <cctype>
 #include <chrono>
@@ -182,6 +183,10 @@ void UiLayer::shutdown() {
     }
     impl_->renderer.shutdown();
     impl_.reset();
+}
+
+void UiLayer::attachLua(lua_State* L) {
+    if (L && context()) Rml::Lua::Initialise(L);   // RmlUi is up: the plugin initialises at once
 }
 
 Rml::Context* UiLayer::context() const { return impl_ ? impl_->context : nullptr; }

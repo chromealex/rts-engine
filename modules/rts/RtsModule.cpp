@@ -74,6 +74,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;
     g.flowMaxFields = rules_.movement.flow.maxFields;
+    g.blockedGoalNearest = rules_.movement.blockedGoalNearest;
     g.flowBudgetBytes = size_t(rules_.movement.flow.budgetMB) << 20;
     if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
@@ -225,7 +226,12 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     gs.victory = map.has("victory") ? loadVictory(map["victory"], rules_.victory) : rules_.victory;
     // a map may switch flow fields on / tune them for itself ("movement": {"flowField": {...}}): big horde maps
     if (const Json& ff = map["movement"]["flowField"]; ff.isObject()) loadFlowFieldRules(ff, rules_.movement.flow, "map movement.flowField");
-    else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
+    if (map["movement"].has("blockedGoals")) {
+        const std::string bg = map["movement"].getStr("blockedGoals");
+        if (bg != "nearest" && bg != "search") throw std::runtime_error("map movement.blockedGoals: expected 'nearest' or 'search'");
+        rules_.movement.blockedGoalNearest = bg == "nearest";
+    }
+    if (map["movement"].has("flowField") && !map["movement"]["flowField"].isObject()) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players
     const size_t np = sim.players().size();
@@ -929,6 +935,7 @@ void RtsModule::issue(Simulation& sim, Entity e, const Order& o, bool queue) {
     if (!queue) {
         ord->queue.clear();
         stopMoving(sim, e);
+        if (auto* m = w.tryGet<Mobile>(e)) { m->flowGoalCell = -1; m->flowArrived = -1; }   // leaves its flow crowd
         if (auto* c = w.tryGet<Combat>(e)) c->target = kNullEntity;
         if (auto* u = w.tryGet<Unit>(e)) u->flags &= uint8_t(~kUnitHold);
     }
@@ -984,7 +991,9 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     // attack-move of a group: spread into an arc facing the goal, flanks ahead (they wrap around the enemy)
     std::vector<std::pair<Entity, Vec3>> arc;
     // big groups to one point share a flow field (rules movement.flowField.minGroup); no arc for them
-    const bool flowGroup = rules_.movement.flow.minGroup > 0 && movers >= rules_.movement.flow.minGroup &&
+    // (agent-mech BA "flowFields": an attack-move of more than 24 forms a block of rows instead, each to its own point)
+    const bool armyBlock = rules_.mech.armyBlock && cmd.type == kCmdAttack && !w.alive(cmd.target) && movers > 24;
+    const bool flowGroup = rules_.movement.flow.minGroup > 0 && movers >= rules_.movement.flow.minGroup && !armyBlock &&
                            (cmd.type == kCmdMove || cmd.type == kCmdAttack || cmd.type == kCmdPatrol || cmd.type == kCmdSmart);
     if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3 && !flowGroup) {
         Vec3 c{};
@@ -1005,7 +1014,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             const Fixed spacing = maxR * 2 + Fixed::fromRatio(2, 5);
             const int n = int(ms.size());
             const Fixed R = fxMax(Fixed::fromInt(4), spacing * n / 2);
-            if (rules_.mech.flowFields && n > 24) mechArmyBlock(sim, ms, target, dir, perp, spacing, arc);   // agent-mech BA: big armies form a block
+            if (armyBlock) mechArmyBlock(sim, ms, target, dir, perp, spacing, arc);   // agent-mech BA: big armies form a block
             else for (int i = 0; i < n; ++i) {
                 Fixed lat = spacing * (2 * i - (n - 1)) / 2;
                 Vec3 p = target + perp * lat + dir * (lat * lat / (R * 2));
@@ -1021,6 +1030,11 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         o.point = flat(target);
         o.target = w.alive(cmd.target) ? cmd.target : kNullEntity;
         o.flow = flowGroup && !(t.layer & kLayerAir);
+        if (o.flow && rules_.movement.flow.minCells > 0) {   // short trips keep A*
+            const MapGrid& g = state(sim).grid;
+            const Vec3 p = w.get<Transform>(e).pos;
+            o.flow = std::max(std::abs(g.cellX(p.x) - g.cellX(target.x)), std::abs(g.cellY(p.z) - g.cellY(target.z))) >= rules_.movement.flow.minCells;
+        }
         switch (cmd.type) {
         case kCmdMove:
             o.type = OrderType::Move; o.target = kNullEntity; o.param = movers;

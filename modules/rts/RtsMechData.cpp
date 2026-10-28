@@ -230,8 +230,8 @@ static void loadMechStage2(Rules& r, const Json& j) {
     }
 }
 
-// stage 3: cover, suppression, arcs, turrets, ruins, crush, craters, staff, growth, autonomy, power fields, crews,
-// infection, garrison-paid upgrades, rounds
+// stage 3: cover, suppression, arcs, turrets, ruins, crush, craters, staff, growth, autonomy, power fields,
+// infection, rounds (garrison-paid upgrades: RtsOriginalsData.cpp cost.garrison)
 static void loadMechStage3(Rules& r, const Json& j) {
     MechRules& m = r.mech;
     if (const Json& cv = j["cover"]; cv.isObject()) {
@@ -278,10 +278,8 @@ static void loadMechStage3(Rules& r, const Json& j) {
         };
         perWeapon("suppress", mt.suppress);
         for (size_t wi = 0; wi < nw; ++wi) if (ws[wi].has("turret")) { mt.turretRate.resize(nw); mt.turretRate[wi] = ws[wi]["turret"].getFx("turnRate", Fixed::fromInt(180)); m.any = m.combat3 = true; }
-        perWeapon("killsCrew", mt.killsCrew);
         for (size_t wi = 0; wi < nw; ++wi) if (ws[wi].has("crater")) { mt.crater.resize(nw); mt.crater[wi] = ws[wi]["crater"].isObject() ? ws[wi]["crater"].getFx("radius", kOneFx()) : ws[wi].getFx("crater"); m.any = m.combat3 = true; }
         for (size_t wi = 0; wi < nw; ++wi) if (ws[wi].has("infect")) { mt.infect.resize(nw, 0xFFFF); mt.infect[wi] = typeRef(r, where + " weapon infect", ws[wi].getStr("infect")); m.any = m.infection = m.combat3 = true; }
-        if (!mt.killsCrew.empty()) m.combat3 = m.crews = true;
         if (tj.has("ruins")) { mt.ruins = typeRef(r, where + " ruins", tj.getStr("ruins")); m.any = m.ruinsAny = true; }
         if (const Json& cr = tj["crush"]; cr.isObject()) { mt.crushDamage = cr.getFx("damage", Fixed::fromInt(1000)); mt.crushTags = tagsOf(r, where + " crush.tags", cr["tags"]); m.any = m.combat3 = true; }
         if (const Json& st = tj["staff"]; st.isObject()) {
@@ -299,10 +297,7 @@ static void loadMechStage3(Rules& r, const Json& j) {
         if (tj.getBool("autonomous", false)) { mt.autonomous = true; m.any = m.autonomy = true; }
         if (tj.has("powerField")) { mt.powerField = tj.getFx("powerField"); m.any = m.power = true; }
         if (tj.getBool("needsPower", false)) { mt.needsPower = true; m.any = m.power = true; }
-        if (const Json& cw = tj["crew"]; cw.isObject() || cw.boolean()) { mt.crew = true; mt.crewTags = tagsOf(r, where + " crew.accepts", cw["accepts"]); m.any = m.crews = true; }
         if (const Json& inf = tj["infectable"]; inf.isObject()) { mt.infectSpawn = typeRef(r, where + " infectable.spawns", inf.getStr("spawns")); mt.infectCount = int(inf.getInt("count", 1)); m.any = m.infection = true; }
-        mt.upgradeGarrison = int(tj.getInt("upgradeGarrison", 0));
-        if (mt.upgradeGarrison > 0) m.any = true;
     }
 }
 
@@ -324,60 +319,10 @@ void loadMechRules(Rules& r, const Json& j) {
         if (m.vet.xp.empty()) fail("veterancy.xp", "needs at least one rank");
         m.any = m.veterancy = true;
     }
-    // ---- combat models
-    auto classIndex = [&](const std::string& name) -> uint16_t {
-        for (size_t i = 0; i < m.armorClasses.size(); ++i) if (m.armorClasses[i] == name) return uint16_t(i);
-        if (m.armorClasses.size() >= 64) fail("armor classes", "at most 64");
-        m.armorClasses.push_back(name);
-        return uint16_t(m.armorClasses.size() - 1);
-    };
-    if (const Json& am = j["armorModel"]; !am.isNull()) {
-        const std::string type = am.isString() ? am.str() : am.getStr("type", "subtract");
-        if (type == "subtract") m.armorModel = ArmorModel::Subtract;
-        else if (type == "percent") m.armorModel = ArmorModel::Percent;
-        else if (type == "classes") m.armorModel = ArmorModel::Classes;
-        else fail("armorModel", "expected subtract, percent or classes, got '" + type + "'");
-        m.minDamageFraction = am.getFx("minFraction", m.armorModel == ArmorModel::Classes ? Fixed{} : m.minDamageFraction);
-        m.minDamage = am.getFx("min", m.armorModel == ArmorModel::Classes ? Fixed::fromInt(1) : Fixed{});
-        m.percentFactor = am.getFx("factor", m.percentFactor);
-        for (auto& b : am["base"].items()) classIndex(b.str());
-        m.baseClasses = int(m.armorClasses.size());
-        if (m.armorModel == ArmorModel::Classes && m.baseClasses == 0) fail("armorModel.base", "the classes model needs base classes, e.g. [\"melee\", \"pierce\"]");
-        m.any = true;
-    }
-    for (auto& rs : j["upkeepResources"].items()) {
-        int ri = r.findResource(rs.str());
-        if (ri < 0) fail("upkeepResources", "unknown resource '" + rs.str() + "'");
-        m.upkeepMask |= 1u << ri;
-    }
     size_t ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
         UnitType& t = r.types[ti++];
         const std::string where = "type '" + id + "'";
-        if (m.armorModel == ArmorModel::Classes) {
-            for (auto& [cls, v] : tj["armors"].members()) {
-                uint16_t ci = classIndex(cls);
-                if (t.mech.armors.size() <= ci) t.mech.armors.resize(size_t(ci) + 1);
-                t.mech.armors[ci] = v.fx();
-                t.mech.armorClassMask |= uint64_t(1) << ci;
-            }
-            const Json& ws = tj["weapons"];
-            t.mech.attacks.resize(ws.size());
-            for (size_t wi = 0; wi < ws.size(); ++wi)
-                for (auto& [cls, v] : ws[wi]["attacks"].members()) t.mech.attacks[wi].push_back({classIndex(cls), v.fx()});
-        }
-        if (const Json& sh = tj["shields"]; sh.isObject()) {
-            t.mech.shieldMax = sh.getFx("max");
-            if (t.mech.shieldMax.raw <= 0) fail(where + " shields.max", "must be > 0");
-            t.mech.shieldRegen = sh.getFx("regen", Fixed::fromInt(2));
-            t.mech.shieldDelay = sh.getFx("delay", t.mech.shieldDelay);
-            t.mech.shieldArmor = sh.getFx("armor");
-            m.any = m.shields = true;
-        }
-        if (const Json& rn = tj["resourceNode"]; rn.isObject() && rn.has("maxWorkers")) {
-            t.mech.maxWorkers = int(rn.getInt("maxWorkers", 0));
-            if (t.mech.maxWorkers > 0) m.any = m.workerCaps = true;
-        }
         MechType& mt = t.mech;
         if (tj.has("stance")) {
             mt.stance = stanceOf(where + " stance", tj.getStr("stance"));
