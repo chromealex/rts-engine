@@ -112,6 +112,10 @@ public:
     // Optional painted material layer per cell (map key "terrainMaterial": rows of digits 0..3, '.' =
     // by cell kind; see docs/game-format.md). Takes effect at the next buildTerrain().
     void setTerrainMaterial(const Json& rows, int w, int h) { terrain_.setMaterialLayer(parseMaterialRows(rows, w, h)); }
+    // Visual detail heightmap of the map (terrain.detail, docs/terrain.md; files read with the view's
+    // reader). Without one, terrain.style "smooth" synthesises the detail. Takes effect at buildTerrain().
+    void setTerrainDetail(const Json& map);
+    void setTerrainDetail(const terrain::DetailSurface* d, const std::vector<uint8_t>* splat) { terrain_.setDetail(d, splat); }
     const TerrainRenderer& terrainRenderer() const { return terrain_; }
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid);
     // ImGui: bars, counts. ox/oy: top-left of the view on screen; drawList: ImDrawList* (default: background list)

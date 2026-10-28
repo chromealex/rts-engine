@@ -16,6 +16,7 @@
     }
   ],
   "terrain": {
+    "style": "smooth",   // sub-cell detail (docs/terrain.md "Detail surface")
     // terrain materials (docs/game-format.md "Terrain materials"); textures: tools/terrain/make_textures.py (CC0)
     "layers": [
       {"id": "snow",  "texture": "textures/terrain/snow_repeat.png",  "normal": "textures/terrain/snow_n_repeat.png",  "scale": 6},
