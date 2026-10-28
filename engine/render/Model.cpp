@@ -126,6 +126,16 @@ std::unique_ptr<Model> loadModel(const std::string& path, const FileReader& read
 }
 
 bool decodeImage(const std::string& bytes, Image& out) {
+    if (isKtx2(bytes)) {
+        auto ci = std::make_shared<CompressedImage>();
+        std::string err;
+        std::vector<uint8_t> rgba;
+        if (!parseKtx2(bytes, *ci, err) || !decodeBlocks(*ci, 0, rgba)) return false;
+        out.width = ci->width; out.height = ci->height;
+        out.rgba = std::move(rgba);
+        out.compressed = std::move(ci);
+        return true;
+    }
     int w = 0, h = 0, n = 0;
     stbi_uc* px = stbi_load_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()), int(bytes.size()), &w, &h, &n, 4);
     if (!px) return false;
