@@ -4844,6 +4844,10 @@ TEST(lighting_day_night_cycle) {
     CHECK(n < 0.01f);
     render::Lighting dusk = sky(R"({"time": 0.71})", 0, &n);
     CHECK(dusk.sunColor.z < base.sunColor.z - 0.1f);            // warm evening sun
+    // the simulation's day phase (mechanic E) drives the sky even without a lighting block
+    { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 0, 0.0f); CHECK(L.night() > 0.95f); }
+    { game::RtsLights L; L.init(rules); L.configure(Json::parse(R"({"time": 0.0})"), Json{}, Json{});
+      render::Lighting l = base; L.updateSky(l, 0, 0.5f); CHECK(L.night() < 0.01f); }   // and wins over the block's clock
     // no block: the renderer's lighting is left alone
     { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 1234); CHECK(l.sunIntensity == base.sunIntensity && L.night() == 0); }
 }
@@ -6348,7 +6352,6 @@ TEST(mcp_install_patches_configs_as_text) {
     CHECK(t == "[1, 2]");
 }
 #endif
-}
 
 
 // ---------------------------------------------------------------------------------------------
@@ -8497,38 +8500,7 @@ TEST(pack_file_copy_into_existing) {
 }
 
 // ---- agent-mech-tools: JsonAccessLog (rules_lint / rules_schema) and kEvTriggerFired (scenario_run trigger log)
-TEST(tools_json_access_log) {
-    Json j = Json::parse(R"({"types": {"a": {"health": {"max": 5}, "helth": 1}}, "extra": 2})");
-    JsonAccessLog log;
-    Json::setAccessLog(&log);
-    for (auto& [id, t] : j["types"].members()) { (void)id; t["health"].getFx("max"); t.has("move"); }
-    Json::setAccessLog(nullptr);
-    const Json* a = &j["types"]["a"];
-    auto asked = [&](const Json* o, const char* k) {
-        return std::any_of(log.keys.begin(), log.keys.end(), [&](auto& e) { return e.first == o && e.second == k; });
-    };
-    CHECK(asked(a, "health") && asked(a, "move") && !asked(a, "helth"));   // missing keys are recorded too (the loader asked)
-    CHECK(asked(&j, "types") && !asked(&j, "extra"));
-    CHECK(std::find(log.iterated.begin(), log.iterated.end(), &j["types"]) != log.iterated.end());
-    size_t n = log.keys.size();
-    j["extra"].integer();   // off again: nothing recorded
-    CHECK(log.keys.size() == n);
-}
 
-TEST(tools_trigger_fired_event) {
-    const char* rules = R"({"resources": {"gold": {"start": 0}}, "types": {"hq": {"structure": {"footprint": [2, 2]}}},
-      "triggers": [{"id": "salary", "event": {"type": "every", "seconds": 1}, "forEachPlayer": true, "actions": [{"type": "give", "resource": "gold", "amount": 1}]}]})";
-    auto sim = makeSimJson(rules, flatMap(16, 8, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[12,4]}])"));
-    int fired[3] = {0, 0, 0};
-    for (int i = 0; i < 20 * 3 + 1; ++i) {
-        sim->step();
-        for (auto& ev : sim->events())
-            if (ev.type == game::kEvTriggerFired && ev.value == 0 && ev.player <= 2) fired[ev.player]++;
-    }
-    CHECK(fired[1] == 3 && fired[2] == 3 && fired[0] == 0);
-    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(3));
-}
-}
 
 #include "tests_mech.inc"   // agent-mech
 
