@@ -157,6 +157,7 @@ void main() {
     float ndl = max(dot(n, L), 0.0);
     float ndv = max(dot(n, V), 1e-4);
     float sh = (ndl > 0.0 && u_draw.x > 0.5) ? shadowAt(v_wpos, normalize(v_nrm)) : 1.0;
+    sh *= cloudShade(v_wpos);
     vec3 sun = u_sunColor.rgb * u_sunColor.rgb * u_sunDir.w;
     vec3 sky = u_skyColor.rgb * u_skyColor.rgb, ground = u_groundColor.rgb * u_groundColor.rgb;
     vec3 amb = mix(ground, sky, n.y * 0.5 + 0.5);
@@ -349,6 +350,7 @@ fragment float4 fs_main(VOut in [[stage_in]], bool frontFacing [[front_facing]],
     float ndl = max(dot(n, L), 0.0);
     float ndv = max(dot(n, V), 1e-4);
     float sh = (ndl > 0.0 && u.draw.x > 0.5) ? shadowAt(f, in.wpos, normalize(in.nrm), in.pos.xy, tex0, s0) : 1.0;
+    sh *= cloudShade(lu, in.wpos);
     float3 sun = f.sunColor.rgb * f.sunColor.rgb * f.sunDir.w;
     float3 sky = f.skyColor.rgb * f.skyColor.rgb, ground = f.groundColor.rgb * f.groundColor.rgb;
     float3 amb = mix(ground, sky, n.y * 0.5 + 0.5);

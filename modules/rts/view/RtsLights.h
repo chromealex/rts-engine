@@ -14,7 +14,10 @@
 // Day/night: "lighting" block in game.json, overridden per map by the map's "lighting" block:
 //   { "time": 0.5,        time of day at the start, 0..1 (0 midnight, 0.25 dawn, 0.5 noon, 0.75 dusk)
 //     "dayLength": 600,   game seconds per full day (0 = the time of day stays)
-//     "nightLevel": 1 }   how dark the night gets, 0..1
+//     "nightLevel": 1,    how dark the night gets, 0..1
+//     "clouds": 0.5,      cloud shadow coverage 0..1 (0 = clear sky)
+//     "cloudStrength": 0.45, "cloudScale": 1, "wind": [1.2, 0.5]   (world units / s)
+//     "storm": 0 }        0..1: overcast + lightning flashes (deterministic in game time)
 // Without the block the scene keeps the renderer's default (noon) lighting.
 // Testing: RTS_TIME_OF_DAY=0..1 sets the start time, RTS_NIGHT=0..1 forces a fixed night amount.
 // At night emissive materials glow brighter (Renderer3D::lights.setNightGlow).
@@ -38,6 +41,7 @@ public:
     void configure(const Json& gameLighting, const Json& mapLighting);
     void setNight(float n) { forcedNight_ = n; }          // < 0: follow the cycle
     float night() const { return night_; }
+    float lightning() const { return lightning_; }   // current lightning flash 0..1
     float timeOfDay() const { return timeOfDay_; }
     // Adds this frame's lights to r.lights (call between beginScene and render).
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view);
@@ -64,6 +68,8 @@ private:
     // day/night
     bool cycle_ = false;                 // a lighting block or a test override is present
     float startTime_ = 0.5f, dayLength_ = 0, nightLevel_ = 1, forcedNight_ = -1;
+    float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
+    float lightning_ = 0;
     float night_ = 0, dusk_ = 0, timeOfDay_ = 0.5f;
     bool haveBase_ = false, touched_ = false;
     render::Lighting base_;

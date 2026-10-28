@@ -4,6 +4,7 @@
 // Light block (slot U2 in the lit shader, U4 in the model shader):
 //   vec4 map  (origin.xz, 1/extent, enabled)
 //   vec4 info (x per-pixel count, y map range, z flipY, w night emissive boost)
+//   vec4 cloud (noise offset.xz, scale, coverage); vec4 sky (x cloud shadow strength)
 //   vec4 pos[8] (xyz, radius); vec4 col[8] (rgb * intensity)
 // Light map texture: tex1 in the lit shader, tex7 in the model shader (RGBA8, light / range).
 #pragma once
@@ -12,9 +13,16 @@ namespace rts::render::shaders {
 
 // GLSL: block / sampler names are parameters because each shader has its own slots.
 #define RTS_GLSL_LIGHTS_AT(BLOCK, TEX) \
-    "layout(std140) uniform " BLOCK " { vec4 l_map; vec4 l_info; vec4 l_pos[8]; vec4 l_col[8]; };\n" \
+    "layout(std140) uniform " BLOCK " { vec4 l_map; vec4 l_info; vec4 l_cloud; vec4 l_sky; vec4 l_pos[8]; vec4 l_col[8]; };\n" \
     "uniform mediump sampler2D " TEX ";\n" \
     "float nightGlow() { return l_info.w; }\n" \
+    "float cloudShade(vec3 p) { /* drifting cloud shadows on the sun: a few sines, no texture */\n" \
+    "    if (l_sky.x <= 0.0) return 1.0;\n" \
+    "    vec2 q = p.xz * l_cloud.z + l_cloud.xy;\n" \
+    "    float v = sin(q.x) * sin(q.y * 1.31) + 0.6 * sin(q.x * 2.13 + q.y * 1.71 + 1.7) * sin(q.y * 2.37 - q.x * 0.93);\n" \
+    "    v = v * 0.4 + 0.5;\n" \
+    "    return 1.0 - smoothstep(1.0 - l_cloud.w, 1.25 - l_cloud.w, v) * l_sky.x;\n" \
+    "}\n" \
     "vec3 dynamicLight(vec3 wpos, vec3 n, vec3 V, float specK) {\n" \
     "    vec3 c = vec3(0.0);\n" \
     "    if (l_map.w > 0.5) { /* ground-level light: weaker than the 3D path so the tiers match */\n" \
@@ -44,7 +52,14 @@ namespace rts::render::shaders {
 // MSL: the block and the texture are function arguments (buffer / texture indices are chosen in
 // each fragment function's signature).
 #define RTS_MSL_LIGHTS \
-    "struct LightU { float4 map; float4 info; float4 pos[8]; float4 col[8]; };\n" \
+    "struct LightU { float4 map; float4 info; float4 cloud; float4 sky; float4 pos[8]; float4 col[8]; };\n" \
+    "static float cloudShade(constant LightU& l, float3 p) {\n" \
+    "    if (l.sky.x <= 0.0) return 1.0;\n" \
+    "    float2 q = p.xz * l.cloud.z + l.cloud.xy;\n" \
+    "    float v = sin(q.x) * sin(q.y * 1.31) + 0.6 * sin(q.x * 2.13 + q.y * 1.71 + 1.7) * sin(q.y * 2.37 - q.x * 0.93);\n" \
+    "    v = v * 0.4 + 0.5;\n" \
+    "    return 1.0 - smoothstep(1.0 - l.cloud.w, 1.25 - l.cloud.w, v) * l.sky.x;\n" \
+    "}\n" \
     "static float3 dynamicLight(constant LightU& l, texture2d<float> lm, sampler ls, float3 wpos, float3 n, float3 V, float specK) {\n" \
     "    float3 c = float3(0.0);\n" \
     "    if (l.map.w > 0.5) {\n" \

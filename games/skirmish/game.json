@@ -11,7 +11,7 @@
   "maps": [
     { "file": "maps/valley.json", "title": "River Valley (1v1)" }
   ],
-  "lighting": { "time": 0.35, "dayLength": 480 },
+  "lighting": { "time": 0.35, "dayLength": 480, "clouds": 0.55 },
   "orientation": "landscape",
   "icon": "icon.png"
 }

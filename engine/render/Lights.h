@@ -35,6 +35,8 @@ struct PointLight {
 struct LightUniforms {
     float map[4];                // origin.x, origin.z, 1 / extent, enabled
     float info[4];               // x per-pixel light count, y map range, z uv flipY, w night glow
+    float cloud[4];              // noise offset.xz, noise scale, coverage 0..1
+    float sky[4];                // x cloud shadow strength 0..1
     float pos[8][4];             // xyz, radius
     float col[8][4];             // rgb * intensity, unused
 };
@@ -52,6 +54,8 @@ public:
     static LightQuality defaultQualityFor(const gfx::Device& dev, bool mobile);
     void setNightGlow(float g) { nightGlow_ = g; }   // extra emissive multiplier (0 by day)
     float nightGlow() const { return nightGlow_; }
+    // Cloud shadows on the sun: coverage 0..1, strength 0..1 (0 = off), drift offset in world units.
+    void setClouds(float coverage, float strength, float scale, float offsetX, float offsetZ);
 
     void begin(const RTSCamera& cam, float aspect);  // Renderer3D::beginScene
     void add(const PointLight& l);
