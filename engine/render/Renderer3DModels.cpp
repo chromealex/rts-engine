@@ -5,6 +5,7 @@
 #include "Animation.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -12,12 +13,13 @@
 namespace rts::render {
 
 namespace {
-struct ModelDrawUniforms { float model[16]; float normalMat[16]; float tint[4]; float team[4]; float draw[4]; };
 struct MaterialUniforms { float base[4]; float emissive[4]; float pbr[4]; float misc[4]; float uv0[4]; float uv1[4]; };
 constexpr size_t kJointFloats = size_t(kMaxPaletteJoints) * 12; // 3 rows of vec4 per joint
 static_assert(kJointFloats * 4 <= 4096, "joint palette must fit a 4 KB uniform block");
 
-constexpr uint32_t kKeySkinned = 1, kKeyNormalMap = 2, kKeyAlphaMask = 4, kKeyShadow = 8;
+constexpr uint32_t kKeySkinned = 1, kKeyNormalMap = 2, kKeyAlphaMask = 4, kKeyShadow = 8, kKeyBaked = 64, kKeyMorph = 128,
+                   kKeyInstanced = 256, kKeyOutline = 512;
+constexpr int kMaxInstances = 32; // 128-byte instance records in a 4 KB uniform block
 
 // AABB (in `xf` space) against a clip-space frustum: false only when all corners are outside one plane.
 bool boxVisible(const mat4& clip, float3 mn, float3 mx) {
@@ -74,13 +76,16 @@ void Renderer3D::setMaterialQuality(MaterialQuality q) {
     modelPipes_.clear(); modelShaders_.clear();
 }
 
-gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, bool shadow) {
-    const bool skinned = it.joints >= 0;
-    const bool mask = it.mat->alpha == AlphaMode::Mask;
-    const bool normalMap = !shadow && it.mat->normalTex >= 0 && matQuality_ != MaterialQuality::Low;
-    const bool blend = !shadow && (it.mat->alpha == AlphaMode::Blend || it.tint.w < 0.99f);
-    const bool twoSided = it.mat->doubleSided;
-    const uint32_t shaderKey = (skinned ? kKeySkinned : 0u) | (normalMap ? kKeyNormalMap : 0u) | (mask ? kKeyAlphaMask : 0u) | (shadow ? kKeyShadow : 0u);
+gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, int phase, bool instanced) {
+    const bool shadow = phase == 0, outline = phase == 3;
+    const bool skinned = it.joints >= 0, baked = it.baked, morph = it.morph >= 0;
+    const bool mask = !outline && it.mat->alpha == AlphaMode::Mask;
+    const bool normalMap = phase != 0 && !outline && it.mat->normalTex >= 0 && matQuality_ != MaterialQuality::Low;
+    const bool blend = outline || (!shadow && (it.mat->alpha == AlphaMode::Blend || it.tint.w < 0.99f));
+    const bool twoSided = !outline && it.mat->doubleSided;
+    const uint32_t shaderKey = (skinned ? kKeySkinned : 0u) | (normalMap ? kKeyNormalMap : 0u) | (mask ? kKeyAlphaMask : 0u) |
+                               (shadow ? kKeyShadow : 0u) | (baked ? kKeyBaked : 0u) | (morph ? kKeyMorph : 0u) |
+                               (instanced ? kKeyInstanced : 0u) | (outline ? kKeyOutline : 0u);
     const uint32_t pipeKey = shaderKey | (blend ? 16u : 0u) | (twoSided ? 32u : 0u);
     for (auto& [k, p] : modelPipes_) if (k == pipeKey) return p;
 
@@ -88,21 +93,26 @@ gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, bool shadow) 
     for (auto& [k, s] : modelShaders_) if (k == shaderKey) entry = &s;
     if (!entry) {
         std::string defs;
+        defs += "#define RTS_INST " + std::to_string(instanced ? kMaxInstances : 1) + "\n";
         if (skinned) defs += "#define SKINNED 1\n";
+        if (baked) defs += "#define BAKED 1\n";
+        if (morph) defs += "#define MORPH 1\n";
         if (normalMap) defs += "#define NORMALMAP 1\n";
         if (mask) defs += "#define ALPHAMASK 1\n";
+        if (outline) defs += "#define OUTLINE 1\n";
         defs += "#define RTS_Q " + std::to_string(int(matQuality_)) + "\n";
         const std::string vs = defs + (shadow ? shaders::kModelShadowVS : shaders::kModelVS);
         const std::string fs = defs + (shadow ? shaders::kModelShadowFS : shaders::kModelFS);
         const std::string msl = defs + (shadow ? shaders::kModelShadowMSL : shaders::kModelMSL);
         gfx::ShaderDesc sd;
         sd.glslVertex = vs.c_str(); sd.glslFragment = fs.c_str(); sd.msl = msl.c_str();
-        sd.uniformSlots = 4; sd.textureSlots = 7; sd.label = shadow ? "model shadow" : "model";
+        sd.uniformSlots = 5; sd.textureSlots = 9; sd.label = shadow ? "model shadow" : "model";
         ShaderEntry e;
         e.shader = dev_->createShader(sd);
         if (!e.shader.valid()) {
             e.failed = true;
             modelError_ = "model shader (" + defs + "): " + dev_->lastError();
+            std::fprintf(stderr, "%s\n", modelError_.c_str());
         }
         modelShaders_.push_back({shaderKey, e});
         entry = &modelShaders_.back().second;
@@ -121,7 +131,7 @@ gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, bool shadow) 
         pd.attrCount = 7;
         pd.stride = sizeof(ModelVertex);
         pd.indexType = gfx::IndexType::UInt32;
-        pd.cull = twoSided ? gfx::CullMode::None : gfx::CullMode::Back;
+        pd.cull = outline ? gfx::CullMode::Front : twoSided ? gfx::CullMode::None : gfx::CullMode::Back;
         if (shadow) {
             pd.depthOnly = true;
             pd.depthBiasConstant = 2.0f; pd.depthBiasSlope = 2.5f;
@@ -129,7 +139,7 @@ gfx::PipelineHandle Renderer3D::modelPipeline(const ModelItem& it, bool shadow) 
             pd.blend = gfx::BlendMode::Alpha;
             pd.depthWrite = false;
         }
-        pd.label = shadow ? "model shadow" : "model";
+        pd.label = shadow ? "model shadow" : outline ? "model outline" : "model";
         ph = dev_->createPipeline(pd);
         if (!ph.valid()) modelError_ = "model pipeline: " + dev_->lastError();
     }
@@ -143,11 +153,18 @@ void Renderer3D::drawModel(const ModelDraw& d) {
     // whole-model culling with the bind-pose bounds (padded: animation moves limbs outside them)
     float3 c = (m->boundsMin + m->boundsMax) * 0.5f, e = (m->boundsMax - m->boundsMin) * 0.75f + float3{0.1f, 0.1f, 0.1f};
     const bool inView = boxVisible(viewProj_ * d.world, c - e, c + e);
-    const bool inShadow = quality_ != ShadowQuality::Off && !(d.flags & kDrawNoCastShadow) && d.tint.w >= 0.99f &&
+    const bool inShadow = quality_ != ShadowQuality::Off && !(d.flags & kDrawNoCastShadow) && d.tint.w >= 0.99f && d.dissolve <= 0 &&
                           boxVisible(lightViewProj_ * d.world, c - e, c + e);
     if (!inView && !inShadow) return;
     const std::vector<mat4>& world = d.nodeWorld && d.nodeWorld->size() == m->nodes.size() ? *d.nodeWorld : m->bindWorld;
     const std::vector<Material>& mats = d.materials && d.materials->size() == m->materials.size() ? *d.materials : m->materials;
+    const bool usePose = d.pose && d.pose->size() == m->nodes.size();
+    float4 anim{0, 0, 0, 0};
+    const bool canBake = d.baked && m->baked.tex.valid();
+    if (canBake) {
+        const BakedSample& b = *d.baked;
+        anim = {float(bakedRow(*m, b.clipA, b.timeA, b.loopA)), float(bakedRow(*m, b.clipB, b.timeB, b.loopB)), std::clamp(b.mix, 0.0f, 1.0f), 0};
+    }
     for (int n : m->order) {
         const Node& node = m->nodes[size_t(n)];
         if (node.mesh < 0) continue;
@@ -158,9 +175,14 @@ void Renderer3D::drawModel(const ModelDraw& d) {
             ModelItem it;
             it.model = m; it.prim = &p; it.mat = &mats[size_t(std::clamp(mi, 0, int(mats.size()) - 1))];
             it.tint = d.tint; it.team = d.team; it.flash = d.flash; it.flags = d.flags;
+            it.dissolve = d.dissolve; it.outline = d.outline;
             it.inView = inView; it.inShadow = inShadow && it.mat->castShadow && it.mat->alpha != AlphaMode::Blend;
-            it.joints = -1;
-            if (node.skin >= 0 && !p.jointPalette.empty()) {
+            it.joints = -1; it.baked = false; it.anim = anim; it.morph = -1;
+            const bool skinnedPrim = node.skin >= 0 && !p.jointPalette.empty();
+            if (skinnedPrim && canBake && node.skin == m->baked.skin) {
+                it.baked = true;
+                it.world = d.world;
+            } else if (skinnedPrim) {
                 // joint matrices are in model space: the mesh node transform is ignored (glTF skinning rule)
                 paletteMatrices(*m, m->skins[size_t(node.skin)], p, world, palette_);
                 it.joints = int32_t(jointData_.size());
@@ -173,6 +195,15 @@ void Renderer3D::drawModel(const ModelDraw& d) {
             } else {
                 it.world = d.world * world[size_t(n)];
             }
+            if (p.morphTargets > 0 && m->morphTex.valid()) {
+                const float* w = usePose ? (*d.pose)[size_t(n)].w : node.weights;
+                bool any = false;
+                for (int k = 0; k < p.morphTargets; ++k) any |= w[k] != 0;
+                if (any) {
+                    it.morph = int32_t(morphData_.size());
+                    morphData_.insert(morphData_.end(), w, w + kMaxMorphTargets);
+                }
+            }
             float3 wc = it.world.transformPoint((p.boundsMin + p.boundsMax) * 0.5f);
             it.depth = length(wc - camPos_);
             modelItems_.push_back(it);
@@ -180,20 +211,31 @@ void Renderer3D::drawModel(const ModelDraw& d) {
     }
 }
 
-void Renderer3D::drawModelItem(const ModelItem& it, bool shadow, const ModelItem*& lastMat) {
-    gfx::PipelineHandle ph = modelPipeline(it, shadow);
+void Renderer3D::drawModelBatch(const uint32_t* items, uint32_t count, int phase) {
+    const ModelItem& it = modelItems_[items[0]];
+    const bool instanced = count > 1;
+    gfx::PipelineHandle ph = modelPipeline(it, phase, instanced);
     if (!ph.valid()) return;
     if (!(ph == currentPipe_)) { dev_->setPipeline(ph); currentPipe_ = ph; }
-    ModelDrawUniforms u{};
-    std::memcpy(u.model, it.world.m, sizeof u.model);
-    mat4 nm = it.world.normalMatrix();
-    std::memcpy(u.normalMat, nm.m, sizeof u.normalMat);
-    u.tint[0] = it.tint.x; u.tint[1] = it.tint.y; u.tint[2] = it.tint.z; u.tint[3] = it.tint.w;
-    u.team[0] = it.team.x; u.team[1] = it.team.y; u.team[2] = it.team.z; u.team[3] = it.flash;
-    u.draw[0] = (it.mat->receiveShadow && !(it.flags & kDrawNoReceiveShadow)) ? 1.0f : 0.0f;
-    dev_->setUniforms(0, &u, sizeof u);
+    // per-instance block (an instanced shader declares 32 entries: the block is always uploaded whole)
+    const uint32_t slots = instanced ? uint32_t(kMaxInstances) : 1u;
+    instData_.assign(size_t(slots) * 32, 0.0f);
+    for (uint32_t i = 0; i < count; ++i) {
+        const ModelItem& x = modelItems_[items[i]];
+        float* d = instData_.data() + size_t(i) * 32;
+        std::memcpy(d, x.world.m, 16 * sizeof(float));
+        d[16] = x.tint.x; d[17] = x.tint.y; d[18] = x.tint.z; d[19] = x.tint.w;
+        if (phase == 3) { d[20] = x.outline.x; d[21] = x.outline.y; d[22] = x.outline.z; d[23] = 0; }
+        else { d[20] = x.team.x; d[21] = x.team.y; d[22] = x.team.z; d[23] = x.flash; }
+        d[24] = (x.mat->receiveShadow && !(x.flags & kDrawNoReceiveShadow)) ? 1.0f : 0.0f;
+        d[25] = x.dissolve;
+        d[26] = x.outline.w;
+        d[28] = x.anim.x; d[29] = x.anim.y; d[30] = x.anim.z;
+    }
+    dev_->setUniforms(0, instData_.data(), instData_.size() * sizeof(float));
     const Material& mt = *it.mat;
-    if (!lastMat || lastMat->mat != it.mat || lastMat->model != it.model) {
+    const bool newModel = !lastItem_ || lastItem_->model != it.model;
+    if (!lastItem_ || lastItem_->mat != it.mat || newModel) {
         MaterialUniforms mu{};
         mu.base[0] = mt.baseColor.x; mu.base[1] = mt.baseColor.y; mu.base[2] = mt.baseColor.z; mu.base[3] = mt.baseColor.w;
         mu.emissive[0] = mt.emissive.x * mt.emissiveStrength; mu.emissive[1] = mt.emissive.y * mt.emissiveStrength; mu.emissive[2] = mt.emissive.z * mt.emissiveStrength;
@@ -207,19 +249,35 @@ void Renderer3D::drawModelItem(const ModelItem& it, bool shadow, const ModelItem
             return idx >= 0 && idx < int(it.model->images.size()) && it.model->images[size_t(idx)].tex.valid() ? it.model->images[size_t(idx)].tex : def;
         };
         dev_->setTexture(1, tex(mt.baseTex, white_));
-        if (!shadow) {
+        if (phase != 0) {
             dev_->setTexture(2, tex(mt.mrTex, white_));
             dev_->setTexture(3, tex(mt.normalTex, flatNormal_));
             dev_->setTexture(4, tex(mt.occlusionTex, white_));
             dev_->setTexture(5, tex(mt.emissiveTex, white_));
             dev_->setTexture(6, tex(mt.teamTex, black_));
         }
-        lastMat = &it;
+    }
+    if (newModel) {
+        dev_->setTexture(7, it.model->baked.tex.valid() ? it.model->baked.tex : white_);
+        dev_->setTexture(8, it.model->morphTex.valid() ? it.model->morphTex : white_);
     }
     if (it.joints >= 0) dev_->setUniforms(3, jointData_.data() + it.joints, kJointFloats * sizeof(float));
+    else if (it.baked && (!lastItem_ || !lastItem_->baked || lastItem_->prim != it.prim)) {
+        float pal[80] = {};
+        for (size_t j = 0; j < it.prim->jointPalette.size() && j < 80; ++j) pal[j] = float(it.prim->jointPalette[j]);
+        dev_->setUniforms(3, pal, sizeof pal);
+    }
+    if (it.morph >= 0) {
+        float mo[16] = {};
+        std::memcpy(mo, morphData_.data() + it.morph, 8 * sizeof(float));
+        mo[8] = float(it.prim->morphTexel); mo[9] = float(it.prim->firstVertex); mo[10] = float(it.prim->vertexCount); mo[11] = float(it.prim->morphTargets);
+        mo[12] = float(it.model->morphTexWidth);
+        dev_->setUniforms(4, mo, sizeof mo);
+    }
     dev_->setVertexBuffer(it.model->vb);
     dev_->setIndexBuffer(it.model->ib);
-    dev_->drawIndexed(it.prim->indexCount, it.prim->firstIndex);
+    dev_->drawIndexed(it.prim->indexCount, it.prim->firstIndex, 0, count);
+    lastItem_ = &it;
     ++drawCalls_;
 }
 
@@ -229,22 +287,37 @@ void Renderer3D::renderModels(int phase) {
     for (uint32_t i = 0; i < modelItems_.size(); ++i) {
         const ModelItem& it = modelItems_[i];
         const bool blended = it.mat->alpha == AlphaMode::Blend || it.tint.w < 0.99f;
-        if (phase == 0 ? it.inShadow : it.inView && (phase == 2) == blended) order_.push_back(i);
+        bool take = phase == 0 ? it.inShadow : phase == 3 ? it.inView && it.outline.w > 0 : it.inView && (phase == 2) == blended;
+        if (take) order_.push_back(i);
     }
     if (order_.empty()) return;
     if (phase == 2) { // back to front
         std::sort(order_.begin(), order_.end(), [&](uint32_t a, uint32_t b) { return modelItems_[a].depth > modelItems_[b].depth; });
-    } else {          // group by state: skinning, material
+    } else {          // group by state so identical primitives end up next to each other (instancing)
         std::sort(order_.begin(), order_.end(), [&](uint32_t a, uint32_t b) {
             const ModelItem &x = modelItems_[a], &y = modelItems_[b];
             if ((x.joints >= 0) != (y.joints >= 0)) return x.joints < y.joints;
+            if (x.baked != y.baked) return x.baked < y.baked;
             if (x.mat != y.mat) return x.mat < y.mat;
+            if (x.prim != y.prim) return x.prim < y.prim;
             return a < b;
         });
     }
     currentPipe_ = {};
-    const ModelItem* lastMat = nullptr;
-    for (uint32_t i : order_) drawModelItem(modelItems_[i], phase == 0, lastMat);
+    lastItem_ = nullptr;
+    auto batchable = [&](const ModelItem& x) { return x.joints < 0 && x.morph < 0; };
+    auto sameBatch = [&](const ModelItem& x, const ModelItem& y) {
+        const bool bx = x.mat->alpha == AlphaMode::Blend || x.tint.w < 0.99f, by = y.mat->alpha == AlphaMode::Blend || y.tint.w < 0.99f;
+        return x.prim == y.prim && x.mat == y.mat && x.baked == y.baked && bx == by;
+    };
+    for (size_t i = 0; i < order_.size();) {
+        size_t j = i + 1;
+        if (batchable(modelItems_[order_[i]]))
+            while (j < order_.size() && j - i < size_t(kMaxInstances) && batchable(modelItems_[order_[j]]) &&
+                   sameBatch(modelItems_[order_[i]], modelItems_[order_[j]])) ++j;
+        drawModelBatch(order_.data() + i, uint32_t(j - i), phase);
+        i = j;
+    }
 }
 
 } // namespace rts::render

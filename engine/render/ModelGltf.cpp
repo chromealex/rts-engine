@@ -5,7 +5,8 @@
 // TRS animations (step / linear / cubic spline), PBR metallic-roughness materials, normal /
 // occlusion / emissive maps, alpha modes, double sided, KHR_texture_transform,
 // KHR_materials_unlit, KHR_materials_emissive_strength, KHR_materials_pbrSpecularGlossiness
-// (converted), KHR_materials_variants. Not supported (warning, skipped): morph targets, TEXCOORD_1,
+// (converted), KHR_materials_variants, morph targets (position / normal deltas, up to 8 per primitive,
+// animated weights). Not supported (warning, skipped): TEXCOORD_1,
 // cameras, lights. Compressed geometry / textures (Draco, meshopt, KTX2, WebP) are an error when
 // required and skipped otherwise.
 #include "Model.h"
@@ -381,7 +382,11 @@ private:
                 if (ci < 0 || ci >= int(nodes.size())) fail("node " + std::to_string(i) + ": child out of range");
                 parentOf_[ci] = int(i);
             }
-            if (j.has("weights") || j.has("camera") || j["extensions"].has("KHR_lights_punctual")) warn("node '" + n.name + "': morph weights, cameras and lights are ignored");
+            if (const Json& w = j["weights"]; w.size() > 0) {
+                for (size_t k = 0; k < std::min<size_t>(w.size(), kMaxMorphTargets); ++k) n.weights[k] = float(num(w[k], 0));
+                nodeWeights_.insert(int(i));
+            }
+            if (j.has("camera") || j["extensions"].has("KHR_lights_punctual")) warn("node '" + n.name + "': cameras and lights are ignored");
         }
         for (auto& [c, p] : parentOf_) model_->nodes[size_t(c)].parent = p;
         // only the default scene is visible: hide meshes of nodes outside it
@@ -435,9 +440,17 @@ private:
             md.name = jm.getStr("name", "mesh" + std::to_string(mi));
             const auto& prims = jm["primitives"].items();
             for (size_t pi = 0; pi < prims.size(); ++pi) loadPrimitive(prims[pi], md, skinOfMesh.count(int(mi)) > 0);
+            for (const auto& w : jm["weights"].items()) md.weights.push_back(float(num(w, 0)));
             model_->meshes.push_back(std::move(md));
         }
-        for (auto& n : model_->nodes) if (n.mesh >= int(model_->meshes.size())) n.mesh = -1;
+        for (size_t i = 0; i < model_->nodes.size(); ++i) {
+            Node& n = model_->nodes[i];
+            if (n.mesh >= int(model_->meshes.size())) n.mesh = -1;
+            if (n.mesh >= 0 && !nodeWeights_.count(int(i))) {
+                const auto& w = model_->meshes[size_t(n.mesh)].weights;
+                for (size_t k = 0; k < std::min<size_t>(w.size(), kMaxMorphTargets); ++k) n.weights[k] = w[k];
+            }
+        }
     }
 
     void loadPrimitive(const Json& p, MeshDef& md, bool skinned) {
@@ -446,7 +459,6 @@ private:
         if (mode < 4) { warn(where + ": points / lines primitives are skipped"); return; }
         if (p["extensions"].has("KHR_draco_mesh_compression") || p["extensions"].has("EXT_meshopt_compression"))
             fail(where + ": compressed geometry (Draco / meshopt) is not supported, export uncompressed");
-        if (p.has("targets")) warn(where + ": morph targets are ignored");
         const Json& at = p["attributes"];
         if (!at.has("POSITION")) fail(where + ": primitive without POSITION");
         if (at.has("TEXCOORD_1")) warn(where + ": TEXCOORD_1 is ignored");
@@ -484,6 +496,25 @@ private:
             if (c < n) fail(where + ": WEIGHTS_0 shorter than POSITION");
             if (at.has("JOINTS_1")) warn(where + ": more than 4 joint influences per vertex; extra influences are ignored");
         }
+        // morph targets: per original vertex [target][vertex] position xyz, normal xyz
+        std::vector<float> morph;
+        int nt = 0;
+        if (const Json& tg = p["targets"]; tg.size() > 0) {
+            nt = int(std::min<size_t>(tg.size(), kMaxMorphTargets));
+            if (tg.size() > size_t(kMaxMorphTargets)) warn(where + ": only the first 8 morph targets are used");
+            morph.assign(size_t(nt) * n * 6, 0.0f);
+            for (int t = 0; t < nt; ++t) {
+                const Json& tj = tg[size_t(t)];
+                if (tj.has("POSITION")) {
+                    auto v = accessorExpect(inum(tj["POSITION"]), 3, c, "morph POSITION");
+                    for (size_t i = 0; i < std::min(n, c); ++i) for (int k = 0; k < 3; ++k) morph[(size_t(t) * n + i) * 6 + size_t(k)] = float(v[i * 3 + size_t(k)]);
+                }
+                if (tj.has("NORMAL")) {
+                    auto v = accessorExpect(inum(tj["NORMAL"]), 3, c, "morph NORMAL");
+                    for (size_t i = 0; i < std::min(n, c); ++i) for (int k = 0; k < 3; ++k) morph[(size_t(t) * n + i) * 6 + 3 + size_t(k)] = float(v[i * 3 + size_t(k)]);
+                }
+            }
+        }
         // indices, converted to a triangle list
         std::vector<uint32_t> idx;
         if (p.has("indices")) {
@@ -508,7 +539,19 @@ private:
             idx.swap(list);
         }
         idx.resize(idx.size() / 3 * 3);
-        if (!hasNormals) flatNormals(verts, idx);
+        if (!hasNormals) {
+            const std::vector<uint32_t> before = idx;
+            flatNormals(verts, idx);
+            if (nt) { // vertices were unshared in triangle order: follow them with the deltas
+                std::vector<float> m2(size_t(nt) * before.size() * 6);
+                for (int t = 0; t < nt; ++t)
+                    for (size_t k = 0; k < before.size(); ++k)
+                        for (int e = 0; e < 6; ++e) m2[(size_t(t) * before.size() + k) * 6 + size_t(e)] = morph[(size_t(t) * n + before[k]) * 6 + size_t(e)];
+                morph.swap(m2);
+            }
+        }
+        morph_ = nt ? &morph : nullptr;
+        morphTargets_ = nt;
         Primitive prim;
         prim.material = std::clamp(inum(p["material"], -1), -1, int(model_->materials.size()) - 1);
         if (prim.material < 0) prim.material = defaultMaterial();
@@ -555,6 +598,7 @@ private:
                      const std::vector<double>* joints, const std::vector<double>* weights, bool needTangents) {
         Model& m = *model_;
         std::vector<int32_t> remap(verts.size(), -1);
+        std::vector<uint32_t> orig;   // local vertex -> source vertex
         std::map<int, int> palette;
         const uint32_t base = uint32_t(m.vertices.size());
         prim.firstIndex = uint32_t(m.indices.size());
@@ -562,6 +606,7 @@ private:
         for (uint32_t i : idx) {
             if (remap[i] < 0) {
                 remap[i] = int32_t(m.vertices.size() - base);
+                orig.push_back(i);
                 ModelVertex v = verts[i];
                 if (joints) {
                     float w[4], sum = 0;
@@ -586,6 +631,17 @@ private:
             if (prim.jointPalette.empty()) prim.jointPalette.push_back(0);
         }
         if (needTangents) generateTangents(m.vertices, m.indices, prim.firstIndex, prim.indexCount);
+        prim.firstVertex = base;
+        prim.vertexCount = uint32_t(orig.size());
+        if (morph_ && morphTargets_ > 0) {
+            const size_t src = verts.size(), cnt = orig.size();
+            prim.morphTargets = morphTargets_;
+            prim.morphDeltas.resize(size_t(morphTargets_) * cnt * 6);
+            for (int t = 0; t < morphTargets_; ++t)
+                for (size_t k = 0; k < cnt; ++k)
+                    for (int e = 0; e < 6; ++e)
+                        prim.morphDeltas[(size_t(t) * cnt + k) * 6 + size_t(e)] = (*morph_)[(size_t(t) * src + orig[k]) * 6 + size_t(e)];
+        }
         md.primitives.push_back(std::move(prim));
     }
 
@@ -623,20 +679,27 @@ private:
                 const Json& tgt = ch["target"];
                 std::string path = tgt.getStr("path");
                 int node = inum(tgt["node"]);
-                if (path == "weights") { warn("animation '" + clip.name + "': morph weight channels are ignored"); continue; }
                 if (node < 0 || node >= int(model_->nodes.size())) continue;
                 const Json& s = samplers[size_t(std::max(0, inum(ch["sampler"], 0)))];
                 AnimChannel c;
                 c.node = node;
-                c.path = path == "rotation" ? AnimChannel::Rotation : path == "scale" ? AnimChannel::Scale : AnimChannel::Translation;
+                c.path = path == "rotation" ? AnimChannel::Rotation : path == "scale" ? AnimChannel::Scale
+                       : path == "weights" ? AnimChannel::Weights : AnimChannel::Translation;
                 std::string ip = s.getStr("interpolation", "LINEAR");
                 c.interp = ip == "STEP" ? AnimChannel::Step : ip == "CUBICSPLINE" ? AnimChannel::CubicSpline : AnimChannel::Linear;
                 size_t nt = 0, nv = 0;
                 auto t = accessorExpect(inum(s["input"]), 1, nt, "animation input");
                 int comps = 0;
                 auto v = accessor(inum(s["output"]), comps, nv);
-                const int want = c.path == AnimChannel::Rotation ? 4 : 3;
                 const size_t perKey = c.interp == AnimChannel::CubicSpline ? 3 : 1;
+                int want = c.path == AnimChannel::Rotation ? 4 : 3;
+                if (c.path == AnimChannel::Weights) { // scalar output: targets values per key
+                    want = nt ? int(nv / (nt * perKey)) : 0;
+                    if (comps != 1 || want <= 0) { warn("animation '" + clip.name + "': malformed weights channel skipped"); continue; }
+                    comps = want;
+                    nv /= size_t(want);
+                }
+                c.comps = uint8_t(std::min(want, 255));
                 if (comps != want || nv < nt * perKey || nt == 0) { warn("animation '" + clip.name + "': malformed channel skipped"); continue; }
                 c.times.assign(t.begin(), t.end());
                 c.values.reserve(nt * perKey * size_t(want));
@@ -657,6 +720,9 @@ private:
     std::vector<std::string> buffers_;
     std::vector<int> texMap_;
     std::map<int, int> parentOf_;
+    std::set<int> nodeWeights_;           // nodes with their own morph weights
+    const std::vector<float>* morph_ = nullptr;
+    int morphTargets_ = 0;
     int defaultMat_ = -1;
     std::unique_ptr<Model> model_;
 };

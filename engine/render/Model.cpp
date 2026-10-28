@@ -225,6 +225,31 @@ bool uploadModel(gfx::Device& dev, Model& m, bool keepCpu) {
         uploadImage(dev, img);
         if (!keepCpu) { img.rgba.clear(); img.rgba.shrink_to_fit(); }
     }
+    // morph deltas of every primitive in one float texture: 2 texels (position, normal) per vertex and target
+    size_t texels = 0;
+    for (auto& mesh : m.meshes)
+        for (auto& p : mesh.primitives) if (p.morphTargets > 0 && !p.morphDeltas.empty()) texels += p.morphDeltas.size() / 3;
+    if (texels > 0 && !m.morphTex.valid()) {
+        const int width = 2048, height = int((texels + width - 1) / width);
+        std::vector<float> data(size_t(width) * size_t(height) * 4, 0.0f);
+        size_t at = 0;
+        for (auto& mesh : m.meshes)
+            for (auto& p : mesh.primitives) {
+                if (p.morphTargets <= 0 || p.morphDeltas.empty()) continue;
+                p.morphTexel = uint32_t(at);
+                for (size_t i = 0; i + 2 < p.morphDeltas.size(); i += 3, ++at)
+                    for (int k = 0; k < 3; ++k) data[at * 4 + size_t(k)] = p.morphDeltas[i + size_t(k)];
+                if (!keepCpu) { p.morphDeltas.clear(); p.morphDeltas.shrink_to_fit(); }
+            }
+        gfx::TextureDesc td;
+        td.width = width; td.height = height;
+        td.format = gfx::PixelFormat::RGBA32F;
+        td.filter = gfx::Filter::Nearest;
+        td.data = data.data();
+        td.label = "morph targets";
+        m.morphTex = dev.createTexture(td);
+        m.morphTexWidth = width;
+    }
     if (!keepCpu) {
         m.vertices.clear(); m.vertices.shrink_to_fit();
         m.indices.clear(); m.indices.shrink_to_fit();
@@ -245,6 +270,9 @@ void releaseModel(gfx::Device& dev, Model& m) {
     if (m.ib.valid()) dev.destroyBuffer(m.ib);
     m.vb = {}; m.ib = {};
     for (auto& img : m.images) if (img.tex.valid()) { dev.destroyTexture(img.tex); img.tex = {}; }
+    if (m.morphTex.valid()) dev.destroyTexture(m.morphTex);
+    if (m.baked.tex.valid()) dev.destroyTexture(m.baked.tex);
+    m.morphTex = {}; m.baked = Model::Baked{};
 }
 
 } // namespace rts::render

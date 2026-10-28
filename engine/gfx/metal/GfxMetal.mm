@@ -99,10 +99,11 @@ public:
     // ---------- textures ----------
     TextureHandle createTexture(const TextureDesc& d) override {
         MTLPixelFormat pf = d.format == PixelFormat::R8 ? MTLPixelFormatR8Unorm
+                          : d.format == PixelFormat::RGBA32F ? MTLPixelFormatRGBA32Float
                           : d.format == PixelFormat::Depth ? MTLPixelFormatDepth32Float
                           : d.renderTarget ? MTLPixelFormatBGRA8Unorm   // same format as the screen: pipelines are shared
                           : MTLPixelFormatRGBA8Unorm;
-        const bool mips = d.mipmaps && d.format != PixelFormat::Depth && !d.renderTarget;
+        const bool mips = d.mipmaps && d.format != PixelFormat::Depth && d.format != PixelFormat::RGBA32F && !d.renderTarget;
         MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
             width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:mips ? YES : NO];
         td.usage = MTLTextureUsageShaderRead | (d.renderTarget || d.format == PixelFormat::Depth ? MTLTextureUsageRenderTarget : 0);
@@ -111,14 +112,14 @@ public:
         t.fmt = d.format;
         t.tex = [device_ newTextureWithDescriptor:td];
         if (d.data && d.format != PixelFormat::Depth) {
-            int bpp = d.format == PixelFormat::R8 ? 1 : 4;
+            int bpp = d.format == PixelFormat::R8 ? 1 : d.format == PixelFormat::RGBA32F ? 16 : 4;
             [t.tex replaceRegion:MTLRegionMake2D(0, 0, NSUInteger(d.width), NSUInteger(d.height)) mipmapLevel:0
                        withBytes:d.data bytesPerRow:NSUInteger(d.width * bpp)];
             if (mips) generateMips(t.tex);
         }
         t.mips = mips;
         MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
-        sd.minFilter = sd.magFilter = d.filter == Filter::Linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+        sd.minFilter = sd.magFilter = d.filter == Filter::Linear && d.format != PixelFormat::RGBA32F ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
         if (mips) sd.mipFilter = d.filter == Filter::Linear ? MTLSamplerMipFilterLinear : MTLSamplerMipFilterNearest;
         sd.sAddressMode = sd.tAddressMode = d.repeat ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
         if (d.compare) sd.compareFunction = MTLCompareFunctionLessEqual;
@@ -338,6 +339,8 @@ public:
         if (!enc_ || !t) return;
         [enc_ setFragmentTexture:t->tex atIndex:NSUInteger(slot)];
         [enc_ setFragmentSamplerState:t->sampler atIndex:NSUInteger(slot)];
+        [enc_ setVertexTexture:t->tex atIndex:NSUInteger(slot)];   // bone / morph data textures are read in the vertex stage
+        [enc_ setVertexSamplerState:t->sampler atIndex:NSUInteger(slot)];
     }
     void setUniforms(int slot, const void* data, size_t size) override {
         if (!enc_) return;
@@ -352,14 +355,14 @@ public:
         if (!enc_ || !pipelines_.get(pipelineId_)) return;
         [enc_ drawPrimitives:prim() vertexStart:first vertexCount:count];
     }
-    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex) override {
+    void drawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex, uint32_t instances) override {
         auto* p = pipelines_.get(pipelineId_);
         auto* ib = buffers_.get(ibId_);
         if (!enc_ || !p || !ib) return;
         const bool u32 = p->desc.indexType == IndexType::UInt32;
         [enc_ drawIndexedPrimitives:prim() indexCount:count indexType:u32 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16
                         indexBuffer:current(*ib) indexBufferOffset:ibOffset_ + size_t(firstIndex) * (u32 ? 4 : 2)
-                      instanceCount:1 baseVertex:baseVertex baseInstance:0];
+                      instanceCount:std::max<uint32_t>(instances, 1) baseVertex:baseVertex baseInstance:0];
     }
 
 private:
