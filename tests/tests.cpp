@@ -2667,6 +2667,152 @@ TEST(terrain_line_of_sight_behind_ridge) {
     CHECK(!mod(*sim2).state(*sim2).grid.hf);
 }
 
+// ------------------------------------------------------------------ split packs (downloadable chunks)
+
+#include "engine/pack/Chunks.h"
+#include "engine/pack/Sha256.h"
+
+TEST(pack_sha256_vectors) {
+    using namespace rts::pack;
+    auto a = sha256("abc", 3);
+    CHECK(toHex(a.data(), a.size()) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    std::string m(1000000, 'a');
+    auto b = sha256(m.data(), m.size());
+    CHECK(toHex(b.data(), b.size()) == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+}
+
+namespace {
+std::string noise(size_t n, uint32_t seed) {   // incompressible test data (not simulation)
+    std::string s(n, '\0');
+    for (char& c : s) { seed = seed * 1664525u + 1013904223u; c = char(seed >> 24); }
+    return s;
+}
+rts::pack::PackWriter splitInputs() {
+    rts::pack::PackWriter w;
+    w.addData("game.json", "{\"name\":\"x\"}");
+    w.addData("rules.json", "{}");
+    w.addData("maps/a.json", noise(3000, 1));
+    for (int i = 0; i < 6; ++i) w.addData("music/track" + std::to_string(i) + ".ogg", noise(40000, 10 + uint32_t(i)));
+    w.addData("music/copy.ogg", noise(40000, 10));   // duplicate of track0
+    return w;
+}
+} // namespace
+
+TEST(pack_split_layout_and_reading) {
+    using namespace rts::pack;
+    PackWriter w = splitInputs();
+    SplitOptions so;
+    so.chunkSize = 100000;
+    so.base = {"game.json", "rules.json", "maps/*"};
+    std::string base;
+    std::vector<std::string> chunks;
+    SplitResult sr;
+    WriteStats st;
+    std::string err;
+    CHECK(w.writeSplit(base, chunks, WriteOptions{}, so, &st, &sr, &err));
+    CHECK(base.size() < 10000);                                  // only what must ship
+    CHECK(chunks.size() == 3 && sr.chunks.size() == 3);          // 6 x 40 KB in chunks of <= 100 KB
+    for (auto& c : chunks) CHECK(c.size() <= so.chunkSize);
+    auto p = Pack::open(memorySource(base), &err);
+    CHECK(p && p->chunks().size() == 3 && p->size() == 10);
+    if (!p) return;
+    std::string out;
+    CHECK(p->read("game.json", out) && out == "{\"name\":\"x\"}");
+    CHECK(!p->read("music/track3.ogg", out) && p->lastError().find("not downloaded") != std::string::npos);
+    PackSet set;
+    Pack& ref = *p;
+    set.mount(std::move(p));
+    CHECK(set.state("music/track3.ogg") == PackSet::State::NotDownloaded && set.state("maps/a.json") == PackSet::State::Ready);
+    // A chunk from another build or the wrong slot is refused; the right one attaches.
+    CHECK(!ref.attachChunk(1, memorySource(chunks[1]), &err));
+    for (size_t i = 0; i < chunks.size(); ++i) CHECK(ref.attachChunk(i + 1, memorySource(chunks[i]), &err));
+    for (int i = 0; i < 6; ++i) CHECK(set.read("music/track" + std::to_string(i) + ".ogg", out) && out == noise(40000, 10 + uint32_t(i)));
+    CHECK(set.read("music/copy.ogg", out) && out == noise(40000, 10));
+    CHECK(set.state("music/track3.ogg") == PackSet::State::Ready);
+    // Same content split or not has the same content hash (identifies the data, not the layout).
+    PackWriter w2 = splitInputs();
+    std::string whole;
+    WriteStats st2;
+    CHECK(w2.writeToString(whole, WriteOptions{}, &st2));
+    CHECK(st2.contentHash == st.contentHash);
+}
+
+TEST(pack_split_budgets) {
+    using namespace rts::pack;
+    std::string base, err;
+    std::vector<std::string> chunks;
+    SplitOptions tight;
+    tight.chunkSize = 100000;
+    tight.base = {"music/*"};
+    tight.baseSize = 50000;                                      // must-ship files don't fit
+    PackWriter w1 = splitInputs();
+    CHECK(!w1.writeSplit(base, chunks, WriteOptions{}, tight, nullptr, nullptr, &err) && err.find("music/") != std::string::npos);
+    SplitOptions fill;
+    fill.chunkSize = 100000;
+    fill.baseSize = 100000;
+    fill.fillBase = true;                                        // base filled up to the limit
+    PackWriter w2 = splitInputs();
+    SplitResult sr;
+    CHECK(w2.writeSplit(base, chunks, WriteOptions{}, fill, nullptr, &sr, &err));
+    CHECK(base.size() <= 100000 && base.size() > 80000 && chunks.size() == 2);
+    SplitOptions total;
+    total.chunkSize = 100000;
+    total.totalBudget = 100000;                                  // whole content over the limit
+    PackWriter w3 = splitInputs();
+    CHECK(!w3.writeSplit(base, chunks, WriteOptions{}, total, nullptr, nullptr, &err) && err.find("whole content") != std::string::npos);
+}
+
+TEST(pack_chunk_manager_sources_cache_and_tampering) {
+    using namespace rts::pack;
+    tfs::path d = testDir("chunks");
+    PackWriter w = splitInputs();
+    SplitOptions so;
+    so.chunkSize = 100000;
+    so.base = {"game.json", "rules.json", "maps/*"};
+    SplitResult sr;
+    std::string err;
+    CHECK(w.writeSplitFiles((d / "app" / "content.rpak").string(), (d / "cdn").string(), WriteOptions{}, so, nullptr, &sr, &err));
+    // A bad mirror first: chunk 2 tampered there, everything else missing.
+    tfs::create_directories(d / "badmirror");
+    std::string c2;
+    { std::ifstream f(d / "cdn" / sr.chunks[1].file, std::ios::binary); std::ostringstream ss; ss << f.rdbuf(); c2 = ss.str(); }
+    c2[c2.size() / 2] ^= 1;
+    writeFile(d / "badmirror" / sr.chunks[1].file, c2);
+    auto runAll = [&](ChunkManager& m) {
+        m.requestAll();
+        for (int i = 0; i < 1000 && m.progress().busy; ++i) m.poll();
+    };
+    auto p = Pack::openFile((d / "app" / "content.rpak").string(), &err);
+    CHECK(p != nullptr);
+    if (!p) return;
+    ChunkManager m;
+    m.setCacheDir((d / "cache").string());
+    m.setSources({(d / "badmirror").string(), "file://" + (d / "cdn").string() + "/{file}"});
+    m.setVerifyBytesPerPoll(1 << 16);                            // several polls per chunk
+    m.addPack(*p);
+    runAll(m);
+    auto pr = m.progress();
+    CHECK(pr.ready == 3 && pr.failed == 0 && pr.bytesReady == pr.bytesTotal);
+    std::string out;
+    CHECK(p->read("music/track4.ogg", out) && out == noise(40000, 14));
+    // Next start: everything comes from the cache, no source needed.
+    auto p2 = Pack::openFile((d / "app" / "content.rpak").string(), &err);
+    ChunkManager m2;
+    m2.setCacheDir((d / "cache").string());
+    m2.addPack(*p2);
+    CHECK(m2.progress().ready == 3 && p2->read("music/track1.ogg", out));
+    // No working source: readable failure.
+    auto p3 = Pack::openFile((d / "app" / "content.rpak").string(), &err);
+    ChunkManager m3;
+    m3.setCacheDir((d / "cache-empty").string());
+    m3.setSources({(d / "nowhere").string()});
+    m3.addPack(*p3);
+    runAll(m3);
+    CHECK(m3.progress().failed == 3 && !m3.chunks()[0].error.empty());
+    std::error_code ec;
+    tfs::remove_all(d, ec);
+}
+
 TEST(audio_3d_distance_models_and_pose) {
     audio::DistanceDef d;
     d.minDistance = 10; d.maxDistance = 50;

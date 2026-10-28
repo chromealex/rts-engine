@@ -262,6 +262,29 @@ std::vector<ChunkManager::ChunkView> ChunkManager::chunks() const {
     return out;
 }
 
+size_t attachChunksNextTo(Pack& p, const std::string& packPath, std::vector<std::string>* problems) {
+    size_t attached = 0;
+    fs::path dir = fs::path(packPath).parent_path();
+    for (size_t i = 1; i <= p.chunks().size(); ++i) {
+        const ChunkInfo& c = p.chunks()[i - 1];
+        std::error_code ec;
+        fs::path f = dir / "chunks" / c.file;
+        if (!fs::exists(f, ec)) f = dir / c.file;
+        if (!fs::exists(f, ec)) { if (problems) problems->push_back(c.file + ": not found next to the pack"); continue; }
+        std::FILE* in = std::fopen(f.string().c_str(), "rb");
+        if (!in) { if (problems) problems->push_back(c.file + ": cannot open"); continue; }
+        Sha256 sha;
+        std::vector<char> buf(1 << 16);
+        for (size_t n; (n = std::fread(buf.data(), 1, buf.size(), in)) > 0;) sha.update(buf.data(), n);
+        std::fclose(in);
+        if (sha.finish() != c.sha256) { if (problems) problems->push_back(c.file + ": SHA-256 mismatch"); continue; }
+        std::string err;
+        if (!p.attachChunk(i, openFileSource(f.string()), &err)) { if (problems) problems->push_back(err); continue; }
+        ++attached;
+    }
+    return attached;
+}
+
 ChunkManager::Status ChunkManager::status(const Pack& pack, size_t index) const {
     for (auto& p : items_) if (p->pack == &pack && p->index == index) return p->status;
     return Status::NotDownloaded;

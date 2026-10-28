@@ -388,7 +388,11 @@ bool mountPack(const std::string& path) {
 bool readContentFile(const std::string& rel, std::string& out) {
     if (!g_app) return false;
     detail::ensurePacks(openAssetPack);
-    if (!state().packs.empty() && state().packs.read(rel, out)) return true;
+    if (!state().packs.empty()) {
+        if (state().packs.read(rel, out)) return true;
+        detail::requestChunkFor(rel);
+        if (state().packs.read(rel, out)) return true;
+    }
     AAsset* a = AAssetManager_open(g_app->activity->assetManager, ("content/" + rel).c_str(), AASSET_MODE_BUFFER);
     if (!a) return false;
     out.assign(static_cast<const char*>(AAsset_getBuffer(a)), size_t(AAsset_getLength(a)));
@@ -402,6 +406,7 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
     S.touch = true;
     S.contentRoot = "content";
     S.userDir = g_app->activity->internalDataPath ? g_app->activity->internalDataPath : ".";
+    pack::setAndroidJavaVm(g_app->activity->vm);   // HTTP downloads of pack chunks
     AConfiguration* conf = AConfiguration_new();
     AConfiguration_fromAssetManager(conf, g_app->activity->assetManager);
     int32_t density = AConfiguration_getDensity(conf);

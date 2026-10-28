@@ -240,6 +240,7 @@ static bool g_closingKeyboard = false; // resignFirstResponder initiated by stop
         auto now = std::chrono::steady_clock::now();
         double dt = std::chrono::duration<double>(now - g_last).count();
         if (dt > rts::platform::detail::FrameClock::kMaxDt) dt = rts::platform::detail::FrameClock::kMaxDt; // after sleep/background
+        rts::platform::pollContent(); // pack chunk downloads
         g_last = now;
         g_device->beginFrame(S.fbW, S.fbH);
         if (S.cb.frame) S.cb.frame(*g_device, dt);

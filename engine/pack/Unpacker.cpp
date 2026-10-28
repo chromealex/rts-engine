@@ -1,5 +1,7 @@
 #include "Unpacker.h"
 
+#include "Chunks.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -329,6 +331,7 @@ bool UnpackerRegistry::list(const UnpackerInfo& u, const std::string& archive, s
         std::string err;
         auto p = Pack::openFile(archive, &err);
         if (!p) return fail(error, err);
+        attachChunksNextTo(*p, archive);   // split pack: its chunks, if they are at hand
         for (size_t i = 0; i < p->size(); ++i) out.push_back({std::string(p->entry(i).path), p->entry(i).rawSize});
         return true;
     }
@@ -346,6 +349,7 @@ bool UnpackerRegistry::extract(const UnpackerInfo& u, const std::string& archive
         std::string err, data;
         auto p = Pack::openFile(archive, &err);
         if (!p) return fail(error, err);
+        attachChunksNextTo(*p, archive);   // split pack: its chunks, if they are at hand
         for (size_t i = 0; i < p->size(); ++i) {
             const Entry& e = p->entry(i);
             if (!p->read(e, data, true)) return fail(error, p->lastError());
@@ -408,6 +412,7 @@ bool importArchive(const UnpackerRegistry& reg, const std::string& archive, cons
         std::string err;
         auto p = Pack::openFile(archive, &err);
         if (!p) return fail(error, err);
+        attachChunksNextTo(*p, archive);   // split pack: its chunks, if they are at hand
         for (size_t i = 0; i < p->size(); ++i) {
             const Entry& e = p->entry(i);
             std::string path(e.path), data;
