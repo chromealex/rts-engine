@@ -357,8 +357,7 @@ private:
     render::float3 camPos_;
     // planets
     PlanetRenderer planets_;
-    RtsPlanetGroundFx planetGroundFx_;   // territory / roads on sphere faces
-    std::vector<uint8_t> territoryDemo_;  // RTS_PLANET_TERRITORY_DEMO (testing the overlay)
+    RtsPlanetGroundFx planetGroundFx_;   // territory, rock, roads, lanes on sphere faces
     PlanetCamera planetCam_;
     PlanetViewFrame pframe_;
     double planetSeconds_ = 0;

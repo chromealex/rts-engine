@@ -8,6 +8,11 @@
   "victory": "keyUnits",
   "costModel": "progressive",
   "supplyCap": 200,
+  // Territory (docs/game-format.md "Dungeon management and territory"): a disc around the starts, then units with
+  // "claim" push the front across the planet (cells touching own ground, never under enemy fire); extractors
+  // follow the ground under them; every owned cell trickles a little metal. Paved cells (map '+') are faster.
+  "territory": {"claimBy": "units", "startRadius": 4, "incomePerCell": {"metal": 0.01}},
+  "roadNetwork": {"speed": 1.4, "cost": {"metal": 2}, "required": false},
   // Heightfield terrain: the map's corner heights drive slopes, line of sight and height bonuses. The central
   // ridge is too steep for heavy kbots and the commander (0.8) but light kbots climb it (move.maxSlope 1.6).
   "terrain": {"model": "heightfield", "maxSlope": {"ground": 0.8}, "uphillSpeed": 0.5, "downhillSpeed": 0.2},
@@ -17,18 +22,18 @@
     "energy": {"name": "Энергия", "kind": "flow", "start": 1000, "storage": 1500, "deficitProduction": 0.3}
   },
   "types": {
-    "commander": {"name": "Командир", "key": true, "health": {"max": 3000, "armor": 3, "regen": 2}, "move": {"speed": 1.8, "radius": 0.6}, "sight": 10,
+    "commander": {"name": "Командир", "claim": {"radius": 2.5, "rate": 2}, "key": true, "health": {"max": 3000, "armor": 3, "regen": 2}, "move": {"speed": 1.8, "radius": 0.6}, "sight": 10,
                   "weapons": [{"range": 4, "damage": 25, "cooldown": 1, "projectileSpeed": 16}], "income": {"metal": 1, "energy": 20},
                   "builds": ["extractor", "solar", "kbot_lab", "defender", "orbital_yard"], "buildPower": 3,
                   "gather": {"metal": {"carry": 20, "time": 2}}, "view": {"shape": "mech", "scale": 1.4}},
-    "constructor": {"name": "Строитель", "health": {"max": 300}, "move": {"speed": 2.2, "radius": 0.45, "maxSlope": 1.6}, "sight": 8,
+    "constructor": {"name": "Строитель", "claim": {"radius": 1.5, "rate": 1}, "health": {"max": 300}, "move": {"speed": 2.2, "radius": 0.45, "maxSlope": 1.6}, "sight": 8,
                     "cost": {"metal": 110, "energy": 900, "time": 15}, "builds": ["extractor", "solar", "kbot_lab", "defender", "orbital_yard"], "buildPower": 1.5,
                     "gather": {"metal": {"carry": 10, "time": 2}}, "view": {"shape": "worker"}},
-    "peewee": {"name": "Пиви", "health": {"max": 250}, "move": {"speed": 3, "radius": 0.4, "maxSlope": 1.6}, "sight": 8,
+    "peewee": {"name": "Пиви", "claim": {"radius": 1.5, "rate": 1.5}, "health": {"max": 250}, "move": {"speed": 3, "radius": 0.4, "maxSlope": 1.6}, "sight": 8,
                "weapons": [{"range": 4, "damage": 10, "cooldown": 0.6}], "cost": {"metal": 50, "energy": 600, "time": 8}, "wreck": {"metal": 25}, "view": {"shape": "soldier"}},
-    "hammer": {"name": "Молот", "health": {"max": 550, "armor": 1}, "move": {"speed": 2.2, "radius": 0.5}, "sight": 9,
+    "hammer": {"name": "Молот", "claim": {"radius": 1.5, "rate": 1}, "health": {"max": 550, "armor": 1}, "move": {"speed": 2.2, "radius": 0.5}, "sight": 9,
                "weapons": [{"range": 6, "damage": 35, "cooldown": 1.8, "projectileSpeed": 12, "splash": 0.8}], "cost": {"metal": 120, "energy": 1300, "time": 14}, "wreck": {"metal": 60}, "view": {"shape": "mech"}},
-    "extractor": {"name": "Экстрактор", "structure": {"footprint": [2, 2], "on": "metal_spot"}, "health": {"max": 300}, "cost": {"metal": 50, "energy": 500, "time": 8},
+    "extractor": {"name": "Экстрактор", "capturable": true, "structure": {"footprint": [2, 2], "on": "metal_spot"}, "health": {"max": 300}, "cost": {"metal": 50, "energy": 500, "time": 8},
                   "income": {"metal": 3, "energy": -3}, "view": {"shape": "refinery"}},
     "solar": {"name": "Солнечный коллектор", "structure": {"footprint": [2, 2]}, "health": {"max": 300}, "cost": {"metal": 140, "energy": 0, "time": 10},
               "income": {"energy": 20}, "storage": {"energy": 100}, "view": {"shape": "plant"}},

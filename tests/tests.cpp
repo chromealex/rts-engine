@@ -9275,3 +9275,124 @@ int main() {
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
+
+// ---- territory on planets (agent-planet-render): starts, unit claims, DK diggers / claimers across face seams
+TEST(planet_territory_claims_and_dig_cross_seams) {
+    const std::string rules = R"J({"victory": {"mode": "survive", "seconds": 600},
+      "diggable": {"D": {"hardness": 1}},
+      "territory": {"claimBy": "both", "startRadius": 5},
+      "types": {"hall": {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+                "digger": {"move": {"speed": 3, "radius": 0.3}, "digs": {"rate": 3}, "claimer": {"time": 0.2}},
+                "trooper": {"move": {"speed": 2, "radius": 0.3}, "claim": {"radius": 2, "rate": 3}}}})J";
+    const std::string map = R"J({"players": [{"start": {"body": "p", "face": 4, "x": 4, "y": 4}}, {"start": {"body": "p", "face": 5, "x": 4, "y": 4}}],
+      "world": {"start": "p", "bodies": [{"id": "p", "kind": "planet", "radius": 12, "faceSize": 8,
+        "terrain": {"faces": [{}, {}, {}, {}, {"rows": ["........", "........", "........", "........", "........", "........", "DDDDDDDD", "........"]}, {}]}}]},
+      "entities": [{"type": "hall", "owner": 1, "at": {"body": "p", "face": 4, "x": 4, "y": 4}},
+                   {"type": "hall", "owner": 2, "at": {"body": "p", "face": 5, "x": 4, "y": 4}},
+                   {"type": "digger", "owner": 1, "at": {"body": "p", "face": 4, "x": 4.5, "y": 5.5}},
+                   {"type": "trooper", "owner": 1, "at": {"body": "p", "face": 4, "x": 0.5, "y": 2.5}}]})J";
+    auto run = [&](bool checks) {
+        auto sim = makeSimJson(rules, map, 2);
+        auto& m = mod(*sim);
+        const game::Surface* S = m.surface(*sim);
+        if (!S) { CHECK(false); return uint64_t(0); }
+        auto& g = m.state(*sim).grid;
+        auto facesOf = [&](uint8_t p) {
+            int mask = 0;
+            for (size_t i = 0; i < g.territory.size(); ++i)
+                if (g.territory[i] == p) { int b, f, x, y; if (S->cellFace(int(i), b, f, x, y)) mask |= 1 << f; }
+            return mask;
+        };
+        const int t0 = m.territoryOf(*sim, 1);
+        if (checks) {
+            CHECK(t0 > 40 && m.territoryOf(*sim, 2) >= t0);   // start discs around both halls (player 1's has a rock row)
+            CHECK((facesOf(1) & ~(1 << 4)) != 0);             // the start radius crosses a face seam
+            CHECK(g.territory[size_t(S->gridCell(0, 4, 4, 6))] == 0);   // rock is not owned
+        }
+        // mark the rock row; the digger digs it and claims the floor
+        Command dg; dg.player = 1; dg.type = game::kCmdDig; dg.point = S->cellCenter(S->gridCell(0, 4, 0, 6)); dg.param = game::rectParam(8, 1);
+        sim->submit(dg);
+        for (int i = 0; i < 20 * 40; ++i) sim->step();
+        int rock = 0;
+        for (int x = 0; x < 8; ++x) rock += g.dig[size_t(S->gridCell(0, 4, x, 6))] ? 1 : 0;
+        const int t1 = m.territoryOf(*sim, 1);
+        if (checks) {
+            CHECK(rock < 8);            // dug through (dig jobs found the marked cells via the sphere BFS)
+            CHECK(t1 > t0 + 10);        // claimed by the trooper / digger
+            // every own cell is connected to the hall through own cells (4-neighbours across seams)
+            std::vector<uint8_t> seen(g.territory.size(), 0);
+            std::vector<int> q{S->gridCell(0, 4, 4, 4)};
+            seen[size_t(q[0])] = 1;
+            for (size_t k = 0; k < q.size(); ++k)
+                for (int d = 0; d < 4; ++d) {
+                    const int n = S->neighbor(q[k], d);
+                    if (n >= 0 && !seen[size_t(n)] && g.territory[size_t(n)] == 1) { seen[size_t(n)] = 1; q.push_back(n); }
+                }
+            CHECK(int(q.size()) == t1);
+            CHECK(m.state(*sim).territoryCells[1] == t1);
+        }
+        return sim->checksum();
+    };
+    const uint64_t a = run(true), b = run(false);
+    CHECK(a == b);
+}
+
+// ---- planet fog blur (agent-planet-render): seam-aware separable blur, timing on faceSize 256
+TEST(planet_fog_blur_seams_and_speed) {
+    using namespace rts::game;
+    auto S = std::make_shared<Surface>();
+    BodyDef b; b.id = "p"; b.radius = Fixed::fromInt(400); b.faceSize = 256;
+    S->bodies.push_back(b);
+    S->build();
+    const size_t n = size_t(S->W) * size_t(S->H);
+    PlanetFieldBlur blur(S);
+    // a uniform field stays uniform (padding never reads void / foreign cells)
+    std::vector<uint8_t> f(n, 200);
+    blur(f, 2);
+    CHECK(std::all_of(f.begin(), f.end(), [](uint8_t v) { return v == 200; }));
+    // a bright block on the edge of face 4 spreads onto the neighbouring face across the seam
+    std::fill(f.begin(), f.end(), uint8_t(0));
+    for (int y = 100; y < 110; ++y)
+        for (int x = 252; x < 256; ++x) f[size_t(S->gridCell(0, 4, x, y))] = 255;
+    const int edge = S->gridCell(0, 4, 255, 104), across = S->offset(edge, 1, 0);
+    CHECK(across >= 0 && S->offset(across, -1, 0) == edge);
+    blur(f, 2);
+    CHECK(f[size_t(across)] > 60);    // light leaks over the seam like inside a face
+    int b2, f2, x2, y2;
+    S->cellFace(across, b2, f2, x2, y2);
+    CHECK(f2 != 4);
+    // never into the stacked next row of the grid (face 4 row 255 vs face 5 row 0 are not neighbours)
+    std::fill(f.begin(), f.end(), uint8_t(0));
+    for (int x = 0; x < 256; ++x) f[size_t(S->gridCell(0, 4, x, 255))] = 255;
+    blur(f, 2);
+    int b3, f3, x3, y3;
+    S->cellFace(S->offset(S->gridCell(0, 4, 128, 255), 0, 1), b3, f3, x3, y3);
+    CHECK(f[size_t(S->gridCell(0, 5, 128, 0))] == 0 || f3 == 5);
+    // timing: the old per-pass 3x3 mean over the neighbour table vs the separable blur
+    std::vector<uint8_t> g(n);
+    for (size_t i = 0; i < n; ++i) g[i] = uint8_t((i * 2654435761u) >> 24) & 0x80 ? 255 : 0;
+    auto old = [&](std::vector<uint8_t>& v, int radius) {
+        std::vector<uint16_t> tmp(n);
+        for (int pass = 0; pass < radius; ++pass) {
+            for (int c = 0; c < int(n); ++c) {
+                int bb, fc, x, y;
+                if (!S->cellFace(c, bb, fc, x, y)) { tmp[size_t(c)] = v[size_t(c)]; continue; }
+                int sum = v[size_t(c)], cnt = 1;
+                for (int k = 0; k < 8; ++k) { const int o = S->neighbor(c, k); if (o >= 0) { sum += v[size_t(o)]; ++cnt; } }
+                tmp[size_t(c)] = uint16_t(sum / cnt);
+            }
+            for (size_t c = 0; c < n; ++c) v[c] = uint8_t(tmp[c]);
+        }
+    };
+    auto ms = [&](auto&& fn) {
+        std::vector<uint8_t> v = g;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (int k = 0; k < 5; ++k) { v = g; fn(v); }
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 5.0;
+    };
+    blur(g, 2);   // padding table built outside the timing
+    for (size_t i = 0; i < n; ++i) g[i] = uint8_t((i * 2654435761u) >> 24) & 0x80 ? 255 : 0;
+    const double tOld = ms([&](std::vector<uint8_t>& v) { old(v, 2); }), tNew = ms([&](std::vector<uint8_t>& v) { blur(v, 2); });
+    std::printf("  fog blur faceSize 256 (%zu cells), radius 2: old %.2f ms, new %.2f ms per update\n", n, tOld, tNew);
+    CHECK(tNew < tOld);
+}
