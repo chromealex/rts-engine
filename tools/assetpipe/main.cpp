@@ -32,6 +32,8 @@
 #include <vector>
 
 #include "engine/pack/PackWriter.h"
+#include "engine/pack/Chunks.h"
+#include "engine/pack/Sha256.h"
 #include "engine/data/Json.h"
 #include "engine/pack/Unpacker.h"
 #include "tools/atlas/AtlasBuild.h"
@@ -56,6 +58,7 @@ Global G;
 void usage() {
     std::cout << "usage:\n"
                  "  assetpipe pack -o <out.rpak> [--level N] [--store] [--threads N] [--ignore <glob>]... <dir>[=<prefix>]...\n"
+                 "       split: --chunk-size 8MB [--base-size 40MB] [--total-size 1GB] [--fill-base] [--base <glob>]... [--order <glob>]... [--chunks-dir D]\n"
                  "  assetpipe import -o <out.rpak> [--format F] [--include <glob>]... [--external] <archive|dir>[=<prefix>]...\n"
                  "  assetpipe list <archive>\n"
                  "  assetpipe verify <pack>...\n"
@@ -106,7 +109,21 @@ struct PackArgs {
     std::vector<std::string> include;
     bool external = false;
     std::vector<std::pair<std::string, std::string>> inputs;
+    bool split = false;              // --chunk-size given: base pack + chunks
+    SplitOptions so;
+    std::string chunksDir;
 };
+
+uint64_t parseSize(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size() && (std::isdigit(static_cast<unsigned char>(s[i])) || s[i] == '.')) ++i;
+    double v = std::atof(s.substr(0, i).c_str());
+    std::string u;
+    for (char c : s.substr(i)) u += char(std::toupper(static_cast<unsigned char>(c)));
+    double m = u.empty() || u == "B" ? 1 : u == "K" || u == "KB" ? 1024.0 : u == "M" || u == "MB" ? 1048576.0 : u == "G" || u == "GB" ? 1073741824.0 : -1;
+    if (i == 0 || m < 0) { std::cout << "ОШИБКА: размер \"" << s << "\" — ожидается число с KB/MB/GB" << std::endl; std::exit(2); }
+    return uint64_t(v * m);
+}
 
 bool parsePackArgs(int argc, char** argv, PackArgs& a, bool importMode) {
     for (int i = 0; i < argc; ++i) {
@@ -118,6 +135,13 @@ bool parsePackArgs(int argc, char** argv, PackArgs& a, bool importMode) {
         else if (s == "--store") a.opt.compress = false;
         else if (s == "--ignore") a.rules.add(next());
         else if (s == "--atlas") a.atlas = next();
+        else if (s == "--chunk-size") { a.split = true; a.so.chunkSize = parseSize(next()); }
+        else if (s == "--base-size") a.so.baseSize = parseSize(next());
+        else if (s == "--total-size") a.so.totalBudget = parseSize(next());
+        else if (s == "--fill-base") a.so.fillBase = true;
+        else if (s == "--base") a.so.base.push_back(next());
+        else if (s == "--order") a.so.priority.push_back(next());
+        else if (s == "--chunks-dir") a.chunksDir = next();
         else if (importMode && s == "--format") a.format = next();
         else if (importMode && s == "--include") a.include.push_back(next());
         else if (importMode && s == "--external") a.external = true;
@@ -148,7 +172,13 @@ int finishPack(PackWriter& w, const PackArgs& a, const std::string& importsJson)
             if (!rts::atlas::applyAtlas(w, cfg, as, &err)) return die(err);
         } catch (const std::exception& e) { return die(e.what()); }
     }
-    if (!w.write(a.out, opt, &st, &err)) return die(err);
+    SplitResult sr;
+    std::string chunksDir = a.chunksDir.empty() ? (fs::path(a.out).parent_path() / "chunks").string() : a.chunksDir;
+    if (a.split) {
+        if (!w.writeSplitFiles(a.out, chunksDir, opt, a.so, &st, &sr, &err)) return die(err);
+    } else if (!w.write(a.out, opt, &st, &err)) {
+        return die(err);
+    }
     rts::atlas::finishStats(as, st);
     bool external = opt.external || w.external();
     if (G.json) {
@@ -156,6 +186,13 @@ int finishPack(PackWriter& w, const PackArgs& a, const std::string& importsJson)
                   << ",\"packBytes\":" << st.packBytes << ",\"duplicates\":" << st.duplicates << ",\"external\":" << (external ? "true" : "false")
                   << ",\"contentHash\":" << q(hex64(st.contentHash)) << ",\"imports\":[" << importsJson << "]";
         if (!a.atlas.empty()) std::cout << ",\"atlas\":" << as.toJson().dump(-1);
+        if (a.split) {
+            std::cout << ",\"split\":{\"baseBytes\":" << sr.baseBytes << ",\"totalBytes\":" << sr.totalBytes << ",\"chunksDir\":" << q(chunksDir) << ",\"chunks\":[";
+            for (size_t i = 0; i < sr.chunks.size(); ++i)
+                std::cout << (i ? "," : "") << "{\"file\":" << q(sr.chunks[i].file) << ",\"bytes\":" << sr.chunks[i].size << ",\"files\":" << sr.chunks[i].files
+                          << ",\"sha256\":" << q(sr.chunks[i].sha256) << "}";
+            std::cout << "]}";
+        }
         std::cout << ",\"warnings\":[";
         for (size_t i = 0; i < st.warnings.size(); ++i) std::cout << (i ? "," : "") << q(st.warnings[i]);
         std::cout << "]}" << std::endl;
@@ -164,6 +201,10 @@ int finishPack(PackWriter& w, const PackArgs& a, const std::string& importsJson)
     for (auto& m : st.warnings) std::cout << "предупреждение: " << m << "\n";
     for (auto& m : as.warnings) std::cout << "предупреждение: " << m << "\n";
     std::cout << a.out << "\n" << sizeReport(st) << (a.atlas.empty() ? std::string() : as.report()) << "хеш контента: " << hex64(st.contentHash) << std::endl;
+    if (a.split) {
+        std::cout << "разбиение: в паке " << formatBytes(sr.baseBytes) << ", частей " << sr.chunks.size() << " в " << chunksDir << ", всего " << formatBytes(sr.totalBytes) << "\n";
+        for (auto& c : sr.chunks) std::cout << "  " << c.file << "  " << formatBytes(c.size) << ", файлов " << c.files << "\n";
+    }
     if (external) std::cout << "ВНИМАНИЕ: пак содержит внешний (сторонний) контент — не коммитить и не распространять." << std::endl;
     return 0;
 }
@@ -263,7 +304,8 @@ int cmdList(const std::string& path) {
             raw += e.rawSize;
             if (G.json) std::cout << (i ? "," : "") << "{\"path\":" << q(std::string(e.path)) << ",\"size\":" << e.rawSize << ",\"stored\":" << e.storedSize
                                   << ",\"codec\":\"" << (e.codec == Codec::Zstd ? "zstd" : "store") << "\"}";
-            else std::cout << formatBytes(e.rawSize) << "\t" << formatBytes(e.storedSize) << "\t" << (e.codec == Codec::Zstd ? "zstd" : "store") << "\t" << e.path << "\n";
+            else std::cout << formatBytes(e.rawSize) << "\t" << formatBytes(e.storedSize) << "\t" << (e.codec == Codec::Zstd ? "zstd" : "store")
+                           << (e.chunk ? "\tчасть " + std::to_string(e.chunk) : std::string("\t")) << "\t" << e.path << "\n";
         }
         if (G.json) { std::cout << "]}" << std::endl; return 0; }
         std::error_code ec;
@@ -285,6 +327,10 @@ int cmdList(const std::string& path) {
     return 0;
 }
 
+size_t attachLocalChunks(Pack& p, const std::string& packPath, std::vector<std::string>& problems) {
+    return attachChunksNextTo(p, packPath, &problems);
+}
+
 int cmdVerify(int argc, char** argv) {
     int bad = 0;
     if (G.json) std::cout << "{\"ok\":";
@@ -295,13 +341,22 @@ int cmdVerify(int argc, char** argv) {
         size_t errors = 0;
         std::string firstErr = err;
         if (p) {
+            std::vector<std::string> problems;
+            attachLocalChunks(*p, argv[i], problems);
+            for (auto& m : problems) {
+                if (!G.json) std::cout << "  часть: " << m << "\n";
+                if (firstErr.empty()) firstErr = m;
+                ++errors;
+            }
             std::string data;
-            for (size_t k = 0; k < p->size(); ++k)
+            for (size_t k = 0; k < p->size(); ++k) {
+                if (!p->ready(p->entry(k))) continue;   // its chunk was already reported
                 if (!p->read(p->entry(k), data, true)) {
                     if (!G.json) std::cout << "  повреждён: " << p->lastError() << "\n";
                     if (firstErr.empty()) firstErr = p->lastError();
                     ++errors;
                 }
+            }
         } else {
             errors = 1;
         }

@@ -85,6 +85,25 @@ bool readContentFile(const std::string& relativePath, std::string& out);
 bool mountPack(const std::string& path);
 // Content hash of the mounted packs (0 when running from loose files) — identifies the data set.
 uint64_t contentPacksHash();
+
+// Split builds (rtsbuild --split): content not shipped with the app lives in pack chunks that are
+// downloaded on demand from the sources in game.json `packaging.sources` (mirrors tried in order),
+// sources set here, or $RTS_CONTENT_SOURCES (';'-separated). Chunks are verified (SHA-256) and
+// cached in userDataDir()/content-cache. readContentFile on a file that isn't downloaded yet
+// returns false and queues its chunk; a loading screen polls contentProgress() until it's ready.
+enum class ContentState { Missing, Ready, NotDownloaded };
+ContentState contentState(const std::string& relativePath);
+void requestContent(const std::vector<std::string>& relativePaths);   // chunks holding these files
+void requestAllContent();
+struct ContentProgress {
+    size_t chunks = 0, ready = 0, active = 0, failed = 0;
+    uint64_t bytesTotal = 0, bytesReady = 0;   // over requested and ready chunks
+    bool busy = false;
+    std::string error;                         // last failure (after all sources were tried)
+};
+ContentProgress contentProgress();             // also drives downloads
+void pollContent();                            // drives downloads; called once per frame by the platform loop
+void setContentSources(const std::vector<std::string>& urls);
 // Writable per-user directory (settings, saved replays).
 std::string userDataDir();
 // Text clipboard (editor copy/paste). May be a no-op on mobile.
