@@ -7,11 +7,21 @@
  "players": [
   {
    "name": "Синие",
-   "team": 1
+   "team": 1,
+   "faction": "allies",
+   "start": [
+    10,
+    24
+   ]
   },
   {
    "name": "Красные",
-   "team": 2
+   "team": 2,
+   "faction": "soviet",
+   "start": [
+    54,
+    24
+   ]
   }
  ],
  "terrain": {
@@ -98,57 +108,25 @@
     12
    ],
    "radius": 3
+  },
+  {
+   "resource": "gems",
+   "center": [
+    32,
+    40
+   ],
+   "radius": 2
+  },
+  {
+   "resource": "gems",
+   "center": [
+    32,
+    8
+   ],
+   "radius": 2
   }
  ],
  "entities": [
-  {
-   "type": "mcv",
-   "owner": 1,
-   "pos": [
-    10,
-    24
-   ]
-  },
-  {
-   "type": "mcv",
-   "owner": 2,
-   "pos": [
-    54,
-    24
-   ]
-  },
-  {
-   "type": "rifleman",
-   "owner": 1,
-   "pos": [
-    13,
-    26
-   ]
-  },
-  {
-   "type": "rifleman",
-   "owner": 2,
-   "pos": [
-    51,
-    22
-   ]
-  },
-  {
-   "type": "rifleman",
-   "owner": 1,
-   "pos": [
-    13,
-    27
-   ]
-  },
-  {
-   "type": "rifleman",
-   "owner": 2,
-   "pos": [
-    51,
-    21
-   ]
-  },
   {
    "type": "ore_mine",
    "owner": 0,
@@ -163,6 +141,14 @@
    "pos": [
     52,
     36
+   ]
+  },
+  {
+   "type": "gem_mine",
+   "owner": 0,
+   "pos": [
+    32,
+    40
    ]
   }
  ]

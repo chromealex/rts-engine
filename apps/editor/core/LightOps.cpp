@@ -13,7 +13,9 @@ const char* kLightProps = R"J("x": {"type": "number"}, "z": {"type": "number"}, 
     "name": {"type": "string"}, "type": {"type": "string", "enum": ["point", "spot"], "description": "spot = searchlight / lamp cone"},
     "angle": {"type": "number", "description": "spot cone, degrees (default 40)"}, "softness": {"type": "number", "description": "spot edge 0..1"},
     "pitch": {"type": "number", "description": "spot: degrees below the horizon (default 35)"}, "yaw": {"type": "number", "description": "spot: direction, degrees (0 = +x, 90 = +z)"},
-    "sweep": {"type": "number", "description": "spot: swing amplitude, degrees (searchlight)"}, "sweepSpeed": {"type": "number", "description": "degrees per second"})J";
+    "sweep": {"type": "number", "description": "spot: swing amplitude, degrees (searchlight)"}, "sweepSpeed": {"type": "number", "description": "degrees per second"},
+    "pattern": {"type": "string", "enum": ["steady", "pulse", "strobe", "beacon"], "description": "beacon: spots rotate, points blink"}, "rate": {"type": "number", "description": "pattern frequency, Hz"},
+    "nightOnly": {"type": "boolean", "description": "on at dusk, off at dawn"}, "electric": {"type": "boolean", "description": "affected by power / damage (map lights: always powered)"})J";
 } // namespace
 
 Json& mapLightsMut(MapDoc& doc) {
@@ -33,6 +35,12 @@ void applyLightParams(Json& l, const Json& p) {
         l.set("color", a);
     }
     if (p.has("name")) l.set("name", Json::string(p.getStr("name")));
+    if (p.has("pattern")) {
+        const std::string pat = p.getStr("pattern");
+        if (pat == "steady" || pat.empty()) l.erase("pattern"); else l.set("pattern", Json::string(pat));
+    }
+    if (p["rate"].isNumber()) l.set("rate", n3(p["rate"].toDouble()));
+    for (const char* k : {"electric", "nightOnly"}) if (p.has(k)) l.set(k, Json::fromBool(p[k].boolean(false)));
     if (p.has("type")) {
         if (p.getStr("type") == "spot") l.set("type", Json::string("spot"));
         else { l.erase("type"); for (const char* k : {"angle", "softness", "pitch", "yaw", "sweep", "sweepSpeed"}) l.erase(k); }

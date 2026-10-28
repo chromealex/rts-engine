@@ -364,7 +364,12 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
   частиц.
 - **Стадии**: строительные леса и стадии постройки, повреждённый вариант по здоровью, появление и
   смерть растворением, обводка выделения, полупрозрачный призрак при постановке здания, портреты.
-- **Форматы**: ещё **FBX** (ufbx) и сжатые текстуры **KTX2** (ETC2/BC/ASTC, остаются сжатыми на GPU).
+- **Форматы**: ещё **FBX** (ufbx) и сжатые текстуры **KTX2** (ETC2/BC/ASTC, остаются сжатыми на GPU);
+  **Collada**, **3DS**, **PLY**, **STL**; воксели **MagicaVoxel .vox** и **.vxl/.hva** (Tiberian Sun,
+  Red Alert 2); модели классических RTS из копии игры пользователя: **Warcraft III .mdx/.mdl** (+ BLP),
+  **Total Annihilation .3do**, **C&C Generals .w3d** (+ DDS). Остальное, что читает assimp (.blend,
+  .lwo, .x, .ms3d, .md2/.md3, .smd, .b3d…), переводит в glTF утилита **modelconv**: редактор делает
+  это сам при открытии и сохранении, сборщик кладёт в пакет только результат.
 
 Сломанная модель не ломает игру: тип рисуется фигурой, причина пишется в консоль редактора.
 Просмотр: `rts_modelview модель.glb@Walk` или `rts_modelview --game templates/showcase` (все типы игры
@@ -398,6 +403,26 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 
 Формат полей — в шапке `modules/rts/view/RtsLights.h`. Тестовые переменные: `RTS_TIME_OF_DAY`,
 `RTS_NIGHT`, `RTS_CLOUDS`, `RTS_STORM`.
+
+## Проверка механик через MCP
+
+Агент, который делает игру без кода, проверяет механику точечно, а не только матчем ботов.
+- **`scenario_run`** — сценарий на копии открытой карты (ничего не сохраняется): `clear` (пустая карта без
+  объектов, волн и стартовых юнитов), `spawn` с именами (`"id": "foot", "count": 3` → `foot#1..3`, `"foot"` — все),
+  команды по секундам (те же ключи, что у `play_command`), `bots` для части слотов, `checks` с результатом
+  pass/fail (`alive`, `dead`, `count`, `hp`, `resource`, `event`, `trigger`, `variable`, `distance`, `status`,
+  `result` + сравнение), `watch` + `every` (состояние объектов во времени), `events` (журнал событий).
+- **`play_units` / `play_command`** — команды в живой тест в окне Game (раньше были только внутри редактора, теперь
+  видны MCP-клиентам). Ссылки на объекты: id из `play_units`, имена `id` из карты или фильтр
+  `{type, owner, tags, kind, area, near + radius}`; `queue: true` — очередь (Shift), `ability` по id.
+- **`match_run`** — плюс журнал срабатывания триггеров и `events` (журнал событий по именам).
+- **`rules_lint`** — ключи `rules.json` и карты, которые загрузчик не читает (опечатки, блок не на месте), с
+  подсказкой («did you mean 'armor'?»). Работает на настоящем загрузчике (`JsonAccessLog` в `engine/data/Json.h`);
+  `rules_set`, `rules_merge` и `map_validate` сообщают о таких ключах сразу.
+- **`rules_schema`** — `part: "keys"`: все ключи, которые загрузчик спрашивает в каждом блоке (`types.*.weapons[]`),
+  собранные по всем играм, и ключи, которых нет в `docs/game-format.md`; `part: "doc"` — сам документ.
+- Событие симуляции `kEvTriggerFired` (только для инструментов и представления, не входит в контрольную сумму).
+- Ветка `agent-mech-tools`.
 
 ## Проверено / не проверено
 

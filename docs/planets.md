@@ -131,7 +131,11 @@ Implemented (agent-terrain-gen, `modules/rts/gen/`, format and params: docs/game
   (layer digits like `terrainMaterial`), `corners`; `generated.starts` = maximally separated land sites
   (farthest-point sampling with `sphereArcTurns`) as `{body, face, x, y}`, flattened base areas; `generated.minStartArc`.
 - Runs at match start from `RtsModule::setup` (per body seed = match seed mixed with the body index for `"seed": "match"`).
-  Not yet: placing objects / players on planets (needs the planet sim's object placement), fairness paths on spheres.
+- Whole planet maps (map-level `generate` with a planet preset, `modules/rts/gen/GenWorld.cpp`): bodies from the template's
+  world, layouts `shared` (polar rotational symmetry, exact for 2 / 4 players) and `separate` (one identical planet per player),
+  kit / near / far / moon objects with `at`, players' `start` as `{body, face, x, y}`, flattened bases away from face seams,
+  graded causeways, fairness measured with `MapGrid::findPath` on the generated map after `Simulation::setup`
+  (`generated.paths`, `pathSpread`, `nearResources`). MCP `map_generate` / editor **Генерация** (layout combo) work on planet maps.
 
 ## 5. Rendering (agent-planet-render)
 

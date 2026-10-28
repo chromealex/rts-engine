@@ -345,6 +345,7 @@ bool RtsModule::castPlayerAbility(Simulation& sim, uint8_t player, int idx, Vec3
     World& w = sim.world();
     GameState& gs = state(sim);
     if (!canUsePlayerAbility(sim, player, idx)) return false;
+    if (rules_.mech.deck && !mechDeckAllows(sim, player, idx, point)) return false;   // agent-mech: card in hand, deploy zone
     const PlayerAbilityDef& a = playerAbilityFor(sim, player, idx);
     // resolve the clicked object for structure / group targets
     if (a.target == TargetKind::Structure || a.target == TargetKind::Group) {
@@ -363,6 +364,7 @@ bool RtsModule::castPlayerAbility(Simulation& sim, uint8_t player, int idx, Vec3
         point = w.get<Transform>(target).pos;
     }
     if (!pay(sim, player, a.cost, {})) return false;
+    if (rules_.mech.deck) mechDeckPlayed(sim, player, idx);
     PlayerAbilityState& st = gs.playerAbilities[player][size_t(idx)];
     if (a.chargesMax > 0) --st.charges;
     Fixed rate = fxMax(playerStat(sim, player, Stat::CooldownRate, kOne), Fixed::fromRatio(1, 10));
@@ -570,8 +572,9 @@ void RtsModule::enterGarrison(Simulation& sim, Entity e, Entity s) {
             if (in.shield.raw > 0) { in.shield -= kOne; if (in.shield.raw <= 0) in.until = sim.tick(); die(); return; }
     if (g->count > 0) {
         Fixed def = (uf & kStIgnoreDefense) ? kOne : tt.garrisonDefense * stat(sim, s, Stat::Defense);
-        g->damageAcc += kOne / fxMax(def, Fixed::fromRatio(1, 10));
+        g->damageAcc += (rules_.originals ? stat(sim, e, Stat::Damage) : kOne) / fxMax(def, Fixed::fromRatio(1, 10));
         while (g->damageAcc >= kOne && g->count > 0) { --g->count; ++g->lost; g->damageAcc -= kOne; }
+        if (rules_.originals) assaultOriginals(sim, e, s);
     } else if (tt.capturable) {
         // revenge payloads of the defender and recapture of a temporarily captured structure
         std::vector<std::pair<int16_t, uint8_t>> revenge;
@@ -588,6 +591,7 @@ void RtsModule::enterGarrison(Simulation& sim, Entity e, Entity s) {
         if (auto* p = w.tryGet<Production>(s)) p->queue.clear();
         const Vec3 pos = w.get<Transform>(s).pos;
         sim.emit({kEvCaptured, me, s, e, old, pos});
+        if (rules_.originals) captureOriginals(sim, s, old, me);
         for (auto& [pl, by] : revenge) {
             EffectCtx ctx; ctx.owner = by; ctx.caster = s; ctx.target = s; ctx.point = pos; ctx.origin = pos;
             applyPayload(sim, pl, ctx);

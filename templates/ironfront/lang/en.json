@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Command & Conquer: Red Alert — MCV, ore, power and a build sidebar.",
+  "howto.like": "Red Alert: Allies vs the Soviet Union — MCV, ore, power and the build sidebar.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "Rocketeers kill tanks cheaply — keep a couple in every group.",
-  "howto.step1": "Deploy the MCV into a construction yard. The build sidebar is on the right: a building is built, then Place it near the base.",
-  "howto.step2": "A refinery arrives with a harvester that hauls ore from the fields into credits.",
-  "howto.step3": "Power plants power the base: without power production runs at half speed.",
-  "howto.step4": "Barracks: riflemen and rocketeers; war factory: light and heavy tanks. Turrets defend the base.",
-  "howto.step5": "Sell a building you no longer need — half of its price comes back."
+  "howto.tip": "Tesla coils and pillboxes go silent without power — build spare power plants.",
+  "howto.step1": "Deploy the MCV into a construction yard. Structures are built in the sidebar and placed next to the base.",
+  "howto.step2": "A refinery comes with a harvester; ore and gems (worth double) become credits, capped by refineries and silos.",
+  "howto.step3": "Each side has its own barracks, vehicles and defences; tanks crush infantry, an engineer captures an enemy building.",
+  "howto.step4": "The tech centre unlocks Tanya, Mammoths and the superweapons: the nuke, the Iron Curtain or the GPS satellite."
 }

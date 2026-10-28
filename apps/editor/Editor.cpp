@@ -1,6 +1,8 @@
 // Editor: lifecycle, docking layout, menus, documents, play-test and viewport rendering.
 // Window contents live in apps/editor/windows/*.cpp; the agent link in EditorAgent.cpp.
 #include "Editor.h"
+#include "core/SimTools.h"
+#include "engine/fx/FxModelMesh.h"
 #include "imgui.h"
 #include "imgui_internal.h" // DockBuilder
 
@@ -117,6 +119,7 @@ void Editor::init(gfx::Device& dev) {
         return true;
     });
     gameFx_.setGroundHeight([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : view_.heightAt(grid_, x, z); });
+    gameFx_.setMeshLoader([this](const std::string& name, fx::FxMesh& out) { return fx::meshFromModelFile(name, projectReader(ws_.project.dir), out); });
     if (!gameFx_.init(&dev)) ws_.log("fx", gameFx_.lastError(), true);
     reloadFx();
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
@@ -512,7 +515,10 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     auto& gs = simModule()->state(*sim_);
     // fields / creep changing during play are read by the terrain shader: build once per play session
     if (!playTerrainBuilt_) {
-        if (const Json* gm = simModule()->generatedMap()) view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h); // map "generate"
+        if (const Json* gm = simModule()->generatedMap()) {   // map "generate": the view shows what the sim was built from
+            if ((*gm)["world"].isObject()) { view_.setWorld(*gm); worldHash_ = 0; }
+            view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h);
+        }
         view_.buildTerrain(*dev_, gs.grid);
         playTerrainBuilt_ = true;
     }
@@ -612,6 +618,7 @@ void Editor::startPlay(int humanSlot) {
         };
         if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
         sim_->setup(ws_.project.rulesJson, mapJson);
+        playIds_ = mapEntityIds(*sim_, *simModule(), mapJson);
         view_.lights().configure(ws_.project.manifest["lighting"], mapJson["lighting"], mapJson["lights"]); // day/night, map lights
     } catch (const std::exception& e) {
         status = std::string("Ошибка запуска: ") + e.what();

@@ -196,7 +196,7 @@ bool MapGrid::passable(int x, int y, uint8_t layer) const {
     if (layer & 2 /*air*/) return true;
     const size_t i = size_t(index(x, y));
     if (blocked[i]) return false;
-    if (layer & 4 /*naval*/) return flags[i] & kCellWater;
+    if (layer & 4 /*naval*/) { if (flags[i] & kCellWater) return true; if (!(layer & 1)) return false; }   // ground | naval: amphibious
     const bool ok = (layer & 8 /*sand only*/) ? (flags[i] & kCellGround) && !(flags[i] & (kCellRock | kCellRamp)) : (flags[i] & kCellGround) != 0;
     return ok && (!hf || slope[i] <= slopeLimitFor(layer)); // heightfield: too steep for this body
 }
