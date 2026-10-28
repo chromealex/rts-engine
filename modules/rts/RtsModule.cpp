@@ -944,7 +944,10 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     if (w.alive(cmd.target)) if (auto* t = w.tryGet<Transform>(cmd.target)) target = t->pos;
     // attack-move of a group: spread into an arc facing the goal, flanks ahead (they wrap around the enemy)
     std::vector<std::pair<Entity, Vec3>> arc;
-    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3) {
+    // big groups to one point share a flow field (rules movement.flowField.minGroup); no arc for them
+    const bool flowGroup = rules_.movement.flow.minGroup > 0 && movers >= rules_.movement.flow.minGroup &&
+                           (cmd.type == kCmdMove || cmd.type == kCmdAttack || cmd.type == kCmdPatrol || cmd.type == kCmdSmart);
+    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3 && !flowGroup) {
         Vec3 c{};
         Fixed maxR{};
         std::vector<Entity> ms;
@@ -977,6 +980,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         Order o;
         o.point = flat(target);
         o.target = w.alive(cmd.target) ? cmd.target : kNullEntity;
+        o.flow = flowGroup && !(t.layer & kLayerAir);
         switch (cmd.type) {
         case kCmdMove:
             o.type = OrderType::Move; o.target = kNullEntity; o.param = movers;

@@ -242,6 +242,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         else m.stuck = fxMax(Fixed{}, m.stuck - dt);
         if (m.stuck > Fixed::fromRatio(3, 2) && m.moving) {
             m.stuck = Fixed{};
+            m.flow = false;   // stuck on a flow field too: own A* path from here
             g.findPath(tr.pos, m.goal, t.pathLayer, m.path, 40000, MapGrid::clearanceFor(t.radius), true);
             m.pathPos = 0;
             m.moving = !m.path.empty();
