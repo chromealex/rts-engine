@@ -679,6 +679,18 @@ Rules loadRules(const Json& j) {
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
         r.movement.planetHpaCells = int(std::clamp<int64_t>(mv.getInt("planetHpaCells", r.movement.planetHpaCells), 0, int64_t(1) << 30));
+        if (const Json& ff = mv["flowField"]; ff.isObject()) {
+            FlowFieldRules& fr = r.movement.flow;
+            fr.minGroup = int(std::clamp<int64_t>(ff.getInt("minGroup", 0), 0, 100000));
+            fr.waves = ff.getBool("waves", false);
+            fr.spread = ff.getFx("spread", fr.spread);
+            fr.maxFields = int(std::clamp<int64_t>(ff.getInt("maxFields", fr.maxFields), 1, 4096));
+            fr.budgetMB = int(std::clamp<int64_t>(ff.getInt("budgetMB", fr.budgetMB), 1, 4096));
+            if (fr.spread.raw < 0) fail("movement.flowField.spread", "must be >= 0");
+            for (auto& [k, v] : ff.members())
+                if (k != "minGroup" && k != "waves" && k != "spread" && k != "maxFields" && k != "budgetMB")
+                    fail("movement.flowField", "unknown key '" + k + "' (minGroup, waves, spread, maxFields, budgetMB)");
+        } else if (mv.has("flowField")) fail("movement.flowField", "expected an object");
     }
     // slope classes: types with their own move.maxSlope get a class (pathing and passability per class)
     for (auto& t : r.types) {

@@ -270,6 +270,7 @@ void RtsModule::moveSphere(Simulation& sim) {
         if (m.pathPos >= m.path.size()) { m.moving = false; m.path.clear(); }
         if (m.stuck > kOne) {
             m.stuck = Fixed{};
+            m.flow = false;   // stuck on a flow field too: own A* path from here
             g.findPath(tr.pos, m.goal, t.pathLayer, m.path, 40000, MapGrid::clearanceFor(t.radius), true);
             m.pathPos = 0;
             m.moving = !m.path.empty();
