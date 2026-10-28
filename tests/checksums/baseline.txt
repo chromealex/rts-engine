@@ -37,9 +37,9 @@ lastcolony 3 6a0a361f64b877a7
 lastcolony 1 394314cea7cba704
 lastcolony 2 7c75a554c95f9641
 lastcolony 3 c7804696c353e006
-lua_lab 1 cb16387e1ff8ca99
-lua_lab 2 6d45a70997af5cb9
-lua_lab 3 e3711427bc9674c0
+lua_lab 1 489e3fa55fd7632c
+lua_lab 2 4402c4aded378bf0
+lua_lab 3 6aeaded19a286db2
 metaltide 1 283d4e2a76f8871d
 metaltide 2 472195c7062308e4
 metaltide 3 f3e3b844b155d115
@@ -76,6 +76,9 @@ tiles2d 3 96eaf2517dea8b58
 underlord 1 6106de43560f3fb0
 underlord 2 7da90cd0aa9a5e06
 underlord 3 abeb50828dcb6a92
+wildfire 1 6213bec2ca2636ff
+wildfire 2 1b87a12ce9c4ebe3
+wildfire 3 fb8e3422e1e1af39
 triggerlab 1 f1f9e3b7efe182b0
 triggerlab 2 ee5c1b7405974d65
 triggerlab 3 5ab343e4e6c1b238
