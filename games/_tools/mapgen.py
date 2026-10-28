@@ -342,17 +342,25 @@ def fourages():
 
 
 def holdtheline():
-    m = Map("Crossroads", 64, 48, duel())
+    # sectors: 4 x 3 grid (16 x 16); the HQ sector is the start, every point takes its sector
+    m = Map("Crossroads", 64, 48, duel("us", "wehrmacht"))
     m.border()
     m.rect(20, 8, 4, 4, '#')
     m.rect(26, 30, 3, 6, '#')
-    m.ent("hq", 1, [8, 24])
-    m.ent("riflemen", 1, [12, 22]); m.ent("riflemen", 1, [12, 26])
-    m.ent("engineer", 1, [11, 24])
-    m.ent("fuel_point", 0, [16, 12])
-    m.ent("victory_point", 0, [32, 24], sym=False)
-    m.ent("victory_point", 0, [24, 12])
-    m.ent("munition_point", 0, [18, 36])
+    names = {}
+    for gy in range(3):
+        for gx in range(4):
+            l = "ABCDEFGHIJKL"[gy * 4 + gx]
+            m.region_rect(gx * 16, gy * 16, 16, 16, l)
+            names[l] = "Сектор " + l
+    m.region_names = names
+    m.players[0]["start"] = [8, 24]
+    m.players[1]["start"] = m.mirror([8, 24])
+    m.ent("fuel_point", 0, [8, 8])
+    m.ent("munition_point", 0, [8, 40])
+    m.ent("strategic_point", 0, [24, 24])
+    m.ent("victory_point", 0, [24, 8])
+    m.ent("munition_point", 0, [24, 40])
     write("holdtheline", m, "crossroads")
 
 

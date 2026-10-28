@@ -90,7 +90,11 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
         }
     }
     // ---- regions / territory extras
-    if (const Json& rg = j["regions"]; rg.isObject()) r.regions.requireExplored = rg.getBool("requireExplored", false);
+    if (const Json& rg = j["regions"]; rg.isObject()) {
+        r.regions.requireExplored = rg.getBool("requireExplored", false);
+        r.regions.supplyLines = rg.getBool("supplyLines", false);
+        if (r.regions.supplyLines) any = true;
+    }
     if (const Json& tr = j["territory"]; tr.isObject())
         for (auto& [k, v] : tr["incomePerCell"].members()) r.territory.incomePerCell.push_back({resId(r, "territory.incomePerCell", k), v.fx()});
     // ---- resources: event gains and per-unit player mods (morale)

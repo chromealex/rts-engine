@@ -306,6 +306,30 @@ void RtsModule::economyOriginals(Simulation& sim) {
         if (pi < gs.territoryCells.size())
             for (auto& a : rules_.territory.incomePerCell) p.income[a.res] += a.value * gs.territoryCells[pi];
     }
+    // supply lines (Company of Heroes): a captured point pays only while its sector is linked to the sector of
+    // an own key structure (the headquarters) through own sectors
+    if (rules_.regions.supplyLines && gs.regionCount > 0) {
+        std::vector<std::vector<uint8_t>> linked(gs.players.size());
+        for (size_t pi = 1; pi < gs.players.size(); ++pi) {
+            auto& lk = linked[pi];
+            lk.assign(size_t(gs.regionCount), 0);
+            std::vector<int> q;
+            w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+                if (o.player != pi || !rules_.types[u.type].key) return;
+                int ri = regionAt(sim, tr.pos);
+                if (ri >= 0 && !lk[size_t(ri)]) { lk[size_t(ri)] = 1; q.push_back(ri); }
+            });
+            for (size_t k = 0; k < q.size(); ++k)
+                for (uint16_t n : gs.regionAdj[size_t(q[k])])
+                    if (!lk[n] && gs.regionOwner[n] == pi) { lk[n] = 1; q.push_back(int(n)); }
+        }
+        w.each<Capture, Unit, Owner, Transform>([&](Entity, Capture&, Unit& u, Owner& o, Transform& tr) {
+            if (o.player == 0 || o.player >= gs.players.size() || (u.flags & kUnitUnderConstruction)) return;
+            int ri = regionAt(sim, tr.pos);
+            if (ri < 0 || linked[o.player][size_t(ri)]) return;
+            for (auto& a : rules_.types[u.type].income) gs.players[o.player].income[a.res] -= a.value;   // cut off
+        });
+    }
     // power fields: structures that need one switch off outside every own field (pylons)
     bool anyField = false;
     for (auto& t : rules_.types) if (t.needsField >= 0) anyField = true;

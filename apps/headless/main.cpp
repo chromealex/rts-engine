@@ -57,7 +57,10 @@ static void dumpTypes(Simulation& sim) {
         sim.world().each<game::Unit, Owner>([&](Entity, game::Unit& u, Owner& o) { if (o.player == p.slot) n[m->rules().types[u.type].id]++; });
         std::printf("  %s:", p.name.c_str());
         for (auto& [k, v] : n) std::printf(" %s=%d", k.c_str(), v);
-        std::printf("\n");
+        std::printf("\n    income:");
+        for (size_t r = 0; r < m->rules().resources.size(); ++r)
+            std::printf(" %s=%.2f/s", m->rules().resources[r].id.c_str(), m->state(sim).players[p.slot].income[r].toDouble());
+        std::printf("  supply %d/%d\n", int(m->state(sim).players[p.slot].supplyUsed.toInt()), int(m->state(sim).players[p.slot].supplyCap.toInt()));
         sim.world().each<game::Unit, Owner, game::Footprint>([&](Entity, game::Unit& u, Owner& o, game::Footprint& f) {
             if (o.player == p.slot) std::printf("    %s [%d,%d %dx%d]\n", m->rules().types[u.type].id.c_str(), f.x, f.y, f.w, f.h);
         });
