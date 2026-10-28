@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "engine/data/Json.h"
+#include "engine/pack/FileCopy.h"
 #include "engine/pack/PackWriter.h"
 #include "engine/pack/Unpacker.h"
 #include "tools/atlas/AtlasBuild.h"
@@ -151,17 +152,15 @@ std::string replaceAll(std::string s, const std::string& a, const std::string& b
     for (size_t pos = 0; (pos = s.find(a, pos)) != std::string::npos; pos += b.size()) s.replace(pos, a.size(), b);
     return s;
 }
-// Recursive copy that also works into an existing folder on every standard library
-// (MinGW's fs::copy(recursive | overwrite_existing) fails when the target directory exists).
-void copyTree(const fs::path& from, const fs::path& to) {
-    fs::create_directories(to);
-    for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
-        const fs::path dst = to / fs::relative(it->path(), from);
-        if (it->is_directory()) fs::create_directories(dst);
-        else fs::copy_file(it->path(), dst, fs::copy_options::overwrite_existing);
-    }
+// fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists (see FileCopy.h).
+void copyDir(const fs::path& from, const fs::path& to) {
+    std::error_code ec;
+    if (!rts::pack::copyTree(from, to, ec)) die("не удалось скопировать " + from.string() + " -> " + to.string() + ": " + ec.message());
 }
-void copyDir(const fs::path& from, const fs::path& to) { copyTree(from, to); }
+void copyFile(const fs::path& from, const fs::path& to) {
+    std::error_code ec;
+    if (!rts::pack::copyFileReplace(from, to, ec)) die("не удалось скопировать " + from.string() + " -> " + to.string() + ": " + ec.message());
+}
 std::string sanitize(const std::string& s) {
     std::string o;
     for (char c : s) o += (std::isalnum(static_cast<unsigned char>(c)) ? c : (c == ' ' || c == '-' || c == '_') ? '_' : '_');
@@ -519,7 +518,7 @@ fs::path contentPack(Options& o) {
 void placeContent(Options& o, const fs::path& contentDir) {
     if (o.pack) {
         fs::create_directories(contentDir);
-        fs::copy_file(contentPack(o), contentDir / "content.rpak", fs::copy_options::overwrite_existing);
+        copyFile(contentPack(o), contentDir / "content.rpak");
     } else {
         copyDir(gameContent(o), contentDir);
         copyDir(o.engine / "engine" / "assets", contentDir / "engine");
@@ -595,7 +594,7 @@ rts::build::BrandingContext branding(const Game& g, const Options& o) {
 void exportSources(const Options& o, const fs::path& dst) {
     for (const char* d : {"engine", "modules", "third_party", "platform"}) copyDir(o.engine / d, dst / d);
     copyDir(o.engine / "apps" / "client", dst / "apps" / "client");
-    fs::copy_file(o.engine / "CMakeLists.txt", dst / "CMakeLists.txt", fs::copy_options::overwrite_existing);
+    copyFile(o.engine / "CMakeLists.txt", dst / "CMakeLists.txt");
 }
 
 // Native plugins for a target: report what goes in and write plugins.cmake into `dir`.
@@ -782,7 +781,7 @@ void buildAndroid(const Game& g, Options& o) {
     std::string variant = o.config == "Debug" ? "debug" : "release";
     fs::path apk = proj / "app" / "build" / "outputs" / "apk" / variant / ("app-" + variant + ".apk");
     if (fs::exists(apk)) {
-        fs::copy_file(apk, out / (g.exe + "-" + variant + ".apk"), fs::copy_options::overwrite_existing);
+        copyFile(apk, out / (g.exe + "-" + variant + ".apk"));
         info("APK: " + (out / (g.exe + "-" + variant + ".apk")).string());
         info("Установка: adb install -r " + quote(out / (g.exe + "-" + variant + ".apk")));
         reportSize(o, "android", out / (g.exe + "-" + variant + ".apk"));
@@ -812,7 +811,7 @@ void buildWeb(const Game& g, Options& o) {
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::create_directories(out);
     for (const char* f : {"index.html", "index.js", "index.wasm", "index.data"}) {
-        if (fs::exists(bdir / f)) fs::copy_file(bdir / f, out / f, fs::copy_options::overwrite_existing);
+        if (fs::exists(bdir / f)) copyFile(bdir / f, out / f);
     }
     std::string html = readText(out / "index.html");
     writeText(out / "index.html", replaceAll(html, "<title>RTSEngine</title>", "<title>" + g.name + "</title>"));
@@ -857,7 +856,7 @@ void buildWindows(const Game& g, Options& o) {
         mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
         fs::remove_all(out / g.exe);
         fs::create_directories(out / g.exe);
-        fs::copy_file(bdir / (g.exe + ".exe"), out / g.exe / (g.exe + ".exe"), fs::copy_options::overwrite_existing);
+        copyFile(bdir / (g.exe + ".exe"), out / g.exe / (g.exe + ".exe"));
         copyPluginRuntime(o, "windows", out / g.exe);
         placeContent(o, out / g.exe / "content");
         info("Готово: " + (out / g.exe / (g.exe + ".exe")).string());
@@ -893,7 +892,7 @@ void buildLinux(const Game& g, Options& o) {
     mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
     fs::remove_all(out / g.exe);
     fs::create_directories(out / g.exe);
-    fs::copy_file(bdir / g.exe, out / g.exe / g.exe, fs::copy_options::overwrite_existing);
+    copyFile(bdir / g.exe, out / g.exe / g.exe);
     copyPluginRuntime(o, "linux", out / g.exe);
     placeContent(o, out / g.exe / "content");
     rts::build::brandLinux(branding(g, o), out / g.exe, info);   // share/icons/hicolor + share/applications/<exe>.desktop
@@ -979,7 +978,7 @@ int main(int argc, char** argv) {
             fs::path pack = contentPack(o);
             std::error_code e2;
             fs::create_directories(o.out / t, e2);
-            fs::copy_file(pack.parent_path() / "size-report.json", o.out / t / "size-report.json", fs::copy_options::overwrite_existing, e2);
+            rts::pack::copyFileReplace(pack.parent_path() / "size-report.json", o.out / t / "size-report.json", e2);
             std::cout << "оценка " << t << ": " << (o.out / t / "size-report.json").string() << std::endl;
         }
         return 0;
