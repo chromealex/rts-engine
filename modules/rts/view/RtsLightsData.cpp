@@ -155,6 +155,7 @@ render::PointLight RtsLights::glowLight(const Glow& g, float3 ground, float yaw,
     if (g.flicker > 0) // two incommensurate waves per object read as fire, not as a pulse
         in *= 1.0f + g.flicker * (0.6f * std::sin(t * 9.0f + phase) + 0.4f * std::sin(t * 23.0f + phase * 1.9f));
     PointLight l{p, g.radius * scale, g.color, in, 0};
+    l.rank = g.intensity;   // flicker must not reshuffle the per-pixel slots
     l.groundY = ground.y;
     l.halo = std::max(g.halo, 0.0f) * scale;
     if (g.spot) {
