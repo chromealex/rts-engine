@@ -9702,3 +9702,64 @@ int main() {
     std::printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
 }
+
+// ---- territory on planets (agent-planet-render): starts, unit claims, DK diggers / claimers across face seams
+TEST(planet_territory_claims_and_dig_cross_seams) {
+    const std::string rules = R"J({"victory": {"mode": "survive", "seconds": 600},
+      "diggable": {"D": {"hardness": 1}},
+      "territory": {"claimBy": "both", "startRadius": 5},
+      "types": {"hall": {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+                "digger": {"move": {"speed": 3, "radius": 0.3}, "digs": {"rate": 3}, "claimer": {"time": 0.2}},
+                "trooper": {"move": {"speed": 2, "radius": 0.3}, "claim": {"radius": 2, "rate": 3}}}})J";
+    const std::string map = R"J({"players": [{"start": {"body": "p", "face": 4, "x": 4, "y": 4}}, {"start": {"body": "p", "face": 5, "x": 4, "y": 4}}],
+      "world": {"start": "p", "bodies": [{"id": "p", "kind": "planet", "radius": 12, "faceSize": 8,
+        "terrain": {"faces": [{}, {}, {}, {}, {"rows": ["........", "........", "........", "........", "........", "........", "DDDDDDDD", "........"]}, {}]}}]},
+      "entities": [{"type": "hall", "owner": 1, "at": {"body": "p", "face": 4, "x": 4, "y": 4}},
+                   {"type": "hall", "owner": 2, "at": {"body": "p", "face": 5, "x": 4, "y": 4}},
+                   {"type": "digger", "owner": 1, "at": {"body": "p", "face": 4, "x": 4.5, "y": 5.5}},
+                   {"type": "trooper", "owner": 1, "at": {"body": "p", "face": 4, "x": 0.5, "y": 2.5}}]})J";
+    auto run = [&](bool checks) {
+        auto sim = makeSimJson(rules, map, 2);
+        auto& m = mod(*sim);
+        const game::Surface* S = m.surface(*sim);
+        if (!S) { CHECK(false); return uint64_t(0); }
+        auto& g = m.state(*sim).grid;
+        auto facesOf = [&](uint8_t p) {
+            int mask = 0;
+            for (size_t i = 0; i < g.territory.size(); ++i)
+                if (g.territory[i] == p) { int b, f, x, y; if (S->cellFace(int(i), b, f, x, y)) mask |= 1 << f; }
+            return mask;
+        };
+        const int t0 = m.territoryOf(*sim, 1);
+        if (checks) {
+            CHECK(t0 > 40 && m.territoryOf(*sim, 2) >= t0);   // start discs around both halls (player 1's has a rock row)
+            CHECK((facesOf(1) & ~(1 << 4)) != 0);             // the start radius crosses a face seam
+            CHECK(g.territory[size_t(S->gridCell(0, 4, 4, 6))] == 0);   // rock is not owned
+        }
+        // mark the rock row; the digger digs it and claims the floor
+        Command dg; dg.player = 1; dg.type = game::kCmdDig; dg.point = S->cellCenter(S->gridCell(0, 4, 0, 6)); dg.param = game::rectParam(8, 1);
+        sim->submit(dg);
+        for (int i = 0; i < 20 * 40; ++i) sim->step();
+        int rock = 0;
+        for (int x = 0; x < 8; ++x) rock += g.dig[size_t(S->gridCell(0, 4, x, 6))] ? 1 : 0;
+        const int t1 = m.territoryOf(*sim, 1);
+        if (checks) {
+            CHECK(rock < 8);            // dug through (dig jobs found the marked cells via the sphere BFS)
+            CHECK(t1 > t0 + 10);        // claimed by the trooper / digger
+            // every own cell is connected to the hall through own cells (4-neighbours across seams)
+            std::vector<uint8_t> seen(g.territory.size(), 0);
+            std::vector<int> q{S->gridCell(0, 4, 4, 4)};
+            seen[size_t(q[0])] = 1;
+            for (size_t k = 0; k < q.size(); ++k)
+                for (int d = 0; d < 4; ++d) {
+                    const int n = S->neighbor(q[k], d);
+                    if (n >= 0 && !seen[size_t(n)] && g.territory[size_t(n)] == 1) { seen[size_t(n)] = 1; q.push_back(n); }
+                }
+            CHECK(int(q.size()) == t1);
+            CHECK(m.state(*sim).territoryCells[1] == t1);
+        }
+        return sim->checksum();
+    };
+    const uint64_t a = run(true), b = run(false);
+    CHECK(a == b);
+}
