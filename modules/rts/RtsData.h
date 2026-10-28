@@ -398,6 +398,7 @@ struct RegionRules {
     bool buildOnlyOwned = true;
     Fixed productionPerRegion{};              // production speed bonus per owned region beyond the first (Z)
     bool requireExplored = false;             // a region must have been seen before it can be claimed (Northgard)
+    bool supplyLines = false;                 // income of points counts only in sectors linked to an own key structure (CoH)
 };
 
 // Diggable terrain: map character -> hardness and what digging it yields (gold veins, gems).
