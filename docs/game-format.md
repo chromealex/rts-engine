@@ -820,6 +820,154 @@ Garrison structures, groups and lanes come from `garrison`, `kCmdSend` and `lane
 Still needs code: **flying towers moving between points** (garrisons are fixed structures; a mobile
 garrison would need garrisons on units).
 
+## Army control (agent-mech): stances, retreat, transports
+
+Optional blocks; a game without them plays exactly as before (stances and retreat commands work in any game).
+
+```json
+"stances": {"defendRadius": 6},                          // defensive stance: chase at most this far from where it stood
+"retreat": {"speed": 1.25, "damageTaken": 0.75},          // the Retreat command (Company of Heroes / Dawn of War II)
+"types": {
+  "hq":     {"retreatPoint": true, ...},                  // retreating units run to the nearest own one (else key / producer)
+  "archer": {"stance": "defensive", ...},                 // default stance of the type: aggressive | defensive | hold | passive
+  "apc":    {"transport": {"slots": 8, "accepts": ["infantry"], "layers": ["ground"], "unloadInterval": 0.5, "killOnDeath": 1}},
+  "bunker": {"transport": {"slots": 4, "fireFrom": 4, "heal": 2}},                 // passengers shoot from inside
+  "town_center": {"transport": {"slots": 15, "damagePerCargo": 0.2, "accepts": ["villager"]}},   // AoE: more arrows per garrisoned unit
+  "ifv":    {"transport": {"slots": 1, "weaponFromCargo": true}},                  // the passenger's weapon fires (RA2 IFV)
+  "tank":   {"cargoSize": 4, ...}                                                  // slots a passenger takes (default 1)
+}
+```
+
+- **Stances** (command `kCmdStance`, param 0 aggressive, 1 defensive, 2 hold, 3 passive): aggressive = default behaviour;
+  defensive = fights enemies within `stances.defendRadius` of its spot and walks back; hold = never moves on its own
+  (persistent `kCmdHold`); passive = never attacks on its own (explicit attack orders still work).
+- **Retreat** (`kCmdRetreat`, needs a `retreat` block): the units run to the nearest own `retreatPoint` (else a `key`
+  structure, else a producer) with `speed` x speed and `damageTaken` x damage, without fighting; any new order ends it.
+  The AI retreats fighters below 30% hp that see an enemy.
+- **Transports** (`transport` on units or structures): `kCmdLoad` (units = passengers, target = transport; a right click
+  on an own transport does the same), `kCmdUnload` (units = transports; param 1 + point: drive there first). Passengers
+  are off the map (`kUnitInCargo`): not targetable, not drawn, not pushing; they ride with the carrier. `accepts`
+  (type tags) and `layers` filter passengers, `fireFrom` passengers with weapons shoot from inside at the carrier's
+  position, `damagePerCargo` raises the carrier's own damage per passenger, `heal` hp/s inside. When the carrier
+  dies, `killOnDeath` of the passengers die with it (default 1 for units, 0 for structures) and the rest get out.
+  Events `kEvLoaded` / `kEvUnloaded` (a = passenger, b = transport). The AI mans shooting structures (`fireFrom`:
+  fighters; `damagePerCargo`: workers) when enemies are within 10 cells and lets workers out when it is safe.
+
+### Detection, toggles, veterancy, guard / follow, waypoints (agent-mech)
+
+```json
+"veterancy": {"xp": [100, 300, 700], "perLevel": [{"stat": "damage", "add": 0.1}, {"stat": "armor", "add": 1}], "healOnLevel": true, "fromCost": 1},
+"statuses": {"cloak": {"flags": ["invisible"]}, "burrowed": {"flags": ["invisible", "root", "disarm"]}},
+"types": {
+  "observer": {"detects": 9, ...},                                   // reveals invisible enemies within 9 cells (allies share it)
+  "ghost":    {"abilities": [{"id": "cloak", "target": "none", "toggle": {"status": "cloak", "drain": 1}}], ...},
+  "lurker":   {"abilities": [{"id": "burrow", "target": "none", "toggle": {"status": "burrowed"}}], ...},
+  "wall":     {"veterancy": false},                                   // or its own {"xp": [...], "perLevel": [...]}
+  "tank":     {"xp": 50, ...}                                         // xp its killer gets (default: its cost x fromCost)
+}
+```
+
+- **Detection**: invisible objects (status flag `invisible`) can be targeted by a side only when `revealed` or within
+  `detects` of one of its (or an ally's) detectors. `RtsModule::canSee(sim, e, viewer)` is the query for the view/UI.
+- **Toggle abilities**: casting switches the status on (until toggled off) and off; `drain` energy per second turns
+  it off when energy runs out. Cloak, burrow, submerge, siege mode (a status with mods / flags) are data.
+- **Veterancy** (ordinary units; heroes keep `hero`): the unit that dealt the last hit gets the victim's `xp`;
+  ranks apply `perLevel` per rank above 1 and heal on rank-up; event `kEvLevelUp` (value = rank).
+- **Guard / follow** (`kCmdGuard`, `kCmdFollow`, target = unit): follow within ~3 cells; guard also fights enemies
+  within 6 cells of the guarded unit.
+- **Rally waypoints**: `kCmdRally` with the queue flag (Shift) adds waypoints after the rally point; new units walk
+  them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
+- **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
+
+### Combat and economy models (agent-mech)
+
+```json
+"armorModel": "percent",                                               // Warcraft III: armor a cuts a*0.06/(1+a*0.06); "factor" changes 0.06
+"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // default (StarCraft): damage - armor, at least 20%
+"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // Age of Empires II
+"upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
+"types": {
+  "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
+  "knight":   {"armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
+  "zealot":   {"shields": {"max": 50, "regen": 2, "delay": 10, "armor": 0}},   // StarCraft shields
+  "goldmine": {"resourceNode": {"resource": "gold", "amount": 12500, "maxWorkers": 5}}
+}
+```
+
+- **classes**: damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that class)); `base`
+  classes always count (a missing armor is 0, armor upgrades raise them), other classes only against types that list
+  them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first base class
+  with its `damage`. The damage table is not used in this model.
+- **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
+  regenerate `regen`/s after `delay` seconds without hits.
+- **maxWorkers**: further workers wait next to the node until a place is free.
+
+### Genre mechanics (agent-mech stage 2)
+
+```json
+"market": {"currency": "gold", "prices": {"wood": 100, "food": 100, "stone": 130}, "fee": 0.3, "step": 3, "lot": 100},
+"tribute": {"fee": 0.3}, "diplomacy": true,
+"items": {"potion": {"cost": {"gold": 50}, "use": {"heal": 200}, "charges": 1},
+          "boots":  {"cost": {"gold": 100}, "mods": [{"stat": "speed", "add": 1}], "charges": 0, "consumable": false}},
+"cycles": [{"id": "day", "length": 480, "phases": [{"id": "day", "until": 0.6}, {"id": "night", "until": 1, "status": "night"}]},
+           {"id": "season", "length": 1200, "phases": [{"id": "summer", "until": 0.75}, {"id": "winter", "until": 1, "status": "winter"}]}],
+"hazards": [{"field": "tiberium", "damage": 6, "tags": ["infantry"]}, {"area": "lava", "status": "burning"}],
+"deck": {"hand": 4, "deployNear": 8, "ownHalf": true},
+"types": {
+  "wall":     {"wall": true, ...},                       // built in a line (kCmdBuildLine)
+  "gate":     {"gate": "own" | "allies", ...},           // the owner walks through; enemies are stopped and attack it
+  "bridge":   {"bridge": true, ...},                     // walkable ground over water while it stands (map-placed)
+  "nydus":    {"transport": {"slots": 20}, "tunnel": "nydus"},   // load at one, unload at any tunnel of the network
+  "hovercraft": {"move": {"layer": "amphibious", ...}},  // ground and water
+  "harrier":  {"weapons": [{"ammo": 2, ...}]},           // empty: flies to the nearest own dock and rearms
+  "airfield": {"dock": {"slots": 4, "rearmTime": 1}},
+  "templar":  {"mergeInto": {"with": "templar", "result": "archon"}},   "archon": {"splitInto": {"type": "templar", "count": 2}},
+  "market":   {"market": true}, "cart": {"trader": {"rate": 0.5}},     // currency per cell between the two markets per round trip
+  "hero":     {"inventory": {"slots": 6}}, "shop": {"shop": {"sells": ["potion", "boots"], "radius": 4}},
+  "kobold":   {"drops": [{"item": "potion", "chance": 0.3}]}
+}
+```
+Map players may have `"deck": ["card ids..."]` (default: every player ability). Commands: `kCmdFormation` (param 0 line, 1 box,
+2 wedge, 3 loose, -1 break; a formation ordered to a point keeps its shape and the pace of its slowest member),
+`kCmdBuildLine`, `kCmdMerge`, `kCmdSplit`, `kCmdTrade` (sell / buy one lot; prices move by `step` and are shared by all),
+`kCmdTradeRoute`, `kCmdTribute`, `kCmdDiplomacy` (alliances need both sides; war moves the player to a new team),
+`kCmdBuyItem` / `kCmdUseItem` / `kCmdDropItem` / `kCmdPickItem`. Cycles apply their phase `status` to every player and set
+trigger variable `cycle.<id>` = phase index (event `kEvCyclePhase`). Jumps over cliffs, jetpacks and blinks are abilities
+with the `blink` effect; teleport networks are `area` effects with `teleportTo`. The AI sells surplus / buys shortages,
+sends idle carts to the farthest market, buys and drinks potions with heroes and merges idle pairs.
+
+## Save states (agent-mech)
+
+`Simulation::serialize()` returns the whole dynamic state as bytes (versioned, little-endian, identical on every
+platform: `engine/core/Archive.h`); `deserialize(bytes)` loads it into a simulation set up from the same rules, map and
+seed and checks the state checksum stored in the file. Saved: tick, RNG, players and teams, pending and executed
+commands (replays continue), the entity allocator, every component pool in dense order and the dynamic part of
+`GameState` (per-cell layers run-length encoded). Not saved: rules, triggers, the planet surface (from setup) and derived
+caches (clearance, HPA*, rebuilt on demand). The computer players keep their own memory, so bots resume from the loaded
+state with fresh plans. Module side: `RtsModule::serializeState` (`modules/rts/RtsSave.cpp`); a component type missing from
+its list makes saving fail. `rts_headless --save F --save-at S` / `--load F`; MCP `match_run` with `saveCheck` (seconds).
+A skirmish match at 90 s is ~150 KB.
+
+## Campaigns (agent-mech)
+
+`campaign.json` in the game folder chains missions; see `modules/rts/RtsCampaign.h`:
+
+```json
+{"start": "m1", "missions": [
+  {"id": "m1", "name": "Raid", "map": "maps/m1.json", "briefing": "campaign.m1.briefing", "next": "m2",
+   "carry": {"resources": ["gold"], "tags": ["hero"], "types": ["knight"], "max": 12}},
+  {"id": "m2", "name": "Siege", "map": "maps/m2.json"}]}
+```
+
+Trigger actions for missions: `{"type": "objective", "id": "raze", "text": "...", "op": "add" | "done" | "fail", "primary": true}`,
+`{"type": "dialog", "speaker": "Captain", "portrait": "ui/captain.png", "voice": "vo/c1.ogg", "text": "...", "duration": 4}`,
+`{"type": "camera", "at": [x, z] | "area": "a", "zoom": 1, "duration": 2, "lock": false}`,
+`{"type": "endMission", "result": "victory" | "defeat", "next": "m2"}`. State in `GameState::mech` (`objectives`,
+`dialogs`, `nextMission`, `missionResult`, saved with the match); events `kEvObjective`, `kEvDialog`, `kEvCamera`,
+`kEvMissionEnd` for the HUD (objective list, dialog box, camera moves). Between missions `collectCarry` (survivors with
+hp, rank, hero level; resources) -> `applyCarry` (into the next map, players[0] = campaign player) -> `restoreCarry`
+after setup. MCP: `campaign_get`, `campaign_set` (validated), `campaign_run` (bots, mission chain, outcomes, carry).
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
@@ -827,7 +975,8 @@ Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player i
 room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
 optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
-`kCmdConnectRoad` (units = own structures), `kCmdTransit` (planets: orbit units, `param` = target body). `kCmdPlayerAbility` with a `structure` / `group` / `player`
+`kCmdConnectRoad` (units = own structures), `kCmdTransit` (planets: orbit units, `param` = target body), `kCmdStance` (param = stance),
+`kCmdRetreat`, `kCmdLoad` (target = transport), `kCmdUnload` (param 1 = drive to point first), `kCmdGuard` / `kCmdFollow` (target = unit). `kCmdPlayerAbility` with a `structure` / `group` / `player`
 ability takes the clicked object in `target` (or the nearest one to `point`).
 
 ## Triggers

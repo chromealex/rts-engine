@@ -14,6 +14,7 @@
 #include "RtsData.h"
 #include "RtsMap.h"
 #include "RtsTriggers.h"
+#include "RtsMech.h"
 #include <memory>
 
 namespace rts::game {
@@ -54,6 +55,25 @@ enum CommandType : uint16_t {
     kCmdBuildRoad,    // no units; rect (extra 0 build, 1 remove), cost per cell from rules.roadNetwork
     kCmdConnectRoad,  // units: own structures; the sim lays the shortest road from each to the own road network
     kCmdTransit,      // planets: orbit units, param = target body index; timed transfer to that body's orbit shell
+    // agent-mech (RtsMech*.cpp)
+    kCmdStance,       // units; param = StanceMode (0 aggressive, 1 defensive, 2 hold, 3 passive)
+    kCmdRetreat,      // units: run to the nearest own retreatPoint (rules "retreat")
+    kCmdLoad,         // units = passengers, target = transport (or units = transports, target = a passenger)
+    kCmdUnload,       // units = transports; point: move there first (param 1), else unload where they stand
+    kCmdGuard,        // units follow `target` and fight what attacks near it
+    kCmdFollow,       // units follow `target`
+    kCmdFormation,    // units; param = shape (0 line, 1 box, 2 wedge, 3 loose, -1 break up)
+    kCmdBuildLine,    // builders; point = start, param = type | end x << 16 | end z << 32 (cells): walls in a line
+    kCmdMerge,        // units: pair up into their mergeInto result (archons)
+    kCmdSplit,        // units with splitInto
+    kCmdTrade,        // units[0] = own market; param = resource | (1 << 8 when selling)
+    kCmdTradeRoute,   // traders; target = destination market (own or allied), home = nearest own market
+    kCmdTribute,      // param = resource | to player << 8 | amount << 16
+    kCmdDiplomacy,    // param = other player | 1 << 8 ally (0: enemy)
+    kCmdBuyItem,      // units[0] = buyer (inventory), target = shop, param = item index
+    kCmdUseItem,      // units[0]; param = slot; target / point for the effect (self by default)
+    kCmdDropItem,     // units[0]; param = slot
+    kCmdPickItem,     // units[0]; point = where the ground item lies
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -103,12 +123,25 @@ enum GameEvent : uint16_t {
     kEvTransitStart,  // planets: a = unit, value = target body, pos = departure point
     kEvTransitEnd,    // planets: a = unit, value = body arrived at, pos = arrival point
     kEvTriggerFired,    // tools/debug: value = trigger index (Rules triggers first, then map), player = triggering slot, a = unit
+    kEvLoaded,          // agent-mech: a = passenger, b = transport, value = passengers aboard
+    kEvUnloaded,        // a = passenger, b = transport, value = passengers left
+    kEvCyclePhase,      // agent-mech: value = cycle index << 8 | phase index (day/night, seasons)
+    kEvTraded,          // player, value = resource | 1 << 8 when sold (market); trader income: a = trader
+    kEvDiplomacy,       // player = who, value = other | 1 << 8 when allied
+    kEvItem,            // a = unit, value = item index; b: shop (bought) / null (used, picked, dropped)
+    kEvMerged,          // a = result
+    kEvObjective,       // campaigns: value = objective index | state << 16 (0 added, 1 done, 2 failed), player
+    kEvDialog,          // value = index into MechState::dialogs, a = speaking unit (if any), player 0 = everyone
+    kEvCamera,          // pos = where to look, value = duration in ms | 1 << 31 when the camera is locked, player
+    kEvMissionEnd,      // value 1 victory / 0 defeat, player
 };
 
 // ---------------------------------------------------------------- components
 enum UnitFlags : uint8_t { kUnitHold = 1, kUnitUnderConstruction = 2, kUnitDisabled = 4 /*power deficit*/, kUnitSilent = 8 /*removed without death effects*/,
                           kUnitInHand = 16 /*picked up: off the map*/, kUnitPossessed = 32 /*directly controlled*/,
-                          kUnitInTransit = 64 /*between bodies (set together with kUnitInHand: off every surface)*/ };
+                          kUnitInTransit = 64 /*between bodies (set together with kUnitInHand: off every surface)*/,
+                          kUnitInCargo = 128 /*inside a transport: off the map (agent-mech)*/ };
+constexpr uint8_t kUnitOffMap = kUnitInHand | kUnitInCargo;
 
 struct Unit {
     uint16_t type = 0;
@@ -123,7 +156,14 @@ enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Retur
                                  Dig,        // point2 = cell to dig, point = cell to stand on
                                  ClaimCell,  // point = cell to claim (claimers)
                                  Need,       // param = NeedKind | room << 8, point = room cell (or target = structure)
-                                 Haul };     // carrier job, see Carrier
+                                 Haul,       // carrier job, see Carrier
+                                 Board,      // agent-mech: walk to the transport `target` and get in
+                                 Unload,     // agent-mech (transports): go to `point` (state 0) then unload
+                                 Follow,     // agent-mech: stay near `target`; param 1 = guard it
+                                 Rearm,      // go to the dock `target` and reload ammo
+                                 Trade,      // trader loop between its markets (Trader component)
+                                 PickItem,   // walk to `point` and pick up the ground item there
+                                 Merge };    // walk to `target` and merge with it
 
 struct Order {
     OrderType type = OrderType::Move;
@@ -307,6 +347,7 @@ struct WaveDef {
     Fixed growth = Fixed::fromInt(1);
     int repeats = 0;
     int done = 0;
+    std::vector<Vec3> route;   // agent-mech: waypoints (map areas / points) the wave walks before its objective
 };
 
 struct RoomZone { uint16_t type = 0; uint8_t owner = 0; std::vector<int32_t> cells; Vec3 center{}; };
@@ -333,6 +374,8 @@ struct EffectCtx {
 };
 
 struct GameState {
+    MechState mech;                           // agent-mech global state (RtsMech.h)
+    bool mechActive = false;                  // agent-mech: a mech component exists (stance given in any game); derived
     std::vector<PlayerEconomy> players;   // index = slot (0 = neutral)
     MapGrid grid;
     RoadGraph roads;
@@ -390,6 +433,7 @@ public:
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
     void hashState(Simulation& sim, Hasher& h) override;
+    bool serializeState(Simulation& sim, Archive& a) override;   // RtsSave.cpp
     int result(Simulation& sim) override;
 
     const Rules& rules() const { return rules_; }
@@ -486,6 +530,61 @@ public:
     std::vector<Amount> upfrontCost(const std::vector<Amount>& cost) const; // the part paid at once (goods are delivered)
     // lanes between garrison buildings a -> b (main lane first), empty when none
     std::vector<int> lanesBetween(Simulation& sim, Entity a, Entity b) const;
+
+    // ---- agent-mech mechanics (RtsMech*.cpp)
+    bool mechOn(Simulation& sim) const { return rules_.mech.any || sim.world().resource<GameState>()->mechActive; }
+    bool applyMechCommand(Simulation& sim, const Command& cmd);   // true: handled (kCmdStance...; smart click on a transport)
+    void sysMech(Simulation& sim);                                 // stances, retreat, transports
+    void hashMech(Simulation& sim, Hasher& h, Entity e);           // per object, only components that exist
+    void mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed& mul) const;   // retreat speed, cargo arrows, veterancy
+    Fixed mechDamageTaken(Simulation& sim, Entity e) const;
+    bool mechCanAcquire(Simulation& sim, Entity e) const;          // auto-targeting allowed (passive stance, cargo)
+    bool mechMayChase(Simulation& sim, Entity e, Vec3 targetPos);  // defensive stance leash
+    bool runBoard(Simulation& sim, Entity e, Order& o);
+    bool runUnload(Simulation& sim, Entity e, Order& o);
+    void mechOnDeath(Simulation& sim, Entity e);                   // a dying transport drops / kills its passengers
+    bool board(Simulation& sim, Entity passenger, Entity carrier); // false: no room / not accepted
+    void unloadOne(Simulation& sim, Entity carrier, size_t index);
+    bool accepts(Simulation& sim, Entity carrier, Entity passenger) const;
+    Entity nearestRetreatPoint(Simulation& sim, uint8_t owner, Vec3 from) const;
+    bool detected(Simulation& sim, Entity e, uint8_t viewer) const;      // an allied detector reveals it
+    bool canSee(Simulation& sim, Entity e, uint8_t viewer) const;        // not invisible to viewer (statuses + detectors)
+    bool mechToggle(Simulation& sim, Entity caster, int ability);        // true: a toggle ability, handled
+    void mechOnHit(Simulation& sim, Entity target, Entity source);       // veterancy: who hit last
+    void mechOnSpawn(Simulation& sim, Entity e, Entity producer);        // rally waypoints
+    bool runFollow(Simulation& sim, Entity e, Order& o);
+    bool applyMechCommand2(Simulation& sim, const Command& cmd);    // guard, follow, rally waypoints
+    void mechTick(Simulation& sim);                                  // veterans, toggles
+    void mechVeteranKill(Simulation& sim, Entity victim);
+    // combat / economy models (RtsMechCombat.cpp)
+    void mechClassDamage(Simulation& sim, Entity attacker, size_t weapon, Entity target, Fixed& dmg, uint16_t& dmgType) const;
+    Fixed mechArmorDamage(Simulation& sim, Entity target, Fixed raw, uint16_t dmgType) const;   // armor model
+    Fixed mechShieldAbsorb(Simulation& sim, Entity target, Fixed dmg);                          // what is left for hp
+    Fixed gatherMultFor(Simulation& sim, uint8_t owner, int res) const;                         // upkeep per resource
+    bool mechNodeHasRoom(Simulation& sim, Entity node, Entity worker) const;                    // maxWorkers
+    void mechTickCombat(Simulation& sim);                                                       // shields
+    // stage 2 (RtsMechWorld.cpp, RtsMechEconomy.cpp, RtsMechGroups.cpp)
+    bool applyMechCommand3(Simulation& sim, const Command& cmd);
+    void mechTickWorld(Simulation& sim);          // gates, bridges, hazards, cycles, docks
+    void mechTickEconomy(Simulation& sim);        // traders, prices, deck setup
+    void mechTickGroups(Simulation& sim);         // formation speeds, merges
+    bool mechUseAmmo(Simulation& sim, Entity e, size_t weapon);
+    bool runRearm(Simulation& sim, Entity e, Order& o);
+    bool runTrade(Simulation& sim, Entity e, Order& o);
+    bool runPickItem(Simulation& sim, Entity e, Order& o);
+    bool runMerge(Simulation& sim, Entity e, Order& o);
+    bool mechDeckAllows(Simulation& sim, uint8_t player, int ability, Vec3 point) const;
+    bool mechInHand(Simulation& sim, uint8_t player, int ability) const;
+    void mechDeckPlayed(Simulation& sim, uint8_t player, int ability);
+    void mechDropItems(Simulation& sim, Entity victim);
+    void mechBridgeDied(Simulation& sim, Entity e);
+    void hashMechGlobal(Simulation& sim, Hasher& h);
+    Fixed marketPrice(Simulation& sim, int res) const;
+    void mechSetup(Simulation& sim, const Json& map);   // decks, prices, alliances (after setupMap)
+    void mechTunnelGather(Simulation& sim, Entity tunnel);   // pull the network's passengers into this exit
+    bool applyMechEconomyCommand(Simulation& sim, const Command& cmd);   // market, trade, tribute, diplomacy, items
+    void campaignAction(Simulation& sim, const TrigAction& a, const std::vector<uint8_t>& players, Entity unit, Vec3 at);
+    void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:
     Json generated_;                 // generated map (see generatedMap())

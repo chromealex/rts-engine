@@ -48,6 +48,8 @@ struct Args {
     int players = 0;
     uint64_t seed = 1;
     uint32_t maxSeconds = 1800;
+    std::string saveFile, loadFile;   // save states (Simulation::serialize)
+    uint32_t saveAt = 0;              // seconds
     int benchPaths = 0;   // >0: time that many path queries (HPA* vs plain A*) and exit
     int benchBody = -1;   // planets: body index for --bench-paths (default: first surface body)
     bool quiet = false;
@@ -182,6 +184,12 @@ static int play(const Args& a) {
     rep.dataHash = hashFileContents({rulesPath, mapPath});
     rep.seed = a.seed; rep.tickRate = cfg.tickRate; rep.inputDelay = cfg.inputDelayTicks;
 
+    if (!a.loadFile.empty()) {
+        std::ifstream f(a.loadFile, std::ios::binary);
+        std::string bytes((std::istreambuf_iterator<char>(f)), {}), err;
+        if (!sim.deserialize(bytes, &err)) { std::printf("Load failed: %s\n", err.c_str()); return 2; }
+        if (!a.quiet) std::printf("Loaded %s: t=%us\n", a.loadFile.c_str(), sim.tick() / sim.tickRate());
+    }
     std::map<uint16_t, int> ev;
     const uint32_t maxTicks = a.maxSeconds * sim.tickRate();
     auto t0 = std::chrono::steady_clock::now();
@@ -192,6 +200,11 @@ static int play(const Args& a) {
         for (auto& e : sim.events()) ev[e.type]++;
         if (sim.tick() % rep.checksumInterval == 0) rep.checksums.emplace_back(sim.tick(), sim.checksum());
         if (!a.quiet && sim.tick() % (sim.tickRate() * 60) == 0) status(sim);
+        if (a.saveAt && sim.tick() == a.saveAt * sim.tickRate() && !a.saveFile.empty()) {
+            std::string bytes = sim.serialize();
+            std::ofstream(a.saveFile, std::ios::binary) << bytes;
+            std::printf("Saved %s: t=%us, %zu bytes, checksum %016llx\n", a.saveFile.c_str(), a.saveAt, bytes.size(), (unsigned long long)sim.checksum());
+        }
     }
     double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     rep.endTick = sim.tick();
@@ -247,6 +260,9 @@ int main(int argc, char** argv) {
         else if (k == "--seed") a.seed = std::stoull(next());
         else if (k == "--max-seconds") a.maxSeconds = uint32_t(std::stoul(next()));
         else if (k == "--record") a.record = next();
+        else if (k == "--save") a.saveFile = next();
+        else if (k == "--save-at") a.saveAt = uint32_t(std::stoul(next()));
+        else if (k == "--load") a.loadFile = next();
         else if (k == "--replay") a.replay = next();
         else if (k == "--quiet") a.quiet = true;
         else if (k == "--bench-paths") a.benchPaths = std::stoi(next());
@@ -257,7 +273,7 @@ int main(int argc, char** argv) {
         else if (k == "--symmetry") a.symmetry = next();
         else if (k == "--gen-params") a.genParams = next();
         else if (k == "--gen-out") a.genOut = next();
-        else { std::printf("usage: rts_headless --project DIR [--map FILE] [--seed N] [--record F] [--generate PRESET [--players N] [--symmetry S] [--gen-params JSON] [--gen-out F]] | --replay F\n"); return 2; }
+        else { std::printf("usage: rts_headless --project DIR [--map FILE] [--seed N] [--record F] [--save F --save-at S] [--load F] [--generate PRESET [--players N] [--symmetry S] [--gen-params JSON] [--gen-out F]] | --replay F\n"); return 2; }
     }
     try { return a.replay.empty() ? play(a) : replay(a); }
     catch (const std::exception& e) { std::fprintf(stderr, "error: %s\n", e.what()); return 2; }

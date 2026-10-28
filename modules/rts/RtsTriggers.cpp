@@ -136,6 +136,7 @@ struct Parser {
             {"enableTrigger", TrigAction::EnableTrigger}, {"disableTrigger", TrigAction::DisableTrigger}, {"addScore", TrigAction::AddScore},
             {"setRegionOwner", TrigAction::SetRegionOwner}, {"attackMove", TrigAction::AttackMove}, {"move", TrigAction::MoveUnits},
             {"setTickets", TrigAction::SetTickets}, {"castAbility", TrigAction::CastAbility},
+            {"objective", TrigAction::Objective}, {"dialog", TrigAction::Dialog}, {"camera", TrigAction::Camera}, {"endMission", TrigAction::EndMission},
         };
         bool known = false;
         for (auto& [k, v] : kinds) if (t == k) { o.kind = v; known = true; }
@@ -159,6 +160,20 @@ struct Parser {
             if (k < 0) fail(where, "unknown player ability '" + a.getStr("ability") + "'");
             o.index = int16_t(k);
             o.attackMove = a.getBool("free", true);   // reused: free casts skip cost / cooldown / loadout
+        }
+        if (o.kind == TrigAction::Objective) {
+            o.name = a.getStr("id");
+            if (o.name.empty()) fail(where, "objective needs an id");
+            o.op = a.getStr("op", "add");
+            if (o.op != "add" && o.op != "done" && o.op != "fail") fail(where, "objective op: add, done or fail");
+            o.flag = a.getBool("primary", true);
+        }
+        if (o.kind == TrigAction::Dialog) { o.speaker = a.getStr("speaker"); o.portrait = a.getStr("portrait"); o.voice = a.getStr("voice"); }
+        if (o.kind == TrigAction::Camera) { o.flag = a.getBool("lock", false); o.amount = a.getFx("zoom"); }
+        if (o.kind == TrigAction::EndMission) {
+            o.op = a.getStr("result", "victory");
+            if (o.op != "victory" && o.op != "defeat") fail(where, "endMission result: victory or defeat");
+            o.name = a.getStr("next");
         }
         if (o.kind == TrigAction::Buff) {
             bool ok = false;
@@ -413,6 +428,9 @@ void RtsModule::runTriggerActions(Simulation& sim, size_t di, uint8_t player, En
             break;
         case TrigAction::Victory:
             if (!players.empty()) gs.winnerTeam = teamOf(sim, players[0]);
+            break;
+        case TrigAction::Objective: case TrigAction::Dialog: case TrigAction::Camera: case TrigAction::EndMission:
+            campaignAction(sim, a, players, unit, at);   // RtsCampaign.cpp
             break;
         case TrigAction::Defeat:
             for (uint8_t p : players)

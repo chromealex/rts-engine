@@ -126,7 +126,7 @@ void RtsModule::moveAgents(Simulation& sim) {
     std::vector<Agent> agents;
     std::vector<int32_t> byIndex;
     w.each<Mobile, Unit, Transform>([&](Entity e, Mobile& m, Unit& u, Transform& tr) {
-        if (u.flags & (kUnitInHand | kUnitPossessed)) return;
+        if (u.flags & (kUnitOffMap | kUnitPossessed)) return;
         if (rules_.lanes.enabled && w.has<LaneWalker>(e)) return;
         const UnitType& t = rules_.types[u.type];
         Agent a{e, tr.pos.xz(), m.vel.xz(), {}, {}, t.radius, Fixed{}, t.layer, w.get<Owner>(e).player, false, false};

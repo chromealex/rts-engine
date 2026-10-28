@@ -14,6 +14,7 @@
 #include "engine/sim/Replay.h"
 #include "engine/sim/Simulation.h"
 #include "modules/rts/RtsAI.h"
+#include "modules/rts/RtsCampaign.h"   // agent-mech
 #include "modules/rts/RtsModule.h"
 #include "modules/rts/RtsTiles.h"
 #include "modules/rts/RtsSphere.h"
@@ -8274,6 +8275,9 @@ TEST(tools_trigger_fired_event) {
     CHECK(fired[1] == 3 && fired[2] == 3 && fired[0] == 0);
     CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(3));
 }
+}
+
+#include "tests_mech.inc"   // agent-mech
 
 int main() {
     for (auto& [name, fn] : registry()) {

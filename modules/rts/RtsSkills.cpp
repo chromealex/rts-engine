@@ -345,6 +345,7 @@ bool RtsModule::castPlayerAbility(Simulation& sim, uint8_t player, int idx, Vec3
     World& w = sim.world();
     GameState& gs = state(sim);
     if (!canUsePlayerAbility(sim, player, idx)) return false;
+    if (rules_.mech.deck && !mechDeckAllows(sim, player, idx, point)) return false;   // agent-mech: card in hand, deploy zone
     const PlayerAbilityDef& a = playerAbilityFor(sim, player, idx);
     // resolve the clicked object for structure / group targets
     if (a.target == TargetKind::Structure || a.target == TargetKind::Group) {
@@ -363,6 +364,7 @@ bool RtsModule::castPlayerAbility(Simulation& sim, uint8_t player, int idx, Vec3
         point = w.get<Transform>(target).pos;
     }
     if (!pay(sim, player, a.cost, {})) return false;
+    if (rules_.mech.deck) mechDeckPlayed(sim, player, idx);
     PlayerAbilityState& st = gs.playerAbilities[player][size_t(idx)];
     if (a.chargesMax > 0) --st.charges;
     Fixed rate = fxMax(playerStat(sim, player, Stat::CooldownRate, kOne), Fixed::fromRatio(1, 10));
