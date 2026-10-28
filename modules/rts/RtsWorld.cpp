@@ -1,5 +1,5 @@
 // World rules: vision with cliff levels, creep, control points / flags / regions, tickets,
-// neutral creeps and wanderers, scripted waves and lane waves (victory conditions: lua/victory.lua).
+// neutral creeps and wanderers, (waves and victory conditions: lua/waves.lua, lua/victory.lua).
 #include "RtsInternal.h"
 #include <algorithm>
 
@@ -271,90 +271,7 @@ void RtsModule::sysNeutrals(Simulation& sim) {
     for (auto& [e, p] : moves) moveTo(sim, e, p, Fixed::fromRatio(1, 2));
 }
 
-// ================================================================= waves
-
-namespace {
-// Nearest hostile key structure (else any structure, else any unit) for a wave unit to march at.
-Vec3 waveObjective(RtsModule& m, Simulation& sim, uint8_t player, Vec3 from, bool& found) {
-    World& w = sim.world();
-    const Rules& rules = m.rules();
-    Vec3 best = from;
-    Fixed bestD{};
-    int bestRank = 9;
-    found = false;
-    w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& t) {
-        if (!m.hostile(sim, player, o.player) || o.player == kHostileNeutral || u.hp.raw <= 0) return;
-        const UnitType& ut = rules.types[u.type];
-        if (!ut.countsForVictory) return;
-        int rank = ut.key ? 0 : ut.structure ? 1 : 2;
-        Fixed d = dist2D(t.pos, from);
-        if (!found || rank < bestRank || (rank == bestRank && d < bestD)) { best = t.pos; bestD = d; bestRank = rank; found = true; }
-    });
-    return best;
-}
-} // namespace
-
-void RtsModule::sysWaves(Simulation& sim) {
-    World& w = sim.world();
-    GameState& gs = state(sim);
-    const uint32_t tick = sim.tick();
-    std::vector<Entity> spawned;
-    // scripted waves (They Are Billions, tower defense, survival maps)
-    for (auto& wd : gs.waves) {
-        if (wd.repeats >= 0 && wd.done > wd.repeats) continue;
-        uint32_t due = wd.tick + uint32_t(wd.done) * wd.every;
-        if (tick != due || (wd.done > 0 && wd.every == 0)) continue;
-        Fixed scale = kOne;
-        for (int k = 0; k < wd.done; ++k) scale = scale * wd.growth;
-        for (auto& [type, count] : wd.spawn) {
-            int n = int((scale * count).toInt());
-            for (int k = 0; k < n; ++k) {
-                Vec3 p = wd.at + Vec3{(sim.rng().unit() * 2 - kOne) * wd.spread, Fixed{}, (sim.rng().unit() * 2 - kOne) * wd.spread};
-                int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
-                if (!gs.grid.nearestPassable(cx, cy, rules_.types[type].pathLayer, 6)) continue;
-                spawned.push_back(spawn(sim, type, wd.player, gs.grid.cellCenter(cx, cy)));
-            }
-        }
-        sim.emit({kEvWave, wd.player, kNullEntity, kNullEntity, wd.done, wd.at});
-        ++wd.done;
-        if (wd.every == 0) wd.done = wd.repeats + 1;
-    }
-    // lane waves: every structure with a wave spawner releases its squad on the shared clock
-    if (rules_.waveClock.raw > 0 && tick >= gs.nextWaveTick && gs.nextWaveTick > 0) {
-        struct Rel { Entity from; uint16_t type; int count; uint8_t owner; };
-        std::vector<Rel> rel;
-        w.each<Unit, Owner>([&](Entity e, Unit& u, Owner& o) {
-            const UnitType& t = rules_.types[u.type];
-            if (t.waveUnit == kNoType || (u.flags & (kUnitUnderConstruction | kUnitDisabled)) || o.player == 0) return;
-            auto* pi = sim.player(o.player);
-            if (pi && !pi->alive) return;
-            rel.push_back({e, t.waveUnit, t.waveCount, o.player});
-        });
-        for (auto& r : rel)
-            for (int k = 0; k < r.count; ++k) {
-                Vec3 p = freeSpotNear(sim, r.from, rules_.types[r.type].pathLayer);
-                Entity n = spawn(sim, r.type, r.owner, p);
-                spawned.push_back(n);
-                sim.emit({kEvTrainDone, r.owner, n, r.from, r.type, p});
-            }
-        gs.nextWaveTick = tick + uint32_t((rules_.waveClock * int64_t(sim.tickRate())).toInt());
-        sim.emit({kEvWave, 0, kNullEntity, kNullEntity, int64_t(rel.size()), {}});
-    }
-    // everything spawned by a wave marches on the enemy
-    for (Entity n : spawned) {
-        if (!w.alive(n) || !w.has<Orders>(n)) continue;
-        uint8_t owner = w.get<Owner>(n).player;
-        bool found = false;
-        Vec3 goal = waveObjective(*this, sim, owner, w.get<Transform>(n).pos, found);
-        if (!found) continue;
-        Order o;
-        o.type = OrderType::AttackMove;
-        o.point = flat(goal);
-        o.param = 4;
-        issue(sim, n, o, false);
-    }
-}
-
+// waves: modules/rts/lua/waves.lua (standard Lua library, std.waves)
 // victory: modules/rts/lua/victory.lua (standard Lua library, std.victory)
 
 } // namespace rts::game

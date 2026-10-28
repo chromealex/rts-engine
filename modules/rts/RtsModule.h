@@ -482,7 +482,6 @@ private:
     void sysCapture(Simulation& sim);
     void sysCreep(Simulation& sim);
     void sysVision(Simulation& sim);
-    void sysWaves(Simulation& sim);
     void sysTriggers(Simulation& sim);
     void sysDungeon(Simulation& sim);     // RtsDungeon.cpp: jobs, needs, portals, territory, possession
     void setupDungeon(Simulation& sim, const Json& map);
