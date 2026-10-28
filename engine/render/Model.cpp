@@ -43,6 +43,15 @@ int Model::findClip(const std::string& name) const {
     for (size_t i = 0; i < clips.size(); ++i) if (clips[i].name == name) return int(i);
     const std::string l = lower(name);
     for (size_t i = 0; i < clips.size(); ++i) if (lower(clips[i].name) == l) return int(i);
+    // numbered variants: "Attack" finds "Attack - 1" (Warcraft III), "Attack1", "Attack_01"
+    for (size_t i = 0; i < clips.size(); ++i) {
+        const std::string c = lower(clips[i].name);
+        if (c.size() <= l.size() || c.compare(0, l.size(), l) != 0) continue;
+        bool numbered = true;
+        for (size_t k = l.size(); k < c.size(); ++k)
+            if (!(std::isdigit(static_cast<unsigned char>(c[k])) || c[k] == ' ' || c[k] == '-' || c[k] == '_')) numbered = false;
+        if (numbered) return int(i);
+    }
     return -1;
 }
 int Model::findMaterial(const std::string& name) const {

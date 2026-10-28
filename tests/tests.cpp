@@ -6656,6 +6656,15 @@ TEST(models_blp_decode) {
     }
 }
 
+
+TEST(models_find_clip_numbered_variants) {
+    using namespace rts::render;
+    Model m;
+    for (const char* n : {"Stand Ready", "Attack - 1", "Attack - 2", "Walk", "Spell_01"}) { AnimClip c; c.name = n; m.clips.push_back(c); }
+    CHECK(m.findClip("Attack") == 1 && m.findClip("attack - 2") == 2 && m.findClip("walk") == 3 && m.findClip("Spell") == 4);
+    CHECK(m.findClip("Stand") == -1 && m.findClip("Att") == -1);   // "Stand Ready" is another action
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
