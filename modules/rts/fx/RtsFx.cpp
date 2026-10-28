@@ -155,8 +155,9 @@ const RtsFx::Binding& RtsFx::lookup(int type, FxCue c) const {
 const RtsFx::Binding& RtsFx::trailFor(int type) const {
     if (type >= 0 && size_t(type) < types_.size()) {
         const UnitType& ut = rules_->types[size_t(type)];
-        for (size_t w = 0; w < ut.weapons.size(); ++w)   // the projectile weapon's trail
-            if (ut.weapons[w].projectileSpeed > Fixed{} && types_[size_t(type)].weapons[w].trail.set) return types_[size_t(type)].weapons[w].trail;
+        const auto& bound = types_[size_t(type)].weapons;   // empty when fx.json binds no weapons
+        for (size_t w = 0; w < ut.weapons.size() && w < bound.size(); ++w)   // the projectile weapon's trail
+            if (ut.weapons[w].projectileSpeed > Fixed{} && bound[w].trail.set) return bound[w].trail;
     }
     return lookup(type, FxCue::Trail);
 }
