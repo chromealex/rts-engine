@@ -1,0 +1,13 @@
+// laneclash — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Castle Fight and Line Wars from Warcraft III, Clash Royale: you build, the army fights by itself.",
+  "howto.goal": "Score more in 7 minutes, or destroy the enemy Core.",
+  "howto.tip": "An upgrade usually beats a new building: it strengthens every wave.",
+  "howto.step1": "The Build button at the top places a random building (barracks, range, kennel) for crystals; each one costs more.",
+  "howto.step2": "Every 12 seconds every building sends out fighters that march down the lane on their own.",
+  "howto.step3": "Select barracks or a range and press Upgrade for tier-two fighters.",
+  "howto.step4": "Crystals trickle in and come from kills; score and time are on the top bar."
+}

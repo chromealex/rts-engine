@@ -78,6 +78,10 @@ void Editor::init(gfx::Device& dev) {
     std::error_code fec;
     if (!fs::exists(font, fec)) font = "engine/fonts/ui.ttf";
     ui_.init(dev, font.c_str(), 16.0f);
+    // the editor's own look (the game's ImGui overlay keeps ImGuiLayer's style)
+    if (!theme_.loadFonts(opt_.engineDir)) ws_.log("editor", "Шрифты редактора не найдены (third_party/fonts): используется ui.ttf", true);
+    theme_.registerSettings();
+    theme_.apply();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     static std::string iniPath = platform::userDataDir() + "/editor_layout.ini";
@@ -141,6 +145,10 @@ void Editor::shutdown() {
 EditorWindow* Editor::window(const std::string& id) {
     for (auto& w : windows_) if (id == w->id()) return w.get();
     return nullptr;
+}
+
+void Editor::focusWindow(const std::string& id) {
+    if (auto* w = window(id)) { w->open = true; ImGui::SetWindowFocus(w->imguiName()); }
 }
 
 // ============================ documents ============================
@@ -533,7 +541,7 @@ void Editor::startPlay(int humanSlot) {
         gameCam.distance = 24;
     }
     game::applyCameraSetup(game::cameraSetupFrom(ws_.project.manifest), gameCam, 720.0f);
-    if (auto* w = window("game")) { w->open = true; ImGui::SetWindowFocus(w->title()); }
+    focusWindow("game");
     status = human_ ? "Тест: вы играете за игрока " + std::to_string(human_) : "Тест: боты играют на карте";
 }
 
@@ -588,12 +596,12 @@ void Editor::handleShortcuts() {
     if (mod && ImGui::IsKeyPressed(ImGuiKey_S, false) && !doc().path.empty()) saveMap(doc().path);
     if (mod && ImGui::IsKeyPressed(ImGuiKey_Z, false) && !playing()) { if (io.KeyShift) doc().redo(); else doc().undo(); selection = {}; }
     if (mod && ImGui::IsKeyPressed(ImGuiKey_Y, false) && !playing()) { doc().redo(); selection = {}; }
-    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) { if (!playing()) startPlay(0); else stopPlay(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false)) { if (!playing()) startPlay(lastPlaySlot_); else stopPlay(); }
 }
 
 void Editor::drawDockspace() {
     ImGuiViewport* mv = ImGui::GetMainViewport();
-    const float statusH = ImGui::GetFrameHeight() + 6;
+    const float statusH = statusBarHeight();
     ImVec2 pos(mv->WorkPos.x, mv->WorkPos.y), size(mv->WorkSize.x, mv->WorkSize.y - statusH);
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(size);
@@ -605,6 +613,8 @@ void Editor::drawDockspace() {
                                            ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBackground);
     ImGui::PopStyleVar(3);
     ImGuiID dock = ImGui::GetID("MainDock");
+    // layouts saved before window names became "Title###id" dock nothing: rebuild them once
+    if (!layoutChecked_) { layoutChecked_ = true; if (theme_.loadedLayoutVersion() < EditorTheme::kLayoutVersion) resetLayout_ = true; }
     if (resetLayout_ || !ImGui::DockBuilderGetNode(dock)) {
         resetLayout_ = false;
         ImGui::DockBuilderRemoveNode(dock);
@@ -618,12 +628,14 @@ void Editor::drawDockspace() {
         for (auto& w : windows_) {
             std::string a = w->dockArea();
             ImGuiID node = a == "left" ? left : a == "left-bottom" ? leftBottom : a == "bottom" ? bottom : a == "center" ? center : right;
-            ImGui::DockBuilderDockWindow(w->title(), node);
+            ImGui::DockBuilderDockWindow(w->imguiName(), node);
         }
         ImGui::DockBuilderFinish(dock);
         focusFirst_ = 2; // select the first tab of every area once the windows exist
     }
+    ImGui::PushFont(theme_.headingFont(), EditorTheme::kUiSize); // tab titles: semibold
     ImGui::DockSpace(dock, ImVec2(0, 0), ImGuiDockNodeFlags_None);
+    ImGui::PopFont();
     ImGui::End();
 }
 
@@ -648,6 +660,7 @@ void Editor::frame(gfx::Device& dev, double dt) {
     flashes_.erase(std::remove_if(flashes_.begin(), flashes_.end(), [&](const Flash& f) { return f.until < time_; }), flashes_.end());
     for (auto& w : windows_) w->update(*this, dt);
 
+    theme_.applyPending();
     ui_.newFrame(dt);
     handleShortcuts();
     if (showPicker_) {
@@ -661,11 +674,11 @@ void Editor::frame(gfx::Device& dev, double dt) {
             if (focusFirst_ == 1 && w->order() == 0) ImGui::SetNextWindowFocus();
             // a window opened for the first time (not in the saved layout) joins the tabs of its dock area
             // instead of floating as a tiny box
-            if (!ImGui::FindWindowByName(w->title()))
+            if (!ImGui::FindWindowByName(w->imguiName()))
                 for (auto& o : windows_)
                     if (o.get() != w.get() && o->open && std::string(o->dockArea()) == w->dockArea())
-                        if (ImGuiWindow* ow = ImGui::FindWindowByName(o->title()); ow && ow->DockId) { ImGui::SetNextWindowDockID(ow->DockId, ImGuiCond_FirstUseEver); ImGui::SetNextWindowFocus(); break; }
-            bool visible = ImGui::Begin(w->title(), &w->open, w->flags());
+                        if (ImGuiWindow* ow = ImGui::FindWindowByName(o->imguiName()); ow && ow->DockId) { ImGui::SetNextWindowDockID(ow->DockId, ImGuiCond_FirstUseEver); ImGui::SetNextWindowFocus(); break; }
+            bool visible = ImGui::Begin(w->imguiName(), &w->open, w->flags());
             if (w->zeroPadding()) ImGui::PopStyleVar();
             if (visible) w->draw(*this);
             ImGui::End();

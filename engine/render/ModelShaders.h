@@ -265,7 +265,7 @@ void main() {
 #endif
     vec3 col = diff * (amb * ao + sun * ndl * sh) + sun * spec * sh + ambSpec * ao;
     col += amb * base.rgb * pow(1.0 - ndv, 3.0) * 0.25;   // rim, keeps silhouettes readable from the RTS camera
-    col += diff * dynamicLight(v_wpos, n, V, (1.0 - rough) * 0.5);   // point lights (Lights.h)
+    { vec3 dd, ds; dynLight(v_wpos, n, V, rough, dd, ds); col += diff * dd + (F0 + 0.15 * (1.0 - rough) * (1.0 - metallic)) * ds; }   // point lights + light reflections (Lights.h)
     if (m_uv1.y > 0.5) col = base.rgb;
     col += emis * (1.0 + nightGlow()) + v_team.a * vec3(1.0, 0.85, 0.7) + edge * vec3(1.0, 0.45, 0.12) * 3.0;
     float dist = length(u_camPos.xyz - v_wpos);
@@ -522,7 +522,7 @@ fragment float4 fs_main(VOut in [[stage_in]], bool frontFacing [[front_facing]],
 #endif
     float3 col = diff * (amb * ao + sun * ndl * sh) + sun * spec * sh + ambSpec * ao;
     col += amb * base.rgb * pow(1.0 - ndv, 3.0) * 0.25;
-    col += diff * dynamicLight(lu, tex9, s9, in.wpos, n, V, (1.0 - rough) * 0.5);
+    { float3 dd, ds; dynLight(lu, tex9, s9, in.wpos, n, V, rough, dd, ds); col += diff * dd + (F0 + 0.15 * (1.0 - rough) * (1.0 - metallic)) * ds; }
     if (m.uv1.y > 0.5) col = base.rgb;
     col += emis * (1.0 + lu.info.w) + in.team.a * float3(1.0, 0.85, 0.7) + edge * float3(1.0, 0.45, 0.12) * 3.0;
     float dist = length(f.camPos.xyz - in.wpos);

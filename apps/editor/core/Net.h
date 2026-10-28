@@ -19,6 +19,7 @@ public:
     void send(int client, const std::string& line);   // appends '\n'
     bool listening() const { return fd_ >= 0; }
     int port() const { return port_; }
+    int clients() const { return int(conns_.size()); }   // connected MCP servers (status pill)
 
 private:
     struct Conn { intptr_t fd; std::string in; };

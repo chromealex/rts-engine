@@ -14,8 +14,9 @@ public:
     const char* dockArea() const override { return "left-bottom"; }
 
     void draw(Editor& ed) override {
-        static const char* names[] = {"Выбор", "Объекты", "Тип клеток", "Уровни / плато", "Высота", "Поля ресурсов", "Регионы", "Зоны для триггеров",
-                                      "Старты игроков", "Дороги", "Удаление"};
+        static const char* names[] = {ICON_SELECT "  Выбор", ICON_OBJECTS "  Объекты", ICON_CELLS "  Тип клеток", ICON_LEVELS "  Уровни / плато",
+                                      ICON_HEIGHT "  Высота", ICON_FIELDS "  Поля ресурсов", ICON_REGIONS "  Регионы", ICON_ZONES "  Зоны для триггеров",
+                                      ICON_STARTS "  Старты игроков", ICON_ROADS "  Дороги", ICON_ERASER "  Удаление"};
         ImGui::SetNextItemWidth(-1);
         int t = int(ed.tool);
         if (ImGui::Combo("##tool", &t, names, int(Tool::Count))) { ed.tool = Tool(t); ed.roadStart = -1; }
@@ -32,7 +33,7 @@ public:
                 ImGui::EndCombo();
             }
             ui::inputString("##flt", filter_);
-            if (filter_.empty()) { ImGui::SameLine(12); ImGui::TextDisabled("поиск типа"); }
+            if (filter_.empty()) { ImGui::SameLine(16); ImGui::TextDisabled(ICON_SEARCH "  поиск типа"); }
             ImGui::BeginChild("##palette", ImVec2(0, 0), ImGuiChildFlags_Borders);
             static const char* groups[] = {"Юниты", "Здания", "Ресурсы и декор"};
             for (int group = 0; group < 3; ++group) {

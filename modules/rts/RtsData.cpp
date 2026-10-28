@@ -128,6 +128,8 @@ Rules loadRules(const Json& j) {
         else if (m == "none" || m == "off") r.fog.mode = FogMode::None;
         else throw std::runtime_error("fogOfWar.mode: unknown '" + m + "' (full, explored, none)");
         r.fog.shareAllies = f.getBool("shareAllies", true);
+        r.fog.lineOfSight = f.getBool("lineOfSight", false);
+        r.fog.rockHeight = f.getFx("rockHeight", r.fog.rockHeight);
     }
     if (const Json& h = j["heights"]; h.isObject()) {
         r.heights.blockVision = h.getBool("blockVision", true);
@@ -341,6 +343,11 @@ Rules loadRules(const Json& j) {
             t.armorType = armorIdx(h.getStr("armorType", "none"));
         }
         t.invulnerable = tj.getBool("invulnerable", false);
+        if (const Json& vj = tj["vision"]; vj.isObject()) {
+            t.visionBlock = fxMax(Fixed{}, vj.getFx("blocks"));
+            t.eyeHeight = fxMax(Fixed{}, vj.getFx("eye"));
+            t.seesOver = vj.getBool("seesOver", false);
+        }
         if (const Json& m = tj["move"]; m.isObject()) {
             t.speed = m.getFx("speed", Fixed::fromInt(2));
             t.layer = parseLayers(m["layer"], kLayerGround);

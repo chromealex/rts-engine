@@ -30,6 +30,17 @@ public:
             if (ImGui::RadioButton(modeNames[i], mi == i)) set(ed, "mode", Json::string(modes[i]));
         bool share = f.getBool("shareAllies", true);
         if (ImGui::Checkbox("Союзники видят общее", &share)) set(ed, "shareAllies", Json::fromBool(share));
+        bool los = f.getBool("lineOfSight", false);
+        if (ImGui::Checkbox("3D: линия видимости по высотам", &los)) set(ed, "lineOfSight", Json::fromBool(los));
+        ui::help("Видимость считается лучом от глаз юнита: холмы, уровни скал, стены (тип \"vision\": {\"blocks\": h}), "
+                 "дым (delivery.blocksVision) и нераскопанная порода закрывают то, что за ними. Вышки видят дальше "
+                 "(\"vision\": {\"eye\": h}), летающие и \"seesOver\" — поверх всего.");
+        if (los) {
+            float rock = float(f["rockHeight"].toDouble(2));
+            ImGui::SetNextItemWidth(180);
+            ImGui::SliderFloat("Высота породы", &rock, 0, 6, "%.1f");
+            if (ImGui::IsItemDeactivatedAfterEdit()) set(ed, "rockHeight", Json::number(double(rock), 1));
+        }
 
         ImGui::SeparatorText("Вид");
         bool show = f.getBool("show", true);
