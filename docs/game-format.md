@@ -1159,6 +1159,25 @@ MCP: `map_info.heightfield` (`corners`, `min`, `max`, `storage`, `model`), `map_
 heightfield or removes it, `map_validate` warns when the model is heightfield but the map has no corners and flags
 units/structures standing on slopes too steep for them. Sculpting: `terrain_sculpt`, heightmap PNG import/export (see Terrain materials). The view draws the relief from the corners (two triangles per cell, diagonal (0,0)-(1,1)); `RtsView::heightAt` follows the same triangles, so models and overlays sit on the drawn ground.
 
+## Planets: visual keys (map `world` block)
+
+The bodies themselves are described in `docs/planets.md` §1-2 (`world.bodies`, `kind`, `radius`, `faceSize`,
+`seaLevel`, `orbit`, `terrain.faces` / `terrain.corners`). What only the view reads:
+
+```jsonc
+{"id": "terra", "kind": "planet", ...,
+ "visual": {"color": [255, 220, 160],                        // stars: light colour and glow; others: far-away tint
+            "atmosphere": {"color": [110, 170, 255], "height": 0.08}}}   // or false; default: on for planets, off for moons
+```
+
+- `visual.atmosphere.height`: shell thickness as a fraction of the radius (0.005..0.5). The shell and the haze use the
+  colour; the shell is drawn from the Medium material tier up.
+- `terrain.faces[f].material`: rows of digits `0`..`3` per face (`.` = by cell kind), like the flat map's
+  `terrainMaterial`; painted by `terrain_material` with `body`.
+- Ground look on planets = the visual `terrain` block of the game (layers per cell kind, cliff texture, water colour).
+- Editor / MCP: `planet_info`; `terrain_sculpt` / `terrain_paint` / `terrain_material` with `body` + `face` + `x`, `y`
+  (cells on that face) or `dir` [x, y, z] and `radius` in cells (3D brush, crosses face seams).
+
 ## Sample games (data only, `games/<id>/`; maps from `games/_tools/mapgen.py`)
 
 | id | like | recipe |
