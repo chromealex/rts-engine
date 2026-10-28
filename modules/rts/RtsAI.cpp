@@ -179,34 +179,51 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             break;
         }
     }
-    // player skills (effect engine): every primitive gets a target from smartTarget; keep a resource reserve
+    // player skills (effect engine): every primitive gets a target from smartTarget. Cheap skills are cast
+    // when ready (keeping a 20% reserve of capped resources); now and then the bot picks an expensive skill and
+    // saves up for it, so costly skills get used too.
     if (R.advancedEffects && !R.playerAbilities.empty() && sim.tick() >= lastSkillTick_ + 30) {
         const size_t n = R.playerAbilities.size();
-        const size_t start = rng_.below(uint32_t(n));
-        for (size_t k = 0; k < n; ++k) {
-            const int ai = int((start + k) % n);
-            if (!m.canUsePlayerAbility(sim, player_, ai)) continue;
-            const PlayerAbilityDef& a = m.playerAbilityFor(sim, player_, ai);
-            if (a.autoEvery.raw > 0) continue;                         // fires by itself
-            bool reserveOk = true;
+        auto& states = gs.playerAbilities[player_];
+        auto affordable = [&](const PlayerAbilityDef& a, bool reserve) {
             for (auto& c : a.cost) {
                 Fixed cap = eco.cap[c.res].raw > 0 ? eco.cap[c.res] : R.resources[c.res].storage;
-                if (cap.raw > 0 && eco.stock[c.res] - c.value < cap / 5) reserveOk = false;
+                Fixed keep = reserve && cap.raw > 0 ? cap / 5 : Fixed{};
+                if (eco.stock[c.res] - c.value < keep) return false;
             }
-            if (!reserveOk) continue;
+            return true;
+        };
+        auto tryCast = [&](int ai, bool reserve) {
+            if (!m.canUsePlayerAbility(sim, player_, ai)) return false;
+            const PlayerAbilityDef& a = m.playerAbilityFor(sim, player_, ai);
+            if (a.autoEvery.raw > 0 || !affordable(a, reserve)) return false;
             Vec3 pt; Entity tg;
-            SmartRule rule = a.smart;
-            if (rule == SmartRule::Auto && a.target == TargetKind::None) {
+            if (a.smart == SmartRule::Auto && a.target == TargetKind::None) {
                 // untargeted skills: only when they clearly help (dispels when we are debuffed, damage when enemies are near)
                 Vec3 p2; Entity t2;
                 if (!m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DebuffedOwn, p2, t2) &&
-                    !m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DensestEnemy, p2, t2)) continue;
+                    !m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DensestEnemy, p2, t2)) return false;
             }
-            if (!m.smartTarget(sim, player_, a.payload, a.target, rule, pt, tg)) continue;
+            if (!m.smartTarget(sim, player_, a.payload, a.target, a.smart, pt, tg)) return false;
             Command c; c.type = kCmdPlayerAbility; c.param = ai; c.point = pt; c.target = tg;
             send(sim, c);
             lastSkillTick_ = sim.tick();
-            break;
+            return true;
+        };
+        if (savingFor_ >= 0 && (sim.tick() > savingUntil_ || size_t(savingFor_) >= n)) savingFor_ = -1;
+        if (savingFor_ >= 0) {
+            if (tryCast(savingFor_, false)) savingFor_ = -1;
+        } else {
+            const size_t start = rng_.below(uint32_t(n));
+            const int goal = int((start + n / 2) % n);   // a random skill to save up for if it is out of reach
+            for (size_t k = 0; k < n; ++k)
+                if (tryCast(int((start + k) % n), true)) break;
+            if (sim.tick() != lastSkillTick_ && player_ < gs.playerAbilities.size() && size_t(goal) < states.size()) {
+                const PlayerAbilityDef& a = m.playerAbilityFor(sim, player_, goal);
+                if (states[size_t(goal)].owned && !a.passive && a.autoEvery.raw == 0 && !a.cost.empty() && !affordable(a, true)) {
+                    savingFor_ = goal; savingUntil_ = sim.tick() + 20 * 25;
+                }
+            }
         }
     }
     // player abilities: strike the densest enemy group (offensive effects only)

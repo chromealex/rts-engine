@@ -45,6 +45,8 @@ private:
     bool saveForWorkers_ = false;
     uint32_t lastDungeonTick_ = 0;
     uint32_t lastSkillTick_ = 0;
+    int savingFor_ = -1;          // player skill the bot saves resources for
+    uint32_t savingUntil_ = 0;
     uint32_t lastSettlersTick_ = 0;   // few workers left and one can be trained: don't spend on the army
 };
 
