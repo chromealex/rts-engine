@@ -1,6 +1,6 @@
 // Network bot client: plays matches on a real server with the built-in AI. Doubles as a load test
 // and as a way to watch bots play through the whole network stack.
-//   rts_netbot --server HOST[:PORT] | ws://HOST:PORT  --project games/skirmish
+//   rts_netbot --server HOST[:PORT] | ws://HOST:PORT  --project templates/skirmish
 //              [--queue 1v1 | --create NAME [--map maps/x.json] [--bots N] | --join ROOM | --spectate ROOM]
 //              [--clients N] [--name Bot] [--matches N] [--quiet] [--engine-assets engine/assets]
 // Messages are printed in the system language (RTS_LANG=ru to force one), like the game does.
@@ -25,7 +25,7 @@
 using namespace rts;
 
 struct Args {
-    std::string server = "127.0.0.1", project = "games/skirmish", name = "Bot", queue, create, map, engineAssets = "engine/assets";
+    std::string server = "127.0.0.1", project = "templates/skirmish", name = "Bot", queue, create, map, engineAssets = "engine/assets";
     uint32_t join = 0, spectate = 0, clients = 1, matches = 1, bots = 0;
     bool quiet = false;
 };

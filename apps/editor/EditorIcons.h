@@ -103,6 +103,10 @@
 #define ICON_CLOCK          "\xee\x82\x87"   // clock U+E087
 #define ICON_ACTIVITY       "\xee\x80\xb8"   // activity U+E038
 #define ICON_PLUG           "\xee\x8d\xbf"   // plug U+E37F
+#define ICON_HOME           "\xee\x83\xb5"   // house U+E0F5
+#define ICON_FOLDER_UP      "\xee\x82\xa4"   // corner-left-up U+E0A4
+#define ICON_TEMPLATE       "\xee\x88\x87"   // layout-template U+E207
+#define ICON_WARNING        "\xee\x86\x93"   // triangle-alert U+E193
 #define ICON_PLUG_ZAP       "\xee\x91\x9c"   // plug-zap U+E45C
 #define ICON_GLOBE          "\xee\x83\xa8"   // globe U+E0E8
 #define ICON_EXIT           "\xee\x84\x8e"   // log-out U+E10E

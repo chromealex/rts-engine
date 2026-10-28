@@ -1,4 +1,4 @@
-/* RTSEngine default UI theme. A game restyles it with games/<id>/ui/skin.rcss (linked after this
+/* RTSEngine default UI theme. A game restyles it with templates/<id>/ui/skin.rcss (linked after this
    file), or replaces it entirely with ui/theme.rcss, or single documents (ui/hud.rml, ui/menu.rml).
    Units are dp (density-independent pixels); the font family "ui" is the game's fonts/ui.ttf
    or the engine font (Latin + Cyrillic). */

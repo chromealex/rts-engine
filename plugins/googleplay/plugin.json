@@ -1,0 +1,10 @@
+{
+  "name": "googleplay",
+  "description": "Google Play Billing (in-app purchases and subscriptions). Protocol: store (docs/plugins.md).",
+  "provides": ["store"],
+  "android": {
+    "java": "android/java",
+    "classes": { "googleplay": "com.rtsengine.plugins.GooglePlayBillingPlugin" },
+    "dependencies": ["com.android.billingclient:billing:9.1.0"]
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "yandex-ads",
+  "description": "Yandex Mobile Ads SDK 8 (interstitial, rewarded, sticky banner) for Android and iOS. Protocol: ads (docs/plugins.md). Config: interstitial / rewarded / banner ad unit ids, per platform.",
+  "provides": ["ads"],
+  "android": {
+    "java": "android/java",
+    "classes": { "yandex-ads": "com.rtsengine.plugins.YandexAdsPlugin" },
+    "dependencies": ["com.yandex.android:mobileads:8.6.0"]
+  },
+  "ios": {
+    "sources": ["ios/*.mm"],
+    "classes": { "yandex-ads": "RTSYandexAdsPlugin" },
+    "pods": ["pod 'YandexMobileAds', '8.6.0'"]
+  }
+}
