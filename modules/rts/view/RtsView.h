@@ -20,9 +20,12 @@
 #include "../RtsData.h"
 #include "../RtsMap.h"
 #include "Rts2DView.h"
+#include "RtsGroundFx.h"
 #include "RtsLights.h"
 
 namespace rts::game {
+
+struct Lane;
 
 struct SceneObject {
     Entity entity;               // invalid for editor placements
@@ -53,6 +56,10 @@ struct RtsScene {
     std::vector<SimEvent> events;
     uint32_t tick = 0;
     double seconds = 0;          // game time (tick / tick rate): drives the day/night cycle
+    // ground overlays (RtsGroundFx): the fog-of-war viewer (0 = everything) and the sim's lanes (read only)
+    uint8_t viewer = 0;
+    const std::vector<Lane>* lanes = nullptr;
+    uint32_t laneSignature = 0;
     // drag-to-send arrows (Mushroom-Wars input) and box selection are drawn by the client
 };
 
@@ -163,6 +170,7 @@ private:
     uint32_t lastTick_ = ~0u;
     uint64_t frame_ = 0;
     RtsLights lights_;
+    RtsGroundFx groundFx_;   // territory, diggable rock, lanes, roads (RtsGroundFx.cpp)
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters

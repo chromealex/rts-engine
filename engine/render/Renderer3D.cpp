@@ -226,6 +226,12 @@ void Renderer3D::uploadFrameUniforms(bool forShadow) {
     dev_->setUniforms(1, &f, sizeof f);
 }
 
+void Renderer3D::bindLitFrame() {
+    uploadFrameUniforms(false);
+    dev_->setTexture(0, shadowMap_);
+    lights.bind();
+}
+
 void Renderer3D::render(const gfx::PassDesc& screenPass) {
     drawCalls_ = 0;
     // ---- shadow pass
