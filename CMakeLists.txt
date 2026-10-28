@@ -114,7 +114,10 @@ add_library(rts_game STATIC
     modules/rts/RtsAI.cpp
     modules/rts/RtsOriginalsData.cpp
     modules/rts/RtsOriginals.cpp
-    modules/rts/RtsAIOriginals.cpp)
+    modules/rts/RtsFidelityData.cpp
+    modules/rts/RtsFidelity.cpp
+    modules/rts/RtsAIOriginals.cpp
+    modules/rts/RtsAIFidelity.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 # agent-mech: mechanics of the top-100 strategy games plan (stances, transports, ...)
 file(GLOB RTS_MECH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/RtsMech*.cpp)

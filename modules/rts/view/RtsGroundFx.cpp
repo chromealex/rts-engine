@@ -15,7 +15,7 @@ using namespace render;
 namespace {
 constexpr int kChunk = 32;
 constexpr float kTerrY = 0.045f, kRoadY = 0.06f, kLaneY = 0.075f;
-enum { kDirtyT = 1, kDirtyD = 2, kDirtyM = 4, kDirtyR = 8 };
+enum { kDirtyT = 1, kDirtyD = 2, kDirtyM = 4, kDirtyR = 8, kDirtyC = 16 };
 
 struct GU0 { float color[4]; float params[4]; float params2[4]; float rect[4]; };
 
@@ -127,7 +127,8 @@ void RtsGroundFx::init(gfx::Device& dev, const Rules& rules, const FileReader& r
     useT_ = rules.territory.enabled || !rules.rooms.empty();
     useD_ = !rules.diggables.empty();
     useR_ = rules.roadNetwork.enabled; // or a map with '+' cells (resetGrid)
-    loadTex(terr_.tex); loadTex(lane_.tex); loadTex(road_.tex);
+    useC_ = rules.foundation.enabled;
+    loadTex(terr_.tex); loadTex(lane_.tex); loadTex(road_.tex); loadTex(conc_.tex);
 
     gfx::ShaderDesc sd;
     sd.glslVertex = shaders::kGroundFxVS; sd.glslFragment = shaders::kGroundFxFS; sd.msl = shaders::kGroundFxMSL;
@@ -227,6 +228,15 @@ void RtsGroundFx::parseLook(const Json& t) {
             texKeys(j, road_.tex);
         }
     }
+    if (const Json& j = t["concrete"]; !j.isNull()) {
+        if (!j.isObject()) conc_.on = j.boolean(true);
+        else {
+            conc_.on = j.getBool("enabled", true);
+            colKey(j, "color", conc_.color); colKey(j, "seam", conc_.seam);
+            conc_.alpha = num(j, "alpha", conc_.alpha);
+            texKeys(j, conc_.tex);
+        }
+    }
 }
 
 void RtsGroundFx::freeMesh(Mesh& m) {
@@ -244,7 +254,7 @@ void RtsGroundFx::setMesh(Mesh& m, const MeshBuilder& b) {
 void RtsGroundFx::shutdown(gfx::Device& dev) {
     dev_ = &dev;
     for (Chunk& c : chunks_)
-        for (Mesh* m : {&c.fill, &c.border, &c.rock, &c.veins, &c.gems, &c.marks, &c.road}) freeMesh(*m);
+        for (Mesh* m : {&c.fill, &c.border, &c.rock, &c.veins, &c.gems, &c.marks, &c.road, &c.concrete}) freeMesh(*m);
     chunks_.clear();
     freeMesh(lanes_);
     if (pipe_.valid()) dev.destroyPipeline(pipe_);
@@ -272,6 +282,7 @@ void RtsGroundFx::dirty(int x, int y, bool neighbours, int what) {
         if (what & kDirtyD) c.dD = true;
         if (what & kDirtyM) c.dM = true;
         if (what & kDirtyR) c.dR = true;
+        if (what & kDirtyC) c.dC = true;
     };
     mark(x, y);
     if (neighbours) { mark(x - 1, y); mark(x + 1, y); mark(x, y - 1); mark(x, y + 1); }
@@ -279,14 +290,14 @@ void RtsGroundFx::dirty(int x, int y, bool neighbours, int what) {
 
 void RtsGroundFx::resetGrid(const MapGrid& g) {
     for (Chunk& c : chunks_)
-        for (Mesh* m : {&c.fill, &c.border, &c.rock, &c.veins, &c.gems, &c.marks, &c.road}) freeMesh(*m);
+        for (Mesh* m : {&c.fill, &c.border, &c.rock, &c.veins, &c.gems, &c.marks, &c.road, &c.concrete}) freeMesh(*m);
     gridW_ = g.w; gridH_ = g.h;
     chunksX_ = (g.w + kChunk - 1) / kChunk; chunksY_ = (g.h + kChunk - 1) / kChunk;
     chunks_.assign(size_t(chunksX_ * chunksY_), Chunk{});
     const size_t n = size_t(g.w * g.h);
     // terrain (rock, roads) is known from the start like the map itself; territory and rooms are learned by seeing them
     memT_.assign(n, 0); memRoom_.assign(n, -1); memM_.assign(n, 0);
-    memD_.assign(n, 0); memR_.assign(n, 0);
+    memD_.assign(n, 0); memR_.assign(n, 0); memC_.assign(n, 0);
     bool anyRoad = false;
     for (size_t i = 0; i < n; ++i) {
         memD_[i] = i < g.dig.size() ? g.dig[i] : 0;
@@ -325,6 +336,10 @@ void RtsGroundFx::scan(const MapGrid& g, const std::vector<uint8_t>* vision, uin
             if (d != memD_[i]) { memD_[i] = d; dirty(x, y, true, kDirtyD | kDirtyT | kDirtyM); }
             const uint8_t r = (g.flags[i] & kCellRoad) ? 1 : 0;
             if (r != memR_[i]) { memR_[i] = r; dirty(x, y, true, kDirtyR); }
+            if (useC_) {
+                const uint8_t cc = i < g.foundation.size() ? g.foundation[i] : 0;
+                if (cc != memC_[i]) { memC_[i] = cc; dirty(x, y, false, kDirtyC); }
+            }
         }
 }
 
@@ -596,6 +611,36 @@ void RtsGroundFx::buildRoads(Chunk& c, int cx, int cy, const MapGrid& g, const R
     c.dR = false;
 }
 
+// ------------------------------------------------------------------ concrete (foundation cells)
+
+void RtsGroundFx::buildConcrete(Chunk& c, int cx, int cy, const MapGrid& g, const RtsView& v) {
+    MeshBuilder sb, tb;   // seams (whole cell, darker) under the slab tops
+    const float3 up{0, 1, 0};
+    auto emit = [&](MeshBuilder& b, int x, int y, float inset, float yo, uint32_t col) {
+        const float X = float(x), Z = float(y), e = 0.002f;
+        auto P = [&](float px, float pz) {
+            return float3{px, v.heightAt(g, std::clamp(px, X + e, X + 1 - e), std::clamp(pz, Z + e, Z + 1 - e)) + yo, pz};
+        };
+        quad(b, P(X + inset, Z + inset), P(X + 1 - inset, Z + inset), P(X + 1 - inset, Z + 1 - inset), P(X + inset, Z + 1 - inset), up, col);
+    };
+    for (int y = cy * kChunk; y < std::min(g.h, (cy + 1) * kChunk); ++y)
+        for (int x = cx * kChunk; x < std::min(g.w, (cx + 1) * kChunk); ++x) {
+            if (!memC_[size_t(y * g.w + x)]) continue;
+            emit(sb, x, y, 0.0f, kRoadY - 0.008f, c4(conc_.seam, conc_.alpha));
+            const float n = 0.93f + 0.07f * rnd(x, y, 23);
+            emit(tb, x, y, hi_ ? 0.05f : 0.03f, kRoadY - 0.004f, c4(conc_.color * n, conc_.alpha));
+        }
+    MeshBuilder all;
+    for (const MeshBuilder* b : {&sb, &tb}) {
+        const uint32_t base = uint32_t(all.vertexCount());
+        for (auto& vtx : b->vertices()) all.addVertex(vtx.pos, vtx.nrm, vtx.rgba);
+        const auto& id = b->indices();
+        for (size_t k = 0; k + 2 < id.size(); k += 3) all.addTriangle(base + id[k], base + id[k + 1], base + id[k + 2]);
+    }
+    setMesh(c.concrete, all);
+    c.dC = false;
+}
+
 // ------------------------------------------------------------------ lanes (MW2) and map roads between buildings
 
 void RtsGroundFx::buildLanes(const RtsScene& s, const MapGrid& g, const RtsView& v) {
@@ -718,12 +763,12 @@ void RtsGroundFx::draw(Renderer3D& r, const RtsScene& s, double time, const std:
     if (invalid_ || g.w != gridW_ || g.h != gridH_ || s.viewer != viewer_) { viewer_ = s.viewer; resetGrid(g); }
     if (geomDirty_) {
         geomDirty_ = false;
-        for (Chunk& c : chunks_) c.dT = c.dD = c.dM = c.dR = true;
+        for (Chunk& c : chunks_) c.dT = c.dD = c.dM = c.dR = c.dC = true;
         laneCount_ = ~size_t(0);
     }
     // the layers change only through the sim (GameState::territoryDirty is a sticky hint the view may
     // not reset), so they are compared a few times per second against the fog-of-war memory
-    if ((useT_ || useD_ || useR_) && (time >= nextScan_ || nextScan_ < 0)) { scan(g, vision, viewer_); nextScan_ = time + 0.2; }
+    if ((useT_ || useD_ || useR_ || useC_) && (time >= nextScan_ || nextScan_ < 0)) { scan(g, vision, viewer_); nextScan_ = time + 0.2; }
 
     // lanes: rebuilt when the lane set or the map roads change
     if (lane_.on) {
@@ -745,6 +790,7 @@ void RtsGroundFx::draw(Renderer3D& r, const RtsScene& s, double time, const std:
             if (useD_ && dig_.on && c.dD) buildDig(c, cx, cy, g, v);
             if (useD_ && dig_.on && c.dM) buildMarks(c, cx, cy, g, v);
             if (useR_ && road_.on && c.dR) buildRoads(c, cx, cy, g, v);
+            if (useC_ && conc_.on && c.dC) buildConcrete(c, cx, cy, g, v);
             visible_.push_back(cy * chunksX_ + cx);
         }
     // rock blocks: ordinary lit opaque meshes (cast and receive sun shadows, point lights)
@@ -792,6 +838,7 @@ void RtsGroundFx::draw(Renderer3D& r, const RtsScene& s, double time, const std:
             const Chunk& c = chunks_[size_t(ci)];
             if (useT_ && terr_.on) { drawM(c.fill, &terr_.tex, {}, 0.05f, 0, 0.05f); drawM(c.border, nullptr, {}, terr_.glow, pulse, 0.1f); }
         }
+        for (int ci : visible_) if (useC_ && conc_.on) drawM(chunks_[size_t(ci)].concrete, &conc_.tex, dirt, 0.0f, 0, 0.12f);
         for (int ci : visible_) if (useR_ && road_.on) drawM(chunks_[size_t(ci)].road, &road_.tex, cobble, 0.0f, 0, 0.08f);
         if (lane_.on) drawM(lanes_, &lane_.tex, dirt, 0.0f, 0, 0.05f);
         for (int ci : visible_) if (useD_ && dig_.on) drawM(chunks_[size_t(ci)].marks, nullptr, {}, 0.6f, hi_ ? 0.4f : 0.0f, 0.1f);
