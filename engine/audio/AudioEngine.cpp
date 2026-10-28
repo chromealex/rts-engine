@@ -48,6 +48,24 @@ bool busFromName(std::string_view name, Bus& out) {
     return false;
 }
 
+// Distance keys shared by the "spatial" defaults and every sound.
+bool parseDistance(const Json& j, DistanceDef& d, const std::string& who, std::string& error) {
+    if (j.has("model")) {
+        const std::string m = j.getStr("model");
+        if (m == "inverse") d.model = Rolloff::Inverse;
+        else if (m == "linear") d.model = Rolloff::Linear;
+        else if (m == "exponential") d.model = Rolloff::Exponential;
+        else { error = who + ": unknown model '" + m + "' (inverse, linear, exponential)"; return false; }
+    }
+    d.minDistance = num(j["minDistance"], d.minDistance);
+    d.maxDistance = num(j["maxDistance"], d.maxDistance);
+    d.rolloff = std::clamp(num(j["rolloff"], d.rolloff), 0.0f, 10.0f);
+    d.air = std::clamp(num(j["air"], d.air), 0.0f, 4.0f);
+    d.reverb = std::clamp(num(j["reverb"], d.reverb), 0.0f, 4.0f);
+    if (d.minDistance <= 0 || d.maxDistance <= d.minDistance) { error = who + ": needs 0 < minDistance < maxDistance"; return false; }
+    return true;
+}
+
 struct AudioEngine::Impl {
     AudioConfig cfg;
     Mixer mixer;
@@ -71,7 +89,8 @@ struct AudioEngine::Impl {
     float user[size_t(Bus::Count)] = {1, 1, 1, 1, 1};
     float userMaster = 1;
     bool muted = false, paused = false;
-    Listener listener;
+    ListenerPose listener;
+    Environment env;
     double time = 0;
     VoiceId nextId = 1;
     uint32_t rng = 0x6C8E9CF5u;
@@ -90,6 +109,13 @@ struct AudioEngine::Impl {
         c.kind = MixCmd::SetGains;
         for (size_t i = 0; i < size_t(Bus::Count); ++i) c.gains[i] = bankGain[i] * user[i];
         c.master = muted ? 0.0f : bankMaster * userMaster;
+        mixer.push(std::move(c));
+    }
+    void sendEnv() {
+        if (!mixing()) return;
+        MixCmd c;
+        c.kind = MixCmd::SetEnv;
+        c.env = env;
         mixer.push(std::move(c));
     }
     void sendListener() {
@@ -153,7 +179,7 @@ void AudioEngine::init(const AudioConfig& cfg) {
             m.devError = "audio backend unavailable";
         }
     }
-    m.mixer.configure(rate, cfg.maxVoices);
+    m.mixer.configure(rate, cfg.maxVoices, cfg.reverb);
     m.initialized = true;
     if (m.devOk) {
         if (ma_device_start(&m.dev) == MA_SUCCESS) m.running = true;
@@ -162,6 +188,7 @@ void AudioEngine::init(const AudioConfig& cfg) {
     if (!m.devError.empty()) std::fprintf(stderr, "audio: %s, running silently\n", m.devError.c_str());
     m.sendGains();
     m.sendListener();
+    m.sendEnv();
 }
 
 void AudioEngine::shutdown() {
@@ -194,7 +221,9 @@ void AudioEngine::clearBank() {
     m.lastVariant.clear();
     std::fill(std::begin(m.bankGain), std::end(m.bankGain), 1.0f);
     m.bankMaster = 1;
+    m.env = Environment{};
     m.sendGains();
+    m.sendEnv();
 }
 
 bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string* error) {
@@ -216,9 +245,36 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     }
 
     // RtsAudio reads the gameplay mapping sections; anything else is most likely a typo
-    static const std::set<std::string> kTopKeys = {"volume", "sounds", "music", "events", "types", "weapons", "abilities"};
+    static const std::set<std::string> kTopKeys = {"volume", "spatial", "sounds", "music", "events", "types", "weapons", "abilities"};
     for (auto& [k, unused] : bank.members())
-        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, sounds, music, events, types, weapons, abilities)");
+        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, spatial, sounds, music, events, types, weapons, abilities)");
+
+    Environment env;
+    if (const Json& sp = bank["spatial"]; !sp.isNull()) {
+        if (!sp.isObject()) return fail("\"spatial\" must be an object");
+        static const std::set<std::string> kSpatialKeys = {"model", "minDistance", "maxDistance", "rolloff", "air", "reverb",
+                                                           "airAbsorption", "rear", "speedOfSound"};
+        for (auto& [k, unused] : sp.members())
+            if (!kSpatialKeys.count(k)) warnings.push_back("spatial: unknown key '" + k + "'");
+        std::string why;
+        if (!parseDistance(sp, env.defaults, "spatial", why)) return fail(why);
+        env.defaults.reverb = 1;  // here "reverb" configures the reverb itself, not a send multiplier
+        const Json& air = sp["airAbsorption"];
+        if (air.type() == Json::Type::Bool) env.airCutoff = air.boolean() ? env.airCutoff : 0;
+        else if (!air.isNull()) env.airCutoff = std::clamp(num(air, env.airCutoff), 0.0f, 20000.0f);
+        env.rear = std::clamp(num(sp["rear"], env.rear), 0.0f, 1.0f);
+        env.speedOfSound = std::max(0.0f, num(sp["speedOfSound"], 0));
+        const Json& rv = sp["reverb"];
+        if (rv.type() == Json::Type::Bool) env.reverb = rv.boolean();
+        else if (rv.isObject()) {
+            env.reverbSize = std::clamp(num(rv["size"], env.reverbSize), 0.0f, 1.0f);
+            env.reverbDamping = std::clamp(num(rv["damping"], env.reverbDamping), 0.0f, 1.0f);
+            env.reverbWet = std::clamp(num(rv["wet"], env.reverbWet), 0.0f, 2.0f);
+            env.reverbNear = std::clamp(num(rv["near"], env.reverbNear), 0.0f, 1.0f);
+            env.reverbFar = std::clamp(num(rv["far"], env.reverbFar), 0.0f, 1.0f);
+        } else if (!rv.isNull()) return fail("spatial.reverb must be false or {\"size\", \"damping\", \"wet\", \"near\", \"far\"}");
+    }
+    std::vector<std::pair<SoundId, std::string>> farNames;   // resolved once every sound is known
 
     std::map<std::string, std::shared_ptr<const Clip>> cache; // a file used by several sounds decodes once
     auto loadClip = [&](const std::string& who, const std::string& path) -> std::shared_ptr<const Clip> {
@@ -235,7 +291,8 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         return res;
     };
 
-    static const std::set<std::string> kSoundKeys = {"file", "files", "synth", "volume", "pitch", "bus", "maxInstances",
+    static const std::set<std::string> kSoundKeys = {"file", "files", "synth", "volume", "pitch", "bus", "maxInstances", "model",
+                                                      "minDistance", "maxDistance", "rolloff", "air", "reverb", "far",
                                                       "cooldown", "priority", "loop", "spatial"};
     for (auto& [name, j] : bank["sounds"].members()) {
         const std::string who = "sound '" + name + "'";
@@ -256,6 +313,14 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         d.priority = int(std::clamp<int64_t>(j.getInt("priority", 0), -100, 100));
         d.loop = j.getBool("loop", false);
         d.spatial = j.getBool("spatial", d.bus == Bus::Sfx || d.bus == Bus::Ambient);
+        d.distance = env.defaults;
+        if (std::string why; !parseDistance(j, d.distance, who, why)) return fail(why);
+        if (const Json& far = j["far"]; !far.isNull()) {
+            const Json& fs = far.isObject() ? far["sound"] : far;
+            if (!fs.isString()) return fail(who + ": \"far\" must be a sound name or {\"sound\": name, \"from\": 0.3}");
+            if (far.isObject()) d.farFrom = std::clamp(num(far["from"], d.farFrom), 0.0f, 0.95f);
+            farNames.push_back({SoundId(sounds.size()), fs.str()});
+        }
 
         int sources = (j.has("file") ? 1 : 0) + (j.has("files") ? 1 : 0) + (j.has("synth") ? 1 : 0);
         if (sources != 1) return fail(who + ": needs exactly one of \"file\", \"files\", \"synth\"");
@@ -280,6 +345,14 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         }
         byName[name] = SoundId(sounds.size());
         sounds.push_back(std::move(d));
+    }
+
+    for (auto& [id, farName] : farNames) {
+        auto it = byName.find(farName);
+        SoundDef& d = sounds[size_t(id)];
+        if (it == byName.end()) warnings.push_back("sound '" + d.name + "': unknown far sound '" + farName + "'");
+        else if (it->second == id || sounds[size_t(it->second)].far != kNoSound) warnings.push_back("sound '" + d.name + "': far sound '" + farName + "' must be a plain sound");
+        else d.far = it->second;
     }
 
     for (auto& [name, j] : bank["music"].members()) {
@@ -314,7 +387,9 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     m.lastVariant.assign(m.sounds.size(), -1);
     std::copy(std::begin(gains), std::end(gains), std::begin(m.bankGain));
     m.bankMaster = master;
+    m.env = env;
     m.sendGains();
+    m.sendEnv();
     for (auto& w : m.warnings) std::fprintf(stderr, "audio: %s\n", w.c_str());
     return true;
 }
@@ -341,32 +416,51 @@ VoiceId AudioEngine::play(SoundId id, const PlayParams& p) {
     double& last = m.lastPlay[size_t(id)];
     if (m.time - last < double(d->cooldown)) return kNoVoice;
     const bool spatial = d->spatial && p.positional;
-    if (spatial && !d->loop && audibility(p.x, p.z) <= 0.001f) return kNoVoice;
+    if (spatial && !d->loop && audibility(id, p.x, p.y, p.z) <= 0.001f) return kNoVoice;
     last = m.time;
 
-    int variant = 0;
-    if (d->clips.size() > 1) { // random, but never the same variation twice in a row
-        int& prev = m.lastVariant[size_t(id)];
-        variant = int(m.frand() * float(d->clips.size())) % int(d->clips.size());
-        if (variant == prev) variant = (variant + 1) % int(d->clips.size());
-        prev = variant;
+    uint32_t delay = 0;   // speed of sound: far explosions arrive late
+    if (spatial && m.env.speedOfSound > 0) {
+        const float dx = p.x - m.listener.pos[0], dy = p.y - m.listener.pos[1], dz = p.z - m.listener.pos[2];
+        const float seconds = std::min(3.0f, std::sqrt(dx * dx + dy * dy + dz * dz) / m.env.speedOfSound);
+        delay = uint32_t(seconds * float(m.mixer.sampleRate()));
     }
-    MixCmd c;
-    c.kind = MixCmd::Play;
-    c.id = m.nextId++;
+    const VoiceId vid = m.nextId++;
     if (m.nextId == kNoVoice) m.nextId = 1;
-    c.sound = id;
-    c.clip = d->clips[size_t(variant)];
-    c.volume = d->volume * p.volume;
-    c.pitch = p.pitch * (d->pitchMin + (d->pitchMax - d->pitchMin) * m.frand());
-    c.bus = d->bus;
-    c.priority = d->priority;
-    c.maxInstances = d->maxInstances;
-    c.loop = d->loop;
-    c.spatial = spatial;
-    c.x = p.x; c.z = p.z;
-    const VoiceId vid = c.id;
-    m.mixer.push(std::move(c));
+
+    auto pushVoice = [&](SoundId sid, MixCmd::Role role) {
+        const SoundDef& s = *sound(sid);
+        if (s.clips.empty()) return;
+        int variant = 0;
+        if (s.clips.size() > 1) { // random, but never the same variation twice in a row
+            int& prev = m.lastVariant[size_t(sid)];
+            variant = int(m.frand() * float(s.clips.size())) % int(s.clips.size());
+            if (variant == prev) variant = (variant + 1) % int(s.clips.size());
+            prev = variant;
+        }
+        MixCmd c;
+        c.kind = MixCmd::Play;
+        c.id = vid;   // both halves of a near/far pair answer to the same voice id
+        c.sound = sid;
+        c.clip = s.clips[size_t(variant)];
+        c.volume = s.volume * p.volume;
+        c.pitch = p.pitch * (s.pitchMin + (s.pitchMax - s.pitchMin) * m.frand());
+        c.bus = s.bus;
+        c.priority = role == MixCmd::Far ? d->priority : s.priority;
+        c.maxInstances = s.maxInstances;
+        c.loop = s.loop;
+        c.spatial = spatial;
+        c.x = p.x; c.y = p.y; c.z = p.z;
+        c.distance = s.distance;
+        c.role = role;
+        c.pairDistance = d->distance;
+        c.pairFrom = d->farFrom;
+        c.delayFrames = delay;
+        m.mixer.push(std::move(c));
+    };
+    const bool pair = spatial && d->far != kNoSound;
+    pushVoice(id, pair ? MixCmd::Near : MixCmd::Single);
+    if (pair) pushVoice(d->far, MixCmd::Far);
     return vid;
 }
 
@@ -387,25 +481,40 @@ void AudioEngine::stopAll(float fade) {
     impl_->mixer.push(std::move(c));
 }
 
-void AudioEngine::setVoicePosition(VoiceId v, float x, float z) {
+void AudioEngine::setVoicePosition(VoiceId v, float x, float y, float z) {
     if (v == kNoVoice || !impl_->mixing()) return;
     MixCmd c;
     c.kind = MixCmd::SetPos;
     c.id = v;
-    c.x = x; c.z = z;
+    c.x = x; c.y = y; c.z = z;
     impl_->mixer.push(std::move(c));
 }
 
-void AudioEngine::setListener(float x, float z, float yaw, float radius) {
-    Listener& l = impl_->listener;
-    if (l.x == x && l.z == z && l.yaw == yaw && l.radius == radius) return;
-    l = {x, z, yaw, radius};
+void AudioEngine::setListener(const ListenerPose& pose) {
+    ListenerPose& l = impl_->listener;
+    if (std::equal(pose.pos, pose.pos + 3, l.pos) && std::equal(pose.forward, pose.forward + 3, l.forward) &&
+        std::equal(pose.up, pose.up + 3, l.up) && pose.hearing == l.hearing) return;
+    l = pose;
     impl_->sendListener();
 }
 
-float AudioEngine::audibility(float x, float z) const {
-    float g, pan;
-    spatialize(impl_->listener, x, z, g, pan);
+void AudioEngine::setListener(float x, float z, float yaw, float radius) {
+    ListenerPose pose;
+    pose.pos[0] = x; pose.pos[1] = 0; pose.pos[2] = z;
+    pose.forward[0] = -std::sin(yaw); pose.forward[1] = 0; pose.forward[2] = -std::cos(yaw);
+    pose.hearing = radius / std::max(0.01f, impl_->env.defaults.minDistance);
+    setListener(pose);
+}
+
+const ListenerPose& AudioEngine::listener() const { return impl_->listener; }
+const Environment& AudioEngine::environment() const { return impl_->env; }
+
+float AudioEngine::audibility(SoundId id, float x, float y, float z) const {
+    const Impl& m = *impl_;
+    const SoundDef* d = sound(id);
+    const DistanceDef& dist = d ? d->distance : m.env.defaults;
+    float g = distanceGain(dist, spatialize(m.listener, m.env, dist, x, y, z).distance, m.listener.hearing);
+    if (d && d->far != kNoSound) g = std::max(g, audibility(d->far, x, y, z));
     return g;
 }
 

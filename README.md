@@ -254,7 +254,8 @@ docker build -f apps/server/Dockerfile -t rts-server .             # серве�
 | Что | Смысл |
 |---|---|
 | форматы | WAV, OGG Vorbis, MP3, FLAC; `"synth"` — звук из параметров (`sine/square/saw/triangle/noise`, свип частоты, огибающая, вибрато, фильтр, слои) |
-| шины | `sfx` и `ambient` — позиционные (затухание и панорама от камеры), `voice`, `ui`, `music` — нет |
+| шины | `sfx` и `ambient` — позиционные (3D: затухание, панорама, высота), `voice`, `ui`, `music` — нет |
+| расстояние | `spatial`: модель затухания, дальности, «воздух» (вдали пропадают верха), реверберация растёт с расстоянием, скорость звука; у звука — свои дальности и `far` — дальний вариант с кроссфейдом |
 | `maxInstances`, `cooldown`, `priority` | прореживание в больших боях: 40 лучников не дают 40 одинаковых выстрелов |
 | события (cues) | `attack hit miss died spawned trainStarted ready buildPlaced buildDone gathered captured lost playerDefeated victory defeat notEnough notEnoughSupply noRoom researched levelUp ability readyToPlace sold regionClaimed wave lowPower upgraded message underAttack baseUnderAttack select move attackOrder buildOrder click error` |
 | поиск звука | тип → оружие/способность по id → `events` |

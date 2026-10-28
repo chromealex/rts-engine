@@ -158,6 +158,7 @@ endif()
 add_library(rts_audio STATIC
     engine/audio/AudioEngine.cpp
     engine/audio/AudioMixer.cpp
+    engine/audio/AudioReverb.cpp
     engine/audio/AudioDecode.cpp
     engine/audio/Synth.cpp
     ${RTS_MINIAUDIO_IMPL})

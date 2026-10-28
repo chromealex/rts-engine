@@ -865,6 +865,7 @@ TEST(pack_sample_games_match_folder) {
 #include <sstream>
 #include <tuple>
 #include "engine/audio/Audio.h"
+#include "engine/audio/AudioMixer.h"   // spatialize / distanceGain (pure functions)
 #include "engine/audio/Synth.h"
 #include "modules/rts/audio/RtsAudio.h"
 
@@ -1001,15 +1002,15 @@ TEST(audio_voice_limits_and_cooldown) {
 
 TEST(audio_spatial_and_volumes) {
     auto a = offlineAudio();
-    CHECK(loadBank(*a, R"({"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
+    CHECK(loadBank(*a, R"({"spatial":{"minDistance":10,"maxDistance":20,"reverb":false},"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
     a->setListener(0, 0, 0, 10);
     CHECK(a->audibility(5, 0) == 1.0f && a->audibility(25, 0) == 0.0f);
     CHECK(a->audibility(15, 0) > 0.0f && a->audibility(15, 0) < 1.0f);
     audio::PlayParams far;
     far.positional = true; far.x = 100;
-    CHECK(loadBank(*a, R"({"sounds":{"blip":{"synth":{"duration":0.1}}}})"));
+    CHECK(loadBank(*a, R"({"spatial":{"minDistance":10,"maxDistance":20,"reverb":false},"sounds":{"blip":{"synth":{"duration":0.1}}}})"));
     CHECK(a->play("blip", far) == audio::kNoVoice);                 // inaudible one-shots are not even started
-    CHECK(loadBank(*a, R"({"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
+    CHECK(loadBank(*a, R"({"spatial":{"minDistance":10,"maxDistance":20,"reverb":false},"sounds":{"tone":{"synth":{"wave":"sine","freq":300,"duration":2},"loop":true}}})"));
     audio::PlayParams right;
     right.positional = true; right.x = 9;
     audio::VoiceId v = a->play("tone", right);
@@ -2473,6 +2474,141 @@ TEST(atlas_texture_library_is_transparent) {
         CHECK(lib.loadImage("units/x/b.png", back) && sameImage(back, b));
     }
     CHECK(dev.alive == 0);
+}
+
+TEST(audio_3d_distance_models_and_pose) {
+    audio::DistanceDef d;
+    d.minDistance = 10; d.maxDistance = 50;
+    for (auto model : {audio::Rolloff::Inverse, audio::Rolloff::Linear, audio::Rolloff::Exponential}) {
+        d.model = model;
+        CHECK(audio::distanceGain(d, 5, 1) == 1.0f && audio::distanceGain(d, 50, 1) == 0.0f);
+        float prev = 1.0f;
+        bool monotonic = true;
+        for (float x = 10; x <= 50; x += 1) { float g = audio::distanceGain(d, x, 1); monotonic = monotonic && g <= prev; prev = g; }
+        CHECK(monotonic);
+        CHECK(audio::distanceGain(d, 40, 2) > audio::distanceGain(d, 40, 1));  // more hearing = farther
+    }
+    audio::Environment env;
+    audio::ListenerPose ear;   // at the origin, looking down -z
+    auto above = audio::spatialize(ear, env, d, 0, 30, 0), side = audio::spatialize(ear, env, d, 30, 0, 0);
+    CHECK(std::fabs(above.distance - 30) < 1e-3f && std::fabs(above.gain - side.gain) < 1e-5f);  // height counts as distance
+    CHECK(std::fabs(above.pan) < 1e-3f && side.pan > 0.8f);
+    ear.forward[0] = 0; ear.forward[1] = -1; ear.forward[2] = 0;          // top-down camera
+    ear.up[0] = 0; ear.up[1] = 0; ear.up[2] = -1;                          // screen up = world -z
+    CHECK(audio::spatialize(ear, env, d, 20, -5, 0).pan > 0.5f);          // world +x is screen right
+    env.rear = 1;
+    ear = audio::ListenerPose{};
+    auto front = audio::spatialize(ear, env, d, 0, 0, -20), back = audio::spatialize(ear, env, d, 0, 0, 20);
+    CHECK(back.gain < front.gain && back.cutoff > 0 && (front.cutoff == 0 || back.cutoff < front.cutoff));
+    CHECK(front.t > 0.2f && front.send > env.reverbNear);                  // farther = more reverb
+    CHECK(audio::farWeight(0.1f, 0.3f) == 0.0f && audio::farWeight(1.0f, 0.3f) == 1.0f && audio::farWeight(0.65f, 0.3f) > 0.3f);
+}
+
+namespace {
+// Fraction of the signal's energy in its sample-to-sample differences: high for bright sounds.
+double brightness(const std::vector<float>& st) {
+    double e = 0, d = 0;
+    for (size_t i = 2; i < st.size(); i += 2) { e += st[i] * st[i]; const double x = st[i] - st[i - 2]; d += x * x; }
+    return e > 0 ? d / e : 0;
+}
+std::vector<float> renderBuf(audio::AudioEngine& a, float seconds) {
+    std::vector<float> buf(size_t(48000 * seconds) * 2);
+    a.render(buf.data(), int(buf.size() / 2));
+    return buf;
+}
+double energy(const std::vector<float>& st, size_t from, size_t to) {
+    double e = 0;
+    for (size_t i = from * 2; i < std::min(st.size(), to * 2); ++i) e += st[i] * st[i];
+    return e;
+}
+} // namespace
+
+TEST(audio_air_absorption_dulls_far_sounds) {
+    // linear rolloff 0 keeps the level until the last 20 %: only the air filter differs
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":100,"airAbsorption":1000,"reverb":false},
+        "sounds":{"hiss":{"synth":{"wave":"noise","freq":20000,"duration":0.5,"attack":0,"release":0}}}})"));
+    a->setListener(0, 0, 0, 5);
+    audio::PlayParams p;
+    p.positional = true;
+    p.x = 2;
+    a->play("hiss", p);
+    const double nearB = brightness(renderBuf(*a, 0.4f));
+    renderBuf(*a, 0.3f);
+    p.x = 75;
+    a->play("hiss", p);
+    const auto farBuf = renderBuf(*a, 0.4f);
+    CHECK(energy(farBuf, 0, 19200) > 1.0);                                  // still clearly audible
+    CHECK(brightness(farBuf) < nearB * 0.3);                                // but much duller
+}
+
+TEST(audio_reverb_grows_with_distance) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":100,"airAbsorption":false,
+        "reverb":{"size":0.7,"wet":0.6,"near":0.0,"far":1.0}},
+        "sounds":{"tick":{"synth":{"wave":"square","freq":300,"duration":0.04,"attack":0,"release":0.01}}}})"));
+    a->setListener(0, 0, 0, 5);
+    auto tailRatio = [&](float x) {
+        audio::PlayParams p;
+        p.positional = true;
+        p.x = x;
+        a->play("tick", p);
+        auto b = renderBuf(*a, 0.8f);
+        const double direct = energy(b, 0, 2400), tail = energy(b, 9600, 38400);  // 0..50 ms vs 200..800 ms
+        renderBuf(*a, 4.0f);                                                       // let the tail die
+        return direct > 0 ? tail / direct : 0.0;
+    };
+    const double nearR = tailRatio(2), farR = tailRatio(75);
+    CHECK(nearR < 0.01 && farR > 0.05 && farR > nearR * 10);
+    auto after = renderBuf(*a, 0.1f);                                       // the reverb decays (stable, no NaN)
+    CHECK(energy(after, 0, 4800) < 1e-6 && std::isfinite(energy(after, 0, 4800)));
+}
+
+TEST(audio_far_variant_crossfade) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":100,"airAbsorption":false,"reverb":false},
+        "sounds":{"boom":{"synth":{"wave":"sine","freq":2000,"duration":1},"far":{"sound":"boomFar","from":0.2},"maxDistance":100},
+                  "boomFar":{"synth":{"wave":"sine","freq":100,"duration":1},"maxDistance":160}}})"));
+    CHECK(a->sound(a->find("boom"))->far == a->find("boomFar"));
+    a->setListener(0, 0, 0, 5);
+    auto crossings = [&](float x) {
+        audio::PlayParams p;
+        p.positional = true;
+        p.x = x;
+        audio::VoiceId v = a->play("boom", p);
+        auto b = renderBuf(*a, 0.3f);
+        int zc = 0;
+        for (size_t i = 2; i < b.size(); i += 2) zc += (b[i] > 0) != (b[i - 2] > 0);
+        a->stop(v, 0.01f);
+        renderBuf(*a, 0.05f);
+        CHECK(a->activeVoices() == 0);                                      // stop() ends both halves
+        return zc;
+    };
+    CHECK(crossings(3) > 1000);    // near: the bright 2 kHz version
+    CHECK(crossings(95) < 100);    // far: the 100 Hz rumble
+    CHECK(a->audibility(a->find("boom"), 130, 0, 0) > 0.0f);  // heard as far as its far variant carries
+    std::string err;
+    CHECK(loadBank(*a, R"({"sounds":{"x":{"synth":{},"far":"nope"}}})", &err) && a->warnings().size() == 1);
+    CHECK(!loadBank(*a, R"({"spatial":{"model":"cubic"}})", &err) && err.find("unknown model 'cubic'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"minDistance":30,"maxDistance":20}}})", &err) && err.find("minDistance < maxDistance") != std::string::npos);
+}
+
+TEST(audio_speed_of_sound_delay) {
+    auto a = offlineAudio();
+    CHECK(loadBank(*a, R"({"spatial":{"model":"linear","rolloff":0,"minDistance":5,"maxDistance":200,"airAbsorption":false,"reverb":false,"speedOfSound":100},
+        "sounds":{"bang":{"synth":{"wave":"square","freq":200,"duration":0.2,"attack":0}}}})"));
+    a->setListener(0, 0, 0, 5);
+    audio::PlayParams p;
+    p.positional = true;
+    p.x = 50;                                                                 // 0.5 s away
+    a->play("bang", p);
+    auto b = renderBuf(*a, 0.8f);
+    CHECK(energy(b, 0, 22000) < 1e-9);                                        // nothing before ~0.46 s
+    CHECK(energy(b, 24500, 33000) > 1.0);                                     // then the bang
+    p.x = 0.5f;
+    a->play("bang", p);
+    b = renderBuf(*a, 0.05f);
+    CHECK(energy(b, 0, 2400) > 0.1);                                          // close sounds are immediate
 }
 
 int main() {

@@ -49,6 +49,12 @@ public:
     void onSelect(Simulation& sim, Entity unit);
     void onCommand(Simulation& sim, Entity firstUnit, uint16_t commandType);
     void onMatchEnd(bool won);
+
+    // Listener for an RTS camera (eye looking at a ground target). The ear hangs on the view ray
+    // above the target: zooming out raises it, so the battle sounds farther (quieter, duller,
+    // roomier), while hearing widens with the square root of the zoom so the visible
+    // battlefield never goes silent. `referenceDistance` = camera distance of "normal" zoom.
+    static audio::ListenerPose cameraListener(const float target[3], const float eye[3], float referenceDistance = 24.0f);
     void play(Cue c);   // UI cues (click, error) and anything without a position
 
     // How many sounds update() started since attach (tests, debug overlay).
@@ -65,7 +71,7 @@ private:
 
     audio::SoundId resolve(const Json& name, const std::string& where);
     audio::SoundId cueFor(int type, Cue c) const;
-    bool playAt(audio::SoundId s, const Vec3& pos, bool positional);
+    bool playAt(audio::SoundId s, const Vec3& pos, bool positional, float height = 0);
     // `worldSounds` = false still updates alerts and battle intensity, without playing the hit itself.
     void handle(Simulation& sim, const SimEvent& ev, bool worldSounds);
 
