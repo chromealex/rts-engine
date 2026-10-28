@@ -6,6 +6,8 @@
 local WAVES = rts.waves()          -- static definitions (constant for the match); progress lives in C++ (wave_done)
 local CLOCK = rts.wave_clock_ticks()
 
+std.period.waves = (#WAVES > 0 or CLOCK >= 0) and 1 or 0   -- not called at all without waves
+
 local function march(spawned)
   for _, n in ipairs(spawned) do
     if rts.has_orders(n) then

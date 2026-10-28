@@ -64,3 +64,6 @@ tiles2d 3 96eaf2517dea8b58
 underlord 1 947ac6f45ccad967
 underlord 2 7fb2f6337e91f2df
 underlord 3 26526d08d9ff63a8
+triggerlab 1 f1f9e3b7efe182b0
+triggerlab 2 ee5c1b7405974d65
+triggerlab 3 5ab343e4e6c1b238

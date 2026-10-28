@@ -30,10 +30,13 @@ local function aliveTeams()
   return teams
 end
 
+std.period.victory = 10           -- checked every 10 ticks
+
+local V = rts.victory_rules()     -- constant for the match (rules + map override)
+
 function std.victory(tick)
-  if tick % 10 ~= 0 then return end
   if rts.winner() >= 0 then return end
-  local v = rts.victory_rules()
+  local v = V
 
   for _, p in ipairs(rts.players()) do
     if p.alive and not rts.is_wave_player(p.slot) then

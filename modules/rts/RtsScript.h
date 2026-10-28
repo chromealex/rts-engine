@@ -82,7 +82,7 @@ Json scriptApiReference();
 
 // Systems implemented by the engine's standard Lua library (modules/rts/lua/<name>.lua defines
 // std.<name>(tick)); a game overrides one with scripts/std/<name>.lua.
-enum class StdFn : uint8_t { Victory, Waves, Count };
+enum class StdFn : uint8_t { Victory, Waves, Triggers, Count };
 
 // The simulation VM of one match (owned by RtsModule). It always runs the standard library;
 // game scripts (rules/map "scripts") are loaded on top.
