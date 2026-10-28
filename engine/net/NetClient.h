@@ -10,6 +10,7 @@
 //               the UI keeps calling sim.submit(cmd) with cmd.player = net.match().localSlot.
 #pragma once
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,8 +37,8 @@ struct ClientIdentity {
 // Something for the UI. `text` is a localization key with arguments (net::translate() in
 // NetLocalize.h); it is empty when the event needs no message.
 struct NetEvent {
-    enum class Kind { Connected, Disconnected, Error, Chat, RoomChanged, QueueChanged, MatchStarted, PlayerStatus, Desync, MatchEnded,
-                      RatingChanged, ControlChanged };
+    enum class Kind { Connected, Disconnected, Reconnecting, Error, Chat, RoomChanged, QueueChanged, MatchStarted, PlayerStatus, Desync,
+                      MatchEnded, RatingChanged, ControlChanged };
     Kind kind;
     NetText text;
     int32_t value = 0;   // error code, result (MatchEnded), player slot, rating delta ...
@@ -45,9 +46,15 @@ struct NetEvent {
 
 class NetClient {
 public:
-    enum class Phase { Connecting, Online, Disconnected };
+    enum class Phase { Connecting, Online, Reconnecting, Disconnected };
 
     NetClient(std::unique_ptr<Conn> conn, ClientIdentity id, uint64_t reconnectToken = 0);
+    // Connects to an address (see connectTo) and reconnects to it by itself after a drop.
+    NetClient(const std::string& address, ClientIdentity id, uint64_t reconnectToken = 0);
+    // How to open a new connection after a drop. With it, a lost connection does not end the session:
+    // the client retries for reconnectWindowMs and, if the match is still running on the server, only
+    // the input confirmed since the drop is sent (the Simulation keeps running, nothing is rebuilt).
+    void setReconnect(std::function<std::unique_ptr<Conn>()> connect, uint32_t reconnectWindowMs = 120000);
     ~NetClient();
 
     void update(uint64_t now);
@@ -103,6 +110,9 @@ private:
     ClientIdentity id_;
     Phase phase_ = Phase::Connecting;
     bool helloSent_ = false;
+    std::function<std::unique_ptr<Conn>()> reconnect_;
+    uint32_t reconnectWindowMs_ = 120000;
+    uint64_t droppedAt_ = 0, nextRetry_ = 0;
     uint32_t clientId_ = 0;
     uint64_t reconnectToken_ = 0;
     std::string serverName_;

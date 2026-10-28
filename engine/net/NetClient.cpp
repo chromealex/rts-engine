@@ -31,6 +31,16 @@ NetClient::NetClient(std::unique_ptr<Conn> conn, ClientIdentity id, uint64_t rec
     if (!conn_) phase_ = Phase::Disconnected;
 }
 
+NetClient::NetClient(const std::string& address, ClientIdentity id, uint64_t reconnectToken)
+    : NetClient(connectTo(address), std::move(id), reconnectToken) {
+    if (conn_) setReconnect([address] { return connectTo(address); });
+}
+
+void NetClient::setReconnect(std::function<std::unique_ptr<Conn>()> connect, uint32_t reconnectWindowMs) {
+    reconnect_ = std::move(connect);
+    reconnectWindowMs_ = reconnectWindowMs;
+}
+
 NetClient::~NetClient() { session_.reset(); if (conn_) conn_->close(); }
 
 std::vector<NetEvent> NetClient::takeEvents() {
@@ -41,15 +51,28 @@ std::vector<NetEvent> NetClient::takeEvents() {
 
 void NetClient::update(uint64_t now) {
     now_ = now;
-    if (!conn_ || phase_ == Phase::Disconnected) return;
-    conn_->update(now);
-    if (conn_->state() == ConnState::Closed) {
-        phase_ = Phase::Disconnected;
-        event(NetEvent::Kind::Disconnected, NetText("net.disconnected"));
-        return;
+    if (phase_ == Phase::Disconnected) return;
+    if (conn_) conn_->update(now);
+    if (!conn_ || conn_->state() == ConnState::Closed) {
+        // Lost (or a retry failed): keep the session and try again while the server keeps our slot.
+        const bool canRetry = reconnect_ && reconnectToken_ && (phase_ != Phase::Connecting || droppedAt_);
+        if (!canRetry || (droppedAt_ && now - droppedAt_ > reconnectWindowMs_)) {
+            phase_ = Phase::Disconnected;
+            event(NetEvent::Kind::Disconnected, NetText("net.disconnected"));
+            return;
+        }
+        if (!droppedAt_) { droppedAt_ = now; nextRetry_ = now; event(NetEvent::Kind::Reconnecting, NetText("net.reconnecting")); }
+        phase_ = Phase::Reconnecting;
+        if (now < nextRetry_) return;
+        nextRetry_ = now + 2000;
+        conn_ = reconnect_();
+        helloSent_ = false;
+        if (!conn_) return;
+        conn_->update(now);
     }
     if (conn_->state() == ConnState::Connected && !helloSent_) {
         HelloMsg h; h.name = id_.name; h.gameId = id_.gameId; h.clientKey = id_.clientKey; h.reconnectToken = reconnectToken_;
+        if (match_ && session_) { h.resumeSeed = match_->seed; h.resumeTick = session_->confirmedNext(); }
         send(encode(h));
         helloSent_ = true;
     }
@@ -71,6 +94,11 @@ void NetClient::handle(const Bytes& b) {
         if (!decode(r, m)) return;
         clientId_ = m.clientId; reconnectToken_ = m.reconnectToken; serverName_ = m.serverName; queues_ = m.queues;
         phase_ = Phase::Online;
+        droppedAt_ = 0;
+        // Input sent while the link was dead may be lost: send every unconfirmed frame again (the
+        // server drops the ones it already has). If the server cannot resume the match from here,
+        // it answers with a full MatchStart instead and the game rebuilds the simulation.
+        if (m.resumed && session_) session_->resendUnconfirmed();
         event(NetEvent::Kind::Connected, NetText("net.connected").str("server", m.serverName), m.resumed ? 1 : 0);
         break;
     }

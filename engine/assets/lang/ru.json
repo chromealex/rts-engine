@@ -166,6 +166,7 @@
   "net": {
     "connected": "Подключено к серверу {server}",
     "disconnected": "Соединение с сервером потеряно",
+    "reconnecting": "Связь потеряна, переподключаемся…",
     "chat_line": "{name}: {text}",
     "desync": "Рассинхронизация на тике {tick}",
     "rating_up": "Рейтинг +{delta}",

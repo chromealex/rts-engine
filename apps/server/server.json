@@ -5,8 +5,10 @@
   "wsPort": 27016,               // web clients; put a TLS proxy in front for wss:// on HTTPS pages
   "replays": "replays",          // every finished match is saved here (rts_headless --replay plays it)
   "ratings": "ratings.txt",
-  "reconnectGraceSec": 120,
-  // Game id (game.json "id") -> folder, so saved replays reference real files.
+  "reconnectGraceSec": 120,      // a dropped player who does not come back in time surrenders
+  // "surrenderCommand": 22,       // set automatically to the RTS module's kCmdSurrender
+  // Game id (game.json "id") -> folder: saved replays reference real files, and the server can
+  // decide a match nobody settled (everyone left, results disagree) by re-simulating it.
   "games": {
     "com.rtsengine.ironandgold": "games/skirmish",
     "com.rtsengine.mushroomclash": "games/mushrooms"

@@ -32,6 +32,7 @@ void Server::Impl::startMatch(Room& r) {
         p.slot = uint8_t(i + 1); p.team = r.map.slotTeams[i]; p.kind = s.kind; p.clientId = s.kind == SlotKind::Human ? s.clientId : 0;
         p.name = s.name;
         m->players.push_back(p);
+        if (Client* c = client(s.clientId); c && s.kind == SlotKind::Human) m->keyBySlot[p.slot] = c->key;
         if (s.kind == SlotKind::Human) {
             Member mb;
             mb.clientId = s.clientId; mb.slot = p.slot; mb.slots = {p.slot}; mb.nextFrame = r.settings.inputDelay;
@@ -64,8 +65,27 @@ static uint32_t nominalTick(uint64_t now, uint64_t start, uint32_t tickRate) {
     return now > start ? uint32_t((now - start) * tickRate / 1000) : 0;
 }
 
+void Server::Impl::confirmNextTick(Match& M) {
+    const uint32_t T = M.confirmedNext;
+    std::vector<Command> cmds;
+    for (auto& m : M.members) {
+        auto it = m.frames.find(T);
+        if (it == m.frames.end()) continue;
+        for (auto& c : it->second) cmds.push_back(std::move(c));
+        m.frames.erase(it);
+    }
+    for (auto& c : M.carry) cmds.push_back(std::move(c));
+    M.carry.clear();
+    // Canonical order: by player, keeping each player's own order; seq becomes 1..n per player.
+    std::stable_sort(cmds.begin(), cmds.end(), [](const Command& a, const Command& b) { return a.player < b.player; });
+    std::map<uint8_t, uint32_t> seq;
+    for (auto& c : cmds) { c.tick = T; c.seq = ++seq[c.player]; M.history.push_back(c); }
+    ++M.confirmedNext;
+}
+
 void Server::Impl::matchUpdate(Room& r) {
     Match& M = *r.match;
+    if (M.concluding) return;
     const RoomSettings& s = r.settings;
     const uint32_t nominal = nominalTick(now, M.startMs, s.tickRate);
     const uint32_t horizon = nominal + s.inputDelay + s.rollbackWindow + 2; // nobody can legitimately be further ahead
@@ -78,20 +98,7 @@ void Server::Impl::matchUpdate(Room& r) {
             if (m.slot && m.connected && !m.left && m.synced && !m.slots.empty() && m.nextFrame <= T) all = false;
         const uint64_t deadline = M.startMs + uint64_t(T + 1) * 1000 / s.tickRate + s.lagToleranceMs;
         if (!all && now < deadline) break;
-        std::vector<Command> cmds;
-        for (auto& m : M.members) {
-            auto it = m.frames.find(T);
-            if (it == m.frames.end()) continue;
-            for (auto& c : it->second) cmds.push_back(std::move(c));
-            m.frames.erase(it);
-        }
-        for (auto& c : M.carry) cmds.push_back(std::move(c));
-        M.carry.clear();
-        // Canonical order: by player, keeping each player's own order; seq becomes 1..n per player.
-        std::stable_sort(cmds.begin(), cmds.end(), [](const Command& a, const Command& b) { return a.player < b.player; });
-        std::map<uint8_t, uint32_t> seq;
-        for (auto& c : cmds) { c.tick = T; c.seq = ++seq[c.player]; M.history.push_back(c); }
-        ++M.confirmedNext;
+        confirmNextTick(M);
     }
 
     // ---- send confirmed input
@@ -142,8 +149,14 @@ void Server::Impl::matchUpdate(Room& r) {
         result = m.result; anyReport = true;
     }
     if (anyReport && everyone) {
-        if (agree) endMatch(r, result, NetText());
-        else { M.desync = true; endMatch(r, 0, NetText("net.end.result_mismatch")); }
+        if (agree) {
+            uint32_t tick = M.confirmedNext; uint64_t hash = 0;
+            for (auto& m : M.members) if (m.reported && m.slot && !m.left) { tick = m.resultTick; hash = m.resultHash; break; }
+            endMatch(r, result, NetText(), tick, hash, false);
+        } else {
+            M.desync = true;
+            requestVerdict(r, NetText("net.end.result_mismatch"));   // players disagree: the server's simulation decides
+        }
     }
 }
 
@@ -153,6 +166,7 @@ void Server::Impl::onInputFrame(Client& c, Room& r, ByteReader& rd) {
     if (!m || !m->slot || m->left || !decode(rd, f)) return;
     Match& M = *r.match;
     if (f.tick > M.confirmedNext + 2000) return;
+    if (f.tick < m->nextFrame) return;   // already have it (resent after a reconnect) or stale
     std::vector<Command> ok;
     for (auto& cmd : f.commands) {
         if (ok.size() >= 64) break;   // flood guard: nobody issues more per tick
@@ -201,11 +215,20 @@ void Server::Impl::onMatchResult(Client& c, Room& r, ByteReader& rd) {
     m->reported = true; m->result = res.result; m->resultTick = res.tick; m->resultHash = res.hash;
 }
 
-void Server::Impl::memberResumed(Room& r, Client& c) {
+void Server::Impl::memberResumed(Room& r, Client& c, uint64_t resumeSeed, uint32_t resumeTick) {
     Member* m = member(r, c.id);
     if (!m || m->left) return;
-    m->connected = true; m->synced = false; m->frames.clear();
-    sendMatchStart(r, *m, true);
+    m->connected = true; m->synced = false;
+    if (resumeSeed == r.match->seed && resumeTick <= r.match->confirmedNext && !r.match->concluding) {
+        // The client still runs this match: continue from its last confirmed tick. Frames it already
+        // sent stay; the ones lost with the old connection come again (duplicates are dropped).
+        m->sent = resumeTick;
+        log("room #%u: slot %u resumed at tick %u (server at %u)", r.id, m->slot, resumeTick, r.match->confirmedNext);
+    } else {
+        // Restarted game: everything from the start, the client re-simulates.
+        m->frames.clear();
+        sendMatchStart(r, *m, true);
+    }
     PlayerStatusMsg ps; ps.slot = m->slot; ps.status = 0;
     Bytes b = encode(ps);
     for (auto& o : r.match->members) if (o.clientId != c.id) if (Client* oc = client(o.clientId)) send(*oc, b);
@@ -222,6 +245,18 @@ void Server::Impl::memberDropped(Room& r, uint32_t clientId, bool left) {
     for (auto& o : r.match->members) if (o.clientId != clientId) if (Client* oc = client(o.clientId)) send(*oc, b);
     if (m->slots.size() > 1) reassignBots(r);
     if (!left) return;
+    if (cfg.surrenderCommand) {
+        // Leaving = surrendering, in the input stream: every client and the replay see the same defeat,
+        // and the simulation decides who won. Nobody left to report it: the server re-simulates.
+        Command c;
+        c.player = m->slot;
+        c.type = cfg.surrenderCommand;
+        r.match->carry.push_back(c);
+        bool anyHuman = false;
+        for (auto& o : r.match->members) anyHuman |= o.slot && !o.left;
+        if (!anyHuman) requestVerdict(r, NetText("net.end.everyone_left"));
+        return;
+    }
     // Leaving counts as giving up: end the match when only one team has anyone left in it.
     std::set<uint8_t> activeTeams, startTeams;
     bool anyHuman = false;
@@ -229,8 +264,8 @@ void Server::Impl::memberDropped(Room& r, uint32_t clientId, bool left) {
     for (auto& o : r.match->members)
         if (o.slot && !o.left) { anyHuman = true; for (auto& p : r.match->players) if (p.slot == o.slot) activeTeams.insert(p.team); }
     if (anyHuman) for (auto& p : r.match->players) if (p.kind == SlotKind::Bot) activeTeams.insert(p.team);
-    if (!anyHuman) endMatch(r, 0, NetText("net.end.everyone_left"));
-    else if (activeTeams.size() == 1 && startTeams.size() > 1) endMatch(r, *activeTeams.begin(), NetText("net.end.opponents_left"));
+    if (!anyHuman) endMatch(r, 0, NetText("net.end.everyone_left"), r.match->confirmedNext, 0, false);
+    else if (activeTeams.size() == 1 && startTeams.size() > 1) endMatch(r, *activeTeams.begin(), NetText("net.end.opponents_left"), r.match->confirmedNext, 0, false);
 }
 
 void Server::Impl::reassignBots(Room& r) {
@@ -256,39 +291,92 @@ void Server::Impl::reassignBots(Room& r) {
     }
 }
 
-void Server::Impl::endMatch(Room& r, int32_t result, const NetText& reason) {
+MatchRecord Server::Impl::record(Room& r) {
     Match& M = *r.match;
-    uint32_t endTick = M.confirmedNext;
-    uint64_t endHash = 0;
-    for (auto& m : M.members) if (m.reported && m.result == result) { endTick = m.resultTick; endHash = m.resultHash; break; }
-    saveReplay(r, endTick, endHash);
+    MatchRecord rec;
+    rec.roomId = r.id; rec.gameId = r.gameId; rec.queueId = r.queueId; rec.matchmade = r.matchmade; rec.desync = M.desync;
+    rec.map = r.map; rec.settings = r.settings; rec.seed = M.seed; rec.players = M.players;
+    rec.keyBySlot = M.keyBySlot;
+    rec.history = M.history; rec.agreed = M.agreed; rec.confirmedNext = M.confirmedNext;
+    return rec;
+}
 
-    MatchEndMsg end;
-    end.result = result;
-    end.reason = reason;
-    if (r.matchmade && !M.desync && result > 0) {
+// Ratings and the replay: everything about the outcome that does not need the room.
+std::vector<std::pair<uint8_t, int32_t>> Server::Impl::applyOutcome(const MatchRecord& rec, int32_t result, uint32_t endTick, uint64_t endHash,
+                                                                   bool verified) {
+    saveReplay(rec, endTick, endHash);
+    std::vector<std::pair<uint8_t, int32_t>> deltas;
+    if (rec.matchmade && result > 0 && (verified || !rec.desync)) {
         // Elo against the average rating of the other teams' humans (bots count as 1000).
         std::map<uint8_t, std::vector<int>> teamRatings;
-        for (auto& p : M.players) {
-            Client* c = client(p.clientId);
-            teamRatings[p.team].push_back(p.kind == SlotKind::Human && c ? rating(r.queueId, c->key).value : 1000);
+        for (auto& p : rec.players) {
+            auto k = rec.keyBySlot.find(p.slot);
+            teamRatings[p.team].push_back(k != rec.keyBySlot.end() ? rating(rec.queueId, k->second).value : 1000);
         }
-        for (auto& p : M.players) {
-            Client* c = client(p.clientId);
-            if (p.kind != SlotKind::Human || !c) continue;
-            Rating& mine = rating(r.queueId, c->key);
+        for (auto& p : rec.players) {
+            auto k = rec.keyBySlot.find(p.slot);
+            if (k == rec.keyBySlot.end()) continue;
+            Rating& mine = rating(rec.queueId, k->second);
             double opp = 0; int n = 0;
             for (auto& [team, list] : teamRatings) if (team != p.team) for (int v : list) { opp += v; ++n; }
             if (!n) continue;
             const double expected = 1.0 / (1.0 + std::pow(10.0, (opp / n - mine.value) / 400.0));
-            const double k = mine.games < 20 ? 40 : 24;
-            const int delta = int(std::lround(k * ((p.team == result ? 1.0 : 0.0) - expected)));
+            const double k2 = mine.games < 20 ? 40 : 24;
+            const int delta = int(std::lround(k2 * ((p.team == result ? 1.0 : 0.0) - expected)));
             mine.value += delta;
             ++mine.games;
-            end.ratingDelta.emplace_back(p.slot, delta);
+            deltas.emplace_back(p.slot, delta);
         }
         saveRatings();
     }
+    ++counters.matchesFinished;
+    log("room #%u: match over, result %d (ticks %u, desync %d%s)", rec.roomId, result, endTick, int(rec.desync), verified ? ", server verdict" : "");
+    return deltas;
+}
+
+void Server::Impl::requestVerdict(Room& r, const NetText& fallback) {
+    Match& M = *r.match;
+    if (M.concluding) return;
+    if (!M.carry.empty()) confirmNextTick(M);   // e.g. the surrender of the last player who left
+    if (!cfg.arbiter) { endMatch(r, 0, fallback, M.confirmedNext, 0, false); return; }
+    PendingVerdict v;
+    v.rec = record(r);
+    v.fallback = fallback;
+    ArbiterJob job;
+    job.gameId = r.gameId; job.mapFile = r.map.file; job.dataHash = r.map.dataHash; job.seed = M.seed;
+    job.tickRate = r.settings.tickRate; job.inputDelay = r.settings.inputDelay; job.endTick = M.confirmedNext;
+    job.commands = M.history;
+    for (auto& a : M.agreed) job.checkpoints.push_back(a);
+    // A long match takes seconds to re-simulate: never on the network thread.
+    v.result = std::async(std::launch::async, cfg.arbiter, std::move(job));
+    M.concluding = true;
+    log("room #%u: no agreed result, re-simulating %u ticks", r.id, M.confirmedNext);
+    verdicts.push_back(std::move(v));
+}
+
+void Server::Impl::pollVerdicts() {
+    for (size_t i = 0; i < verdicts.size();) {
+        if (verdicts[i].result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { ++i; continue; }
+        PendingVerdict v = std::move(verdicts[i]);
+        verdicts.erase(verdicts.begin() + long(i));
+        ArbiterResult res;
+        try { res = v.result.get(); } catch (const std::exception& e) { res.error = e.what(); }
+        ++counters.verdicts;
+        if (!res.ok) { log("room #%u: verdict failed: %s", v.rec.roomId, res.error.c_str()); res = ArbiterResult{}; res.tick = v.rec.confirmedNext; }
+        if (res.mismatchTick) log("room #%u: server simulation disagrees with the players at tick %u", v.rec.roomId, res.mismatchTick);
+        const NetText reason = res.result ? NetText() : v.fallback;
+        Room* r = room(v.rec.roomId);
+        if (r && r->match && r->match->concluding && r->match->seed == v.rec.seed) endMatch(*r, res.result, reason, res.tick, res.hash, res.ok);
+        else applyOutcome(v.rec, res.result, res.tick, res.hash, res.ok);   // everyone is gone: ratings and replay only
+    }
+}
+
+void Server::Impl::endMatch(Room& r, int32_t result, const NetText& reason, uint32_t endTick, uint64_t endHash, bool verified) {
+    Match& M = *r.match;
+    MatchEndMsg end;
+    end.result = result;
+    end.reason = reason;
+    end.ratingDelta = applyOutcome(record(r), result, endTick, endHash, verified);
     // Spectators lag behind: give them the rest so they can watch the ending.
     for (auto& m : M.members) {
         Client* c = client(m.clientId);
@@ -301,8 +389,6 @@ void Server::Impl::endMatch(Room& r, int32_t result, const NetText& reason) {
     }
     Bytes b = encode(end);
     for (auto& m : M.members) if (Client* c = client(m.clientId); c && c->roomId == r.id) send(*c, b);
-    ++counters.matchesFinished;
-    log("room #%u: match over, result %d %s (ticks %u, desync %d)", r.id, result, reason.key.c_str(), endTick, int(M.desync));
 
     r.match.reset();
     r.phase = RoomPhase::Lobby;
@@ -319,12 +405,11 @@ void Server::Impl::endMatch(Room& r, int32_t result, const NetText& reason) {
     if (Room* still = room(roomId)) broadcastRoom(*still);
 }
 
-void Server::Impl::saveReplay(Room& r, uint32_t endTick, uint64_t endHash) {
+void Server::Impl::saveReplay(const MatchRecord& M, uint32_t endTick, uint64_t endHash) {
     if (cfg.replayDir.empty()) return;
-    Match& M = *r.match;
     Replay rep;
     std::string dir;
-    if (auto it = cfg.gameDirs.find(r.gameId); it != cfg.gameDirs.end()) dir = it->second + "/";
+    if (auto it = cfg.gameDirs.find(M.gameId); it != cfg.gameDirs.end()) dir = it->second + "/";
     rep.module = "rts";
     std::string rules = "rules.json";
     try {
@@ -335,14 +420,14 @@ void Server::Impl::saveReplay(Room& r, uint32_t endTick, uint64_t endHash) {
         }
     } catch (const std::exception&) {}
     rep.rulesPath = dir + rules;
-    rep.mapPath = dir + r.map.file;
-    rep.dataHash = r.map.dataHash;
+    rep.mapPath = dir + M.map.file;
+    rep.dataHash = M.map.dataHash;
     rep.seed = M.seed;
-    rep.tickRate = r.settings.tickRate;
-    rep.inputDelay = r.settings.inputDelay;
+    rep.tickRate = M.settings.tickRate;
+    rep.inputDelay = M.settings.inputDelay;
     rep.endTick = endTick;
     rep.finalChecksum = endHash;
-    rep.checksumInterval = r.settings.checksumInterval;
+    rep.checksumInterval = M.settings.checksumInterval;
     for (auto& c : M.history) if (c.tick < endTick) rep.commands.push_back(c);
     for (auto& a : M.agreed) if (a.first <= endTick) rep.checksums.push_back(a);
     std::error_code ec;
@@ -350,7 +435,7 @@ void Server::Impl::saveReplay(Room& r, uint32_t endTick, uint64_t endHash) {
     const std::time_t t = std::time(nullptr);
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::gmtime(&t));
-    const std::string path = cfg.replayDir + "/" + stamp + "-room" + std::to_string(r.id) + (M.desync ? "-desync" : "") + ".rpl";
+    const std::string path = cfg.replayDir + "/" + stamp + "-room" + std::to_string(M.roomId) + (M.desync ? "-desync" : "") + ".rpl";
     if (rep.save(path)) log("replay %s", path.c_str());
 }
 

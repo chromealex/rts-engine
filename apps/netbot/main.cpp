@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "apps/server/GameData.h"
 #include "engine/i18n/GameLanguage.h"
 #include "engine/net/NetClient.h"
 #include "engine/net/NetLocalize.h"
@@ -66,7 +67,7 @@ int main(int argc, char** argv) {
         manifest = Json::parseFile(a.project + "/game.json");
         maps = net::describeGameMaps(a.project);
     } catch (const std::exception& e) { std::fprintf(stderr, "error: %s\n", e.what()); return 2; }
-    const std::string gameId = manifest.getStr("id"), rules = a.project + "/" + manifest.getStr("rules", "rules.json");
+    const std::string gameId = manifest.getStr("id");
     // Packaged layout: "engine/..." from the engine assets, everything else from the game folder.
     i18n::FileReader reader = [&](const std::string& rel, std::string& out) {
         const std::string path = rel.rfind("engine/", 0) == 0 ? a.engineAssets + "/" + rel.substr(7) : a.project + "/" + rel;
@@ -152,8 +153,9 @@ int main(int argc, char** argv) {
             if (b.net->matchReady()) {
                 auto& m = b.net->match();
                 b.sim.reset(); // the old session was already dropped by MatchStart
-                b.sim = std::make_unique<Simulation>(b.net->simConfig(), std::make_unique<game::RtsModule>());
-                b.sim->setup(Json::parseFile(rules), Json::parseFile(a.project + "/" + m.map.file));
+                auto data = netgame::loadMatchData(a.project, m.map.file);   // tile maps: same as the game
+                b.sim = netgame::makeSimulation(data.module, b.net->simConfig());
+                b.sim->setup(data.rules, data.map);
                 b.net->attach(*b.sim);
                 b.ai.clear();
                 for (uint8_t s : m.controlled) b.ai.emplace_back(s, rng());

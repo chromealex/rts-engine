@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "engine/net/Conn.h"
+#include "apps/server/GameData.h"
 #include "engine/i18n/GameLanguage.h"
 #include "engine/net/NetClient.h"
 #include "engine/net/NetLocalize.h"
@@ -176,6 +177,7 @@ struct NetPlayer {
     int endResult = 0;
     std::vector<std::string> log;
     bool paused = false;
+    int matchStarts = 0;
 };
 
 static std::string gameIdOf(const std::string& dir) { return Json::parseFile(dir + "/game.json").getStr("id"); }
@@ -196,13 +198,14 @@ static void pump(NetPlayer& p, uint64_t now, double dt) {
         if (!e.text.empty()) g_seenKeys.insert(e.text.key);
         if (e.kind == net::NetEvent::Kind::MatchEnded && !p.ended) { p.ended = true; p.endResult = e.value; }
         if (e.kind == net::NetEvent::Kind::Desync) p.desync = true;
+        if (e.kind == net::NetEvent::Kind::MatchStarted) ++p.matchStarts;
         if (e.kind == net::NetEvent::Kind::Error) std::printf("    [%s] error: %s\n", p.name.c_str(), e.text.key.c_str());
     }
     if (p.net->matchReady()) {
         auto& m = p.net->match();
-        Json manifest = Json::parseFile(p.gameDir + "/game.json");
-        p.sim = std::make_unique<Simulation>(p.net->simConfig(), std::make_unique<game::RtsModule>());
-        p.sim->setup(Json::parseFile(p.gameDir + "/" + manifest.getStr("rules", "rules.json")), Json::parseFile(p.gameDir + "/" + m.map.file));
+        auto data = netgame::loadMatchData(p.gameDir, m.map.file);
+        p.sim = netgame::makeSimulation(data.module, p.net->simConfig());
+        p.sim->setup(data.rules, data.map);
         p.net->attach(*p.sim);
         p.bots.clear();
         for (uint8_t s : m.controlled) p.bots.emplace_back(s, 1000 + s);
@@ -234,6 +237,8 @@ static net::ServerConfig testServerConfig() {
     cfg.replayDir = kReplayDir;
     cfg.gameDirs[gameIdOf(kSkirmish)] = kSkirmish;
     cfg.gameDirs[gameIdOf(kMushrooms)] = kMushrooms;
+    cfg.surrenderCommand = game::kCmdSurrender;
+    cfg.arbiter = netgame::makeArbiter(cfg.gameDirs);
     net::QueueConfig q1; q1.id = "1v1"; q1.title = "1 на 1"; q1.settings.rollbackWindow = 0; // classic lockstep here
     net::QueueConfig qb; qb.id = "1v1bots"; qb.botFillSec = 2;
     cfg.queues = {q1, qb};
@@ -256,7 +261,9 @@ static uint64_t runUntilEnd(net::Server& srv, std::vector<NetPlayer*> ps, uint64
 }
 
 // Re-simulate the server's replay offline: it must reproduce the players' final state exactly.
-static bool verifyLatestReplay(uint64_t expectHash, std::string* name = nullptr, const std::vector<Command>* truth = nullptr) {
+// expectHash 0: accept the replay's own final checksum (a server verdict). result: the winner it re-simulates to.
+static bool verifyLatestReplay(uint64_t expectHash, std::string* name = nullptr, const std::vector<Command>* truth = nullptr,
+                               int* result = nullptr, Replay* out = nullptr) {
     std::filesystem::path latest;
     std::error_code ec;
     for (auto& e : std::filesystem::directory_iterator(kReplayDir, ec))
@@ -286,7 +293,9 @@ static bool verifyLatestReplay(uint64_t expectHash, std::string* name = nullptr,
     }
     std::printf("    replay %s: %u ticks, %zu commands, %zu/%zu checkpoints ok\n", latest.filename().string().c_str(), rep.endTick,
                 rep.commands.size(), ci, rep.checksums.size());
-    return sim.checksum() == rep.finalChecksum && rep.finalChecksum == expectHash && ci == rep.checksums.size();
+    if (result) *result = sim.result();
+    if (out) *out = rep;
+    return sim.checksum() == rep.finalChecksum && (expectHash == 0 || rep.finalChecksum == expectHash) && ci == rep.checksums.size();
 }
 
 static void printSession(NetPlayer& p) {
@@ -465,6 +474,182 @@ TEST(net_real_sockets_udp_and_websocket) {
     CHECK(!a.desync && !b.desync);
     CHECK(std::abs(int(sa->tick()) - int(sb->tick())) < 10);
     (void)probe;
+}
+
+
+// ---------------- leaving, server verdicts, delta resume ----------------
+// Room with two mushroom players; returns once both are in the match.
+static bool startRoomMatch(net::Server& srv, NetPlayer& a, NetPlayer& b, uint64_t& now, net::RoomSettings rs = {}) {
+    auto step = [&](int ms) { for (int i = 0; i < ms; i += 5, now += 5) { srv.update(now); pump(a, now, .005); pump(b, now, .005); } };
+    step(200);
+    auto maps = net::describeGameMaps(a.gameDir);
+    a.net->createRoom("r", maps[0], rs);
+    step(200);
+    b.net->refreshRooms();
+    step(200);
+    if (b.net->rooms().empty()) return false;
+    b.net->joinRoom(b.net->rooms()[0].id, maps[0].dataHash);
+    step(200);
+    b.net->setReady(true);
+    step(200);
+    a.net->startMatch();
+    step(300);
+    return a.net->inMatch() && b.net->inMatch();
+}
+
+static bool hasSurrender(const Replay& rep, uint8_t slot) {
+    for (auto& c : rep.commands) if (c.type == game::kCmdSurrender && c.player == slot) return true;
+    return false;
+}
+
+TEST(net_leaving_is_a_surrender_in_the_simulation) {
+    net::Server srv(testServerConfig());
+    NetPlayer a{"Stayer", kMushrooms}, b{"Leaver", kMushrooms};
+    connectPlayer(srv, a, {30, 10, 21}, 501);
+    connectPlayer(srv, b, {30, 10, 22}, 502);
+    uint64_t now = 1000;
+    CHECK(startRoomMatch(srv, a, b, now));
+    const uint8_t aTeam = a.sim ? a.sim->player(a.net->match().localSlot)->team : 0;
+    const uint8_t bSlot = b.net->match().localSlot;
+    runUntilEnd(srv, {&a}, now, 200000, [&](uint64_t t) { if (t == 15000) b.net->leaveMatch(); });
+    CHECK(a.ended && a.endResult == aTeam);
+    CHECK(std::count(a.log.begin(), a.log.end(), "net.player.left") == 1);
+    auto* sa = a.net->session();
+    Replay rep; int res = 0;
+    CHECK(sa && verifyLatestReplay(sa->resultHash(), nullptr, nullptr, &res, &rep));
+    CHECK(res == aTeam && hasSurrender(rep, bSlot));                  // the replay shows why the match ended
+}
+
+TEST(net_server_decides_when_nobody_reports) {
+    net::ServerConfig cfg = testServerConfig();
+    cfg.reconnectGraceSec = 2;
+    net::Server srv(cfg);
+    NetPlayer a{"Silent", kMushrooms}, b{"Quitter", kMushrooms};
+    connectPlayer(srv, a, {30, 10, 23}, 601);
+    connectPlayer(srv, b, {30, 10, 24}, 602);
+    uint64_t now = 1000;
+    for (int i = 0; i < 60; ++i, now += 5) { srv.update(now); pump(a, now, .005); pump(b, now, .005); }
+    auto maps = net::describeGameMaps(kMushrooms);
+    a.net->joinQueue("1v1", maps);
+    b.net->joinQueue("1v1", maps);
+    uint8_t aTeam = 0, bSlot = 0;
+    for (int i = 0; i < 3000; ++i, now += 5) {           // 15 s of play
+        srv.update(now); pump(a, now, .005); pump(b, now, .005);
+        if (a.sim && !aTeam) aTeam = a.sim->player(a.net->match().localSlot)->team;
+    }
+    CHECK(a.net->inMatch() && b.net->inMatch());
+    if (!b.net->inMatch()) return;
+    bSlot = b.net->match().localSlot;
+    b.net->leaveMatch();       // surrenders...
+    a.paused = true;           // ...and the winner freezes before it can report, then its connection dies
+    for (int i = 0; i < 40; ++i, now += 5) { srv.update(now); pump(b, now, .005); }
+    a.net.reset();             // the client dies (net before sim: the session detaches from the sim)
+    const uint64_t t0 = net::nowMs();
+    for (int i = 0; i < 2000 || (srv.busy() && net::nowMs() - t0 < 60000); ++i, now += 5) {
+        srv.update(now); pump(b, now, .005);
+        if (srv.busy()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(!srv.busy() && srv.stats().verdicts == 1);
+    CHECK(srv.rating("1v1", 601) > 1000 && srv.rating("1v1", 602) < 1000);   // the server's verdict counts
+    Replay rep; int res = 0;
+    CHECK(verifyLatestReplay(0, nullptr, nullptr, &res, &rep));
+    CHECK(res == aTeam && hasSurrender(rep, bSlot));
+}
+
+TEST(net_crashing_out_still_costs_rating) {
+    net::ServerConfig cfg = testServerConfig();
+    cfg.reconnectGraceSec = 2;
+    net::Server srv(cfg);
+    NetPlayer a{"Winner", kMushrooms}, b{"RageQuit", kMushrooms};
+    connectPlayer(srv, a, {30, 10, 25}, 801);
+    connectPlayer(srv, b, {30, 10, 26}, 802);
+    uint64_t now = 1000;
+    for (int i = 0; i < 60; ++i, now += 5) { srv.update(now); pump(a, now, .005); pump(b, now, .005); }
+    auto maps = net::describeGameMaps(kMushrooms);
+    a.net->joinQueue("1v1", maps);
+    b.net->joinQueue("1v1", maps);
+    runUntilEnd(srv, {&a}, now, 200000, [&](uint64_t t) {
+        if (t < 15000) pump(b, now, .005);
+        if (t == 15000) { b.net.reset(); b.sim.reset(); }      // the game is killed and never comes back
+    });
+    CHECK(a.ended && a.endResult > 0);
+    CHECK(std::count(a.log.begin(), a.log.end(), "net.player.dropped") == 1 && std::count(a.log.begin(), a.log.end(), "net.player.left") == 1);
+    CHECK(srv.rating("1v1", 801) > 1000 && srv.rating("1v1", 802) < 1000);
+}
+
+TEST(net_server_verdict_matches_offline_on_a_tile_map) {
+    // The server's re-simulation must load maps exactly like the game: 2D tile maps get their tileset.
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/tiles2d";
+    Json manifest = Json::parseFile(dir + "/game.json");
+    const std::string mapFile = manifest["maps"][size_t(0)].getStr("file");
+    auto data = netgame::loadMatchData(dir, mapFile);
+    SimConfig cfg; cfg.seed = 9;
+    auto sim = netgame::makeSimulation(data.module, cfg);
+    sim->setup(data.rules, data.map);
+    std::vector<game::RtsAI> bots;
+    for (auto& p : sim->players()) bots.emplace_back(p.slot, 9);
+    std::vector<std::pair<uint32_t, uint64_t>> checks;
+    while (sim->tick() < 3000 && sim->result() == 0) {
+        for (auto& b : bots) b.update(*sim);
+        sim->step();
+        if (sim->tick() % 100 == 0) checks.emplace_back(sim->tick(), sim->checksum());
+    }
+    net::ArbiterJob job;
+    job.gameId = manifest.getStr("id"); job.mapFile = mapFile; job.seed = 9;
+    job.dataHash = hashFileContents({dir + "/" + manifest.getStr("rules", "rules.json"), dir + "/" + mapFile});
+    job.endTick = sim->tick(); job.commands = sim->executedCommands(); job.checkpoints = checks;
+    auto res = netgame::makeArbiter({{job.gameId, dir}})(job);
+    CHECK(res.ok && res.mismatchTick == 0 && res.tick == sim->tick() && res.hash == sim->checksum() && res.result == sim->result());
+    if (!res.ok) std::printf("    arbiter: %s\n", res.error.c_str());
+    job.dataHash ^= 1;   // a player with other data: the server refuses to judge
+    CHECK(!netgame::makeArbiter({{job.gameId, dir}})(job).ok);
+}
+
+// Wraps a client connection so a test can cut it like a dead network link.
+struct CuttableConn final : net::Conn {
+    std::unique_ptr<net::Conn> inner;
+    std::shared_ptr<bool> cut;
+    CuttableConn(std::unique_ptr<net::Conn> c, std::shared_ptr<bool> flag) : inner(std::move(c)), cut(std::move(flag)) {}
+    void send(const net::Bytes& m) override { if (!*cut) inner->send(m); }
+    bool recv(net::Bytes& m) override { return !*cut && inner->recv(m); }
+    void update(uint64_t now) override { if (!*cut) inner->update(now); }
+    net::ConnState state() const override { return *cut ? net::ConnState::Closed : inner->state(); }
+    void close() override { inner->close(); }
+    uint32_t rttMs() const override { return inner->rttMs(); }
+    std::string describe() const override { return "cuttable " + inner->describe(); }
+};
+
+TEST(net_network_drop_resumes_with_a_delta) {
+    net::Server srv(testServerConfig());
+    NetPlayer a{"Subway", kMushrooms}, b{"Home", kMushrooms};
+    uint64_t now = 1000, outageEnd = 0;
+    auto cut = std::make_shared<bool>(false);
+    auto open = [&](net::LoopbackOptions link) -> std::unique_ptr<net::Conn> {
+        auto [c, sv] = net::makeLoopbackPair(link);
+        srv.addConnection(std::move(sv));
+        *cut = false;
+        return std::make_unique<CuttableConn>(std::move(c), cut);
+    };
+    a.net = std::make_unique<net::NetClient>(open({30, 20, 31}), net::ClientIdentity{"Subway", gameIdOf(kMushrooms), 701});
+    a.net->setReconnect([&]() -> std::unique_ptr<net::Conn> { return now < outageEnd ? nullptr : open({30, 20, 32}); });
+    connectPlayer(srv, b, {30, 20, 33}, 702);
+    net::RoomSettings rs; rs.rollbackWindow = 8;
+    CHECK(startRoomMatch(srv, a, b, now, rs));
+    Simulation* simBefore = a.sim.get();
+    net::RollbackSession* sessionBefore = a.net->session();
+    uint32_t tickAtCut = 0;
+    runUntilEnd(srv, {&a, &b}, now, 400000, [&](uint64_t t) {
+        if (t == 20000) { *cut = true; outageEnd = now + 3000; tickAtCut = a.sim->tick(); }   // 3 s without network
+    });
+    printSession(a); printSession(b);
+    CHECK(tickAtCut > 0 && std::count(a.log.begin(), a.log.end(), "net.reconnecting") == 1);
+    CHECK(a.matchStarts == 1);                                          // no second MatchStart: nothing rebuilt
+    CHECK(a.sim.get() == simBefore && a.net->session() == sessionBefore);
+    CHECK(a.ended && b.ended && a.endResult == b.endResult && !a.desync && !b.desync);
+    auto* sa = a.net->session(); auto* sb = b.net->session();
+    CHECK(sa && sb && sa->resultHash() == sb->resultHash());
+    if (sa) CHECK(sa->stats().resimulatedTicks < 200);                 // re-simulated the gap, not the match
+    if (sa) CHECK(verifyLatestReplay(sa->resultHash()));
 }
 
 // ---------------- localization of network texts ----------------
