@@ -227,6 +227,7 @@ void Rts2DView::submit(Renderer3D& r, const MapGrid& grid, float lh) {
     if (!ready_) return;
     r.drawCustom([this, &r, &grid, lh](gfx::Device& dev) {
         refreshTiles(dev, grid, lh);
+        r.lights.bind(2, 1);   // day/night tint + light map for the sprite shader (lighting agent)
         if (tileMesh_.vb.valid() && atlas_.valid()) batch_.drawMesh(dev, tileMesh_, atlas_.tex, r.viewProj());
         batch_.flush(dev, r.viewProj());
     });

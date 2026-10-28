@@ -12,6 +12,7 @@ using namespace render;
 
 namespace {
 float3 toF(const Vec3& v) { return {float(v.x.toDouble()), float(v.y.toDouble()), float(v.z.toDouble())}; }
+float3 mix3(float3 a, float3 b, float t) { return a + (b - a) * t; }
 } // namespace
 
 void RtsLights::consumeEvents(const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
@@ -101,11 +102,16 @@ void RtsLights::addContactShadows(Renderer3D& r, const RtsScene& s, const MapGri
 
 void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid, const RtsView& view) {
     if (types_.empty()) return;
-    updateSky(r.lighting, s.seconds);
+    updateSky(r.lighting, s.seconds, s.cycle);
     LightSystem& ls = r.lights;
     addContactShadows(r, s, grid, view);
     ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
     ls.setWaterReflections(waterRefl_);
+    {   // 2D sprites: warm at dusk, dark blue at night (the lit 3D scene gets this from the sun / sky)
+        const float3 duskTint{1.0f, 0.84f, 0.7f}, nightTint{0.3f, 0.34f, 0.52f};
+        const float3 t = mix3(mix3({1, 1, 1}, duskTint, dusk_), nightTint, night_ * 0.9f);
+        ls.setUnlitTint(lightning_ > 0 ? mix3(t, {1, 1, 1.05f}, lightning_) : t);
+    }
     {   // clouds drift with the wind in game time; a storm covers the sky
         const float clouds = preview_ ? previewClouds_ : clouds_, storm = preview_ ? previewStorm_ : storm_;
         const float cover = (cycle_ || preview_) ? std::max(clouds, storm * 0.85f) : 0.0f;
@@ -116,7 +122,7 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
     consumeEvents(s, time, vision, grid, view);
     const float tt = float(time);
     // Constant lights matter at night; by day they only warm their surroundings a little.
-    const bool cycle = cycle_ || preview_;
+    const bool cycle = cycle_ || preview_ || s.cycle >= 0;
     const float glowK = cycle ? 0.55f + 0.45f * std::max(night_, dusk_) : 1.0f;
     const float haloK = cycle ? 0.15f + 0.85f * std::max(night_, dusk_ * 0.7f) : 0.35f;
     for (size_t oi = 0; oi < s.objects.size(); ++oi) {

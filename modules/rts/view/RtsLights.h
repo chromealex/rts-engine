@@ -110,7 +110,7 @@ public:
     const TypeLights& typeLights(uint16_t type) const { return types_[type]; }
 
     // Day/night + weather on the renderer's lighting (pure; called by draw()).
-    void updateSky(render::Lighting& l, double seconds);
+    void updateSky(render::Lighting& l, double seconds, float cycle = -1);   // cycle >= 0: the sim's day phase
     // Lightning brightness 0..1 at a game time for a storm strength (pure function of its inputs).
     static float lightningAt(double seconds, float storm);
     const std::string& preset() const { return preset_; }

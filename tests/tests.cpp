@@ -4838,6 +4838,10 @@ TEST(lighting_day_night_cycle) {
     CHECK(n < 0.01f);
     render::Lighting dusk = sky(R"({"time": 0.71})", 0, &n);
     CHECK(dusk.sunColor.z < base.sunColor.z - 0.1f);            // warm evening sun
+    // the simulation's day phase (mechanic E) drives the sky even without a lighting block
+    { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 0, 0.0f); CHECK(L.night() > 0.95f); }
+    { game::RtsLights L; L.init(rules); L.configure(Json::parse(R"({"time": 0.0})"), Json{}, Json{});
+      render::Lighting l = base; L.updateSky(l, 0, 0.5f); CHECK(L.night() < 0.01f); }   // and wins over the block's clock
     // no block: the renderer's lighting is left alone
     { game::RtsLights L; L.init(rules); render::Lighting l = base; L.updateSky(l, 1234); CHECK(l.sunIntensity == base.sunIntensity && L.night() == 0); }
 }
