@@ -6647,6 +6647,166 @@ TEST(planet_hpa_threshold_and_slope_classes) {
     CHECK(gb.hpaSphereDigest(cons.pathLayer) != 0 && gb.hpaSphereDigest(cmdr.pathLayer) != 0);
 }
 
+// ---------------- Flow fields ----------------
+namespace {
+// Follows the field's direction from `s`; returns the number of steps to the goal area (-1: stuck / loop).
+int flowWalk(game::MapGrid& g, int fi, int s, int64_t* cost = nullptr) {
+    int cur = s;
+    int64_t c = 0;
+    for (int i = 0; i < 100000; ++i) {
+        if (g.flowValue(fi, cur) == 0) { if (cost) *cost = c; return i; }
+        const int k = g.flowDir(fi, cur);
+        if (k < 0) return -1;
+        static const int dx[8] = {1, -1, 0, 0, 1, 1, -1, -1}, dy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+        const int n = g.surf ? g.surf->neighbor(cur, k) : cur + dy[k] * g.w + dx[k];
+        if (g.flowValue(fi, n) >= g.flowValue(fi, cur)) return -1;
+        c += k >= 4 ? 14 : 10;
+        cur = n;
+    }
+    return -1;
+}
+void flatObstacles(game::MapGrid& g, uint64_t seed) {
+    Random rng(seed, 11);
+    for (int k = 0; k < g.w * g.h / 50; ++k) {
+        const int x = int(rng.below(uint32_t(g.w))), y = int(rng.below(uint32_t(g.h))), r = 1 + int(rng.below(3));
+        for (int dy = -r; dy <= r; ++dy) for (int dx = -r; dx <= r; ++dx)
+            if (g.inside(x + dx, y + dy) && dx * dx + dy * dy <= r * r) g.flags[size_t(g.index(x + dx, y + dy))] = rng.below(4) ? 0 : uint8_t(game::kCellWater);
+    }
+    for (int y = 0; y < g.h; ++y) if (y % 23 > 2) g.flags[size_t(g.index(g.w / 2, y))] = 0;   // a wall with gaps
+}
+struct FieldStats { int pairs = 0, mismatch = 0, worse = 0, badWalk = 0; double ratio = 0; int compared = 0; };
+void compareField(game::MapGrid& g, int goalCell, uint8_t layer, Random& rng, int samples, FieldStats& st, bool exact) {
+    const int fi = g.flowAcquire(g.centerOf(goalCell), 0, layer, 0, 1);
+    if (fi < 0) return;
+    for (int q = 0; q < samples; ++q) {
+        const int s = int(rng.below(uint32_t(g.w * g.h)));
+        if (!g.passable(s % g.w, s / g.w, layer)) continue;
+        if (g.surf && g.surf->bodyOfCell(s) != g.surf->bodyOfCell(goalCell)) continue;
+        ++st.pairs;
+        const int64_t a = g.astarCellCost(s, goalCell, layer);
+        const uint32_t v = g.flowValue(fi, s);
+        if ((a < 0) != (v == game::FlowField::kInf)) { ++st.mismatch; continue; }
+        if (a < 0) continue;
+        int64_t walked = 0;
+        if (flowWalk(g, fi, s, &walked) < 0 || walked > int64_t(v)) ++st.badWalk;   // descent is at most the value
+        // full fields are exact; hierarchical ones snap to HPA* entrances: never below the optimum, a bounded excess
+        if (exact ? int64_t(v) != a : (int64_t(v) < a || int64_t(v) > a * 125 / 100 + 40)) ++st.worse;
+        st.ratio += a > 0 ? double(v) / double(a) : 1.0;
+        ++st.compared;
+    }
+}
+} // namespace
+
+TEST(flow_field_flat_matches_astar) {
+    for (uint64_t seed : {1u, 2u}) {
+        for (int size : {60, 256}) {   // 60: full field (exact); 256: hierarchical over HPA*
+            game::MapGrid g;
+            g.init(size, size);
+            flatObstacles(g, seed);
+            Random rng(seed, 5);
+            FieldStats st;
+            for (int goals = 0; goals < 3; ++goals) {
+                int gc;
+                do gc = int(rng.below(uint32_t(size * size))); while (!g.passable(gc % size, gc / size, game::kLayerGround));
+                compareField(g, gc, game::kLayerGround, rng, size == 60 ? 60 : 25, st, size == 60);
+                compareField(g, gc, game::kLayerNaval, rng, 10, st, size == 60);
+            }
+            std::printf("  flow flat %d seed %d: pairs=%d compared=%d mismatch=%d worse=%d badWalk=%d ratio=%.3f\n", size, int(seed), st.pairs, st.compared, st.mismatch, st.worse, st.badWalk, st.compared ? st.ratio / st.compared : 0.0);
+            CHECK(st.compared > 20);
+            CHECK(st.mismatch == 0 && st.worse == 0 && st.badWalk == 0);
+            if (size == 256) CHECK(st.ratio / st.compared < 1.10);
+        }
+    }
+}
+
+TEST(flow_field_sphere_matches_astar) {
+    for (uint64_t seed : {1u, 2u}) {
+        for (int forceHpa : {0, 1}) {
+            auto sim = planetSim(hpaPlanetMap(seed, {37, 20}));   // seams, a blocked cube corner, a second body
+            auto& g = mod(*sim).state(*sim).grid;
+            const game::Surface& S = *g.surf;
+            g.sphereHpaMinCells = forceHpa ? 0 : (1 << 30);
+            Random rng(seed, 9);
+            FieldStats st;
+            for (int goals = 0; goals < 3; ++goals) {
+                const int body = goals == 2 ? 1 : 0, N = S.bodies[size_t(body)].faceSize;
+                int gc;
+                do gc = S.gridCell(body, int(rng.below(6)), int(rng.below(uint32_t(N))), int(rng.below(uint32_t(N))));
+                while (!g.passable(gc % g.w, gc / g.w, game::kLayerGround));
+                compareField(g, gc, game::kLayerGround, rng, 60, st, !forceHpa);
+            }
+            // a goal on a cube-corner cell of face 0 (7 neighbours)
+            int corner = S.gridCell(0, 0, 0, 0);
+            if (g.passable(corner % g.w, corner / g.w, game::kLayerGround)) compareField(g, corner, game::kLayerGround, rng, 40, st, !forceHpa);
+            std::printf("  flow sphere seed %d hpa %d: pairs=%d compared=%d mismatch=%d worse=%d badWalk=%d ratio=%.3f\n", int(seed), forceHpa, st.pairs, st.compared, st.mismatch, st.worse, st.badWalk, st.compared ? st.ratio / st.compared : 0.0);
+            CHECK(st.compared > 30);
+            CHECK(st.mismatch == 0 && st.worse == 0 && st.badWalk == 0);
+            CHECK(st.ratio / st.compared < 1.10);
+            // no field values on the other body
+            const int fi = g.flowAcquire(S.cellCenter(S.gridCell(0, 4, 5, 5)), 0, game::kLayerGround, 0, 1);
+            if (fi >= 0) CHECK(g.flowValue(fi, S.gridCell(1, 4, 5, 5)) == game::FlowField::kInf);
+        }
+    }
+}
+
+TEST(flow_field_incremental_equals_rebuild) {
+    for (int size : {60, 256}) {
+        game::MapGrid g;
+        g.init(size, size);
+        flatObstacles(g, 4);
+        Random rng(4, 2);
+        int gc;
+        do gc = int(rng.below(uint32_t(size * size))); while (!g.passable(gc % size, gc / size, game::kLayerGround));
+        std::vector<int> probe;
+        while (probe.size() < 200) { int s = int(rng.below(uint32_t(size * size))); if (g.passable(s % size, s / size, game::kLayerGround)) probe.push_back(s); }
+        int fi = g.flowAcquire(g.centerOf(gc), 2, game::kLayerGround, 0, 1);
+        for (int s : probe) g.flowValue(fi, s);   // build the blocks units would use
+        // structures appear (and one goes away), a cell is "dug"
+        for (int k = 0; k < 6; ++k) { const int x = int(rng.below(uint32_t(size - 4))), y = int(rng.below(uint32_t(size - 4))); g.block(x, y, 3, 3, +1); if (k == 5) g.block(x, y, 3, 3, -1); }
+        const int dug = size / 2 + (size / 2) * size; g.flags[size_t(dug)] = game::kCellGround; g.cellChanged(dug % size, dug / size);
+        std::vector<uint32_t> inc;
+        fi = g.flowAcquire(g.centerOf(gc), 2, game::kLayerGround, 0, 2);
+        for (int s : probe) inc.push_back(g.flowValue(fi, s));
+        g.flowDropAll();
+        fi = g.flowAcquire(g.centerOf(gc), 2, game::kLayerGround, 0, 3);
+        int diff = 0;
+        for (size_t i = 0; i < probe.size(); ++i) diff += g.flowValue(fi, probe[i]) != inc[i];
+        CHECK(diff == 0);
+    }
+}
+
+namespace {
+// 60 units ordered to one point across the skirmish map; with fields on (minGroup) they must all get close.
+uint64_t flowGroupMatch(bool fields, int* arrived, uint64_t* hash2 = nullptr) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    if (fields) { Json ff = Json::object(); ff.set("minGroup", Json::number(int64_t(8))); rules.member("movement").set("flowField", ff); }
+    SimConfig cfg; cfg.seed = 7;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    auto& m = mod(*sim);
+    const int ft = m.rules().findType("footman");
+    Command c; c.player = 1; c.type = game::kCmdMove;
+    for (int i = 0; i < 60; ++i) c.units.push_back(m.spawn(*sim, uint16_t(ft), 1, {Fixed::fromInt(6 + i % 8), Fixed{}, Fixed::fromInt(6 + i / 8)}));
+    c.point = {Fixed::fromInt(52), Fixed{}, Fixed::fromInt(40)};
+    sim->submit(c);
+    for (int t = 0; t < 20 * 60; ++t) sim->step();
+    int n = 0;
+    for (Entity e : c.units) if (sim->world().alive(e) && (sim->world().get<Transform>(e).pos - c.point).xz().length() < Fixed::fromInt(7)) ++n;
+    *arrived = n;
+    if (hash2) *hash2 = sim->checksum();
+    return sim->checksum();
+}
+} // namespace
+
+TEST(flow_field_group_reaches_goal_deterministic) {
+    int a1 = 0, a2 = 0, a0 = 0;
+    const uint64_t h1 = flowGroupMatch(true, &a1), h2 = flowGroupMatch(true, &a2);
+    flowGroupMatch(false, &a0);
+    std::printf("  flow group: arrived %d (fields) %d (per-unit)\n", a1, a0);
+    CHECK(h1 == h2 && a1 == a2);
+    CHECK(a1 >= 54);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
