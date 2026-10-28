@@ -251,12 +251,14 @@ void classifyCells(Ctx& c) {
     }
     // base areas: plain ground, one level, never water
     for (auto& s : c.starts) {
-        const int sx = int(s.x >> 16), sy = int(s.y >> 16), r = c.baseRadius;
+        const int sx = int(s.x >> 16), sy = int(s.y >> 16), r = c.baseRadius + 3;   // + room for the mines next to the base
         int8_t lv = c.inside(sx, sy) ? c.lvl[size_t(c.ci(sx, sy))] : 0;
         for (int y = sy - r; y <= sy + r; ++y)
             for (int x = sx - r; x <= sx + r; ++x) {
                 if (!c.inside(x, y) || (x - sx) * (x - sx) + (y - sy) * (y - sy) > r * r) continue;
                 const int i = c.ci(x, y);
+                const bool core = (x - sx) * (x - sx) + (y - sy) * (y - sy) <= c.baseRadius * c.baseRadius;
+                if (!core && (c.cell[size_t(i)] == '~' || c.cell[size_t(i)] == '#')) continue;
                 c.cell[size_t(i)] = c.rockBases ? 'R' : '.';
                 c.lvl[size_t(i)] = lv;
                 if (c.biome[size_t(i)] == BOcean || c.biome[size_t(i)] == BSwamp || c.biome[size_t(i)] == BForest) c.biome[size_t(i)] = BGrass;
@@ -489,7 +491,15 @@ void ensureConnectivity(Ctx& c) {
         int bad = -1;
         for (size_t k = 1; k < c.starts.size(); ++k)
             if (!seen[size_t(c.ci(int(c.starts[k].x >> 16), int(c.starts[k].y >> 16)))]) { bad = int(k); break; }
-        if (bad < 0) { c.info.set("repairs", Json::number(int64_t(round))); return; }
+        if (bad < 0) {
+            c.info.set("repairs", Json::number(int64_t(round)));
+            // reserve the walkable route between consecutive starts so objects never wall it off
+            for (size_t k = 1; k < c.starts.size(); ++k) {
+                std::vector<int> p = repairPath(c, g, int(c.starts[k - 1].x >> 16), int(c.starts[k - 1].y >> 16), int(c.starts[k].x >> 16), int(c.starts[k].y >> 16), dig);
+                if (!p.empty()) c.corridors.push_back(std::move(p));
+            }
+            return;
+        }
         std::vector<int> path = repairPath(c, g, sx, sy, int(c.starts[size_t(bad)].x >> 16), int(c.starts[size_t(bad)].y >> 16), dig);
         if (path.empty()) break;
         c.corridors.push_back(path);

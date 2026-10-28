@@ -137,7 +137,7 @@ static int play(const Args& a) {
         if (!a.genParams.empty()) g.set("params", Json::parse(a.genParams));
         g.set("template", Json::string(fs::relative(mapPath, a.project).generic_string()));
         m.set("generate", g);
-        mapPath = (a.record.empty() ? (fs::temp_directory_path() / "rts_generated_map.json").string() : a.record + ".map.json");
+        mapPath = (a.record.empty() ? (fs::temp_directory_path() / ("rts_gen_" + a.generate + "_" + std::to_string(a.seed) + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".json")).string() : a.record + ".map.json");
         std::ofstream(mapPath) << m.dump();
     }
     Json mapJson = loadMap(mapPath, a.project);
