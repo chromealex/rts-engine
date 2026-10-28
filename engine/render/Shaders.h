@@ -127,7 +127,7 @@ void main() {
 )";
 
 inline const char* kLitFS =
-    RTS_GLSL_BLOCKS RTS_GLSL_SHADOW RTS_GLSL_LIGHTS
+    RTS_GLSL_BLOCKS RTS_GLSL_SHADOW RTS_GLSL_LIGHTS RTS_GLSL_WATER_REFLECT("tex2")
     R"(
 in vec3 v_nrm;
 in vec3 v_wpos;
@@ -157,12 +157,12 @@ void main() {
     float dist = length(u_camPos.xyz - v_wpos);
     col = mix(col, u_fog.rgb * u_fog.rgb, 1.0 - exp(-dist * u_fog.w));
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0); // ACES fit
-    o_color = vec4(sqrt(col), albedo.a);
+    o_color = vec4(waterReflect(sqrt(col), v_wpos, n, V, u_params.y), albedo.a);   // planar reflection (water, High)
 }
 )";
 
 inline const char* kLitMSL =
-    "#include <metal_stdlib>\nusing namespace metal;\n" RTS_MSL_BLOCKS RTS_MSL_SHADOW RTS_MSL_LIGHTS
+    "#include <metal_stdlib>\nusing namespace metal;\n" RTS_MSL_BLOCKS RTS_MSL_SHADOW RTS_MSL_LIGHTS RTS_MSL_WATER_REFLECT
     R"(
 struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; };
 struct VOut { float4 pos [[position]]; float3 nrm; float3 wpos; float4 col; };
@@ -180,7 +180,8 @@ static float shadowFactor(constant U0& u, constant U1& f, float3 wpos, float3 n,
 }
 fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], constant U1& f [[buffer(2)]],
                         depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]],
-                        constant LightU& l [[buffer(3)]], texture2d<float> tex1 [[texture(1)]], sampler s1 [[sampler(1)]]) {
+                        constant LightU& l [[buffer(3)]], texture2d<float> tex1 [[texture(1)]], sampler s1 [[sampler(1)]],
+                        texture2d<float> tex2 [[texture(2)]], sampler s2 [[sampler(2)]]) {
     float4 albedo = u.color * in.col;
     float3 base = albedo.rgb * albedo.rgb;
     float3 n = normalize(in.nrm);
@@ -200,7 +201,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], cons
     float dist = length(f.camPos.xyz - in.wpos);
     col = mix(col, f.fog.rgb * f.fog.rgb, 1.0 - exp(-dist * f.fog.w));
     col = clamp((col * (2.51 * col + 0.03)) / (col * (2.43 * col + 0.59) + 0.14), 0.0, 1.0);
-    return float4(sqrt(col), albedo.a);
+    return float4(waterReflect(l, tex2, s2, in.pos.xy, sqrt(col), in.wpos, n, V, u.params.y), albedo.a);
 }
 )";
 
