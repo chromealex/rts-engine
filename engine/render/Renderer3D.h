@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include "../gfx/Gfx.h"
+#include "Lights.h"
 #include "Math3D.h"
 #include "Model.h"
 
@@ -130,6 +131,7 @@ public:
 
     const mat4& viewProj() const { return viewProj_; }
     Lighting lighting;
+    LightSystem lights;   // dynamic point lights: add between beginScene() and render()
     uint32_t drawCalls() const { return drawCalls_; }
 
 private:

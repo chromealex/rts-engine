@@ -207,6 +207,7 @@ set(RTS_RUNTIME_SRC
     engine/platform/PlatformCommon.cpp
     engine/render/Renderer3D.cpp
     engine/render/Renderer3DModels.cpp
+    engine/render/Lights.cpp
     engine/render/ImGuiLayer.cpp)
 
 if(RTS_PLATFORM STREQUAL "macos")
@@ -250,7 +251,8 @@ else()
 endif()
 
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
-    modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp)
+    modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
+    modules/rts/view/RtsLights.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.
