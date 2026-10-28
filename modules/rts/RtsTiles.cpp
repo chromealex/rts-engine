@@ -1,4 +1,5 @@
 #include "RtsTiles.h"
+#include "gen/MapGen.h"
 #include "RtsMap.h"
 #include <algorithm>
 #include <array>
@@ -299,6 +300,7 @@ void applyTilesToMap(Json& map, const Tileset& ts) {
 
 bool applyTilesToMap(Json& map, const std::function<bool(const std::string&, std::string&)>& read, std::string* errOut) {
     if (!applyCornersFile(map, read, errOut)) return false; // big heightfield maps: terrain.cornersFile (RtsMap.h)
+    if (!gen::prepareGenerate(map, read, errOut)) return false; // generated maps: players array, template, layers
     if (!map["tiles"].isObject()) return true;
     std::string path = map["tiles"].getStr("tileset"), text;
     try {
