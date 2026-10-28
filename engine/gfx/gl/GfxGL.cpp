@@ -37,12 +37,13 @@ private:
 };
 
 struct GLBuffer { GLuint id = 0; GLenum target = 0; size_t size = 0; Usage usage = Usage::Immutable; };
-struct GLTexture { GLuint id = 0; PixelFormat fmt = PixelFormat::RGBA8; int w = 0, h = 0; };
+struct GLTexture { GLuint id = 0; PixelFormat fmt = PixelFormat::RGBA8; int w = 0, h = 0; bool mips = false; };
 struct GLFramebuffer { uint32_t color = 0, depth = 0; GLuint fbo = 0; };
 struct GLShader { GLuint program = 0; };
 struct GLPipeline { PipelineDesc desc; GLuint program = 0; };
 
 constexpr size_t kUniformRingSize = 1 << 20;
+constexpr int kMaxUniformSlots = 8;
 
 class GLDevice final : public Device {
 public:
@@ -100,6 +101,7 @@ public:
     // ---------- textures ----------
     TextureHandle createTexture(const TextureDesc& d) override {
         GLTexture t; t.fmt = d.format; t.w = d.width; t.h = d.height;
+        t.mips = d.mipmaps && d.format != PixelFormat::Depth && !d.renderTarget;
         glGenTextures(1, &t.id);
         glBindTexture(GL_TEXTURE_2D, t.id);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -112,7 +114,10 @@ public:
         } else if (d.format == PixelFormat::R8) glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, d.width, d.height, 0, GL_RED, GL_UNSIGNED_BYTE, d.data);
         else glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, d.width, d.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, d.data);
         GLint f = d.filter == Filter::Linear ? GL_LINEAR : GL_NEAREST;
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
+        if (t.mips) {
+            if (d.data) glGenerateMipmap(GL_TEXTURE_2D);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, d.filter == Filter::Linear ? GL_LINEAR_MIPMAP_LINEAR : GL_NEAREST_MIPMAP_NEAREST);
+        } else glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, f);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, f);
         GLint wrap = d.repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
@@ -132,6 +137,7 @@ public:
             for (int r = 0; r < hh; ++r)
                 glTexSubImage2D(GL_TEXTURE_2D, 0, x, y + r, w, 1, fmt, GL_UNSIGNED_BYTE, static_cast<const uint8_t*>(pixels) + size_t(r) * rowPitch);
         }
+        if (t->mips) glGenerateMipmap(GL_TEXTURE_2D);
     }
     void destroyTexture(TextureHandle h) override {
         if (auto* t = textures_.get(h.id)) { glDeleteTextures(1, &t->id); textures_.remove(h.id); }
@@ -223,6 +229,7 @@ public:
     void beginFrame(int w, int h) override {
         fbW_ = w; fbH_ = h;
         uboOffset_ = 0;
+        for (auto& d : slotData_) d.clear();
         glBindBuffer(GL_UNIFORM_BUFFER, ubo_);
         glBufferData(GL_UNIFORM_BUFFER, kUniformRingSize, nullptr, GL_STREAM_DRAW); // orphan the ring
         glBindVertexArray(vao_);
@@ -322,12 +329,23 @@ public:
         glBindTexture(GL_TEXTURE_2D, t ? t->id : 0);
     }
     void setUniforms(int slot, const void* data, size_t size) override {
+        if (slot < 0 || slot >= kMaxUniformSlots) return;
         size_t off = (uboOffset_ + uboAlign_ - 1) / uboAlign_ * uboAlign_;
         if (off + size > kUniformRingSize) { // ring exhausted: orphan and restart
             glBindBuffer(GL_UNIFORM_BUFFER, ubo_);
             glBufferData(GL_UNIFORM_BUFFER, kUniformRingSize, nullptr, GL_STREAM_DRAW);
-            off = 0;
+            uboOffset_ = 0;
+            // the other slots still point into the orphaned storage: upload their last data again
+            for (int s = 0; s < kMaxUniformSlots; ++s)
+                if (s != slot && !slotData_[s].empty()) writeUniforms(s, slotData_[s].data(), slotData_[s].size());
+            off = (uboOffset_ + uboAlign_ - 1) / uboAlign_ * uboAlign_;
         }
+        slotData_[slot].assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+        uboOffset_ = off;
+        writeUniforms(slot, data, size);
+    }
+    void writeUniforms(int slot, const void* data, size_t size) {
+        size_t off = (uboOffset_ + uboAlign_ - 1) / uboAlign_ * uboAlign_;
         glBindBuffer(GL_UNIFORM_BUFFER, ubo_);
         glBufferSubData(GL_UNIFORM_BUFFER, GLintptr(off), GLsizeiptr(size), data);
         glBindBufferRange(GL_UNIFORM_BUFFER, GLuint(slot), ubo_, GLintptr(off), GLsizeiptr(size));
@@ -351,6 +369,7 @@ public:
                 case VertexFormat::Float3: n = 3; break;
                 case VertexFormat::Float4: n = 4; break;
                 case VertexFormat::UByte4N: n = 4; type = GL_UNSIGNED_BYTE; norm = GL_TRUE; break;
+                case VertexFormat::UByte4: n = 4; type = GL_UNSIGNED_BYTE; break;
             }
             glEnableVertexAttribArray(a.location);
             glVertexAttribPointer(a.location, n, type, norm, GLsizei(d.stride), reinterpret_cast<const void*>(base + a.offset));
@@ -380,6 +399,7 @@ private:
     std::string error_;
     GLuint vao_ = 0, ubo_ = 0, currentProgram_ = 0;
     size_t uboAlign_ = 256, uboOffset_ = 0;
+    std::vector<uint8_t> slotData_[kMaxUniformSlots]; // last data per slot, re-uploaded when the ring is orphaned
     int passW_ = 0, passH_ = 0;
     std::vector<GLFramebuffer> fbos_;
     Pool<GLBuffer> buffers_;
