@@ -167,6 +167,19 @@ static int benchPaths(Simulation& sim, const Args& a) {
 }
 
 
+static void printProfile(Simulation& sim) {
+    int64_t tot = 0;
+    for (size_t i = 0; i < sim.systemCount(); ++i) tot += sim.systemTime(i);
+    std::printf("Profile (%u ticks, systems %.0f ms, %.3f ms/tick):\n", sim.tick(), tot / 1e6, sim.tick() ? tot / 1e6 / sim.tick() : 0.0);
+    std::vector<size_t> order(sim.systemCount());
+    for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](size_t x, size_t y) { return sim.systemTime(x) > sim.systemTime(y); });
+    for (size_t i : order)
+        if (sim.systemTime(i) * 200 >= tot)
+            std::printf("  %-16s %8.0f ms  %6.3f ms/tick  %5.1f%%\n", sim.systemName(i).c_str(), sim.systemTime(i) / 1e6,
+                        sim.systemTime(i) / 1e6 / std::max<uint32_t>(1, sim.tick()), tot ? 100.0 * sim.systemTime(i) / tot : 0.0);
+}
+
 // Group movement benchmark: N units of the first mobile combat type of player 1 spread over a block, one move order to
 // the far corner (flat) / the antipode (planet). Reports ticks/s, path ms per tick, arrivals and the field cache size.
 static int benchGroup(Simulation& sim, const Args& a) {
@@ -238,6 +251,7 @@ static int benchGroup(Simulation& sim, const Args& a) {
     int near = 0;
     for (Entity e : c.units) if (sim.world().alive(e) && (sim.world().get<Transform>(e).pos - goalPos).length() < arriveR) ++near;
     (void)movementNs;
+    if (a.profile) printProfile(sim);
     std::printf("Group %d x %s on %dx%d%s: %u ticks %.0f ms = %.0f ticks/s | path total %.0f ms, %.3f ms/tick, worst tick %.1f ms | arrived %d/%d (90%% at %.0f s) | fields peak %zu, %.2f MB | %016llx\n",
                 a.benchGroup, m->rules().types[size_t(type)].id.c_str(), g.w, g.h, g.surf ? " planet" : "", ticks, ms, ticks / (ms / 1000.0),
                 double(g.pathNs) / 1e6, double(g.pathNs) / 1e6 / ticks, double(peakPathNs) / 1e6, near, a.benchGroup, done ? double(done) / sim.tickRate() : -1.0,
@@ -300,6 +314,7 @@ static int play(const Args& a) {
     }
     if (a.maxSeconds == 0) return 0;   // --max-seconds 0: set up (and generate) only
 
+    if (a.profile) sim.setProfileClock([] { return int64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); });
     if (a.benchPaths > 0) return benchPaths(sim, a);
     if (a.benchGroup > 0) return benchGroup(sim, a);
     std::vector<game::RtsAI> bots;
@@ -318,7 +333,6 @@ static int play(const Args& a) {
     }
     std::map<uint16_t, int> ev;
     const uint32_t maxTicks = a.maxSeconds * sim.tickRate();
-    if (a.profile) sim.setProfileClock([] { return int64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()); });
     auto t0 = std::chrono::steady_clock::now();
     if (!a.quiet) std::printf("Match: %s  seed=%llu\n", mapPath.c_str(), (unsigned long long)a.seed);
     while (sim.result() == 0 && sim.tick() < maxTicks) {
@@ -347,18 +361,7 @@ static int play(const Args& a) {
                 ev[game::kEvSpawned], ev[game::kEvDied], ev[game::kEvAttack], ev[game::kEvTrainDone], ev[game::kEvBuildDone],
                 ev[game::kEvGathered], ev[game::kEvCaptured]);
     if (a.dump) dumpTypes(sim);
-    if (a.profile) {
-        int64_t tot = 0;
-        for (size_t i = 0; i < sim.systemCount(); ++i) tot += sim.systemTime(i);
-        std::printf("Profile (%u ticks, systems %.0f ms, %.3f ms/tick):\n", sim.tick(), tot / 1e6, sim.tick() ? tot / 1e6 / sim.tick() : 0.0);
-        std::vector<size_t> order(sim.systemCount());
-        for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-        std::sort(order.begin(), order.end(), [&](size_t x, size_t y) { return sim.systemTime(x) > sim.systemTime(y); });
-        for (size_t i : order)
-            if (sim.systemTime(i) * 200 >= tot)
-                std::printf("  %-16s %8.0f ms  %6.3f ms/tick  %5.1f%%\n", sim.systemName(i).c_str(), sim.systemTime(i) / 1e6,
-                            sim.systemTime(i) / 1e6 / std::max<uint32_t>(1, sim.tick()), tot ? 100.0 * sim.systemTime(i) / tot : 0.0);
-    }
+    if (a.profile) printProfile(sim);
     std::printf("Checksum: %016llx\n", (unsigned long long)rep.finalChecksum);
     if (!a.record.empty()) {
         if (!rep.save(a.record)) return 2;

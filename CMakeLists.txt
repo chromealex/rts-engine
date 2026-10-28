@@ -104,6 +104,7 @@ add_library(rts_game STATIC
     modules/rts/RtsUnits.cpp
     modules/rts/RtsCombat.cpp
     modules/rts/RtsWorld.cpp
+    modules/rts/RtsVision.cpp
     modules/rts/RtsTriggers.cpp
     modules/rts/RtsDungeon.cpp
     modules/rts/RtsSettlers.cpp
