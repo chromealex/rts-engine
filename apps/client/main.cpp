@@ -207,6 +207,7 @@ void GameClient::startMatch(size_t idx) {
     selection_.clear();
     for (auto& g : groups_) g.clear();
     view_.setTiles(map["tiles"]);
+    view_.setTerrainMaterial(map["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
     fitCamera();

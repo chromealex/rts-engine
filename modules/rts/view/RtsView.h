@@ -73,8 +73,9 @@ public:
     // the editor changes the grid. Resource fields / creep changing in a match need no call (the
     // terrain shader reads them from per-cell textures).
     void buildTerrain(gfx::Device& dev, const MapGrid& grid);
-    // Optional painted material layer per cell (editor / map terrain.material), 255 = by cell kind.
-    void setTerrainMaterial(std::vector<uint8_t> layer) { terrain_.setMaterialLayer(std::move(layer)); }
+    // Optional painted material layer per cell (map key "terrainMaterial": rows of digits 0..3, '.' =
+    // by cell kind; see docs/game-format.md). Takes effect at the next buildTerrain().
+    void setTerrainMaterial(const Json& rows, int w, int h) { terrain_.setMaterialLayer(parseMaterialRows(rows, w, h)); }
     const TerrainRenderer& terrainRenderer() const { return terrain_; }
     void draw(render::Renderer3D& r, const RtsScene& s, double time, const std::vector<uint8_t>* vision, const MapGrid& grid);
     // ImGui: bars, counts. ox/oy: top-left of the view on screen; drawList: ImDrawList* (default: background list)
