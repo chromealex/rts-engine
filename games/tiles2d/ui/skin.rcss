@@ -1,0 +1,49 @@
+/* Crystal Dunes: UI skin (linked after engine/ui/theme.rcss). 2D desert of crystals: warm sand, teal and violet gems.
+   Title font: fonts/title.ttf (Marmelad, SIL OFL, fonts/OFL.txt). */
+
+body { color: #fbf2df; }
+h1 { font-family: title; color: #5ef2e0; font-size: 32dp; font-weight: normal; }
+h2 { color: #c9b58f; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #c9b58f; }
+.error { color: #ff7a6b; }
+
+.panel {
+    background-color: #2a2018ec;
+    border: 2dp #5ef2e0;
+    border-radius: 10dp;
+}
+
+button {
+    color: #fff8ea;
+    border: 1dp #7b5ac9;
+    border-radius: 8dp;
+    decorator: vertical-gradient(#5b3fa0ff #3d2878ff);
+}
+button:hover { decorator: vertical-gradient(#6c4fb5ff #4a3290ff); border-color: #5ef2e0; }
+button:active { decorator: vertical-gradient(#3d2878ff #5b3fa0ff); }
+button.active { border-color: #5ef2e0; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#5b3fa0ff #3d2878ff); border-color: #7b5ac9; }
+button .cost { color: #a6fff3; }
+button .tip { color: #ff7a6b; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #5ef2e0; }
+
+#card .title { color: #5ef2e0; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff7a6b; }
+.notice { color: #a6fff3; }
+#selbox { border-color: #5ef2e0; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#4f3c2dff #17110dff); }
+input.text { background-color: #1a140e; border-color: #7b5ac9; color: #fbf2df; }
+input.text:focus { border-color: #5ef2e0; }
+#lobby .slot.mine { border-color: #5ef2e0; }
+#lobby .roomtitle { color: #5ef2e0; font-family: title; }
+
+#kb { background-color: #2a2018ec; border-color: #5ef2e0; }
+#kb .key { color: #fff8ea; border-color: #7b5ac9; border-radius: 8dp; decorator: vertical-gradient(#5b3fa0ff #3d2878ff); }
+#kb .key:active { border-color: #5ef2e0; }
+#kb .key.on { border-color: #5ef2e0; color: #ffffff; }
+
+#menu h1 { text-align: center; }

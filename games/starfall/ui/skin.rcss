@@ -1,0 +1,50 @@
+/* Starfall Sectors: UI skin (linked after engine/ui/theme.rcss). Space war: deep navy console, holographic blue.
+   Title font: fonts/title.ttf (Play, SIL OFL, fonts/OFL.txt). */
+
+body { color: #dbe8ff; }
+h1 { font-family: title; color: #7fb2ff; font-size: 28dp; font-weight: normal; text-transform: uppercase; letter-spacing: 3dp; }
+h2 { color: #7d8fb3; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #7d8fb3; }
+.error { color: #ff7070; }
+
+.panel {
+    background-color: #050c1ce6;
+    border: 1dp #3d8bff;
+    border-radius: 10dp;
+}
+
+button {
+    color: #e6efff;
+    border: 1dp #244b8c;
+    border-radius: 8dp;
+    decorator: vertical-gradient(#16345fff #0b1c38ff);
+}
+button:hover { decorator: vertical-gradient(#1f4a87ff #10294fff); border-color: #7fb2ff; }
+button:active { decorator: vertical-gradient(#0b1c38ff #16345fff); }
+button.active { border-color: #7fb2ff; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#16345fff #0b1c38ff); border-color: #244b8c; }
+button .cost { color: #9cc8ff; }
+button .tip { color: #ff7070; }
+
+progress { background-color: #244b8c80; }
+progress fill { background-color: #7fb2ff; }
+
+#card .title { color: #7fb2ff; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff7070; }
+.notice { color: #bcd6ff; }
+#selbox { border-color: #7fb2ff; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#091635ff #02060fff); }
+input.text { background-color: #030812; border-color: #244b8c; color: #dbe8ff; }
+input.text:focus { border-color: #7fb2ff; }
+#lobby .slot.mine { border-color: #7fb2ff; }
+#lobby .roomtitle { color: #7fb2ff; font-family: title; }
+
+#kb { background-color: #050c1ce6; border-color: #3d8bff; }
+#kb .key { color: #e6efff; border-color: #244b8c; border-radius: 8dp; decorator: vertical-gradient(#16345fff #0b1c38ff); }
+#kb .key:active { border-color: #7fb2ff; }
+#kb .key.on { border-color: #7fb2ff; color: #ffffff; }
+
+#card { border-radius: 14dp 4dp 14dp 4dp; }
+#minimap { border-radius: 4dp 14dp 4dp 14dp; }
