@@ -253,6 +253,7 @@ add_library(rts_models STATIC
     engine/render/Model3ds.cpp
     engine/render/ModelDae.cpp
     engine/render/ModelMdx.cpp
+    engine/render/ModelMdl.cpp
     engine/render/Model3do.cpp
     engine/render/ModelW3d.cpp
     engine/render/ImageBlp.cpp
