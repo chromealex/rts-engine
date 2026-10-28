@@ -22,6 +22,9 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     rules_ = &rules;
     dev_ = &dev;
     if (!fog_.ready()) fog_.init(dev);
+    fieldView_.shutdown();
+    fieldView_.init(dev);
+    fieldDefsSeen_ = nullptr;
     read_ = reader ? std::move(reader) : FileReader([](const std::string& p, std::string& out) { return platform::readContentFile(p, out); });
     {   // fog of war look: rules "fogOfWar" (visual keys), game.json "fogOfWar" overrides
         std::string text, rulesPath = "rules.json";
@@ -69,6 +72,7 @@ void RtsView::shutdown(gfx::Device& dev) {
     for (Mesh* m : {&projectile_}) { dev.destroyBuffer(m->vb); dev.destroyBuffer(m->ib); *m = Mesh{}; }
     terrain_.shutdown(dev);
     fog_.shutdown();
+    fieldView_.shutdown();
     hasTerrain_ = false;
     if (twoD_) twoD_->shutdown(dev);
     twoD_.reset();
@@ -160,6 +164,15 @@ void RtsView::draw(Renderer3D& r, const RtsScene& s, double time, const std::vec
         twoD_->submit(r, grid, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f);
     }
 
+    // grid fields (RtsFieldView): overlays under the fog sheet
+    if (!s.fields.empty() && s.fieldDefs) {
+        if (fieldDefsSeen_ != s.fieldDefs || fieldDefsCount_ != s.fieldDefs->size()) {
+            fieldView_.setFields(*s.fieldDefs);
+            fieldDefsSeen_ = s.fieldDefs; fieldDefsCount_ = s.fieldDefs->size();
+        }
+        const bool lowFields = r.materialQuality() == MaterialQuality::Low || r.shadowQuality() == ShadowQuality::Off;
+        fieldView_.draw(r, s.fields, vision, grid, *this, time, lowFields, s.viewer);
+    }
     // fog of war (RtsFog): faded, blurred field; a sheet draped over the ground, or the terrain shader
     // on heightfield maps (a sheet would cut the relief)
     if (vision && !vision->empty()) {
@@ -208,6 +221,16 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.lanes = R.lanes.enabled ? &gs.lanes : nullptr;
     out.laneSignature = gs.laneSignature;
     out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
+    out.fields.clear();
+    out.fieldDefs = nullptr;
+    if (GridFields* gf = m->gridFields(); gf && gf->active())
+        if (const GridFieldStore* fs = sim.world().resource<GridFieldStore>()) {
+            out.fieldDefs = &gf->defs();
+            for (size_t i = 0; i < fs->fields.size(); ++i) {
+                const auto& f = fs->fields[i];
+                out.fields.push_back({int(i), f.w, f.h, gf->defs()[i].resolution, f.layers, f.v.data(), f.version});
+            }
+        }
     if (const Surface* surf = gs.surface.get()) { sceneFromSphere(sim, *m, *surf, out, alpha, viewer); return; }   // RtsPlanetView.cpp
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         if (u.flags & kUnitInCargo) return;   // inside a transport (agent-mech)
