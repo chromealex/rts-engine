@@ -4,6 +4,7 @@
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
+#include "modules/rts/view/RtsTerrainDetail.h"
 #include "modules/rts/view/RtsTerrainSurface.h"
 
 // Private copies (static functions) of stb_image (16-bit PNG decode) and stb_image_write (zlib for
@@ -66,14 +67,16 @@ float valueNoise(float x, float y, uint32_t seed) {
 
 bool parseSculpt(const std::string& s, Sculpt& out) {
     static const std::pair<const char*, Sculpt> k[] = {{"raise", Sculpt::Raise}, {"lower", Sculpt::Lower}, {"smooth", Sculpt::Smooth},
-                                                       {"flatten", Sculpt::Flatten}, {"noise", Sculpt::Noise}, {"set", Sculpt::Set}};
+                                                       {"flatten", Sculpt::Flatten}, {"noise", Sculpt::Noise}, {"set", Sculpt::Set},
+                                                       {"erode", Sculpt::Erode}, {"stamp", Sculpt::Stamp}};
     for (auto& [n, v] : k) if (s == n) { out = v; return true; }
     return false;
 }
 const char* sculptName(Sculpt s) {
     switch (s) {
         case Sculpt::Raise: return "raise"; case Sculpt::Lower: return "lower"; case Sculpt::Smooth: return "smooth";
-        case Sculpt::Flatten: return "flatten"; case Sculpt::Noise: return "noise"; default: return "set";
+        case Sculpt::Flatten: return "flatten"; case Sculpt::Noise: return "noise"; case Sculpt::Erode: return "erode";
+        case Sculpt::Stamp: return "stamp"; default: return "set";
     }
 }
 
@@ -140,6 +143,7 @@ CornerRect sculpt(MapDoc& doc, float lh, Sculpt op, float x, float z, float radi
                     h += (m / 9.0f - h) * k * std::clamp(strength, 0.0f, 1.0f);
                     break;
                 }
+                default: break;   // erode / stamp: detail resolution only
             }
             at(X, Y) = int16_t(std::clamp(std::lround(h), -32768l, 32767l));
         }
@@ -182,19 +186,18 @@ void paintMaterial(MapDoc& doc, int cx, int cy, int radius, int layer) {
     doc.touched();
 }
 
-bool exportHeightmap(const MapData& d, const std::string& file, float& scale, float& offset, std::string* err) {
-    if (d.corners.size() != size_t((d.w + 1) * (d.h + 1))) { if (err) *err = "the map has no heightfield (terrain_sculpt creates one)"; return false; }
-    auto [mn, mx] = std::minmax_element(d.corners.begin(), d.corners.end());
+bool writeHeightPng(const std::vector<int16_t>& grid, int W, int H, const std::string& file, float& scale, float& offset, std::string* err) {
+    if (grid.size() != size_t(W) * size_t(H) || W < 2 || H < 2) { if (err) *err = "no heights to export"; return false; }
+    auto [mn, mx] = std::minmax_element(grid.begin(), grid.end());
     offset = float(*mn) / kUnit;
     if (scale <= 0) scale = std::max(1.0f, float(*mx - *mn) / kUnit);
-    const int W = d.w + 1, H = d.h + 1;
     // PNG: 16-bit grayscale, rows big-endian, filter 0
     std::vector<unsigned char> raw;
     raw.reserve(size_t(H) * size_t(W * 2 + 1));
     for (int y = 0; y < H; ++y) {
         raw.push_back(0);
         for (int x = 0; x < W; ++x) {
-            float h = float(d.corners[size_t(y * W + x)]) / kUnit;
+            float h = float(grid[size_t(y) * size_t(W) + size_t(x)]) / kUnit;
             int v = int(std::clamp(std::lround((h - offset) / scale * 65535.0f), 0l, 65535l));
             raw.push_back(uint8_t(v >> 8)); raw.push_back(uint8_t(v & 255));
         }
@@ -223,27 +226,38 @@ bool exportHeightmap(const MapData& d, const std::string& file, float& scale, fl
     return true;
 }
 
-bool importHeightmap(MapDoc& doc, const std::string& file, float scale, float offset, std::string* err) {
+bool readHeightPng(const std::string& file, int W, int H, float scale, float offset, std::vector<int16_t>& out, std::string* err) {
     std::ifstream f(file, std::ios::binary);
     if (!f) { if (err) *err = "cannot read " + file; return false; }
     std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
     int w = 0, h = 0, n = 0;
     stbi_us* px = stbi_load_16_from_memory(reinterpret_cast<const stbi_uc*>(bytes.data()), int(bytes.size()), &w, &h, &n, 1);
     if (!px || w < 2 || h < 2) { if (px) stbi_image_free(px); if (err) *err = "not a PNG heightmap: " + file; return false; }
-    MapData& d = doc.data;
-    const int W = d.w + 1, H = d.h + 1;
-    d.corners.assign(size_t(W * H), 0);
+    out.assign(size_t(W) * size_t(H), 0);
     for (int y = 0; y < H; ++y)
         for (int x = 0; x < W; ++x) {
-            // bilinear resample of the image onto the corner grid
+            // bilinear resample of the image onto the target grid
             float sx = float(x) * float(w - 1) / float(std::max(1, W - 1)), sy = float(y) * float(h - 1) / float(std::max(1, H - 1));
             int x0 = int(sx), y0 = int(sy), x1 = std::min(x0 + 1, w - 1), y1 = std::min(y0 + 1, h - 1);
             float fx = sx - float(x0), fy = sy - float(y0);
             auto v = [&](int a, int b) { return float(px[size_t(b) * size_t(w) + size_t(a)]); };
             float val = (v(x0, y0) * (1 - fx) + v(x1, y0) * fx) * (1 - fy) + (v(x0, y1) * (1 - fx) + v(x1, y1) * fx) * fy;
-            d.corners[size_t(y * W + x)] = toCorner(offset + val / 65535.0f * scale);
+            out[size_t(y) * size_t(W) + size_t(x)] = toCorner(offset + val / 65535.0f * scale);
         }
     stbi_image_free(px);
+    return true;
+}
+
+bool exportHeightmap(const MapData& d, const std::string& file, float& scale, float& offset, std::string* err) {
+    if (d.corners.size() != size_t((d.w + 1) * (d.h + 1))) { if (err) *err = "the map has no heightfield (terrain_sculpt creates one)"; return false; }
+    return writeHeightPng(d.corners, d.w + 1, d.h + 1, file, scale, offset, err);
+}
+
+bool importHeightmap(MapDoc& doc, const std::string& file, float scale, float offset, std::string* err) {
+    MapData& d = doc.data;
+    std::vector<int16_t> c;
+    if (!readHeightPng(file, d.w + 1, d.h + 1, scale, offset, c, err)) return false;
+    d.corners.swap(c);
     doc.touched();
     return true;
 }
@@ -251,20 +265,24 @@ bool importHeightmap(MapDoc& doc, const std::string& file, float scale, float of
 // ------------------------------------------------------------------ operations (MCP + editor)
 
 void registerTerrainOps(Workspace& ws) {
+    registerTerrainDetailOps(ws);
     Workspace* w = &ws;
     auto lh = [w] { return float(w->project.rules.levelHeight.toDouble()); };
     auto needMap = [w] { if (w->project.dir.empty()) throw std::runtime_error("no game is open: call open_game first"); };
     auto add = [&ws](const char* name, const char* desc, const char* sch, Workspace::OpFn fn) { ws.registerOp({name, desc, Json::parse(sch), std::move(fn)}); };
 
     add("terrain_sculpt",
-        "Sculpt the map's heightfield (corner heights; smooth hills and valleys). op: raise | lower (strength = world units at the centre), "
-        "smooth | flatten (strength 0..1 blend), noise (strength = amplitude), set (strength = target height). x, y: centre in cells "
-        "(fractions allowed), radius in cells; 'points' [[x,y],...] applies the same dab along a stroke. The first sculpt on a map without "
-        "a heightfield creates it from the current surface (levels, ramps, fine heights). Visual only unless rules terrain.model is "
-        "'heightfield' (then it is gameplay: slopes, line of sight). Undoable.",
-        R"({"properties": {"op": {"type": "string", "enum": ["raise", "lower", "smooth", "flatten", "noise", "set"]},
+        "Sculpt the terrain. op: raise | lower (strength = world units at the centre), smooth | flatten | erode (strength 0..1), "
+        "noise (strength = amplitude), set (strength = target height), stamp (strength = height of the brush image; 'stamp': crater | mesa | "
+        "dunes | rocks or a grayscale PNG in the game folder, 'angle' degrees). x, y: centre in world units (fractions allowed), radius in "
+        "world units; 'points' [[x,y],...] applies the dab along a stroke. detail=true (default when the map has a detail layer) sculpts the "
+        "visual detail heightmap at sub-cell resolution (k samples per cell, soft falloff, 'hardness' 0..1; created from the drawn surface "
+        "on first use; erode / stamp need it); detail=false sculpts the cell corners (heightfield; the first sculpt creates it from the "
+        "current surface). Corners are gameplay only with rules terrain.model 'heightfield' (they then follow the detail). Undoable.",
+        R"({"properties": {"op": {"type": "string", "enum": ["raise", "lower", "smooth", "flatten", "noise", "set", "erode", "stamp"]},
             "x": {"type": "number"}, "y": {"type": "number"}, "radius": {"type": "number"}, "strength": {"type": "number"},
-            "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "seed": {"type": "integer"}},
+            "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "seed": {"type": "integer"},
+            "detail": {"type": "boolean"}, "hardness": {"type": "number"}, "stamp": {"type": "string"}, "angle": {"type": "number"}},
             "required": ["op"]})",
         [w, lh, needMap](const Json& p) {
             needMap();
@@ -278,6 +296,22 @@ void registerTerrainOps(Workspace& ws) {
                 pts.push_back({float(p["x"].toDouble()), float(p["y"].toDouble())});
             }
             w->map.beginEdit();
+            const bool useDetail = p.has("detail") ? p.getBool("detail") : (w->map.data.detailScale > 0 || op == Sculpt::Erode || op == Sculpt::Stamp);
+            if (useDetail) {
+                const bool createdD = ensureDetail(*w, 4);
+                int x0, y0, x1, y1;
+                std::string err;
+                if (!detailSculpt(*w, op, pts, radius, strength, float(p["hardness"].toDouble(0.2)), uint32_t(p.getInt("seed", 1)),
+                                  p.getStr("stamp"), float(p["angle"].toDouble(0)) * 0.0174533f, x0, y0, x1, y1, &err)) throw std::runtime_error(err);
+                w->note({Change::Cells, x0, y0, x1 - 1, y1 - 1, -1, std::string("Рельеф: ") + sculptName(op)});
+                Json r = Json::object();
+                r.set("ok", Json::fromBool(true));
+                r.set("detailScale", Json::number(int64_t(w->map.data.detailScale)));
+                if (createdD) r.set("createdDetail", Json::fromBool(true));
+                r.set("summary", str(std::string("Рельеф (детально): ") + sculptName(op) + (createdD ? " (создан детальный слой)" : "")));
+                return r;
+            }
+            if (op == Sculpt::Erode || op == Sculpt::Stamp) throw std::runtime_error("erode / stamp work on the detail layer (detail: true)");
             const bool created = w->map.data.corners.empty();
             CornerRect all{1 << 30, 1 << 30, -1, -1};
             for (auto [x, z] : pts) {
@@ -294,17 +328,20 @@ void registerTerrainOps(Workspace& ws) {
 
     add("terrain_heights",
         "Read the visual surface height (world units) at points [[x,y],...] (or a w x h grid summary when 'grid': step in cells): min, "
-        "max, mean. Uses the same surface as the renderer (heightfield corners, otherwise levels + ramps + fine heights).",
+        "max, mean. Uses the same surface as the renderer (detail heightmap, else heightfield corners, else levels + ramps + fine heights).",
         R"({"properties": {"points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}}, "grid": {"type": "integer"}}})",
         [w, lh, needMap](const Json& p) {
             needMap();
             const MapData& d = w->map.data;
             game::MapGrid g = gridOf(d);
             if (d.corners.size() == size_t((d.w + 1) * (d.h + 1))) g.corner = d.corners;
+            game::terrain::DetailSurface ds;
+            if (d.detailScale > 0 && !d.detail.empty()) game::terrain::detailFromInt16(d.w, d.h, d.detailScale, d.detail, ds);
+            auto surf = [&](float x, float z) { return ds.valid() ? ds.sample(x, z) : game::terrain::heightAt(g, lh(), x, z); };
             Json r = Json::object();
             if (p["points"].isArray()) {
                 Json hs = Json::array();
-                for (auto& q : p["points"].items()) hs.push(Json::number(double(game::terrain::heightAt(g, lh(), float(q[0].toDouble()), float(q[1].toDouble()))), 2));
+                for (auto& q : p["points"].items()) hs.push(Json::number(double(surf(float(q[0].toDouble()), float(q[1].toDouble()))), 2));
                 r.set("heights", hs);
             }
             int step = int(p.getInt("grid", 0));
@@ -315,7 +352,7 @@ void registerTerrainOps(Workspace& ws) {
                 for (int y = 0; y < d.h; y += step) {
                     Json row = Json::array();
                     for (int x = 0; x < d.w; x += step) {
-                        float h = game::terrain::heightAt(g, lh(), float(x) + 0.5f, float(y) + 0.5f);
+                        float h = surf(float(x) + 0.5f, float(y) + 0.5f);
                         mn = std::min(mn, h); mx = std::max(mx, h); sum += h; ++n;
                         row.push(Json::number(double(h), 1));
                     }
@@ -325,6 +362,7 @@ void registerTerrainOps(Workspace& ws) {
                 r.set("min", Json::number(double(mn), 2)); r.set("max", Json::number(double(mx), 2)); r.set("mean", Json::number(double(sum / float(std::max(n, 1))), 2));
             }
             r.set("heightfield", Json::fromBool(!d.corners.empty()));
+            r.set("detailScale", Json::number(int64_t(d.detailScale)));
             return r;
         });
 
@@ -345,15 +383,20 @@ void registerTerrainOps(Workspace& ws) {
         });
 
     add("heightmap_export",
-        "Write the map's heightfield as a 16-bit grayscale PNG ((w+1) x (h+1) pixels) to 'file' (relative to the game folder). "
-        "Returns scale (world units of the 0..65535 range) and offset (height of 0) needed to import it back.",
-        R"({"properties": {"file": {"type": "string"}, "scale": {"type": "number"}}, "required": ["file"]})",
+        "Write the map's heightfield as a 16-bit grayscale PNG ((w+1) x (h+1) pixels; detail=true: the detail heightmap, (w*k+1) x "
+        "(h*k+1)) to 'file' (relative to the game folder). Returns scale (world units of the 0..65535 range) and offset (height of 0) "
+        "needed to import it back.",
+        R"({"properties": {"file": {"type": "string"}, "scale": {"type": "number"}, "detail": {"type": "boolean"}}, "required": ["file"]})",
         [w, needMap](const Json& p) {
             needMap();
             float scale = float(p["scale"].toDouble(0)), offset = 0;
             std::string err, file = p.getStr("file");
             if (file.find("..") != std::string::npos) throw std::runtime_error("file must stay inside the game folder");
-            if (!exportHeightmap(w->map.data, w->project.dir + "/" + file, scale, offset, &err)) throw std::runtime_error(err);
+            const MapData& d = w->map.data;
+            if (p.getBool("detail", false)) {
+                if (d.detailScale <= 0) throw std::runtime_error("the map has no detail heightmap (terrain_detail create)");
+                if (!writeHeightPng(d.detail, d.w * d.detailScale + 1, d.h * d.detailScale + 1, w->project.dir + "/" + file, scale, offset, &err)) throw std::runtime_error(err);
+            } else if (!exportHeightmap(d, w->project.dir + "/" + file, scale, offset, &err)) throw std::runtime_error(err);
             Json r = Json::object();
             r.set("ok", Json::fromBool(true));
             r.set("scale", Json::number(double(scale), 4)); r.set("offset", Json::number(double(offset), 4));
@@ -363,14 +406,25 @@ void registerTerrainOps(Workspace& ws) {
 
     add("heightmap_import",
         "Replace the map's heightfield with a grayscale PNG (8 or 16 bit; resampled to (w+1) x (h+1) corners). height = offset + "
-        "value / 65535 * scale (world units). 'file' is relative to the game folder. Undoable.",
-        R"({"properties": {"file": {"type": "string"}, "scale": {"type": "number"}, "offset": {"type": "number"}}, "required": ["file"]})",
+        "value / 65535 * scale (world units). detail=true (+ 'detailScale' 1..8, default 4): import into the detail heightmap at "
+        "(w*k+1) x (h*k+1) samples (heightfield maps: corners follow). 'file' is relative to the game folder. Undoable.",
+        R"({"properties": {"file": {"type": "string"}, "scale": {"type": "number"}, "offset": {"type": "number"}, "detail": {"type": "boolean"}, "detailScale": {"type": "integer"}}, "required": ["file"]})",
         [w, needMap](const Json& p) {
             needMap();
             std::string err, file = p.getStr("file");
             if (file.find("..") != std::string::npos) throw std::runtime_error("file must stay inside the game folder");
             w->map.beginEdit();
-            if (!importHeightmap(w->map, w->project.dir + "/" + file, float(p["scale"].toDouble(8)), float(p["offset"].toDouble(0)), &err)) throw std::runtime_error(err);
+            if (p.getBool("detail", false)) {
+                MapData& d = w->map.data;
+                const int k = std::clamp(int(p.getInt("detailScale", d.detailScale > 0 ? d.detailScale : 4)), 1, 8);
+                std::vector<int16_t> v;
+                if (!readHeightPng(w->project.dir + "/" + file, d.w * k + 1, d.h * k + 1, float(p["scale"].toDouble(8)), float(p["offset"].toDouble(0)), v, &err)) throw std::runtime_error(err);
+                if (d.detailScale != k) d.detailSplat.clear();
+                d.detailScale = k; d.detail.swap(v);
+                if (d.corners.size() == size_t((d.w + 1) * (d.h + 1)))   // heightfield: corners follow the detail
+                    for (int Y = 0; Y <= d.h; ++Y) for (int X = 0; X <= d.w; ++X) d.corners[size_t(Y * (d.w + 1) + X)] = d.detail[size_t(Y * k) * size_t(d.w * k + 1) + size_t(X * k)];
+                w->map.touched();
+            } else if (!importHeightmap(w->map, w->project.dir + "/" + file, float(p["scale"].toDouble(8)), float(p["offset"].toDouble(0)), &err)) throw std::runtime_error(err);
             w->note({Change::Map, 0, 0, w->map.data.w - 1, w->map.data.h - 1, -1, "Карта высот"});
             Json r = Json::object();
             r.set("ok", Json::fromBool(true));

@@ -9202,6 +9202,70 @@ TEST(gen_planet_world_players) {
     CHECK(runMatch(4) != runMatch(5));
 }
 
+// ---- terrain detail surface (agent-terrain): sub-cell visual heightmap
+#include "modules/rts/view/RtsTerrainDetail.h"
+
+TEST(terrain_detail_synthesis_is_deterministic_and_keeps_corners) {
+    game::MapGrid g;
+    g.init(8, 6);
+    g.corner.assign(size_t(9 * 7), 0);
+    for (int y = 0; y <= 6; ++y) for (int x = 0; x <= 8; ++x) g.corner[size_t(y * 9 + x)] = int16_t((x * 7 + y * 3) % 23 * 4);
+    game::terrain::DetailParams p; p.noise = 0;
+    game::terrain::DetailSurface a, b;
+    a.init(8, 6, 4); b.init(8, 6, 4);
+    game::terrain::synthCorners(g, p, a);
+    game::terrain::synthCorners(g, p, b);
+    CHECK(a.hgt == b.hgt);
+    // bicubic passes through every corner (the simulation's surface at the corners is kept)
+    for (int Y = 0; Y <= 6; ++Y)
+        for (int X = 0; X <= 8; ++X) CHECK(std::fabs(a.at(X * 4, Y * 4) - float(g.corner[size_t(Y * 9 + X)]) / 16.0f) < 1e-4f);
+    // incremental synthesis of a sub-rect equals the full synthesis there
+    game::terrain::DetailSurface c;
+    c.init(8, 6, 4);
+    game::terrain::synthCorners(g, p, c, 4, 4, 20, 16);
+    for (int j = 4; j < 16; ++j) for (int i = 4; i < 20; ++i) CHECK(c.at(i, j) == a.at(i, j));
+}
+
+TEST(terrain_detail_levels_bevels_cliffs_and_samples_like_the_mesh) {
+    game::MapGrid g;
+    g.init(12, 8);
+    for (auto& f : g.flags) f = game::kCellGround;
+    for (int y = 0; y < 8; ++y) for (int x = 6; x < 12; ++x) g.level[size_t(g.index(x, y))] = 1;
+    game::terrain::DetailParams p; p.noise = 0; p.wobble = 0; p.bevel = 0.5f;
+    game::terrain::DetailSurface d;
+    d.init(12, 8, 4);
+    game::terrain::synthLevels(g, 1.5f, false, p, d);
+    // far from the edge the plateau heights are kept, across the edge the height rises monotonically (a slope, no wall)
+    CHECK(std::fabs(d.sample(2.0f, 4.0f) - 0.0f) < 1e-3f);
+    CHECK(std::fabs(d.sample(10.0f, 4.0f) - 1.5f) < 1e-3f);
+    float prev = -1;
+    bool mono = true;
+    for (int i = 16; i <= 32; ++i) { float h = d.at(i, 16); if (h < prev - 1e-4f) mono = false; prev = h; }
+    CHECK(mono);
+    CHECK(d.at(24, 16) > 0.2f && d.at(24, 16) < 1.3f);
+    // sample() uses the mesh triangles (diagonal (0,0)-(1,1)) of the sample grid
+    const float q = d.sample(5.6f, 3.1f);
+    const int i = int(5.6f * 4), j = int(3.1f * 4);
+    const float fx = 5.6f * 4 - float(i), fz = 3.1f * 4 - float(j);
+    CHECK(std::fabs(q - game::terrain::quadSurface(d.at(i, j), d.at(i + 1, j), d.at(i, j + 1), d.at(i + 1, j + 1), fx, fz)) < 1e-5f);
+}
+
+TEST(terrain_detail_codec_roundtrip) {
+    game::terrain::DetailSurface d;
+    d.init(3, 2, 2);
+    for (size_t i = 0; i < d.hgt.size(); ++i) d.hgt[i] = float(int(i) - 7) * 0.25f;
+    std::string bytes = game::terrain::encodeDetail(d);
+    CHECK(bytes.size() == size_t(7 * 5 * 2));
+    game::terrain::DetailSurface e;
+    CHECK(game::terrain::decodeDetail(bytes, 3, 2, 2, e, nullptr) && e.hgt == d.hgt);
+    std::string err;
+    CHECK(!game::terrain::decodeDetail(bytes, 3, 2, 4, e, &err) && err.find("expected") != std::string::npos);
+    Json map = Json::parse(R"({"size": [3, 2], "terrain": {"detail": {"scale": 2, "file": "maps/x.detail.r16"}}})");
+    std::vector<uint8_t> splat;
+    CHECK(game::terrain::loadMapDetail(map, [&](const std::string& f, std::string& o) { o = bytes; return f == "maps/x.detail.r16"; }, e, splat, nullptr));
+    CHECK(e.k == 2 && e.hgt == d.hgt && splat.empty());
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

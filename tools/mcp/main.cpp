@@ -175,7 +175,7 @@ const char* kInstructions =
     "entity_place, player_set, map_set for waves/triggers/areas/victory) -> map_validate -> match_run (bots, balance check) -> "
     "map_save {addToGame:true} -> view_screenshot to look at it -> build_start for a platform. "
     "map_ascii gives a quick text picture of a map. 2D tile games: tileset_list, tiles_init, tile_paint. Dungeon / territory "
-    "games: terrain_paint with the game's map characters, territory_paint. Smooth relief (heightfield): terrain_sculpt, terrain_heights, "
+    "games: terrain_paint with the game's map characters, territory_paint. Relief: terrain_sculpt (sub-cell detail, erode, stamp), terrain_detail, terrain_paint_material, terrain_heights, "
     "terrain_material, heightmap_import / heightmap_export. Other data files (lang/*.json, audio.json, "
     "tilesets, fx, ui/*.rml): game_file_read / game_file_write; models, textures, sounds: asset_import. "
     "Balancing: balance_stats (numbers side by side: DPS per armor, value per cost) -> balance_duel / balance_matrix "
