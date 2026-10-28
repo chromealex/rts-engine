@@ -6665,6 +6665,408 @@ TEST(models_find_clip_numbered_variants) {
     CHECK(m.findClip("Stand") == -1 && m.findClip("Att") == -1);   // "Stand Ready" is another action
 }
 
+// ---- interchange formats: Collada, 3DS, PLY, STL (models agent, interchange loaders)
+
+namespace interchangetest {
+using namespace rts::render;
+using modeltest::near;
+using modeltest::mapReader;
+// 2x2 uncompressed 32-bit TGA (stb_image reads it): red, green, blue, white
+inline std::string tga2x2() {
+    std::string t(18, '\0');
+    t[2] = 2; t[12] = 2; t[14] = 2; t[16] = 32; t[17] = 0x28;
+    const unsigned char px[16] = {0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 255, 255, 255, 255};   // BGRA
+    t.append(reinterpret_cast<const char*>(px), 16);
+    return t;
+}
+inline const char* skinnedDae() {
+    return R"(<?xml version="1.0" encoding="utf-8"?>
+<COLLADA xmlns="http://www.collada.org/2005/11/COLLADASchema" version="1.4.1">
+ <asset><unit meter="1"/><up_axis>Y_UP</up_axis></asset>
+ <library_geometries>
+  <geometry id="quad" name="Quad"><mesh>
+   <source id="quad-pos"><float_array id="quad-pos-a" count="12">-0.5 0 0  0.5 0 0  0.5 2 0  -0.5 2 0</float_array>
+    <technique_common><accessor source="#quad-pos-a" count="4" stride="3"><param name="X" type="float"/><param name="Y" type="float"/><param name="Z" type="float"/></accessor></technique_common></source>
+   <vertices id="quad-v"><input semantic="POSITION" source="#quad-pos"/></vertices>
+   <polylist count="1"><input semantic="VERTEX" source="#quad-v" offset="0"/><vcount>4</vcount><p>0 1 2 3</p></polylist>
+  </mesh></geometry>
+ </library_geometries>
+ <library_controllers>
+  <controller id="skin" name="Skin"><skin source="#quad">
+   <bind_shape_matrix>1 0 0 0  0 1 0 0  0 0 1 0.25  0 0 0 1</bind_shape_matrix>
+   <source id="skin-joints"><Name_array id="skin-joints-a" count="2">JRoot JTop</Name_array>
+    <technique_common><accessor source="#skin-joints-a" count="2" stride="1"><param name="JOINT" type="name"/></accessor></technique_common></source>
+   <source id="skin-ibm"><float_array id="skin-ibm-a" count="32">1 0 0 -0.5  0 1 0 0  0 0 1 0  0 0 0 1   1 0 0 -0.5  0 1 0 -1  0 0 1 0  0 0 0 1</float_array>
+    <technique_common><accessor source="#skin-ibm-a" count="2" stride="16"><param name="TRANSFORM" type="float4x4"/></accessor></technique_common></source>
+   <source id="skin-w"><float_array id="skin-w-a" count="3">1 0.5 0.25</float_array>
+    <technique_common><accessor source="#skin-w-a" count="3" stride="1"><param name="WEIGHT" type="float"/></accessor></technique_common></source>
+   <joints><input semantic="JOINT" source="#skin-joints"/><input semantic="INV_BIND_MATRIX" source="#skin-ibm"/></joints>
+   <vertex_weights count="4"><input semantic="JOINT" source="#skin-joints" offset="0"/><input semantic="WEIGHT" source="#skin-w" offset="1"/>
+    <vcount>1 1 2 2</vcount><v>0 0  0 0  0 1 1 1  1 0 0 2</v></vertex_weights>
+  </skin></controller>
+ </library_controllers>
+ <library_visual_scenes><visual_scene id="scene">
+  <node id="Armature" name="Armature">
+   <node id="Root" sid="JRoot" name="Root" type="JOINT"><matrix sid="transform">1 0 0 0.5  0 1 0 0  0 0 1 0  0 0 0 1</matrix>
+    <node id="Top" sid="JTop" name="Top" type="JOINT"><translate sid="location">0 1 0</translate><rotate sid="rotZ">0 0 1 0</rotate></node>
+   </node>
+  </node>
+  <node id="Body" name="Body"><instance_controller url="#skin"><skeleton>#Root</skeleton></instance_controller></node>
+ </visual_scene></library_visual_scenes>
+ <library_animations>
+  <animation id="anim-root">
+   <source id="ar-in"><float_array id="ar-in-a" count="2">0 1</float_array><technique_common><accessor source="#ar-in-a" count="2" stride="1"/></technique_common></source>
+   <source id="ar-out"><float_array id="ar-out-a" count="32">1 0 0 0.5 0 1 0 0 0 0 1 0 0 0 0 1  1 0 0 2.5 0 1 0 0 0 0 1 0 0 0 0 1</float_array>
+    <technique_common><accessor source="#ar-out-a" count="2" stride="16"/></technique_common></source>
+   <sampler id="ar-s"><input semantic="INPUT" source="#ar-in"/><input semantic="OUTPUT" source="#ar-out"/></sampler>
+   <channel source="#ar-s" target="Root/transform"/>
+  </animation>
+  <animation id="anim-top"><animation>
+   <source id="at-in"><float_array id="at-in-a" count="2">0 1</float_array><technique_common><accessor source="#at-in-a" count="2" stride="1"/></technique_common></source>
+   <source id="at-out"><float_array id="at-out-a" count="2">0 90</float_array><technique_common><accessor source="#at-out-a" count="2" stride="1"/></technique_common></source>
+   <source id="at-i"><Name_array id="at-i-a" count="2">LINEAR LINEAR</Name_array><technique_common><accessor source="#at-i-a" count="2" stride="1"/></technique_common></source>
+   <sampler id="at-s"><input semantic="INPUT" source="#at-in"/><input semantic="OUTPUT" source="#at-out"/><input semantic="INTERPOLATION" source="#at-i"/></sampler>
+   <channel source="#at-s" target="Top/rotZ.ANGLE"/>
+  </animation></animation>
+ </library_animations>
+ <library_animation_clips>
+  <animation_clip id="walk" name="Walk" start="0" end="1"><instance_animation url="#anim-root"/><instance_animation url="#anim-top"/></animation_clip>
+ </library_animation_clips>
+ <scene><instance_visual_scene url="#scene"/></scene>
+</COLLADA>)";
+}
+inline const char* texturedZupDae() {
+    return R"(<COLLADA version="1.4.1"><asset><unit name="centimeter" meter="0.01"/><up_axis>Z_UP</up_axis></asset>
+<library_images><image id="img"><init_from>tex%20file.tga</init_from></image></library_images>
+<library_effects><effect id="fx"><profile_COMMON>
+ <newparam sid="surf"><surface type="2D"><init_from>img</init_from></surface></newparam>
+ <newparam sid="samp"><sampler2D><source>surf</source></sampler2D></newparam>
+ <technique sid="common"><phong>
+  <emission><color>0.5 0 0 1</color></emission>
+  <diffuse><texture texture="samp" texcoord="UVMap"/></diffuse>
+  <shininess><float>30</float></shininess>
+  <transparent opaque="A_ONE"><color>1 1 1 1</color></transparent>
+  <transparency><float>0.5</float></transparency>
+ </phong></technique></profile_COMMON>
+ <extra><technique profile="GOOGLEEARTH"><double_sided>1</double_sided></technique></extra></effect></library_effects>
+<library_materials><material id="mat" name="Paint &amp; Glass"><instance_effect url="#fx"/></material></library_materials>
+<library_geometries><geometry id="tri"><mesh>
+ <source id="p"><float_array id="pa" count="9">0 0 0  100 0 0  0 0 100</float_array><technique_common><accessor source="#pa" count="3" stride="3"/></technique_common></source>
+ <source id="uv"><float_array id="uva" count="6">0 0 1 0 0 1</float_array><technique_common><accessor source="#uva" count="3" stride="2"/></technique_common></source>
+ <vertices id="v"><input semantic="POSITION" source="#p"/></vertices>
+ <!-- one triangle -->
+ <triangles count="1" material="sym"><input semantic="VERTEX" source="#v" offset="0"/><input semantic="TEXCOORD" source="#uv" offset="1" set="0"/><p>0 0 1 1 2 2</p></triangles>
+</mesh></geometry></library_geometries>
+<library_visual_scenes><visual_scene id="s"><node id="n" name="Tri"><instance_geometry url="#tri"><bind_material><technique_common>
+ <instance_material symbol="sym" target="#mat"/></technique_common></bind_material></instance_geometry></node></visual_scene></library_visual_scenes>
+<scene><instance_visual_scene url="#s"/></scene></COLLADA>)";
+}
+template <class T> void be(std::string& b, T v) {   // big endian
+    char tmp[sizeof(T)];
+    std::memcpy(tmp, &v, sizeof(T));
+    for (size_t i = 0; i < sizeof(T); ++i) b += tmp[sizeof(T) - 1 - i];
+}
+template <class T> void le(std::string& b, T v) { b.append(reinterpret_cast<const char*>(&v), sizeof(T)); }
+inline std::string chunk3ds(uint16_t id, const std::string& payload) {
+    std::string c;
+    le<uint16_t>(c, id);
+    le<uint32_t>(c, uint32_t(payload.size() + 6));
+    return c + payload;
+}
+inline std::string sample3ds() {
+    std::string mat = chunk3ds(0xA000, std::string("Red") + '\0');
+    mat += chunk3ds(0xA020, chunk3ds(0x0011, std::string("\xff\x00\x00", 3)));
+    std::string pct; le<int16_t>(pct, 50);
+    mat += chunk3ds(0xA050, chunk3ds(0x0030, pct));
+    std::string verts; le<uint16_t>(verts, 4);
+    for (float f : {0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 1.f, 0.f}) le<float>(verts, f);
+    std::string uvs; le<uint16_t>(uvs, 4);
+    for (float f : {0.f, 0.f, 1.f, 0.f, 1.f, 1.f, 0.f, 1.f}) le<float>(uvs, f);
+    std::string matrix;
+    for (float f : {1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f, 1.f, 0.f, 0.f, 0.f}) le<float>(matrix, f);
+    std::string faces; le<uint16_t>(faces, 2);
+    for (uint16_t i : {0, 1, 2, 7, 0, 2, 3, 7}) le<uint16_t>(faces, i);
+    std::string group = std::string("Red") + '\0';
+    for (uint16_t i : {2, 0, 1}) le<uint16_t>(group, i);
+    std::string smooth; le<uint32_t>(smooth, 1); le<uint32_t>(smooth, 2);   // different groups: hard edge on the diagonal
+    faces += chunk3ds(0x4130, group) + chunk3ds(0x4150, smooth);
+    const std::string mesh = chunk3ds(0x4110, verts) + chunk3ds(0x4140, uvs) + chunk3ds(0x4160, matrix) + chunk3ds(0x4120, faces);
+    std::string version; le<uint32_t>(version, 3);
+    const std::string editor = chunk3ds(0x3D3E, version) + chunk3ds(0xAFFF, mat) + chunk3ds(0x4000, std::string("Box") + '\0' + chunk3ds(0x4100, mesh));
+    std::string frames; le<uint32_t>(frames, 0); le<uint32_t>(frames, 30);
+    std::string id; le<uint16_t>(id, 0);
+    std::string hdr = std::string("Box") + '\0'; le<uint16_t>(hdr, 0); le<uint16_t>(hdr, 0); le<uint16_t>(hdr, 0xFFFF);
+    std::string pivot; for (float f : {0.f, 0.f, 0.f}) le<float>(pivot, f);
+    std::string track; le<uint16_t>(track, 0); le<uint32_t>(track, 0); le<uint32_t>(track, 0); le<uint32_t>(track, 2);
+    le<uint32_t>(track, 0); le<uint16_t>(track, 0); for (float f : {0.f, 0.f, 0.f}) le<float>(track, f);
+    le<uint32_t>(track, 30); le<uint16_t>(track, 1); le<float>(track, 0.5f); for (float f : {3.f, 0.f, 0.f}) le<float>(track, f);   // tension
+    const std::string node = chunk3ds(0xB030, id) + chunk3ds(0xB010, hdr) + chunk3ds(0xB013, pivot) + chunk3ds(0xB020, track);
+    const std::string kf = chunk3ds(0xB008, frames) + chunk3ds(0xB002, node);
+    return chunk3ds(0x4D4D, chunk3ds(0x0002, version) + chunk3ds(0x3D3D, editor) + chunk3ds(0xB000, kf));
+}
+inline const char* asciiPly() {
+    return "ply\r\nformat ascii 1.0\r\ncomment TextureFile t.tga\r\nelement vertex 4\r\nproperty float x\r\nproperty float y\r\nproperty float z\r\n"
+           "property float s\r\nproperty float t\r\nproperty uchar red\r\nproperty uchar green\r\nproperty uchar blue\r\n"
+           "element face 1\r\nproperty list uchar int vertex_indices\r\nend_header\r\n"
+           "0 0 0 0 0 255 0 0\r\n1 0 0 1 0 0 255 0\r\n1 1 0 1 1 0 0 255\r\n0 1 0 0 1 255 255 255\r\n4 0 1 2 3\r\n";
+}
+inline std::string binaryPly() {   // the same quad, big endian, with an unknown element in between
+    std::string b = "ply\nformat binary_big_endian 1.0\nelement vertex 4\nproperty float x\nproperty float y\nproperty float z\n"
+                    "property float s\nproperty float t\nproperty uchar red\nproperty uchar green\nproperty uchar blue\n"
+                    "element extra 2\nproperty list uchar short junk\nproperty double w\n"
+                    "element face 1\nproperty list uchar int vertex_indices\nend_header\n";
+    const float v[4][5] = {{0, 0, 0, 0, 0}, {1, 0, 0, 1, 0}, {1, 1, 0, 1, 1}, {0, 1, 0, 0, 1}};
+    const uint8_t c[4][3] = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255}};
+    for (int i = 0; i < 4; ++i) { for (float f : v[i]) be<float>(b, f); for (uint8_t x : c[i]) b += char(x); }
+    for (int i = 0; i < 2; ++i) { b += char(2); be<int16_t>(b, 7); be<int16_t>(b, 8); be<double>(b, 1.5); }
+    b += char(4);
+    for (int i : {0, 1, 2, 3}) be<int32_t>(b, i);
+    return b;
+}
+inline std::string binaryStl() {   // header starting with "solid" on purpose, two facets, VisCAM colour on the first
+    std::string b = "solid but actually binary";
+    b.resize(80, ' ');
+    le<uint32_t>(b, 2);
+    const float tri[2][12] = {{0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0}, {0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0}};
+    for (int t = 0; t < 2; ++t) {
+        for (float f : tri[t]) le<float>(b, f);
+        le<uint16_t>(b, t == 0 ? uint16_t(0x8000u | (31u << 10)) : uint16_t(0));
+    }
+    return b;
+}
+// Truncations and byte flips must end in an exception or a model, never a crash.
+inline int fuzz(const std::string& path, const std::string& bytes, const std::map<std::string, std::string>& extra) {
+    int threw = 0;
+    auto run = [&](const std::string& b) {
+        std::map<std::string, std::string> files = extra;
+        files[path] = b;
+        try { std::vector<std::string> w; loadModel(path, mapReader(files), &w); }
+        catch (const std::exception&) { ++threw; }
+    };
+    uint32_t s = 12345;
+    auto rnd = [&]() { s = s * 1664525u + 1013904223u; return s >> 8; };
+    for (size_t cut = 0; cut < bytes.size(); cut += 1 + bytes.size() / 97) run(bytes.substr(0, cut));
+    for (int i = 0; i < 300; ++i) {
+        std::string b = bytes;
+        for (int k = 0, n = 1 + int(rnd() % 4); k < n; ++k) b[rnd() % b.size()] = char(rnd());
+        run(b);
+    }
+    return threw;
+}
+} // namespace interchangetest
+
+TEST(models_dae_skinned_two_bones) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto m = loadModel("units/rig.dae", mapReader({{"units/rig.dae", skinnedDae()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    const int root = m->findNode("Root"), top = m->findNode("Top"), body = m->findNode("Body");
+    CHECK(root >= 0 && top >= 0 && body >= 0 && m->nodes.size() == 4);
+    if (root < 0 || top < 0 || body < 0) return;
+    CHECK(m->nodes[size_t(top)].parent == root && m->nodes[size_t(root)].parent == m->findNode("Armature"));
+    CHECK(near(m->nodes[size_t(root)].t.x, 0.5f) && near(m->nodes[size_t(top)].t.y, 1));   // row-major <matrix>
+    CHECK(m->skins.size() == 1 && m->nodes[size_t(body)].skin == 0 && m->nodes[size_t(body)].mesh == 0);
+    const Skin& sk = m->skins[0];
+    CHECK(sk.joints.size() == 2 && sk.joints[0] == root && sk.joints[1] == top);
+    CHECK(near(sk.inverseBind[1].at(1, 3), -1) && near(sk.inverseBind[1].at(0, 3), -0.5f));
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(m->meshes[0].primitives.size() == 1 && p.indexCount == 6 && p.jointPalette.size() == 2);
+    std::vector<mat4> pal;
+    paletteMatrices(*m, sk, p, m->bindWorld, pal);
+    bool identity = true;
+    for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+    CHECK(identity);
+    bool topVertex = false;
+    for (uint32_t i = 0; i < p.indexCount; ++i) {
+        const ModelVertex& v = m->vertices[m->indices[p.firstIndex + i]];
+        CHECK(near(v.pos.z, 0.25f));                       // bind shape matrix baked in
+        CHECK(v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3] == 255);
+        if (near(v.pos.x, -0.5f) && near(v.pos.y, 2)) {    // JTop 1, JRoot 0.25 -> 0.8 / 0.2
+            topVertex = true;
+            CHECK(p.jointPalette[v.joints[0]] == 1 && near(v.weights[0] / 255.0f, 0.8f, 0.01f));
+        }
+    }
+    CHECK(topVertex);
+    CHECK(m->clips.size() == 1 && m->findClip("walk") == 0);
+    if (m->clips.empty()) return;
+    const AnimClip& clip = m->clips[0];
+    CHECK(near(clip.duration, 1));
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(clip, 0.5f, pose);
+    const quat e = quat::axisAngle({0, 0, 1}, 0.785398f);
+    CHECK(near(pose[size_t(root)].t.x, 1.5f, 1e-3f));
+    CHECK(near(std::fabs(pose[size_t(top)].r.z), e.z, 2e-3f) && near(std::fabs(pose[size_t(top)].r.w), e.w, 2e-3f));
+    CHECK(near(pose[size_t(top)].t.y, 1));
+}
+
+TEST(models_dae_textured_zup_and_errors) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto m = loadModel("dae/tri.dae", mapReader({{"dae/tri.dae", texturedZupDae()}, {"dae/tex file.tga", tga2x2()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    // root node: centimetres -> metres, Z up -> Y up
+    CHECK(m->nodes.size() == 2 && m->nodes[0].name == "root" && near(m->nodes[0].s.x, 0.01f) && m->nodes[1].parent == 0);
+    CHECK(near(m->boundsMax.y, 1) && near(m->boundsMax.x, 1) && near(m->boundsMin.y, 0));
+    const float3 up = m->nodes[0].r.rotate({0, 0, 1});
+    CHECK(near(up.y, 1));
+    const Primitive& p = m->meshes[0].primitives[0];
+    const Material& mt = m->materials[size_t(p.material)];
+    CHECK(m->materials.size() == 1 && mt.name == "Paint & Glass");
+    CHECK(mt.baseTex == 0 && m->images.size() == 1 && m->images[0].width == 2);
+    CHECK(mt.alpha == AlphaMode::Blend && near(mt.baseColor.w, 0.5f) && near(mt.emissive.x, 0.5f) && near(mt.roughness, 0.25f) && mt.doubleSided);
+    const ModelVertex& v2 = m->vertices[m->indices[p.firstIndex + 2]];
+    CHECK(near(v2.uv.y, 0) && near(v2.nrm.y, -1));         // V flipped; smoothed normal (no NORMAL input)
+    // readable errors
+    auto err = [](const std::string& path, const std::string& text) {
+        try { loadModel(path, mapReader({{path, text}}), nullptr); }
+        catch (const std::exception& e) { return std::string(e.what()); }
+        return std::string();
+    };
+    std::string e = err("bad.dae", "<COLLADA><asset></COLLADA>");
+    CHECK(e.find("bad.dae") == 0 && e.find("line 1") != std::string::npos);
+    std::string broken = texturedZupDae();
+    broken.replace(broken.find("<p>0 0 1 1 2 2</p>"), 18, "<p>0 0 1 1 9 2</p>");
+    e = err("idx.dae", broken);
+    CHECK(e.find("out of range") != std::string::npos);
+    CHECK(err("cam.dae", "<COLLADA><library_visual_scenes><visual_scene id='s'><node id='c'/></visual_scene></library_visual_scenes></COLLADA>").find("no geometry") != std::string::npos);
+    CHECK(err("x.dae", "<mesh/>").find("not a Collada") != std::string::npos);
+}
+
+TEST(models_3ds_chunks_smoothing_keyframer) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto m = loadModel("old/box.3ds", mapReader({{"old/box.3ds", sample3ds()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    CHECK(m->nodes.size() == 2 && m->nodes[0].name == "root" && m->nodes[1].name == "Box" && m->nodes[1].parent == 0);
+    const Primitive& p = m->meshes[0].primitives[0];
+    CHECK(m->meshes[0].primitives.size() == 1 && p.indexCount == 6);
+    CHECK(p.vertexCount == 6);            // smoothing groups 1 and 2 split the shared diagonal
+    const Material& mt = m->materials[size_t(p.material)];
+    CHECK(mt.name == "Red" && near(mt.baseColor.x, 1) && near(mt.baseColor.y, 0) && mt.alpha == AlphaMode::Blend && near(mt.baseColor.w, 0.5f));
+    for (uint32_t i = 0; i < p.vertexCount; ++i) CHECK(near(m->vertices[p.firstVertex + i].nrm.z, 1));
+    const float3 up = m->nodes[0].r.rotate({0, 0, 1});
+    CHECK(near(up.y, 1));                  // Z up -> Y up
+    CHECK(m->clips.size() == 1 && m->clips[0].name == "Take 001" && near(m->clips[0].duration, 1));
+    if (m->clips.empty()) return;
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(m->clips[0], 0.5f, pose);
+    CHECK(near(pose[1].t.x, 1.5f));
+    bool threw = false;
+    std::string bad = sample3ds();
+    bad[2] = 0x7f;                         // main chunk length past the end
+    try { loadModel("old/bad.3ds", mapReader({{"old/bad.3ds", bad}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("old/bad.3ds") == 0; }
+    CHECK(threw);
+}
+
+TEST(models_ply_ascii_binary) {
+    using namespace interchangetest;
+    std::vector<std::string> warn;
+    auto a = loadModel("scan/q.ply", mapReader({{"scan/q.ply", asciiPly()}, {"scan/t.tga", tga2x2()}}), &warn);
+    auto b = loadModel("scan/b.ply", mapReader({{"scan/b.ply", binaryPly()}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    for (const Model* m : {a.get(), b.get()}) {
+        CHECK(m->vertices.size() == 4 && m->indices.size() == 6);
+        CHECK(m->vertices[0].color == 0xff0000ffu && m->vertices[3].color == 0xffffffffu);   // red; white
+        CHECK(near(m->vertices[2].uv.x, 1) && near(m->vertices[2].uv.y, 0));
+        CHECK(near(m->vertices[1].nrm.z, 1));                                               // smoothed
+        CHECK(near(m->boundsMax.y, 1) && near(m->boundsMax.x, 1));                          // Y up kept
+    }
+    CHECK(a->materials[0].baseTex == 0 && b->materials[0].baseTex == -1);
+    bool threw = false;
+    std::string bad = asciiPly();
+    bad.replace(bad.find("4 0 1 2 3"), 9, "4 0 1 2 7");
+    try { loadModel("scan/bad.ply", mapReader({{"scan/bad.ply", bad}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("out of range") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(models_stl_ascii_binary) {
+    using namespace interchangetest;
+    const std::string ascii = "solid part\n facet normal 0 0 0\n  outer loop\n   vertex 0 0 0\n   vertex 1 0 0\n   vertex 0 1 0\n  endloop\n endfacet\nendsolid part\n";
+    std::vector<std::string> warn;
+    auto a = loadModel("print/a.stl", mapReader({{"print/a.stl", ascii}}), &warn);
+    auto b = loadModel("print/b.STL", mapReader({{"print/b.STL", binaryStl()}}), &warn);
+    CHECK(warn.empty());
+    CHECK(a->nodes.size() == 1 && a->nodes[0].name == "part" && a->vertices.size() == 3);
+    CHECK(near(a->vertices[0].nrm.y, 1));                          // zero normal recomputed, Z up -> Y up
+    CHECK(near(a->vertices[2].pos.z, -1) && near(a->vertices[2].pos.y, 0));
+    CHECK(b->vertices.size() == 6 && b->vertices[0].color == 0xff0000ffu && b->vertices[3].color == 0xffffffffu);
+    CHECK(near(b->vertices[0].nrm.y, 1));
+    bool threw = false;
+    try { loadModel("print/c.stl", mapReader({{"print/c.stl", "solid x\n facet normal 0 0 1\n vertex 0 0 zero\nendsolid\n"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("print/c.stl") == 0; }
+    CHECK(threw);
+}
+
+TEST(models_dae_palette_split) {
+    using namespace interchangetest;
+    // 100 joints, one triangle per joint: primitives are split so each palette fits kMaxPaletteJoints
+    const int n = 100;
+    std::string pos, idx, names, ibm, vcount, v, nodes;
+    for (int j = 0; j < n; ++j) {
+        const float x = float(j);
+        pos += std::to_string(x) + " 0 0 " + std::to_string(x + 0.5f) + " 0 0 " + std::to_string(x) + " 1 0 ";
+        idx += std::to_string(j * 3) + " " + std::to_string(j * 3 + 1) + " " + std::to_string(j * 3 + 2) + " ";
+        names += "j" + std::to_string(j) + " ";
+        ibm += "1 0 0 " + std::to_string(-x) + " 0 1 0 0 0 0 1 0 0 0 0 1 ";
+        vcount += "1 1 1 ";
+        for (int k = 0; k < 3; ++k) v += std::to_string(j) + " 0 ";
+        nodes += "<node id='n" + std::to_string(j) + "' sid='j" + std::to_string(j) + "'><translate>" + std::to_string(x) + " 0 0</translate></node>";
+    }
+    const std::string dae = "<COLLADA><library_geometries><geometry id='g'><mesh><source id='p'><float_array id='pa' count='" + std::to_string(n * 9) + "'>" + pos +
+        "</float_array><technique_common><accessor source='#pa' count='" + std::to_string(n * 3) + "' stride='3'/></technique_common></source>"
+        "<vertices id='v'><input semantic='POSITION' source='#p'/></vertices><triangles count='" + std::to_string(n) + "'><input semantic='VERTEX' source='#v' offset='0'/><p>" + idx +
+        "</p></triangles></mesh></geometry></library_geometries><library_controllers><controller id='c'><skin source='#g'>"
+        "<source id='jn'><Name_array id='jna' count='" + std::to_string(n) + "'>" + names + "</Name_array><technique_common><accessor source='#jna' count='" + std::to_string(n) + "'/></technique_common></source>"
+        "<source id='ib'><float_array id='iba' count='" + std::to_string(n * 16) + "'>" + ibm + "</float_array><technique_common><accessor source='#iba' count='" + std::to_string(n) + "' stride='16'/></technique_common></source>"
+        "<source id='w'><float_array id='wa' count='1'>1</float_array><technique_common><accessor source='#wa' count='1'/></technique_common></source>"
+        "<joints><input semantic='JOINT' source='#jn'/><input semantic='INV_BIND_MATRIX' source='#ib'/></joints>"
+        "<vertex_weights count='" + std::to_string(n * 3) + "'><input semantic='JOINT' source='#jn' offset='0'/><input semantic='WEIGHT' source='#w' offset='1'/><vcount>" + vcount + "</vcount><v>" + v + "</v></vertex_weights>"
+        "</skin></controller></library_controllers><library_visual_scenes><visual_scene id='s'><node id='skel'>" + nodes + "</node>"
+        "<node id='body'><instance_controller url='#c'><skeleton>#skel</skeleton></instance_controller></node></visual_scene></library_visual_scenes></COLLADA>";
+    std::vector<std::string> warn;
+    auto m = loadModel("many.dae", mapReader({{"many.dae", dae}}), &warn);
+    CHECK(warn.empty());
+    CHECK(m->skins.size() == 1 && m->skins[0].joints.size() == size_t(n));
+    const auto& prims = m->meshes[0].primitives;
+    CHECK(prims.size() == 2);
+    uint32_t tris = 0;
+    for (const Primitive& p : prims) {
+        tris += p.indexCount / 3;
+        CHECK(!p.jointPalette.empty() && int(p.jointPalette.size()) <= kMaxPaletteJoints);
+        std::vector<mat4> pal;
+        paletteMatrices(*m, m->skins[0], p, m->bindWorld, pal);
+        bool identity = true;
+        for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        CHECK(identity);
+        for (uint32_t i = 0; i < p.indexCount; ++i) {   // every vertex points at the joint of its triangle
+            const ModelVertex& vx = m->vertices[m->indices[p.firstIndex + i]];
+            const int joint = p.jointPalette[vx.joints[0]];
+            CHECK(vx.weights[0] == 255 && joint == int(std::floor(vx.pos.x + 0.01f)));
+        }
+    }
+    CHECK(tris == uint32_t(n));
+}
+
+TEST(models_interchange_fuzz_never_crashes) {
+    using namespace interchangetest;
+    // every loader survives truncations and random byte flips (throws or loads, never crashes)
+    const int a = fuzz("f/rig.dae", skinnedDae(), {});
+    const int b = fuzz("f/tri.dae", texturedZupDae(), {{"f/tex file.tga", tga2x2()}});
+    const int c = fuzz("f/box.3ds", sample3ds(), {});
+    const int d = fuzz("f/q.ply", asciiPly(), {});
+    const int e = fuzz("f/b.ply", binaryPly(), {});
+    const int f = fuzz("f/b.stl", binaryStl(), {});
+    CHECK(a > 50 && b > 50 && c > 50 && d > 20 && e > 20 && f > 20);   // most truncations are reported
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
