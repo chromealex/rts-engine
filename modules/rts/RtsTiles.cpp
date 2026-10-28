@@ -1,4 +1,5 @@
 #include "RtsTiles.h"
+#include "RtsMap.h"
 #include <algorithm>
 #include <array>
 #include <stdexcept>
@@ -297,6 +298,7 @@ void applyTilesToMap(Json& map, const Tileset& ts) {
 }
 
 bool applyTilesToMap(Json& map, const std::function<bool(const std::string&, std::string&)>& read, std::string* errOut) {
+    if (!applyCornersFile(map, read, errOut)) return false; // big heightfield maps: terrain.cornersFile (RtsMap.h)
     if (!map["tiles"].isObject()) return true;
     std::string path = map["tiles"].getStr("tileset"), text;
     try {

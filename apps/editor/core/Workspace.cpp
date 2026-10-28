@@ -536,7 +536,7 @@ void Workspace::registerCoreOps() {
     add("map_new", "Start a new empty map (not saved until map_save).",
         R"({"properties": {"width": {"type": "integer"}, "height": {"type": "integer"}, "name": {"type": "string"}}, "required": ["width", "height"]})",
         [this](const Json& p) {
-            map.reset(std::clamp(pi(p, "width", 64), 8, 1024), std::clamp(pi(p, "height", 48), 8, 1024));
+            map.reset(std::clamp(pi(p, "width", 64), 8, game::kMaxMapSize), std::clamp(pi(p, "height", 48), 8, game::kMaxMapSize));
             if (p.has("name")) map.data.name = ps(p, "name");
             note({Change::Map, 0, 0, map.data.w - 1, map.data.h - 1, -1, "Новая карта"});
             Json r = ok();
@@ -580,6 +580,17 @@ void Workspace::registerCoreOps() {
         r.set("players", players);
         r.set("entities", Json::number(int64_t(d.entities.size())));
         r.set("roads", Json::number(int64_t(d.roads.size())));
+        // heightfield: corner heights present? how they are stored, and what the rules do with them
+        Json hf = Json::object();
+        hf.set("corners", Json::fromBool(!d.corners.empty()));
+        if (!d.corners.empty()) {
+            auto [mn, mx] = std::minmax_element(d.corners.begin(), d.corners.end());
+            hf.set("min", Json::number(double(*mn) / 16.0, 2)); hf.set("max", Json::number(double(*mx) / 16.0, 2));
+            hf.set("storage", str(d.corners.size() > kInlineCornersMax ? "file " + map.cornersFileName() : "inline"));
+        }
+        hf.set("model", str(project.rules.terrain.model == game::TerrainModel::Heightfield ? "heightfield"
+                           : project.rules.terrain.model == game::TerrainModel::Flat ? "flat" : "levels"));
+        r.set("heightfield", hf);
         Json keys = Json::array();
         for (auto& [k, v] : d.extra.members()) keys.push(str(k));
         r.set("extraBlocks", keys);
@@ -594,6 +605,7 @@ void Workspace::registerCoreOps() {
     add("map_get", "Read the open map as JSON (or a part by path: 'players[0]', 'waves', 'triggers', 'areas', 'victory').",
         R"({"properties": {"path": {"type": "string"}, "includeTerrain": {"type": "boolean"}}})", [this](const Json& p) {
             Json j = map.toJson();
+            if (Json* t = j.find("terrain")) t->erase("cornersBlob");  // binary corners of big maps: not for JSON clients
             if (!p.getBool("includeTerrain", false) && !p.has("path")) { j.erase("terrain"); j.erase("fields"); j.member("regions").erase("rows"); }
             const Json* v = p.has("path") ? jsonPath(j, ps(p, "path")) : &j;
             if (!v) throw std::runtime_error("path not found");
@@ -788,6 +800,15 @@ void Workspace::registerCoreOps() {
             note({Change::Map, 0, 0, map.data.w - 1, map.data.h - 1, -1, "Размер карты"});
             Json r = ok();
             r.set("summary", str("Размер карты " + std::to_string(map.data.w) + "x" + std::to_string(map.data.h)));
+            return r;
+        });
+    add("map_heightfield", "Add a flat heightfield (corner heights, all 0) to the open map, or remove it ('enabled': false). "
+        "Sculpting is done with the terrain tools; the simulation uses the heights when rules terrain.model is 'heightfield'.",
+        R"({"properties": {"enabled": {"type": "boolean"}}, "required": ["enabled"]})", [this](const Json& p) {
+            map.setCorners(p.getBool("enabled", true));
+            note({Change::Map, 0, 0, map.data.w - 1, map.data.h - 1, -1, "Рельеф"});
+            Json r = ok();
+            r.set("summary", str(map.data.corners.empty() ? "Рельеф удалён" : "Рельеф (высоты углов) включён"));
             return r;
         });
     add("map_mirror", "Make the map symmetric: copy the left half to the right ('horizontal') or rotate it 180° ('point'); owners 1 and 2 swap.",

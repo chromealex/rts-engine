@@ -25,12 +25,22 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
   `RTS_*_SHADOW` and `RTS_*_LIGHTS`. Textures via `TextureCache::resolve(path)`; tiling splat textures are kept out of atlases.
 - 2D tile maps (`RtsTileView`) are drawn separately and must not change: check `games/tiles2d` and `games/km2d`.
 
-## Rules for the simulation (`model: "heightfield"`)
-- Fixed-point only: `MapGrid::surfaceHeight(Fixed x, Fixed z)` (bilinear on corners), slope per cell, passability by
-  `maxSlope` per move layer, uphill speed, line of sight / range by height, unit and projectile Y from the surface.
-- Cliff `levels` are derived from heights for the existing bonuses (`heights.blockVision` etc.).
-- Corners are hashed in `hashState` only when the model is `heightfield` (old checksums unchanged).
-- Large maps: hierarchical pathfinding so A* stays bounded on 1024x1024.
+## Rules for the simulation (`model: "heightfield"`) — implemented (agent-terrain-sim)
+- Data keys: rules `terrain.{model, maxSlope (number or {ground, sand}), buildSlope, uphillSpeed, downhillSpeed,
+  eyeHeight, targetHeight}`, type `move.maxSlope`; full description in docs/game-format.md "Heightfield terrain".
+- `MapGrid::surfaceHeight(x, z)` (bilinear, fixed), `cellHeight`, `gradient`, `slope[]` (1/256 units per cell),
+  `hf` flag; `enableHeightfield()` derives slopes and cliff `level` = floor(h / levelHeight). Passability by slope
+  per move layer / slope class (`UnitType::pathLayer` = layer | class << 4); `canStep` ignores cliffs on heightfields.
+- Uphill/downhill speed factor, mobile unit `pos.y` = surface, projectile Y from the surface, LOS vision,
+  `RtsModule::heightAdvantage` for range/damage/missUphill.
+- Corners and the model are hashed only when the heightfield is active (old checksums unchanged).
+- `terrain.cornersFile`: raw int16 LE; `applyCornersFile(map, reader)` (called by `applyTilesToMap`, so every
+  loader gets it) attaches the bytes as in-memory `terrain.cornersBlob`; `MapDoc` loads/saves it (file above
+  257x257 corners). Size cap `kMaxMapSize` = 2048.
+- Large maps: HPA* (`RtsHpa.cpp`) on maps >= 256x256, built at setup, clusters invalidated by `MapGrid::block` /
+  `cellChanged`; clearance updated locally on block; fog reset, soft obstacles and spatial hash reset are O(used).
+- The view should keep reading `corners` for its own surface; on heightfield games mobile units now carry a real
+  `pos.y` (the view may keep using `heightAt`, which matches the sim surface when it is bilinear on corners).
 
 ## Branches
 | Branch | Scope |
