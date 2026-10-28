@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 
+#include "ClientSplash.h"
 #include "GameClient.h"
 #include "modules/rts/RtsLocalize.h"
 #include "modules/rts/RtsTiles.h"
@@ -41,35 +42,52 @@ GameClient* g_client = nullptr;
 // ------------------------------------------------------------------ setup
 
 void GameClient::init(gfx::Device& dev) {
-    dev_ = &dev;
-    { // settings (language, online name) are saved here; platforms do not create it
-        std::error_code ec;
-        std::filesystem::create_directories(platform::userDataDir(), ec);
+    for (int i = 0; i < kInitSteps; ++i) initStep(dev, i);
+}
+
+float GameClient::initWeight(int step) {
+    static const float w[kInitSteps] = {0.15f, 0.15f, 0.35f, 0.1f, 0.1f, 0.15f};   // view: models, looks, terrain
+    return step >= 0 && step < kInitSteps ? w[step] : 0.0f;
+}
+
+void GameClient::initStep(gfx::Device& dev, int step) {
+    switch (step) {
+    case 0: {   // manifest, rules, language
+        dev_ = &dev;
+        { // settings (language, online name) are saved here; platforms do not create it
+            std::error_code ec;
+            std::filesystem::create_directories(platform::userDataDir(), ec);
+        }
+        std::string text;
+        try {
+            if (!platform::readContentFile("game.json", text)) throw std::runtime_error("game.json not found in content");
+            manifest_ = Json::parse(text);
+            gameName_ = manifest_.getStr("name", gameName_);
+            if (!platform::readContentFile(manifest_.getStr("rules", "rules.json"), text)) throw std::runtime_error("rules not found");
+            rulesJson_ = Json::parse(text);
+            langs_ = i18n::readGameLanguages(manifest_);
+            applyLanguage(!forcedLanguage_.empty() ? forcedLanguage_
+                                                   : i18n::chooseLanguage(langs_, i18n::readSavedLanguage(platform::userDataDir())), false);
+        } catch (const std::exception& e) {
+            error_ = e.what();
+        }
+        platform::setTitle(gameName_);
+        loadNetSettings();
+        break;
     }
-    std::string text;
-    try {
-        if (!platform::readContentFile("game.json", text)) throw std::runtime_error("game.json not found in content");
-        manifest_ = Json::parse(text);
-        gameName_ = manifest_.getStr("name", gameName_);
-        if (!platform::readContentFile(manifest_.getStr("rules", "rules.json"), text)) throw std::runtime_error("rules not found");
-        rulesJson_ = Json::parse(text);
-        langs_ = i18n::readGameLanguages(manifest_);
-        applyLanguage(!forcedLanguage_.empty() ? forcedLanguage_
-                                               : i18n::chooseLanguage(langs_, i18n::readSavedLanguage(platform::userDataDir())), false);
-    } catch (const std::exception& e) {
-        error_ = e.what();
+    case 1:     // renderer
+        overlay_.init(dev, "fonts/ui.ttf", 17.0f);
+        if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
+        r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
+        r3d_.setMaterialQuality(Renderer3D::defaultMaterialQualityFor(dev, platform::isTouchDevice()));
+        r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
+        break;
+    case 2: view_.init(dev, rules_); break;     // models, textures, atlases of every type
+    case 3: fx_.init(dev, rules_); break;
+    case 4: initAudio(); break;
+    case 5: initUi(); break;
+    default: break;
     }
-    platform::setTitle(gameName_);
-    loadNetSettings();
-    overlay_.init(dev, "fonts/ui.ttf", 17.0f);
-    if (!r3d_.init(dev)) error_ = "renderer: " + dev.lastError();
-    r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, platform::isTouchDevice()));
-    r3d_.setMaterialQuality(Renderer3D::defaultMaterialQualityFor(dev, platform::isTouchDevice()));
-    r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, platform::isTouchDevice()));
-    view_.init(dev, rules_);
-    fx_.init(dev, rules_);
-    initAudio();
-    initUi();
 }
 
 void GameClient::initAudio() {
@@ -656,19 +674,37 @@ void GameClient::frame(gfx::Device& dev, double dt) {
     if (sim_) {
         r3d_.beginScene(cam_, dev.framebufferWidth(), dev.framebufferHeight());
         auto& gs = mod().state(*sim_);
+        {   // input state for the overlays (placement footprint / build grids, held keys, modes, cursor)
+            static const char* kModes[] = {"normal", "attack", "patrol", "place", "rally", "ability", "claim"};
+            OverlayContext oc;
+            oc.sim = sim_.get();
+            oc.player = spectator_ ? 0 : human_;
+            float3 g;
+            if (groundAt(mouseX_, mouseY_, g)) { oc.hasCursor = true; oc.cursor = g; }
+            if (mode_ == Mode::Place && placeType_ >= 0) {
+                bool ok;
+                Vec3 c = placeCentre(mouseX_, mouseY_, ok);
+                if (ok) {
+                    oc.placeType = placeType_;
+                    oc.placeAt = {float(c.x.toDouble()), 0, float(c.z.toDouble())};
+                    oc.placeOk = mod().canPlace(*sim_, human_, uint16_t(placeType_), c);
+                }
+            }
+            oc.keys = keys_; oc.keyCount = int(platform::Key::Count);
+            oc.mode = kModes[int(mode_)];
+            oc.paused = screen_ == Screen::Paused;
+            oc.over = screen_ == Screen::Over;
+            view_.setOverlayContext(oc);
+        }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
         fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
                    screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-        if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
+        fx_.addLights(r3d_.lights);   // particle lights ("light" module)
+        if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
             if (ok) {
-                const UnitType& t = rules_.types[size_t(placeType_)];
                 bool can = mod().canPlace(*sim_, human_, uint16_t(placeType_), c);
-                uint32_t col = can ? rgba(80, 255, 120, 110) : rgba(255, 70, 60, 110);
-                float x0 = float(c.x.toDouble()) - t.footprintW * 0.5f, z0 = float(c.z.toDouble()) - t.footprintH * 0.5f;
-                r3d_.triangle({x0, 0.08f, z0}, {x0, 0.08f, z0 + t.footprintH}, {x0 + t.footprintW, 0.08f, z0 + t.footprintH}, col);
-                r3d_.triangle({x0, 0.08f, z0}, {x0 + t.footprintW, 0.08f, z0 + t.footprintH}, {x0 + t.footprintW, 0.08f, z0}, col);
                 view_.drawGhost(r3d_, uint16_t(placeType_), {float(c.x.toDouble()), 0, float(c.z.toDouble())}, can, mod().state(*sim_).grid, time_);
             }
         }
@@ -690,15 +726,21 @@ void GameClient::frame(gfx::Device& dev, double dt) {
 int rtsMain(int argc, char** argv) {
     using namespace rts::client;
     static GameClient client;
+    static ClientBoot boot;   // splash / loading screen (ClientSplash.h)
+    static size_t autostartMap = size_t(-1);
     g_client = &client;
     platform::AppConfig cfg;
     cfg.title = "RTSEngine";
     cfg.width = 1280; cfg.height = 760;
+#ifdef RTS_SPLASH_BACKGROUND   // rtsbuild: game.json splash.background, the window colour before the first frame
+    cfg.clearColor[0] = float((RTS_SPLASH_BACKGROUND >> 16) & 0xff) / 255.0f;
+    cfg.clearColor[1] = float((RTS_SPLASH_BACKGROUND >> 8) & 0xff) / 255.0f;
+    cfg.clearColor[2] = float(RTS_SPLASH_BACKGROUND & 0xff) / 255.0f;
+#endif
     platform::AppCallbacks cb;
-    cb.init = [](gfx::Device& d) { g_client->init(d); };
-    cb.frame = [](gfx::Device& d, double dt) { g_client->frame(d, dt); };
-    cb.event = [](const Event& e) { g_client->event(e); };
-    cb.shutdown = [] { g_client->shutdown(); };
+    cb.frame = [](gfx::Device& d, double dt) { boot.frame(d, dt); };
+    cb.event = [](const Event& e) { boot.event(e); };
+    cb.shutdown = [] { boot.shutdown(); };
     // --howto: open "How to play"; --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -710,11 +752,16 @@ int rtsMain(int argc, char** argv) {
             int w = 0, h = 0;
             if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) { cfg.width = w; cfg.height = h; }
         }
-        if (a == "--map" && i + 1 < argc) {
-            size_t idx = size_t(std::stoul(argv[++i]));
-            auto oldInit = cb.init;
-            cb.init = [oldInit, idx](gfx::Device& d) { oldInit(d); g_client->autostart(idx); };
-        }
+        if (a == "--map" && i + 1 < argc) autostartMap = size_t(std::stoul(argv[++i]));
     }
+    // RTS_SPLASH=off: load in the init callback (old behaviour); full: the whole splash even with --map
+    ClientBoot::Mode mode = autostartMap != size_t(-1) ? ClientBoot::Mode::LoadingOnly : ClientBoot::Mode::Full;
+    if (const char* s = std::getenv("RTS_SPLASH")) {
+        if (std::string(s) == "off") mode = ClientBoot::Mode::Off;
+        else if (std::string(s) == "full") mode = ClientBoot::Mode::Full;
+    }
+    cb.init = [mode](gfx::Device& d) {
+        boot.init(d, *g_client, mode, [] { if (autostartMap != size_t(-1)) g_client->autostart(autostartMap); });
+    };
     return platform::run(cfg, cb);
 }

@@ -242,7 +242,7 @@ void GameClient::updateUi() {
         const float W = platform::windowWidth(), H = platform::windowHeight();
         float3 q[4];
         const bool haveQuad = groundAt(0, 0, q[0]) && groundAt(W, 0, q[1]) && groundAt(W, H, q[2]) && groundAt(0, H, q[3]);
-        minimap_.update(*dev_, gs, rules_, scene_, spectator_ ? nullptr : &gs.vision[human_], q, haveQuad);
+        minimap_.update(*dev_, gs, rules_, scene_, spectator_ ? nullptr : &gs.vision[human_], q, haveQuad, &view_.overlays().minimapMarks());
         const float side = s.touch ? 150.0f : 190.0f;
         const float k = side / float(std::max(gs.grid.w, gs.grid.h));
         s.minimapStyle = fmt("width: %.0fdp; height: %.0fdp;", gs.grid.w * k, gs.grid.h * k);

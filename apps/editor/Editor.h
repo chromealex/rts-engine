@@ -130,10 +130,16 @@ public:
     void renderScene(Viewport& vp, const render::RTSCamera& cam, bool editOverlays);
     void renderGame(Viewport& vp, const render::RTSCamera& cam);
 
+    // overlays (Overlays window / overlay_preview): ids drawn regardless of their conditions, and a
+    // structure type whose ghost overlays (build grid, placement) are previewed at the cursor
+    std::vector<std::string> overlayPreview;
+    int overlayPreviewType = -1;
+
     // particle effects of the play-test (fx/fx.json + fx/*.json of the open game)
     fx::ParticleSystem& gameFx() { return gameFx_; }
     void reloadFx();                           // after fx files changed (Effects window, agents)
     std::vector<std::string> fxWarnings;       // from the last reloadFx()
+    int fxRevision = 0;                        // bumped when fx files change (agents): the Effects window re-reads
 
     // helpers for windows
     bool groundAt(const Viewport& vp, const render::RTSCamera& cam, float sx, float sy, float& x, float& z) const;
@@ -176,8 +182,13 @@ private:
     void pollAgentLink();
     void registerGuiOps();
     void registerPlayOps();   // EditorPlayOps.cpp
+    void registerFxPreviewOps();   // EditorFxOps.cpp: fx_preview
+    // Particles of the Scene / Game views (EditorFxOps.cpp): after beginScene (dt, previews, event bridge,
+    // particle lights into r3d_.lights); render them after Renderer3D::render.
+    void tickFx(const render::RTSCamera& cam, int w, int h, const std::vector<game::SceneObject>* objects);
     void samplePlayStats();
     void deliverShots(gfx::Device& dev);
+    void setOverlayContext(const Viewport& vp, const render::RTSCamera& cam, bool play);   // input state for RtsOverlays
 
     Options opt_;
     Workspace ws_;
@@ -210,6 +221,10 @@ private:
     game::RtsFx gameFxBridge_;
     render::TextureCache fxTextures_;          // sprite textures of effects (same loader as sprites)
     double fxTime_ = -1;
+    struct FxPreview { std::string name; fx::float3 pos{}; float scale = 1; fx::float4 tint{1, 1, 1, 1}; bool loop = false; fx::FxHandle h; double next = 0;
+                       bool moving = false; float moveT = 0; };   // moving: circles 2 m around pos (trails, perMeter)
+    FxPreview fxPreview_;                      // fx_preview: the effect an agent is looking at
+    bool fxFrozen_ = false;                    // fx_preview {freeze}: particles hold still for screenshots
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;
     int human_ = 0;
@@ -219,6 +234,7 @@ private:
     struct PendingShot { int client; int64_t id; std::string device; };
     std::vector<PendingShot> shots_;
     bool captureArmed_ = false;
+    bool overlayKeys_[int(platform::Key::Count)] = {};
 };
 
 } // namespace rts::editor

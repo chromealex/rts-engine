@@ -99,6 +99,7 @@ void Editor::init(gfx::Device& dev) {
     std::stable_sort(windows_.begin(), windows_.end(), [](auto& a, auto& b) { return a->order() < b->order(); });
     registerGuiOps();
     registerPlayOps();
+    registerFxPreviewOps();
     if (!opt_.projectDir.empty()) {
         std::string err;
         if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
@@ -115,6 +116,7 @@ void Editor::init(gfx::Device& dev) {
         out = {r.tex, r.u0, r.v0, r.u1, r.v1};
         return true;
     });
+    gameFx_.setGroundHeight([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : view_.heightAt(grid_, x, z); });
     if (!gameFx_.init(&dev)) ws_.log("fx", gameFx_.lastError(), true);
     reloadFx();
     if (!opt_.openMap.empty()) openMap(opt_.openMap);
@@ -168,6 +170,7 @@ void Editor::openGame(const std::string& idOrDir) {
 void Editor::reloadFx() {
     fxWarnings.clear();
     gameFx_.reloadAll();
+    if (dev_) { fxTextures_.shutdown(); fxTextures_.init(*dev_); }   // re-imported textures (fx_import_unity) show up
     gameFx_.clearErrors();
     Json bank;
     std::string text;
@@ -398,13 +401,18 @@ void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) 
     if (playing()) { renderGame(vp, cam); return; }
     buildEditScene(scene_);
     r3d_.beginScene(cam, vp.w, vp.h);
+    setOverlayContext(vp, cam, false);
     view_.draw(r3d_, scene_, time_, nullptr, grid_);
+    if (const auto& oc = view_.overlays().context(); overlayPreviewType >= 0 && oc.placeType >= 0)   // overlay preview ghost
+        view_.drawGhost(r3d_, uint16_t(oc.placeType), oc.placeAt, oc.placeOk, grid_, time_);
     if (editOverlays) drawEditOverlays3D();
+    tickFx(cam, vp.w, vp.h, nullptr);   // agent previews (fx_preview) in the Scene view
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
     pass.depthTarget = vp.depth;
     pass.clearColor[0] = 0.13f; pass.clearColor[1] = 0.15f; pass.clearColor[2] = 0.17f;
     r3d_.render(pass);
+    gameFx_.render({r3d_.lighting.fogColor, r3d_.lighting.fogDensity});
     dev_->endPass();
     view_.drawOverlays(cam, scene_, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
@@ -418,12 +426,11 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     game::sceneFromSim(*sim_, sc, float(sim_->alpha()), uint8_t(human_));
     for (auto& o : sc.objects) o.selected = std::find(gameSelection.begin(), gameSelection.end(), o.entity) != gameSelection.end();
     r3d_.beginScene(cam, vp.w, vp.h);
+    setOverlayContext(vp, cam, true);
     view_.draw(r3d_, sc, time_, human_ ? &gs.vision[size_t(human_)] : nullptr, gs.grid);
-    const float fxDt = fxTime_ < 0 || playPaused ? 0.0f : float(time_ - fxTime_) * playSpeed;
-    fxTime_ = time_;
-    gameFx_.setView(cam, r3d_.viewProj(), vp.w, vp.h);
-    if (fxDt > 0) gameFxBridge_.update(*sim_, &sc.objects);
-    gameFx_.update(fxDt);
+    if (const auto& oc = view_.overlays().context(); overlayPreviewType >= 0 && oc.placeType >= 0)
+        view_.drawGhost(r3d_, uint16_t(oc.placeType), oc.placeAt, oc.placeOk, gs.grid, time_);
+    tickFx(cam, vp.w, vp.h, &sc.objects);
     gfx::PassDesc pass;
     pass.colorTarget = vp.color;
     pass.depthTarget = vp.depth;
@@ -434,13 +441,50 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     view_.drawOverlays(cam, sc, vp.pointsW, vp.pointsH, vp.originX, vp.originY, ImGui::GetWindowDrawList());
 }
 
+// Overlays get what the player does in this view: cursor, held keys, the structure being placed
+// (Scene: the Place tool; both: overlay_preview), pause / match over.
+void Editor::setOverlayContext(const Viewport& vp, const RTSCamera& cam, bool play) {
+    game::OverlayContext oc;
+    oc.sim = play ? sim_.get() : nullptr;
+    oc.player = uint8_t(play ? std::max(0, human_) : 1);
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    float x = 0, z = 0;
+    if (vp.hovered && groundAt(vp, cam, mp.x, mp.y, x, z)) { oc.hasCursor = true; oc.cursor = {x, 0, z}; }
+    using platform::Key;
+    for (int k = 0; k < 26; ++k) overlayKeys_[int(Key::A) + k] = ImGui::IsKeyDown(ImGuiKey(ImGuiKey_A + k));
+    for (int k = 0; k < 10; ++k) overlayKeys_[int(Key::Num0) + k] = ImGui::IsKeyDown(ImGuiKey(ImGuiKey_0 + k));
+    overlayKeys_[int(Key::LeftShift)] = ImGui::GetIO().KeyShift;
+    overlayKeys_[int(Key::LeftCtrl)] = ImGui::GetIO().KeyCtrl;
+    overlayKeys_[int(Key::LeftAlt)] = ImGui::GetIO().KeyAlt;
+    overlayKeys_[int(Key::LeftSuper)] = ImGui::GetIO().KeySuper;
+    overlayKeys_[int(Key::Space)] = ImGui::IsKeyDown(ImGuiKey_Space);
+    oc.keys = overlayKeys_;
+    oc.keyCount = int(Key::Count);
+    int place = overlayPreviewType >= 0 ? overlayPreviewType : (!play && tool == Tool::Place ? placeType : -1);
+    if (place >= 0 && size_t(place) < rules().types.size() && rules().types[size_t(place)].structure) {
+        const auto& t = rules().types[size_t(place)];
+        const float px = oc.hasCursor ? x : cam.target.x, pz = oc.hasCursor ? z : cam.target.z;
+        oc.placeType = place;
+        oc.placeAt = {(t.footprintW % 2) ? std::floor(px) + 0.5f : std::round(px), 0, (t.footprintH % 2) ? std::floor(pz) + 0.5f : std::round(pz)};
+        const game::MapGrid& g = play && sim_ ? simModule()->state(*sim_).grid : grid_;
+        oc.placeOk = g.areaBuildable(int(std::floor(oc.placeAt.x - t.footprintW * 0.5f + 0.01f)), int(std::floor(oc.placeAt.z - t.footprintH * 0.5f + 0.01f)),
+                                     t.footprintW, t.footprintH);
+    }
+    oc.paused = play && playPaused;
+    oc.over = play && sim_ && sim_->result() != 0;
+    oc.areas = &doc().data.extra["areas"];
+    oc.preview = overlayPreview.empty() ? nullptr : &overlayPreview;
+    view_.setOverlayContext(oc);
+}
+
 // Agent edits: fly the scene camera there and flash the area.
 void Editor::applyChanges() {
     if (ws_.changes.empty()) return;
-    bool rulesChanged = false, projectChanged = false;
+    bool rulesChanged = false, projectChanged = false, fxChanged = false;
     for (auto& c : ws_.changes) {
         if (c.kind == Change::Rules) rulesChanged = true;
         if (c.kind == Change::Project) projectChanged = true;
+        if (c.kind == Change::Fx) fxChanged = true;
         if (c.x1 >= c.x0 && c.y1 >= c.y0) {
             flash(float(c.x0), float(c.y0), float(c.x1 + 1), float(c.y1 + 1));
             if (followAgent && c.kind != Change::Map) focusScene((c.x0 + c.x1 + 1) * 0.5f, (c.y0 + c.y1 + 1) * 0.5f);
@@ -448,6 +492,8 @@ void Editor::applyChanges() {
         if (c.entity >= 0 && c.kind == Change::Entity) selectEntity(c.entity);
     }
     if (projectChanged || rulesChanged) reloadRules();
+    else if (fxChanged) reloadFx();
+    if (fxChanged || projectChanged) ++fxRevision;
     if (projectChanged) { fitScene(); selection = {}; }
     ws_.changes.clear();
     if (selectedEntity() >= int(doc().data.entities.size())) selection = {};
@@ -480,6 +526,8 @@ void Editor::startPlay(int humanSlot) {
     }
     human_ = humanSlot;
     gameFx_.clear();
+    fxPreview_ = {};
+    fxFrozen_ = false;
     gameFxBridge_.setHeightFn([this](float x, float z) { return sim_ ? view_.heightAt(simModule()->state(*sim_).grid, x, z) : 0.0f; });
     gameFxBridge_.setPlayerColorFn([](int p) { return game::RtsView::playerColor(p); });
     gameFxBridge_.attach(*sim_, uint8_t(human_));
@@ -506,6 +554,8 @@ void Editor::startPlay(int humanSlot) {
 void Editor::stopPlay() {
     gameFxBridge_.detach();
     gameFx_.clear();
+    fxPreview_ = {};
+    fxFrozen_ = false;
     sim_.reset();
     bots_.clear();
     gameSelection.clear();
