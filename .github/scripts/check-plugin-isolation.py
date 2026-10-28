@@ -28,7 +28,7 @@ work.mkdir(parents=True, exist_ok=True)
 game = work / "game"
 if game.exists():
     shutil.rmtree(game)
-shutil.copytree(engine / "games" / "skirmish", game)
+shutil.copytree(engine / "templates" / "skirmish", game)
 text = (game / "game.json").read_text(encoding="utf-8")
 cfg = json.loads(re.sub(r"^\s*//.*$", "", text, flags=re.M))
 cfg.pop("plugins", None)

@@ -9,6 +9,7 @@
 #include "OverlayOps.h"
 #include "FxOps.h"
 #include "BrandingOps.h"
+#include "Projects.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -326,6 +327,10 @@ bool Workspace::openGame(const std::string& idOrDir, std::string* err) {
     std::error_code ec;
     dir = fs::weakly_canonical(dir, ec).string();
     if (!project.load(dir, err)) return false;
+    {   // recent projects (shared with rtsmcp); the engine's own templates aren't user projects
+        const std::string tpl = fs::weakly_canonical(fs::path(gamesDir()), ec).string();
+        if (dir.rfind(tpl, 0) != 0) rememberProject(dir, project.manifest.getStr("name", fs::path(dir).filename().string()));
+    }
     // open the first map of the game (or a fresh one)
     std::string first = project.manifest["maps"][0].getStr("file");
     std::string merr;
@@ -368,80 +373,72 @@ void Workspace::registerCoreOps() {
     };
 
     // ---------------------------------------------------------------- games
-    add("list_games", "List the game projects in the engine's games/ folder.", "{}", [this](const Json&) {
+    auto templatesJson = [this] {
         Json arr = Json::array();
-        for (auto& g : listGames()) {
+        for (auto& t : listTemplates(engineDir)) {
             Json j = Json::object();
-            j.set("id", str(g.id)); j.set("name", str(g.name)); j.set("dir", str(g.dir)); j.set("maps", Json::number(int64_t(g.maps)));
-            j.set("open", Json::fromBool(g.dir == project.dir));
+            j.set("id", str(t.id)); j.set("name", str(t.name));
+            if (!t.description.empty()) j.set("description", str(t.description));
+            if (!t.dir.empty()) j.set("dir", str(t.dir));
+            j.set("maps", Json::number(int64_t(t.maps)));
             arr.push(j);
         }
+        return arr;
+    };
+    auto projectsJson = [this] {
+        Json arr = Json::array();
+        for (auto& pr : recentProjects()) {
+            Json j = Json::object();
+            j.set("name", str(pr.name)); j.set("dir", str(pr.dir)); j.set("exists", Json::fromBool(pr.exists));
+            j.set("open", Json::fromBool(pr.dir == project.dir));
+            arr.push(j);
+        }
+        return arr;
+    };
+    add("list_projects", "Recently opened game projects (they live anywhere on disk) and the engine's templates to start a new one from.", "{}",
+        [=](const Json&) {
+            Json r = Json::object();
+            r.set("projects", projectsJson());
+            r.set("templates", templatesJson());
+            r.set("defaultLocation", str(defaultProjectsDir()));
+            return r;
+        });
+    add("list_games", "Same as list_projects (kept for older agents): recent projects + templates.", "{}", [=](const Json&) {
         Json r = Json::object();
-        r.set("games", arr);
+        r.set("projects", projectsJson());
+        r.set("templates", templatesJson());
+        r.set("games", projectsJson());
         return r;
     });
-    add("open_game", "Open a game project by id (folder name in games/) or path; opens its first map.",
-        R"({"properties": {"game": {"type": "string"}}, "required": ["game"]})", [this](const Json& p) {
+    add("open_game", "Open a game project by folder path (or a template id from templates/ to edit the template itself); opens its first map.",
+        R"({"properties": {"game": {"type": "string", "description": "project folder (absolute) or template id"}}, "required": ["game"]})", [this](const Json& p) {
             std::string err;
             if (!openGame(ps(p, "game"), &err)) throw std::runtime_error(err);
             Json r = ok();
-            r.set("summary", str("Открыта игра " + project.manifest.getStr("name")));
+            r.set("dir", str(project.dir));
+            r.set("summary", str("Открыт проект " + project.manifest.getStr("name")));
             return r;
         });
-    add("create_game", "Create a new game project in games/<id> from a template game (default: copy of 'skirmish', or 'empty').",
-        R"({"properties": {"id": {"type": "string", "description": "folder name, latin letters/digits/-"}, "name": {"type": "string"},
-            "template": {"type": "string", "description": "id of a game to copy, or 'empty'"}}, "required": ["id", "name"]})",
-        [this](const Json& p) {
-            std::string id = ps(p, "id"), name = ps(p, "name"), tpl = ps(p, "template", "skirmish");
-            if (id.empty() || id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-_") != std::string::npos) throw std::runtime_error("id: use lowercase latin letters, digits, - or _");
-            fs::path dst = fs::path(gamesDir()) / id;
-            if (fs::exists(dst)) throw std::runtime_error("games/" + id + " already exists");
-            fs::create_directories(dst / "maps");
-            if (tpl != "empty") {
-                fs::path src = fs::path(gamesDir()) / tpl;
-                if (!fs::exists(src / "game.json")) throw std::runtime_error("template game '" + tpl + "' not found");
-                // per file: MinGW's recursive fs::copy fails into an existing folder
-                for (auto it = fs::recursive_directory_iterator(src); it != fs::recursive_directory_iterator(); ++it) {
-                    const fs::path to = dst / fs::relative(it->path(), src);
-                    if (it->is_directory()) fs::create_directories(to);
-                    else fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing);
-                }
-            } else {
-                writeText((dst / "rules.json").string(), R"({
-  "resources": {"gold": {"name": "Золото", "start": 500}},
-  "types": {
-    "hq": {"name": "Штаб", "key": true, "structure": {"footprint": [3, 3]}, "health": {"max": 1500}, "produces": ["worker"], "dropoff": ["gold"], "supply": 10},
-    "worker": {"name": "Рабочий", "move": {"speed": 2.5}, "health": {"max": 40}, "cost": {"gold": 50, "time": 8, "supply": 1}, "gather": {"gold": {"carry": 8, "time": 2}}, "builds": []},
-    "mine": {"name": "Рудник", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "gold", "amount": 5000}}
-  }
-}
-)", nullptr);
-                writeText((dst / "maps/start.json").string(), R"({"name": "Start", "size": [48, 32], "players": [{"name": "Blue", "team": 1}, {"name": "Red", "team": 2}],
- "terrain": {"rows": []}, "entities": [{"type": "hq", "owner": 1, "pos": [8.5, 16.5]}, {"type": "mine", "owner": 0, "pos": [4, 10]},
- {"type": "hq", "owner": 2, "pos": [39.5, 16.5]}, {"type": "mine", "owner": 0, "pos": [44, 22]}]}
-)", nullptr);
-                writeText((dst / "game.json").string(), "{}", nullptr);
-            }
-            Json m = Json::parseFile((dst / "game.json").string());
-            m.set("name", str(name));
-            m.set("id", str("com.rtsengine." + id));
-            m.set("version", str("0.1.0"));
-            if (!m.has("module")) m.set("module", str("rts"));
-            if (!m.has("rules")) m.set("rules", str("rules.json"));
-            if (!m.has("maps") || tpl == "empty") {
-                Json maps = Json::array();
-                Json e = Json::object(); e.set("file", str("maps/start.json")); e.set("title", str("Start"));
-                maps.push(e);
-                m.set("maps", maps);
-            }
-            writeText((dst / "game.json").string(), m.dump() + "\n", nullptr);
-            std::string err;
-            if (!openGame(dst.string(), &err)) throw std::runtime_error(err);
-            Json r = ok();
-            r.set("dir", str(dst.string()));
-            r.set("summary", str("Создана игра «" + name + "» (games/" + id + ")"));
-            return r;
-        });
+    auto create = [this](const Json& p) {
+        const std::string name = ps(p, "name");
+        std::string location = ps(p, "location", defaultProjectsDir());
+        const std::string folder = ps(p, "folder", ps(p, "id"));
+        std::string err;
+        const std::string dir = createProject(engineDir, ps(p, "template", "skirmish"), name, location, folder, &err);
+        if (dir.empty()) throw std::runtime_error(err);
+        if (!openGame(dir, &err)) throw std::runtime_error(err);
+        Json r = ok();
+        r.set("dir", str(dir));
+        r.set("summary", str("Создан проект «" + name + "» в " + dir));
+        return r;
+    };
+    add("create_project", "Create a new game project in a folder of your choice from a template (list_projects shows them; "
+        "'empty' = minimal game) and open it. location: parent folder (default ~/RTSProjects); folder: name of the new folder (default: from the name).",
+        R"({"properties": {"name": {"type": "string"}, "template": {"type": "string"}, "location": {"type": "string"}, "folder": {"type": "string"}}, "required": ["name"]})",
+        create);
+    add("create_game", "Same as create_project (older name; 'id' = folder).",
+        R"({"properties": {"id": {"type": "string"}, "name": {"type": "string"}, "template": {"type": "string"}, "location": {"type": "string"}}, "required": ["name"]})",
+        create);
     add("game_info", "Manifest (game.json), rules summary and maps of the open game.", "{}", [this, needProject](const Json&) {
         needProject();
         Json r = Json::object();

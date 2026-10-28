@@ -20,7 +20,7 @@
 //         --engine <dir> (default: source tree; plugins in <engine>/tools/unpackers)
 //
 // Example (what rtsbuild does):
-//   assetpipe pack -o dist/content.rpak games/skirmish engine/assets=engine
+//   assetpipe pack -o dist/content.rpak templates/skirmish engine/assets=engine
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>

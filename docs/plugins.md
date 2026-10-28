@@ -92,7 +92,7 @@ add your device's advertising id to `testDevices`, or enable test mode in the MA
 
 Mediation notes: `applovin` and `ironsource` are mediators — adapters for other networks (AdMob,
 Unity Ads, Mintegral, …) are extra Gradle/pod dependencies; add them in a copy of the plugin under
-`games/<game>/plugins/` (it overrides the engine one). A LevelPlay rewarded reward may arrive just
+`<project>/plugins/` (it overrides the engine one). A LevelPlay rewarded reward may arrive just
 after the ad closes; the plugin waits up to 1.5 s for it before replying.
 
 ### Steam
@@ -190,7 +190,7 @@ purchase = `{"productId", "state": "purchased|pending|restored", "token", "order
 
 ## Writing a plugin
 
-Folder `plugins/<name>/` (engine-wide) or `games/<game>/plugins/<name>/` (one game), with
+Folder `plugins/<name>/` (engine-wide) or `<project>/plugins/<name>/` (one game), with
 `plugin.json` and the sources:
 
 ```jsonc
