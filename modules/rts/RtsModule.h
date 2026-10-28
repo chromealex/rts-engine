@@ -76,6 +76,7 @@ enum CommandType : uint16_t {
     kCmdPickItem,     // units[0]; point = where the ground item lies
     kCmdBounty,       // point or target; param = resource | reward << 8 (autonomous heroes go for it)
     kCmdRotate,       // conveyor pieces: param 1..4 = east, south, west, north; 0 = turn clockwise
+    kCmdLock,         // gates / doors: param 1 lock (closed for everyone), 2 unlock, 0 toggle
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.

@@ -1039,3 +1039,37 @@ TEST(mech_logistics) {
     CHECK(w.alive(nb) && w.has<game::Belt>(nb) && w.get<game::Belt>(nb).dir == 4);
     CHECK(mechRoundTrip(*sim, rules, map, 60));
 }
+
+// ---------------------------------------------------------------- TR: doors with a lock (Dungeon Keeper) and gate deaths
+TEST(mech_gate_lock) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(, "types": {
+        "gate": {"structure": {"footprint": [1, 2]}, "gate": "own", "health": {"max": 600}},
+        "grunt": {"move": {"speed": 3}, "sight": 6, "health": {"max": 500}, "weapons": [{"range": 1, "damage": 10, "cooldown": 1}]}}})";
+    std::vector<std::string> rows(12, std::string(30, '.'));
+    for (int y = 0; y < 12; ++y) if (y != 5 && y != 6) rows[size_t(y)][15] = '#';
+    std::string map = mapRows(30, 12, rows, R"(,"entities":[{"type":"gate","owner":1,"pos":[15.5,6]},{"type":"grunt","owner":1,"pos":[10,3]},{"type":"grunt","owner":2,"pos":[27,10]}])");
+    auto g = makeSimJson(rules, map);
+    World& w = g->world();
+    Entity mine = findType(*g, "grunt", 1), gate = findType(*g, "gate", 1);
+    run(*g, 0.5);
+    g->submit(mechCmd(1, game::kCmdLock, {gate}, kNullEntity, {}, 1));
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(22, 3)));
+    run(*g, 10);
+    CHECK(posOf(*g, mine).x < Fixed::fromInt(15));   // locked: even the owner stays inside
+    CHECK(hpOf(*g, gate) == Fixed::fromInt(600));    // and does not attack its own door
+    g->submit(mechCmd(1, game::kCmdLock, {gate}, kNullEntity, {}, 2));
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(22, 3)));
+    run(*g, 10);
+    CHECK(posOf(*g, mine).x > Fixed::fromInt(18));
+    CHECK(mechRoundTrip(*g, rules, map, 40));
+    // a destroyed gate leaves the gap walkable (the footprint is unblocked exactly once)
+    g->submit(mechCmd(1, game::kCmdLock, {gate}, kNullEntity, {}, 1));
+    run(*g, 0.2);
+    w.get<game::Unit>(gate).hp = Fixed{};
+    run(*g, 0.5);
+    auto& grid = mod(*g).state(*g).grid;
+    CHECK(grid.passable(15, 5, 1) && grid.passable(15, 6, 1));
+    g->submit(mechCmd(1, game::kCmdMove, {mine}, kNullEntity, at(5, 6)));
+    run(*g, 10);
+    CHECK(posOf(*g, mine).x < Fixed::fromInt(10));
+}

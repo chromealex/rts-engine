@@ -46,14 +46,15 @@ void RtsModule::mechTickWorld(Simulation& sim) {
         if (M.gates) {
             struct Push { Entity u, gate; };
             std::vector<Push> push;
-            w.each<Unit, Footprint, BridgeLaid>([&](Entity e, Unit& u, Footprint& f, BridgeLaid&) {
+            w.each<Unit, Footprint, BridgeLaid>([&](Entity e, Unit& u, Footprint& f, BridgeLaid& bl) {
                 const uint8_t gate = rules_.types[u.type].mech.gate;
+                const bool locked = !bl.laid;
                 if (!gate) return;
                 const uint8_t owner = w.get<Owner>(e).player;
                 const Vec3 c = w.get<Transform>(e).pos;
                 gs.hash.query(c, Fixed::fromInt(std::max(f.w, f.h)), [&](Entity x) {
                     if (x == e || !w.has<Mobile>(x) || !w.has<Unit>(x)) return;
-                    if (!(rules_.types[w.get<Unit>(x).type].layer & kLayerGround) || friendOf(sim, owner, w.get<Owner>(x).player, gate)) return;
+                    if (!(rules_.types[w.get<Unit>(x).type].layer & kLayerGround) || (!locked && friendOf(sim, owner, w.get<Owner>(x).player, gate))) return;
                     const Vec3 p = w.get<Transform>(x).pos;
                     const int cx = g.cellX(p.x), cy = g.cellY(p.z);
                     if (cx >= f.x && cy >= f.y && cx < f.x + f.w && cy < f.y + f.h) push.push_back({x, e});
@@ -74,7 +75,7 @@ void RtsModule::mechTickWorld(Simulation& sim) {
                 }
                 t.pos = back;
                 stopMoving(sim, p.u);
-                if (auto* c = w.tryGet<Combat>(p.u); c && !rules_.types[w.get<Unit>(p.u).type].weapons.empty()) { c->target = p.gate; c->autoTarget = true; }
+                if (auto* c = w.tryGet<Combat>(p.u); c && !rules_.types[w.get<Unit>(p.u).type].weapons.empty() && hostile(sim, w.get<Owner>(p.u).player, w.get<Owner>(p.gate).player)) { c->target = p.gate; c->autoTarget = true; }
             }
         }
     }
@@ -226,7 +227,7 @@ void RtsModule::mechBridgeDied(Simulation& sim, Entity e) {
     auto* bl = w.tryGet<BridgeLaid>(e);
     auto* f = w.tryGet<Footprint>(e);
     if (!bl || !f) return;
-    g.block(f->x, f->y, f->w, f->h, +1);   // sysDeath unblocks the footprint once more: keep the count right
+    if (bl->laid) g.block(f->x, f->y, f->w, f->h, +1);   // sysDeath unblocks the footprint once more: keep the count right (a locked gate is blocked already)
     for (int32_t ci : bl->cells) g.flags[size_t(ci)] &= uint8_t(~kCellGround);
     for (int y = f->y; y < f->y + f->h; ++y) for (int x = f->x; x < f->x + f->w; ++x) if (g.inside(x, y)) g.cellChanged(x, y);
     // ground units on the vanished deck fall into the water
