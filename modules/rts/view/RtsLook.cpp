@@ -87,12 +87,23 @@ void RtsView::buildLook(gfx::Device& dev, const UnitType& t, TypeLook& L) {
     L.turnSpeed = num(v["turnSpeed"], t.structure ? 0.0f : 10.0f);
     L.flyHeight = num(v["flyHeight"], 2.4f);
     L.unitSpeed = float(t.speed.toDouble());
-    std::vector<std::string> paths;
-    if (v["model"].isString()) paths.push_back(v["model"].str());
-    for (const auto& p : v["model"].items()) if (p.isString()) paths.push_back(p.str());
-    for (const auto& p : paths) {
+    // "model": "a.glb" | ["a.glb", "b.vox"] (one picked per object) | entries {"file": "b.vox", ...}
+    // whose other keys replace the view keys for that model (different nodes, materials, height)
+    std::vector<std::pair<std::string, Json>> entries;
+    if (v["model"].isString()) entries.emplace_back(v["model"].str(), v);
+    for (const auto& p : v["model"].items()) {
+        if (p.isString()) entries.emplace_back(p.str(), v);
+        else if (p.isObject()) {
+            Json merged = v;
+            for (const auto& [k, val] : p.members()) if (k != "file") merged.set(k, val);
+            if (p.getStr("file").empty()) warn(t, "model entry without \"file\"");
+            else entries.emplace_back(p.getStr("file"), std::move(merged));
+        }
+    }
+    std::vector<Json> views;   // the view block of each loaded model
+    for (const auto& [p, view] : entries) {
         ModelChoice ch;
-        if (loadChoice(dev, t, v, p, ch)) L.models.push_back(std::move(ch));
+        if (loadChoice(dev, t, view, p, ch)) { L.models.push_back(std::move(ch)); views.push_back(view); }
     }
     L.shape = L.models.empty();
     if (L.shape) {
@@ -107,17 +118,18 @@ void RtsView::buildLook(gfx::Device& dev, const UnitType& t, TypeLook& L) {
         configureChoice(dev, t, v, ch, true);
         L.models.push_back(std::move(ch));
     }
-    auto procedural = [&](ModelChoice& ch) {
-        if (!v.has("procedural")) defaultProcedural(t, L, ch);
+    auto procedural = [&](ModelChoice& ch, const Json& vv) {
+        if (!vv.has("procedural")) defaultProcedural(t, L, ch);
         else {
-            parseProcedural(t, v["procedural"], ch);
-            if (v.getBool("proceduralDefaults")) defaultProcedural(t, L, ch);
+            parseProcedural(t, vv["procedural"], ch);
+            if (vv.getBool("proceduralDefaults")) defaultProcedural(t, L, ch);
         }
     };
-    for (auto& ch : L.models) {
-        procedural(ch);
-        configureExtras(dev, t, v, ch);
-        finishChoice(t, ch);
+    for (size_t i = 0; i < L.models.size(); ++i) {
+        const Json& vv = i < views.size() ? views[i] : v;
+        procedural(L.models[i], vv);
+        configureExtras(dev, t, vv, L.models[i]);
+        finishChoice(t, L.models[i]);
     }
     // ---- LOD: farther models share the clips (by name) and nodes (by name) of models[0]
     if (!L.shape) {
@@ -129,7 +141,7 @@ void RtsView::buildLook(gfx::Device& dev, const UnitType& t, TypeLook& L) {
             for (const auto& c0 : base.clips) lc.clipMap.push_back(lc.model->findClip(c0.name));
             for (const auto& n : lc.model->nodes) lc.nodeMap.push_back(base.findNode(n.name));
             for (int k = 0; k < kAnimCount; ++k) { lc.clips[k] = L.models[0].clips[k]; lc.hasClip[k] = L.models[0].hasClip[k]; }
-            procedural(lc);
+            procedural(lc, v);
             configureExtras(dev, t, v, lc);
             lc.attach.clear(); lc.fx.clear(); lc.legs.clear(); lc.additive.clear(); // far away: no sockets, effects, IK
             finishChoice(t, lc);
@@ -146,7 +158,7 @@ void RtsView::buildLook(gfx::Device& dev, const UnitType& t, TypeLook& L) {
         if (st.build < 0 && st.hp < 0) { warn(t, "stages: each stage needs \"build\" or \"hp\""); continue; }
         if (sj.has("model")) {
             if (!loadChoice(dev, t, v, sj.getStr("model"), st.choice)) continue;
-            procedural(st.choice);
+            procedural(st.choice, v);
         } else {
             st.choice = L.models[0];
         }
@@ -389,7 +401,7 @@ void RtsView::configureChoice(gfx::Device& dev, const UnitType& t, const Json& v
         if (i < 0) { warn(t, "materials: '" + name + "' not found in " + m.path); continue; }
         apply(c.materials[size_t(i)], o);
     }
-    if (v.has("variant")) {
+    if (!v.getStr("variant").empty()) {   // "" = default materials (a model entry can clear the view's variant)
         c.variant = m.findVariant(v.getStr("variant"));
         if (c.variant < 0) warn(t, "variant '" + v.getStr("variant") + "' not found in " + m.path);
     }
