@@ -2035,3 +2035,9 @@ The client gives the overlays its input state each frame (cursor, structure bein
 keys, input mode, pause); the editor's Scene view passes the Place tool's structure, so placement
 overlays can be checked while placing objects, and `overlay_preview` / the window's checkboxes draw
 any overlay regardless of its `when`.
+
+## Post effects (`postfx`)
+
+`game.json` and maps can have a `"postfx"` block: a list of full-screen effects (bloom, colour
+grading, LUT, vignette, tilt-shift, sun shafts, FXAA, grain, ...) with quality tiers and a frame-cost
+model. Format, parameters, tiers and MCP tools: `docs/postfx.md`.

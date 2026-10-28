@@ -232,7 +232,16 @@ void Renderer3D::bindLitFrame() {
     lights.bind();
 }
 
-void Renderer3D::render(const gfx::PassDesc& screenPass) {
+void Renderer3D::resolvePostFx() {
+    if (!post_) return;
+    PostProcess* post = post_;
+    post_ = nullptr;
+    dev_->endPass();
+    PostFrame f{viewProj_, camPos_, lighting, sceneW_ > 0 ? sceneW_ : dev_->framebufferWidth(), sceneH_ > 0 ? sceneH_ : dev_->framebufferHeight()};
+    post->resolve(*dev_, postOut_, f);
+}
+
+void Renderer3D::render(const gfx::PassDesc& screenPass, PostProcess* post) {
     drawCalls_ = 0;
     // ---- shadow pass
     if (quality_ != ShadowQuality::Off && shadowMap_.valid()) {
@@ -263,8 +272,11 @@ void Renderer3D::render(const gfx::PassDesc& screenPass) {
     lights.renderMap();
     renderReflection();   // High: mirrored pass for water (Renderer3DReflect.cpp)
 
-    // ---- main pass (left open for the caller's UI)
-    dev_->beginPass(screenPass);
+    // ---- main pass (left open for the caller's UI; with a post hook: the hook's scene target)
+    post_ = post && post->active() ? post : nullptr;
+    postOut_ = screenPass;
+    dev_->beginPass(post_ ? post_->scenePass(screenPass, sceneW_ > 0 ? sceneW_ : dev_->framebufferWidth(),
+                                             sceneH_ > 0 ? sceneH_ : dev_->framebufferHeight()) : screenPass);
     dev_->setViewport({0, 0, sceneW_ > 0 ? sceneW_ : dev_->framebufferWidth(), sceneH_ > 0 ? sceneH_ : dev_->framebufferHeight()});
     for (auto& fn : customOpaque_) fn(*dev_);
     dev_->setPipeline(litPipe_);

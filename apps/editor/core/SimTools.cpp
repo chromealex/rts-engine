@@ -24,7 +24,9 @@ const char* const kEventNames[] = {
     "chainJump", "castStart", "channelStart", "channelEnd", "alert", "garrisonChanged",
     "transitStart", "transitEnd",
     "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
-    "objective", "dialog", "camera", "missionEnd", "morale",
+    "objective", "dialog", "camera", "missionEnd",
+    "learned", "crewKilled", "crewed", "infected", "submerged", "trapFired", "groupTeleport", "paved",   // originals / fidelity
+    "morale",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
 static_assert(kEventCount == size_t(kEvMorale) + 1, "kEventNames must list every GameEvent");
