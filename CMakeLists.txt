@@ -391,7 +391,7 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
-    modules/rts/view/RtsFog.cpp
+    modules/rts/view/RtsFog.cpp modules/rts/view/RtsFieldView.cpp
     modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
 # visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
 add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
@@ -779,6 +779,10 @@ if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/OverlayOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_overlay_data)
 endif()
+# grid fields in the editor (field_* MCP ops, Scene preview)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/FieldOps.cpp)
+endif()
 
 # VFX tools (vfx tools agent): Unity particle importer tests (Python, stdlib only) and the fx_* editor
 # operations (list / get / set / delete / templates / import_unity / bind; fx_preview in the editor GUI).
@@ -874,6 +878,8 @@ else()
 endif()
 target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp
     modules/rts/RtsScriptStd.cpp)
+# grid fields (G5): data, kernels, Lua `field` table (docs/fields.md)
+target_sources(rts_game PRIVATE modules/rts/RtsGridFields.cpp modules/rts/RtsGridFieldData.cpp modules/rts/RtsGridFieldsApi.cpp)
 # the engine's standard Lua library (rule-level mechanics) is compiled in: modules/rts/lua/*.lua
 file(GLOB RTS_STD_LUA CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/*.lua)
 set(RTS_STD_LUA_H ${CMAKE_CURRENT_BINARY_DIR}/gen/RtsStdLua.h)

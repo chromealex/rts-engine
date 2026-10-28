@@ -43,7 +43,7 @@ void RtsModule::sysVision(Simulation& sim) {
     // 3D line of sight: ground height per cell (heightfield corners or cliff levels) and an occlusion
     // height that adds dynamic blockers (types with vision.blocks, smoke areas, undug rock).
     // Integer units of 1/64 so the ray test is exact and deterministic.
-    const bool losAll = los || rules_.fog.lineOfSight;
+    const bool losAll = los || rules_.fog.lineOfSight || (fields_ && fields_->blocksVision());
     std::vector<int64_t>& base = gs.visionBase;
     std::vector<int64_t>& occ = gs.visionOcc;
     if (losAll) {
@@ -87,6 +87,7 @@ void RtsModule::sysVision(Simulation& sim) {
                     for (int x = cx - rr; x <= cx + rr; ++x)
                         if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rr * rr) raise(x, y, h);
             });
+        if (fields_ && fields_->blocksVision()) fields_->occlude(sim, occ, base);   // grid fields (smoke, walls of fire)
     }
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || o.player >= np || (u.flags & kUnitOffMap)) return;
@@ -136,6 +137,8 @@ void RtsModule::sysVision(Simulation& sim) {
                     if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
                         see(o.player, size_t(y * W + x)); // tracked in visibleCells, so it fades back to explored
         });
+    if (fields_ && fields_->active())   // grid fields with a reveal effect (creep sight, burning cells light up)
+        fields_->reveal(sim, [&](uint8_t p, size_t i) { if (p < np) see(p, i); });
 }
 
 // ================================================================= creep
