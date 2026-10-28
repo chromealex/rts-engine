@@ -428,10 +428,14 @@ def flagsectors():
     m.region_names = names
     m.rect(15, 6, 2, 6, '#'); m.rect(31, 20, 2, 6, '#', sym=False)
     m.ent("fort", 1, [4, 16])
-    m.ent("robot", 1, [8, 14]); m.ent("robot", 1, [8, 18])
+    m.ent("grunt", 1, [8, 14]); m.ent("grunt", 1, [8, 18]); m.ent("sniper", 1, [9, 16])
     for i, x in enumerate([12, 20, 28]):
         m.ent("flag", 0, [x, 16 + (i % 2) * 6 - 3])
-        m.ent("factory", 0, [x - 2, 8 + (i % 2) * 14])
+        m.ent("robot_factory" if i != 1 else "vehicle_factory", 0, [x - 2, 8 + (i % 2) * 14])
+    m.ent("gatling_gun", 0, [21.5, 26.5])
+    m.ent("light_gun", 0, [29.5, 6.5])
+    m.ent("jeep", 0, [26, 26])
+    m.ent("howitzer", 0, [32.5, 16.5], sym=False)
     write("flagsectors", m, "sector_strip")
 
 

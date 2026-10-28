@@ -200,6 +200,8 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             any = true;
         }
         if (const Json& at = tj["autoTrain"]; at.isObject() && at.has("advance")) { t.autoTrainAdvance = at.getBool("advance", true); any = true; }
+        t.requiresRegions = int(tj.getInt("requiresRegions", 0));
+        if (t.requiresRegions > 0) any = true;
         t.clash = tj.getBool("clash", false);
         if (t.clash || t.crews || t.queueSlots > 1) any = true;
         if (const Json& pm = tj["playerMods"]; !pm.isNull()) {
