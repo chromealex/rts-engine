@@ -5467,7 +5467,7 @@ TEST(sphere_great_circle_steps) {
 #define GEN_GOLD_CANYONS 0x70774d541dd26061ull
 #define GEN_GOLD_LANES 0xda23759b4e7fbc56ull
 #define GEN_GOLD_CAVES 0xd348fb3d9f4d2f55ull
-#define GEN_GOLD_METAL 0xac80551c9e87e16dull
+#define GEN_GOLD_METAL 0x40cbbf2882234351ull
 #define GEN_GOLD_PLANET 0x0c2a152a97d7e02bull
 
 // ---------------- terrain / map generator (agent-terrain-gen) ----------------
