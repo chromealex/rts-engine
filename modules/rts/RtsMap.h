@@ -8,6 +8,8 @@
 #include "../../engine/data/Json.h"
 #include "../../engine/core/ECS.h"
 #include "../../engine/core/Fixed.h"
+#include "RtsSurface.h"
+#include <memory>
 
 namespace rts::game {
 
@@ -53,6 +55,10 @@ struct HpaGraph {
 
 struct MapGrid {
     int w = 0, h = 0;
+    // Planet maps (world block): the cube-sphere faces of every body stacked as rows (RtsSurface.h). Null on flat
+    // maps, where every function below keeps its classic behaviour bit for bit.
+    std::shared_ptr<const Surface> surf;
+    bool sphere() const { return surf != nullptr; }
     std::vector<uint8_t> flags;
     std::vector<int8_t> level;      // cliff level 0..9
     std::vector<int16_t> height;    // fine height in 1/16 units (visual + editor)
@@ -117,13 +123,41 @@ struct MapGrid {
     void prepareHpa(uint8_t layer) { if (bigMap()) hpaRefresh(hpaFor(layer)); } // build at load, not mid-match
     // Big maps (w*h >= hpaMinCells): long paths go through the HPA* graph and are refined with A*.
     int hpaMinCells = 256 * 256;
-    bool bigMap() const { return w * h >= hpaMinCells; }
+    bool bigMap() const { return !surf && w * h >= hpaMinCells; }
     int hpaStats[2] = {};  // queries answered by HPA*, fallbacks to plain A* (diagnostics only)
     static int clearanceFor(Fixed radius);  // body radius -> cells of clearance
     bool lineWalkable(int x0, int y0, int x1, int y1, uint8_t layer) const;
     bool nearestPassable(int& x, int& y, uint8_t layer, int radius = 12) const;
 
+    // ---- position <-> cell on any surface (flat: cellX/cellY of p.x/p.z). Grid cell index or -1.
+    int cellOf(Vec3 p) const {
+        if (surf) return surf->cellAt(p);
+        const int x = cellX(p.x), y = cellY(p.z);
+        return inside(x, y) ? index(x, y) : -1;
+    }
+    bool cellXY(Vec3 p, int& x, int& y) const {      // false: outside the map (x, y still set on flat maps)
+        if (!surf) { x = cellX(p.x); y = cellY(p.z); return inside(x, y); }
+        const int c = surf->cellAt(p);
+        x = c < 0 ? -1 : c % w; y = c < 0 ? -1 : c / w;
+        return c >= 0;
+    }
+    Vec3 centerOf(int c) const { return surf ? surf->cellCenter(c) : cellCenter(c % w, c / w); }
+    int offsetCell(int c, int dx, int dy) const {    // cell at a grid offset (across seams on spheres), -1 none
+        if (c < 0) return -1;
+        if (surf) return surf->offset(c, dx, dy);
+        const int x = c % w + dx, y = c / w + dy;
+        return inside(x, y) ? index(x, y) : -1;
+    }
+    // One step between neighbouring cells (8-connected, no corner cutting); on spheres via the neighbour table.
+    bool canMoveCells(int c0, int c1, uint8_t layer) const;
+    // Sphere: derives slopes / cliff levels from the bodies' face corners (rules terrain.model heightfield).
+    void enableSphereHeights(Fixed levelHeight);
+
 private:
+    bool findPathSphere(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out, int maxNodes, int clear, bool soft);
+    bool astarSphere(int s, int g, uint8_t layer, int maxNodes, std::vector<int>& cells);
+    bool lineWalkableSphere(int a, int b, uint8_t layer) const;
+    void updateClearanceSphere();
     int pathClear_ = 0;
     bool pathSoft_ = false;
     int pathEndA_ = -1, pathEndB_ = -1;
@@ -162,9 +196,16 @@ struct SpatialHash {
     int cell = 4, w = 0, h = 0;
     std::vector<std::vector<Entity>> buckets;
     std::vector<int32_t> used;      // non-empty buckets (reset clears only these: big maps have ~65k buckets)
+    std::shared_ptr<const Surface> surf;   // planets: buckets are coarse cube-sphere cells per body
     void reset(int worldW, int worldH, int cellSize = 4);
     void insert(Entity e, Vec3 p);
     template <class Fn> void query(Vec3 p, Fixed radius, Fn&& fn) const {
+        if (surf) {
+            thread_local std::vector<int32_t> near;
+            surf->bucketsAround(p, radius, near);
+            for (int32_t b : near) for (Entity e : buckets[size_t(b)]) fn(e);
+            return;
+        }
         int r = int((radius.raw >> Fixed::kFracBits) / cell) + 1;
         int cx = int(p.x.floorInt()) / cell, cy = int(p.z.floorInt()) / cell;
         for (int y = cy - r; y <= cy + r; ++y)

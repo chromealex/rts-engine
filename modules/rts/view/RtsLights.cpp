@@ -119,7 +119,8 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
     const bool cycle = cycle_ || preview_;
     const float glowK = cycle ? 0.55f + 0.45f * std::max(night_, dusk_) : 1.0f;
     const float haloK = cycle ? 0.15f + 0.85f * std::max(night_, dusk_ * 0.7f) : 0.35f;
-    for (const SceneObject& o : s.objects) {
+    for (size_t oi = 0; oi < s.objects.size(); ++oi) {
+        const SceneObject& o = s.objects[oi];
         if (!o.visible) continue;
         if (o.isProjectile) {
             if (o.shooterType >= types_.size()) continue;
@@ -138,16 +139,20 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
         const float scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());
         const float3 ground{o.pos.x, view.heightAt(grid, o.pos.x, o.pos.z) + ((t.layer & kLayerAir) ? 2.4f : 0.0f), o.pos.z};
         const float yaw = std::atan2(o.facing.z, o.facing.x), ph = o.pos.x * 1.7f + o.pos.z * 2.3f;
-        for (const Glow& g : L.glows) {
+        const uint32_t base = (o.entity.valid() ? o.entity.index : uint32_t(oi)) * 8u + 1u;   // stable per object
+        for (size_t gi = 0; gi < L.glows.size(); ++gi) {
+            const Glow& g = L.glows[gi];
             if (o.build < 1.0f && !g.whileBuilding) continue;
             PointLight l = glowLight(g, ground, yaw, scale, tt, ph);
+            l.key = base + uint32_t(gi);
             l.haloAlpha = haloK * std::min(l.intensity / std::max(g.intensity, 0.01f), 1.3f);
             l.beam = g.spot ? g.beam * haloK : 0.0f;   // shafts show at dusk and night
             l.intensity *= glowK;
             ls.add(l);
         }
     }
-    for (const MapLight& m : mapLights_) { // decorative lights: once the cell has been explored
+    for (size_t mi = 0; mi < mapLights_.size(); ++mi) { // decorative lights: once the cell has been explored
+        const MapLight& m = mapLights_[mi];
         if (vision && !vision->empty()) {
             int x = int(std::floor(m.x)), y = int(std::floor(m.z));
             if (!grid.inside(x, y) || (*vision)[size_t(grid.index(x, y))] == 0) continue;
@@ -155,6 +160,7 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
         PointLight l = glowLight(m, {m.x, view.heightAt(grid, m.x, m.z), m.z}, 0.0f, 1.0f, tt, m.x * 1.7f + m.z * 2.3f);
         l.intensity *= glowK;
         l.priority = 0.3f;
+        l.key = 0x40000000u + uint32_t(mi);
         l.haloAlpha = haloK;
         l.beam = m.spot ? m.beam * haloK : 0.0f;
         ls.add(l);
