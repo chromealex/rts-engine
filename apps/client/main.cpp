@@ -643,19 +643,36 @@ void GameClient::frame(gfx::Device& dev, double dt) {
     if (sim_) {
         r3d_.beginScene(cam_, dev.framebufferWidth(), dev.framebufferHeight());
         auto& gs = mod().state(*sim_);
+        {   // input state for the overlays (placement footprint / build grids, held keys, modes, cursor)
+            static const char* kModes[] = {"normal", "attack", "patrol", "place", "rally", "ability", "claim"};
+            OverlayContext oc;
+            oc.sim = sim_.get();
+            oc.player = spectator_ ? 0 : human_;
+            float3 g;
+            if (groundAt(mouseX_, mouseY_, g)) { oc.hasCursor = true; oc.cursor = g; }
+            if (mode_ == Mode::Place && placeType_ >= 0) {
+                bool ok;
+                Vec3 c = placeCentre(mouseX_, mouseY_, ok);
+                if (ok) {
+                    oc.placeType = placeType_;
+                    oc.placeAt = {float(c.x.toDouble()), 0, float(c.z.toDouble())};
+                    oc.placeOk = mod().canPlace(*sim_, human_, uint16_t(placeType_), c);
+                }
+            }
+            oc.keys = keys_; oc.keyCount = int(platform::Key::Count);
+            oc.mode = kModes[int(mode_)];
+            oc.paused = screen_ == Screen::Paused;
+            oc.over = screen_ == Screen::Over;
+            view_.setOverlayContext(oc);
+        }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
         fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
                    screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-        if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
+        if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
             if (ok) {
-                const UnitType& t = rules_.types[size_t(placeType_)];
                 bool can = mod().canPlace(*sim_, human_, uint16_t(placeType_), c);
-                uint32_t col = can ? rgba(80, 255, 120, 110) : rgba(255, 70, 60, 110);
-                float x0 = float(c.x.toDouble()) - t.footprintW * 0.5f, z0 = float(c.z.toDouble()) - t.footprintH * 0.5f;
-                r3d_.triangle({x0, 0.08f, z0}, {x0, 0.08f, z0 + t.footprintH}, {x0 + t.footprintW, 0.08f, z0 + t.footprintH}, col);
-                r3d_.triangle({x0, 0.08f, z0}, {x0 + t.footprintW, 0.08f, z0 + t.footprintH}, {x0 + t.footprintW, 0.08f, z0}, col);
                 view_.drawGhost(r3d_, uint16_t(placeType_), {float(c.x.toDouble()), 0, float(c.z.toDouble())}, can, mod().state(*sim_).grid, time_);
             }
         }

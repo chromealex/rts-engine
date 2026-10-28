@@ -93,7 +93,7 @@ class Minimap {
 public:
     void build(gfx::Device& dev, const GameState& gs, const Rules& rules);  // per match: terrain colours, texture
     void update(gfx::Device& dev, const GameState& gs, const Rules& rules, const RtsScene& scene, const std::vector<uint8_t>* vision,
-                const float3 (&viewQuad)[4], bool haveQuad);
+                const float3 (&viewQuad)[4], bool haveQuad, const std::vector<OverlayMinimapMark>* marks = nullptr);
     void release(gfx::Device& dev);
     gfx::TextureHandle texture() const { return tex_; }
     int width() const { return w_; }
