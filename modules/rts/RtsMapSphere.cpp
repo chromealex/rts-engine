@@ -20,8 +20,12 @@ bool MapGrid::canMoveCells(int c0, int c1, uint8_t layer) const {
     if (c0 < 0 || c1 < 0) return false;
     if (!surf) return stepOk(c0 % w, c0 / w, c1 % w, c1 / w, layer);
     const int k = nbIndex(*surf, c0, c1);
-    if (k < 0) return false;
-    if (!canStep(c0 % w, c0 / w, c1 % w, c1 / w, layer)) return false;
+    return k >= 0 && canMoveDir(c0, k, layer);
+}
+
+bool MapGrid::canMoveDir(int c0, int k, uint8_t layer) const {
+    const int c1 = surf->neighbor(c0, k);
+    if (c1 < 0 || !canStep(c0 % w, c0 / w, c1 % w, c1 / w, layer)) return false;
     if (k < 4) return true;
     // diagonal: both orthogonal routes through the 2x2 block must be legal (no corner cutting)
     const int o1 = surf->neighbor(c0, Surface::kDx[k] > 0 ? 0 : 1), o2 = surf->neighbor(c0, Surface::kDy[k] > 0 ? 2 : 3);
@@ -123,7 +127,7 @@ bool MapGrid::astarSphere(int start, int goal, uint8_t layer, int maxNodes, std:
         if (cur.hh < bestH) { bestH = cur.hh; best = cur.idx; }
         for (int k = 0; k < 8; ++k) {
             const int ni = surf->neighbor(cur.idx, k);
-            if (ni < 0 || !canMoveCells(cur.idx, ni, layer)) continue;
+            if (ni < 0 || !canMoveDir(cur.idx, k, layer)) continue;
             uint32_t ng = g + (k >= 4 ? 14u : 10u);
             if (pathClear_ > 0 && clearance[size_t(ni)] < pathClear_) ng += 30u * uint32_t(pathClear_ - clearance[size_t(ni)]);
             if (pathSoft_ && soft[size_t(ni)] && ni != pathEndB_) ng += 25u;
@@ -162,7 +166,18 @@ bool MapGrid::findPathSphere(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3
     if (s == gl) { out.push_back(to); return true; }
     if (goalOk && lineWalkableSphere(s, gl, layer)) { out.push_back(to); return true; }
     std::vector<int> cells;
-    const bool found = astarSphere(s, gl, layer, maxNodes, cells);
+    bool found = false, routed = false;
+    // long trips on big bodies: HPA* route refined with A* (RtsHpaSphere.cpp)
+    const int body = surf->bodyOfCell(s);
+    if (goalOk && sphereHpaBody(body)) {
+        const int N = surf->cubeOf(body).faceSize();
+        const Fixed cellsApart = (surf->cellDir(s) - surf->cellDir(gl)).length() * Fixed::fromInt(4 * N) / kFxTwoPi;
+        if (cellsApart > Fixed::fromInt(2 * SphereHpaTopo::kC)) {
+            routed = found = hpaPathSphere(s, gl, layer, cells);
+            ++hpaStats[routed ? 0 : 1];
+        }
+    }
+    if (!routed) { cells.clear(); found = astarSphere(s, gl, layer, maxNodes, cells); }
     std::vector<int> pts;
     size_t i = 0;
     const size_t window = 48;

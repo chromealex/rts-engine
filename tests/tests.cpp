@@ -6210,6 +6210,164 @@ TEST(planet_mapdoc_round_trip_and_validate) {
 }
 #endif
 
+// ---------------- Planets: HPA* on cube-sphere bodies ----------------
+namespace {
+// A planet map JSON: bodies with random obstacle blobs (seeded), walls along seams with gaps, a blocked cube corner.
+Json hpaPlanetMap(uint64_t seed, std::vector<int> faceSizes) {
+    Random rng(seed, 7);
+    Json bodies = Json::array();
+    for (size_t bi = 0; bi < faceSizes.size(); ++bi) {
+        const int N = faceSizes[bi];
+        std::vector<std::string> rows(size_t(6 * N), std::string(size_t(N), '.'));
+        auto at = [&](int f, int x, int y) -> char& { return rows[size_t(f * N + y)][size_t(x)]; };
+        for (int k = 0; k < 6 * N * N / 60; ++k) {   // blobs
+            const int f = int(rng.below(6)), x = int(rng.below(uint32_t(N))), y = int(rng.below(uint32_t(N))), r = 1 + int(rng.below(3));
+            for (int dy = -r; dy <= r; ++dy) for (int dx = -r; dx <= r; ++dx)
+                if (x + dx >= 0 && y + dy >= 0 && x + dx < N && y + dy < N && dx * dx + dy * dy <= r * r) at(f, x + dx, y + dy) = rng.below(3) ? '#' : '~';
+        }
+        for (int y = 0; y < N; ++y) if (y % 9 != 4) at(4, 0, y) = '#';   // wall on the seam 4|0 side, gaps every 9
+        for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) at(2, N - 1 - i, N - 1 - j) = '#';  // a cube corner
+        Json faces = Json::array();
+        for (int f = 0; f < 6; ++f) {
+            Json rj = Json::array();
+            for (int y = 0; y < N; ++y) rj.push(Json::string(rows[size_t(f * N + y)]));
+            Json fj = Json::object(); fj.set("rows", rj); faces.push(fj);
+        }
+        Json t = Json::object(); t.set("faces", faces);
+        Json b = Json::object();
+        b.set("id", Json::string("b" + std::to_string(bi)));
+        b.set("kind", Json::string("planet"));
+        b.set("radius", Json::number(int64_t(N / 2 + 4)));
+        b.set("faceSize", Json::number(int64_t(N)));
+        b.set("terrain", t);
+        bodies.push(b);
+    }
+    Json w = Json::object(); w.set("bodies", bodies);
+    Json m = Json::object();
+    m.set("name", Json::string("hpa"));
+    Json pl = Json::array();
+    for (int p = 0; p < 2; ++p) { Json pj = Json::object(); pj.set("name", Json::string("P")); pj.set("team", Json::number(int64_t(p + 1))); pl.push(pj); }
+    m.set("players", pl);
+    m.set("world", w);
+    return m;
+}
+int pathCost(const game::Surface& S, const std::vector<int>& cells) {
+    int c = 0;
+    for (size_t i = 1; i < cells.size(); ++i) {
+        int k = -1;
+        for (int n = 0; n < 8; ++n) if (S.neighbor(cells[i - 1], n) == cells[i]) k = n;
+        if (k < 0) return -1;
+        c += k >= 4 ? 14 : 10;
+    }
+    return c;
+}
+std::unique_ptr<Simulation> planetSim(const Json& map) {
+    SimConfig cfg; cfg.seed = 1;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(Json::parseFile(kPlanets + "/rules.json"), map);
+    return sim;
+}
+} // namespace
+
+TEST(planet_hpa_matches_astar) {
+    auto len3 = [](Vec3 from, const std::vector<Vec3>& p) { double l = 0; for (auto& q : p) { l += (q - from).length().toDouble(); from = q; } return l; };
+    for (uint64_t seed : {1u, 2u, 3u}) {
+        auto sim = planetSim(hpaPlanetMap(seed, {53, 24}));   // 53: partial clusters (16 + 16 + 16 + 5)
+        auto& g = mod(*sim).state(*sim).grid;
+        const game::Surface& S = *g.surf;
+        Random rng(seed, 3);
+        int pairs = 0, bothFound = 0, mismatch = 0, worse = 0, broken = 0, crossBody = 0, rawMismatch = 0;
+        double ratioSum = 0;
+        const uint8_t layers[2] = {game::kLayerGround, game::kLayerNaval};
+        for (int q = 0; q < 200; ++q) {
+            const int body = q % 3 == 2 ? 1 : 0, N = S.bodies[size_t(body)].faceSize;
+            const uint8_t layer = layers[(q / 3) % 2];
+            const int a = S.gridCell(body, int(rng.below(6)), int(rng.below(uint32_t(N))), int(rng.below(uint32_t(N))));
+            const int b = S.gridCell(body, int(rng.below(6)), int(rng.below(uint32_t(N))), int(rng.below(uint32_t(N))));
+            if (!g.passable(a % g.w, a / g.w, layer) || !g.passable(b % g.w, b / g.w, layer)) continue;
+            ++pairs;
+            // raw cell paths: HPA* exists iff A* exists, and every HPA* step is a legal move
+            std::vector<int> ph, pa;
+            g.sphereHpaMinCells = 0;
+            const bool fh = g.sphereCellPath(a, b, layer, true, ph), fa = g.sphereCellPath(a, b, layer, false, pa);
+            if (fh != fa) ++rawMismatch;
+            if (fh && (ph.front() != a || ph.back() != b || pathCost(S, ph) < 0)) ++broken;
+            for (size_t i = 1; fh && i < ph.size(); ++i) if (!g.canMoveCells(ph[i - 1], ph[i], layer)) ++broken;
+            // game paths (string pulled): HPA* mode vs plain unbounded A*
+            std::vector<Vec3> wh, wa;
+            g.sphereHpaMinCells = 0;
+            const bool gh = g.findPath(S.cellCenter(a), S.cellCenter(b), layer, wh, 1 << 30);
+            g.sphereHpaMinCells = 1 << 30;
+            const bool ga = g.findPath(S.cellCenter(a), S.cellCenter(b), layer, wa, 1 << 30);
+            if (gh != ga) ++mismatch;
+            if (!gh || !ga) continue;
+            ++bothFound;
+            const double lh = len3(S.cellCenter(a), wh), la = len3(S.cellCenter(a), wa);
+            ratioSum += la > 0 ? lh / la : 1.0;
+            if (lh > la * 1.15 + 4) ++worse;
+        }
+        std::vector<int> x;
+        g.sphereHpaMinCells = 0;
+        crossBody += g.sphereCellPath(S.gridCell(0, 0, 3, 3), S.gridCell(1, 0, 3, 3), game::kLayerGround, true, x);
+        std::printf("  hpa seed %d: pairs=%d both=%d mismatch=%d/%d broken=%d worse=%d ratio=%.3f hpa=%d\n", int(seed), pairs, bothFound, mismatch, rawMismatch, broken, worse, bothFound ? ratioSum / bothFound : 0.0, g.hpaStats[0]);
+        CHECK(pairs > 50 && bothFound > 40 && g.hpaStats[0] > 20);
+        CHECK(mismatch == 0 && rawMismatch == 0);
+        CHECK(broken == 0);
+        CHECK(worse == 0);
+        CHECK(ratioSum / std::max(1, bothFound) < 1.04);   // within a few % of A* on average
+        CHECK(crossBody == 0);
+    }
+}
+
+TEST(planet_hpa_incremental_equals_full_and_deterministic) {
+    auto sim = planetSim(hpaPlanetMap(5, {40}));
+    auto& g = mod(*sim).state(*sim).grid;
+    const game::Surface& S = *g.surf;
+    g.sphereHpaMinCells = 0;
+    const uint64_t before = g.hpaSphereDigest(game::kLayerGround);
+    // structures on a seam-adjacent cluster and near a cube corner, then a "dug" cell
+    g.block(S.gridCell(0, 0, 30, 30) % g.w, S.gridCell(0, 0, 30, 30) / g.w, 3, 3, +1);
+    g.block(S.gridCell(0, 4, 0, 10) % g.w, S.gridCell(0, 4, 0, 10) / g.w, 2, 4, +1);
+    const int dug = S.gridCell(0, 3, 15, 16);
+    g.flags[size_t(dug)] = 0; g.cellChanged(dug % g.w, dug / g.w);
+    const uint64_t inc = g.hpaSphereDigest(game::kLayerGround);
+    g.resetHpaSphere();
+    const uint64_t full = g.hpaSphereDigest(game::kLayerGround);
+    CHECK(inc == full);
+    CHECK(inc != before);
+    // removing the structures restores the original graph
+    g.block(S.gridCell(0, 0, 30, 30) % g.w, S.gridCell(0, 0, 30, 30) / g.w, 3, 3, -1);
+    g.block(S.gridCell(0, 4, 0, 10) % g.w, S.gridCell(0, 4, 0, 10) / g.w, 2, 4, -1);
+    g.flags[size_t(dug)] = game::kCellGround; g.cellChanged(dug % g.w, dug / g.w);
+    CHECK(g.hpaSphereDigest(game::kLayerGround) == before);
+    // same map + seed twice -> identical graph and identical paths
+    auto sim2 = planetSim(hpaPlanetMap(5, {40}));
+    auto& g2 = mod(*sim2).state(*sim2).grid;
+    g2.sphereHpaMinCells = 0;
+    CHECK(g2.hpaSphereDigest(game::kLayerGround) == before);
+    std::vector<Vec3> p1, p2;
+    const Vec3 a = S.cellCenter(S.gridCell(0, 4, 20, 20)), b = S.cellCenter(S.gridCell(0, 5, 20, 20));
+    g.findPath(a, b, game::kLayerGround, p1);
+    g2.findPath(a, b, game::kLayerGround, p2);
+    CHECK(!p1.empty() && p1 == p2 && g.hpaStats[0] > 0);
+}
+
+TEST(planet_hpa_threshold_and_slope_classes) {
+    // games/planets (faceSize 24) stays on plain A*; a 128 body uses HPA* by default
+    auto small = makeSim(kPlanets, "maps/two_worlds.json", 1);
+    auto& gs = mod(*small).state(*small).grid;
+    CHECK(!gs.sphereHpaBody(1) && !gs.sphereHpaBody(2));
+    auto big = planetSim(hpaPlanetMap(2, {105, 16}));   // 6 * 105^2 = 66150 >= 65536
+    auto& gb = mod(*big).state(*big).grid;
+    CHECK(gb.sphereHpaBody(0) && !gb.sphereHpaBody(1));
+    // slope classes: games/planets types with move.maxSlope get their own layer graphs on a heightfield body
+    const auto& R = mod(*big).rules();
+    const auto& cons = R.types[size_t(R.findType("constructor"))];
+    const auto& cmdr = R.types[size_t(R.findType("commander"))];
+    CHECK(cons.pathLayer != cmdr.pathLayer);
+    CHECK(gb.hpaSphereDigest(cons.pathLayer) != 0 && gb.hpaSphereDigest(cmdr.pathLayer) != 0);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
