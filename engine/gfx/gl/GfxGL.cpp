@@ -372,6 +372,12 @@ public:
             case BlendMode::Premultiplied:
                 glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD);
                 glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA); break;
+            case BlendMode::Multiply:
+                glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD);
+                glBlendFuncSeparate(GL_DST_COLOR, GL_ZERO, GL_ZERO, GL_ONE); break;
+            case BlendMode::Subtract:
+                glEnable(GL_BLEND); glBlendEquationSeparate(GL_FUNC_REVERSE_SUBTRACT, GL_FUNC_ADD);
+                glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ZERO, GL_ONE); break;
         }
         attribsDirty_ = true;
     }
