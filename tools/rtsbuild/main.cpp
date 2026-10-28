@@ -27,6 +27,14 @@
 //   windows  <Name>.exe + content (MSVC on Windows; MinGW cross-compiler elsewhere),
 //            otherwise a source package with build.bat
 //   linux    <Name> + content
+//
+// Toolchains (tools/rtsbuild/Toolchains.h): every build first checks what the target needs
+// (cmake, emsdk, JDK, Android SDK, Xcode, ...), also outside PATH, and puts the found folders on
+// PATH for its children. Missing tools fail the build with exit code 3 and a line
+//   RTS_MISSING_TOOLCHAIN <target>: <id>,<id>
+// (the editor offers to install them); --install-missing installs them first.
+//   rtsbuild --check-toolchain <target> [--json]      what is there / missing
+//   rtsbuild --install-toolchain <target|id>          install into ~/.rtsengine/toolchains
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -52,6 +60,7 @@
 #include "tools/rtsbuild/Branding.h"
 #include "tools/rtsbuild/FileRules.h"
 #include "tools/rtsbuild/Plugins.h"
+#include "tools/rtsbuild/Toolchains.h"
 #include "tools/models/ModelConvert.h"
 
 #ifndef RTS_SOURCE_DIR
@@ -93,6 +102,7 @@ struct Options {
     std::string chunkSize, baseSize, totalSize;
     std::string plugins;      // --plugins a,b: native plugins instead of game.json "plugins" (tools/rtsbuild/Plugins.h)
     unsigned jobs = std::max(2u, std::thread::hardware_concurrency());
+    bool installMissing = false;   // --install-missing: install what the target needs, then build
 };
 
 struct Game {
@@ -810,7 +820,7 @@ void buildWeb(const Game& g, Options& o) {
     fs::path out = o.out / "web", bdir = o.out / "_build" / "web";
     step("Web: иконки, PWA manifest, заставка");
     rts::build::brandWeb(branding(g, o), out, info);
-    if (emcmake.empty()) { info("Emscripten не найден (emsdk). Установите: https://emscripten.org/docs/getting_started — пропускаю сборку"); return; }
+    if (emcmake.empty()) die("Emscripten (emcmake) не найден, хотя проверка инструментов прошла — выполните rtsbuild --check-toolchain web");
     step("Web: конфигурация (Emscripten)");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
     rts::build::PluginSet plugins = pluginsFor(o, "web");
@@ -915,7 +925,37 @@ void usage() {
                  "                [--no-pack] [--pack-level 1..22] [--no-atlas] [--audio auto|off|desktop|mobile|web]\n"
               "                [--plugins name,name]   (native plugins; default: game.json \"plugins\")\n"
                  "                [--split | --no-split] [--chunk-size 8MB] [--base-size 40MB] [--total-size 1GB] [--fill-base]\n"
-                 "                [--estimate]  (content pack + size-report.json per target only, for the editor)\n";
+                 "                [--estimate]  (content pack + size-report.json per target only, for the editor)\n"
+                 "                [--install-missing]  (install missing toolchains into ~/.rtsengine/toolchains first)\n"
+                 "       rtsbuild --check-toolchain <target> [--json]\n"
+                 "       rtsbuild --install-toolchain <target|emsdk|cmake|jdk|android-sdk|android-ndk|android-cmake|gradle|xcode-clt>\n";
+}
+
+// What the target needs; installs it with --install-missing. false: missing (already reported).
+bool ensureToolchain(const std::string& target, const Options& o) {
+    if (o.generateOnly && target == "android") return true;   // a Gradle project needs no SDK
+    const rts::build::ToolEnv env = rts::build::ToolEnv::current();
+    rts::build::ToolchainStatus st = rts::build::checkToolchain(target, env);
+    rts::build::applyToolchainEnv(st);
+    if (!st.hostSupported || st.ok()) return true;
+    if (o.installMissing) {
+        step("Установка недостающих инструментов для " + target);
+        std::string err = rts::build::installToolchain(target, env, info);
+        st = rts::build::checkToolchain(target, env);
+        rts::build::applyToolchainEnv(st);
+        if (st.ok()) return true;
+        if (!err.empty()) { std::stringstream ss(err); for (std::string l; std::getline(ss, l);) info("ОШИБКА: " + l); }
+    }
+    step("Не хватает инструментов для " + target);
+    std::stringstream ss(st.table());
+    for (std::string l; std::getline(ss, l);) info(l);
+    std::string names;
+    for (auto& id : st.missing()) names += (names.empty() ? "" : ", ") + st.find(id)->name;
+    std::cout << "ОШИБКА: для сборки " << target << " не хватает: " << names << ".\n"
+              << "  Установить автоматически (в " << rts::build::toolchainsDir(env).string() << "): rtsbuild --install-toolchain " << target
+              << "  или сборка с --install-missing\n"
+              << rts::build::machineLine(st) << std::endl;
+    return false;
 }
 
 } // namespace
@@ -923,6 +963,8 @@ void usage() {
 int main(int argc, char** argv) {
     Options o;
     o.engine = RTS_SOURCE_DIR;
+    std::string checkTarget, installWhat;
+    bool json = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         auto next = [&]() -> std::string { if (i + 1 >= argc) { usage(); std::exit(2); } return argv[++i]; };
@@ -946,8 +988,32 @@ int main(int argc, char** argv) {
         else if (a == "--total-size") o.totalSize = next();
         else if (a == "--fill-base") o.fillBase = 1;
         else if (a == "--audio") o.audio = next();
+        else if (a == "--install-missing") o.installMissing = true;
+        else if (a == "--check-toolchain") checkTarget = next();
+        else if (a == "--install-toolchain") installWhat = next();
+        else if (a == "--json") json = true;
         else if (a == "-h" || a == "--help") { usage(); return 0; }
         else { usage(); return 2; }
+    }
+    if (!checkTarget.empty()) {
+        const rts::build::ToolEnv env = rts::build::ToolEnv::current();
+        rts::build::ToolchainStatus st = rts::build::checkToolchain(checkTarget, env);
+        if (json) {
+            Json j = st.toJson();
+            j.set("toolchainsDir", Json::string(rts::build::toolchainsDir(env).string()));
+            std::cout << j.dump(2) << std::endl;
+            return 0;
+        }
+        std::cout << st.table() << "каталог установки: " << rts::build::toolchainsDir(env).string() << std::endl;
+        if (!st.ok()) std::cout << rts::build::machineLine(st) << std::endl;
+        return st.ok() ? 0 : rts::build::kExitMissingToolchain;
+    }
+    if (!installWhat.empty()) {
+        std::string err = rts::build::installToolchain(installWhat, rts::build::ToolEnv::current(), info);
+        if (err.empty()) { std::cout << "\nУстановка завершена." << std::endl; return 0; }
+        std::stringstream ss(err);
+        for (std::string l; std::getline(ss, l);) std::cout << "ОШИБКА: " << l << std::endl;
+        return 1;
     }
     if (o.project.empty() || o.target.empty()) { usage(); return 2; }
     std::error_code ec;
@@ -992,13 +1058,13 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
-    if (findTool("cmake").empty()) die("cmake не найден в PATH");
-
     std::vector<std::string> targets;
     if (o.target == "all") targets = {"macos", "ios", "android", "web", "windows", "linux"};
     else targets = {o.target};
+    std::vector<std::string> missing;
     for (auto& t : targets) {
         o.profile = t;
+        if (!ensureToolchain(t, o)) { missing.push_back(t); continue; }
         if (t == "macos") buildMac(g, o);
         else if (t == "ios") buildIOS(g, o);
         else if (t == "android") buildAndroid(g, o);
@@ -1006,6 +1072,12 @@ int main(int argc, char** argv) {
         else if (t == "windows") buildWindows(g, o);
         else if (t == "linux") buildLinux(g, o);
         else die("неизвестная платформа: " + t);
+    }
+    if (!missing.empty()) {
+        std::string list;
+        for (auto& t : missing) list += " " + t;
+        std::cout << "\nСборка НЕ завершена: не хватает инструментов для" << list << std::endl;
+        return rts::build::kExitMissingToolchain;
     }
     std::cout << "\nСборка завершена." << std::endl;
     return 0;

@@ -511,7 +511,8 @@ if(RTS_BUILD_EDITOR OR RTS_BUILD_TOOLS)
     # Editor core: project/map documents and the operation registry shared by the editor and rtsmcp.
     add_library(rts_editor_core STATIC apps/editor/core/MapDoc.cpp apps/editor/core/MapDocPlanet.cpp apps/editor/core/Workspace.cpp apps/editor/core/Net.cpp apps/editor/core/McpInstall.cpp apps/editor/core/Projects.cpp
     apps/editor/core/DataOps.cpp apps/editor/core/BalanceOps.cpp
-    apps/editor/core/SimTools.cpp apps/editor/core/ScenarioOps.cpp apps/editor/core/SchemaOps.cpp apps/editor/core/CampaignOps.cpp)   # scenario_run, rules_lint, rules_schema keys
+    apps/editor/core/SimTools.cpp apps/editor/core/ScenarioOps.cpp apps/editor/core/SchemaOps.cpp apps/editor/core/CampaignOps.cpp
+    apps/editor/core/ToolchainOps.cpp)   # scenario_run, rules_lint, rules_schema keys
     target_link_libraries(rts_editor_core PUBLIC rts_game)
     target_include_directories(rts_editor_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
     if(WIN32)
@@ -563,6 +564,7 @@ endif()
 
 if(RTS_BUILD_TOOLS)
     add_executable(rtsbuild tools/rtsbuild/main.cpp tools/rtsbuild/FileRules.cpp tools/rtsbuild/Plugins.cpp)
+    target_sources(rtsbuild PRIVATE tools/rtsbuild/Toolchains.cpp tools/rtsbuild/ToolchainInstall.cpp)   # toolchains agent
     target_link_libraries(rtsbuild PRIVATE rts_engine rts_pack_writer rts_audiopack rts_plugins)
     add_executable(assetpipe tools/assetpipe/main.cpp)
     target_link_libraries(assetpipe PRIVATE rts_pack_writer)
@@ -651,6 +653,7 @@ if(RTS_BUILD_TESTS)
     target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_plugins)     # native plugins bridge, store/ads services
+    target_sources(rts_tests PRIVATE tools/rtsbuild/Toolchains.cpp)   # toolchain detection (fake HOME)
     if(TARGET rts_modelconv)   # model conversion step of packs (models agent)
         target_link_libraries(rts_tests PRIVATE rts_modelconv)
         target_compile_definitions(rts_tests PRIVATE RTS_TEST_MODELCONV=1)
