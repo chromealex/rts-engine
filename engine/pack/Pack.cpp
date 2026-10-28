@@ -100,7 +100,7 @@ std::unique_ptr<Pack> Pack::open(std::unique_ptr<Source> src, std::string* error
     if (src->size() < kHeaderSize || !src->read(0, h, kHeaderSize)) { fail(error, "file too small for a pack header"); return nullptr; }
     if (std::memcmp(h, "RPAK", 4) != 0) { fail(error, "not a .rpak file (bad magic)"); return nullptr; }
     uint32_t version = rd32(h + 4), flags = rd32(h + 8), count = rd32(h + 12);
-    if (version != kPackVersion) { fail(error, "unsupported pack version " + std::to_string(version)); return nullptr; }
+    if (version != kPackVersion && version != kPackVersionSplit) { fail(error, "unsupported pack version " + std::to_string(version)); return nullptr; }
     uint64_t tocOff = rd64(h + 16), tocStored = rd64(h + 24), tocRaw = rd64(h + 32), tocHash = rd64(h + 40);
     const uint64_t total = src->size();
     if (tocOff > total || tocStored > total - tocOff) { fail(error, "truncated pack (TOC out of range)"); return nullptr; }
@@ -129,13 +129,43 @@ std::unique_ptr<Pack> Pack::open(std::unique_ptr<Source> src, std::string* error
         uint32_t po = rd32(r + 32);
         uint16_t pl = uint16_t(r[36] | r[37] << 8);
         e.codec = Codec(r[38]);
+        e.chunk = version >= kPackVersionSplit ? r[39] : 0;
         if (po > strSize || pl > strSize - po) { fail(error, "corrupt TOC (path out of range)"); return nullptr; }
-        if (e.offset > total || e.storedSize > total - e.offset) { fail(error, "truncated pack (entry data out of range)"); return nullptr; }
+        if (e.chunk == 0 && (e.offset > total || e.storedSize > total - e.offset)) { fail(error, "truncated pack (entry data out of range)"); return nullptr; }
         if (e.codec != Codec::Stored && e.codec != Codec::Zstd) { fail(error, "unknown codec " + std::to_string(int(e.codec))); return nullptr; }
         if (e.codec == Codec::Stored && e.storedSize != e.rawSize) { fail(error, "corrupt entry size"); return nullptr; }
         e.path = std::string_view(p->toc_.data() + strBase + po, pl);
         if (!p->entries_.empty() && !(p->entries_.back().path < e.path)) { fail(error, "corrupt TOC (paths not sorted)"); return nullptr; }
         p->entries_.push_back(e);
+    }
+    // v2: chunk table at the end of the raw TOC.
+    if (uint64_t ct = version >= kPackVersionSplit ? rd64(h + 56) : 0; ct) {
+        const size_t n = p->toc_.size();
+        if (ct + 4 > n) { fail(error, "corrupt chunk table"); return nullptr; }
+        uint32_t cn = rd32(t + ct);
+        size_t q = size_t(ct) + 4;
+        for (uint32_t i = 0; i < cn; ++i) {
+            if (q + 8 + 32 + 2 > n) { fail(error, "corrupt chunk table"); return nullptr; }
+            ChunkInfo c;
+            c.size = rd64(t + q);
+            std::memcpy(c.sha256.data(), t + q + 8, 32);
+            uint16_t nl = uint16_t(t[q + 40] | t[q + 41] << 8);
+            q += 42;
+            if (q + nl > n || nl == 0) { fail(error, "corrupt chunk table"); return nullptr; }
+            c.file.assign(p->toc_.data() + q, nl);
+            q += nl;
+            if (c.file.find_first_of("/\\:") != std::string::npos || c.file.find("..") != std::string::npos) {
+                fail(error, "corrupt chunk table (bad chunk name)"); return nullptr;
+            }
+            p->chunks_.push_back(std::move(c));
+        }
+        p->chunkSrc_.resize(cn);
+    }
+    for (auto& e : p->entries_) {
+        if (e.chunk == 0) continue;
+        if (e.chunk > p->chunks_.size()) { fail(error, "corrupt TOC (entry in unknown chunk)"); return nullptr; }
+        const ChunkInfo& c = p->chunks_[e.chunk - 1u];
+        if (e.offset < kChunkHeaderSize || e.offset > c.size || e.storedSize > c.size - e.offset) { fail(error, "corrupt TOC (entry outside its chunk)"); return nullptr; }
     }
     p->contentHash_ = rd64(h + 48);
     p->flags_ = flags;
@@ -144,6 +174,25 @@ std::unique_ptr<Pack> Pack::open(std::unique_ptr<Source> src, std::string* error
 }
 
 Pack::~Pack() { if (dctx_) ZSTD_freeDCtx(static_cast<ZSTD_DCtx*>(dctx_)); }
+
+bool checkChunkHeader(Source& src, const ChunkInfo& info, size_t index, uint64_t contentHash, std::string* error) {
+    uint8_t h[kChunkHeaderSize];
+    if (src.size() != info.size) return fail(error, info.file + ": wrong size " + std::to_string(src.size()) + " (expected " + std::to_string(info.size) + ")");
+    if (!src.read(0, h, sizeof h) || std::memcmp(h, "RPKC", 4) != 0) return fail(error, info.file + ": not a pack chunk");
+    if (rd32(h + 4) != 1 || rd32(h + 8) != index) return fail(error, info.file + ": wrong chunk index or version");
+    if (rd64(h + 16) != contentHash) return fail(error, info.file + ": belongs to another build (content hash differs)");
+    return true;
+}
+
+bool Pack::chunkAttached(size_t index) const { return index >= 1 && index <= chunkSrc_.size() && chunkSrc_[index - 1] != nullptr; }
+
+bool Pack::attachChunk(size_t index, std::unique_ptr<Source> src, std::string* error) {
+    if (index < 1 || index > chunks_.size()) return fail(error, "no chunk " + std::to_string(index));
+    if (!src || !checkChunkHeader(*src, chunks_[index - 1], index, contentHash_, error)) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    chunkSrc_[index - 1] = std::move(src);
+    return true;
+}
 
 const Entry* Pack::find(std::string_view path) const {
     auto it = std::lower_bound(entries_.begin(), entries_.end(), path, [](const Entry& e, std::string_view k) { return e.path < k; });
@@ -160,17 +209,22 @@ bool Pack::read(const Entry& e, std::string& out, bool verify) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto failRead = [&](const char* why) { error_ = std::string(e.path) + ": " + why; return false; };
     if (e.rawSize > (uint64_t(1) << 40)) return failRead("entry too large");
+    Source* src = src_.get();
+    if (e.chunk) {
+        src = e.chunk <= chunkSrc_.size() ? chunkSrc_[e.chunk - 1u].get() : nullptr;
+        if (!src) return failRead("not downloaded yet (pack chunk)");
+    }
     std::string data(size_t(e.rawSize), '\0');
-    const uint8_t* m = src_->mapped();
+    const uint8_t* m = src->mapped();
     if (e.codec == Codec::Stored) {
         if (m) std::memcpy(data.data(), m + e.offset, data.size());
-        else if (!src_->read(e.offset, data.data(), data.size())) return failRead("read error");
+        else if (!src->read(e.offset, data.data(), data.size())) return failRead("read error");
     } else {
         const void* in = nullptr;
         if (m) in = m + e.offset;
         else {
             staging_.resize(size_t(e.storedSize));
-            if (!src_->read(e.offset, staging_.data(), staging_.size())) return failRead("read error");
+            if (!src->read(e.offset, staging_.data(), staging_.size())) return failRead("read error");
             in = staging_.data();
         }
         if (!dctx_) dctx_ = ZSTD_createDCtx();
@@ -187,6 +241,18 @@ bool PackSet::contains(std::string_view path) const {
     std::string n = normalizePath(path);
     for (auto it = packs_.rbegin(); it != packs_.rend(); ++it) if ((*it)->find(n)) return true;
     return false;
+}
+
+PackSet::State PackSet::state(std::string_view path, Pack** pack, const Entry** entry) {
+    std::string n = normalizePath(path);
+    for (auto it = packs_.rbegin(); it != packs_.rend(); ++it) {
+        if (const Entry* e = (*it)->find(n)) {
+            if (pack) *pack = it->get();
+            if (entry) *entry = e;
+            return (*it)->ready(*e) ? State::Ready : State::NotDownloaded;
+        }
+    }
+    return State::Missing;
 }
 
 bool PackSet::read(std::string_view path, std::string& out) {

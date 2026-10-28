@@ -11,6 +11,7 @@
 #include <sstream>
 #include <thread>
 
+#include "Sha256.h"
 #include "engine/core/Hash.h"
 #include "third_party/zstd/zstd.h"
 
@@ -39,6 +40,23 @@ constexpr size_t kMinCompressSize = 64;
 bool worthIt(size_t raw, size_t packed) { return packed + raw / 32 < raw; }
 
 } // namespace
+
+bool writeFileAtomic(const std::string& path, const std::string& bytes, std::string* error) {
+    std::error_code ec;
+    fs::path out(path);
+    if (out.has_parent_path()) fs::create_directories(out.parent_path(), ec);
+    // Write to a temp file and rename so a failed build never leaves a half-written file behind.
+    std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(bytes.data(), std::streamsize(bytes.size()));
+        if (!f) return fail(error, "cannot write " + tmp);
+    }
+    fs::rename(tmp, out, ec);
+    if (ec) { fs::remove(out, ec); fs::rename(tmp, out, ec); }
+    if (ec) return fail(error, "cannot write " + path + ": " + ec.message());
+    return true;
+}
 
 bool globMatch(const char* p, const char* t) {
     // Iterative wildcard match with single backtrack point (linear for typical patterns).
@@ -155,26 +173,40 @@ int PackWriter::addPack(Pack& pack, const std::string& prefix, std::string* erro
 bool PackWriter::write(const std::string& outPath, const WriteOptions& opt, WriteStats* stats, std::string* error) {
     std::string bytes;
     if (!writeToString(bytes, opt, stats, error)) return false;
-    std::error_code ec;
-    fs::path out(outPath);
-    if (out.has_parent_path()) fs::create_directories(out.parent_path(), ec);
-    // Write to a temp file and rename so a failed build never leaves a half-written pack behind.
-    std::string tmp = outPath + ".tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        f.write(bytes.data(), std::streamsize(bytes.size()));
-        if (!f) return fail(error, "cannot write " + tmp);
-    }
-    fs::rename(tmp, out, ec);
-    if (ec) { fs::remove(out, ec); fs::rename(tmp, out, ec); }
-    if (ec) return fail(error, "cannot write " + outPath + ": " + ec.message());
-    return true;
+    return writeFileAtomic(outPath, bytes, error);
 }
 
 bool PackWriter::writeToString(std::string& out, const WriteOptions& opt, WriteStats* stats, std::string* error) {
+    std::vector<std::string> chunks;
+    return build(out, chunks, opt, nullptr, stats, nullptr, error);
+}
+
+bool PackWriter::writeSplit(std::string& base, std::vector<std::string>& chunks, const WriteOptions& opt, const SplitOptions& split,
+                            WriteStats* stats, SplitResult* result, std::string* error) {
+    return build(base, chunks, opt, &split, stats, result, error);
+}
+
+bool PackWriter::writeSplitFiles(const std::string& basePath, const std::string& chunkDir, const WriteOptions& opt, const SplitOptions& split,
+                                 WriteStats* stats, SplitResult* result, std::string* error) {
+    std::string base;
+    std::vector<std::string> chunks;
+    SplitResult local;
+    SplitResult& r = result ? *result : local;
+    if (!build(base, chunks, opt, &split, stats, &r, error)) return false;
+    if (!writeFileAtomic(basePath, base, error)) return false;
+    std::error_code ec;
+    if (!chunks.empty()) fs::create_directories(chunkDir, ec);
+    for (size_t i = 0; i < chunks.size(); ++i)
+        if (!writeFileAtomic((fs::path(chunkDir) / r.chunks[i].file).string(), chunks[i], error)) return false;
+    return true;
+}
+
+bool PackWriter::build(std::string& out, std::vector<std::string>& chunkData, const WriteOptions& opt, const SplitOptions* split,
+                       WriteStats* stats, SplitResult* result, std::string* error) {
     WriteStats local;
     WriteStats& st = stats ? *stats : local;
     st = WriteStats{};
+    chunkData.clear();
 
     std::vector<size_t> order(inputs_.size());
     for (size_t i = 0; i < order.size(); ++i) order[i] = i;
@@ -233,15 +265,81 @@ bool PackWriter::writeToString(std::string& out, const WriteOptions& opt, WriteS
     worker();
     for (auto& t : pool) t.join();
     if (failed) return fail(error, "compression failed");
+    auto storedOf = [&](const Blob& b) -> const std::string& { return b.codec == Codec::Zstd ? b.stored : b.raw; };
 
+    // ---- placement: chunk index per unique blob (0 = base)
+    std::vector<uint8_t> chunkOf(blobs.size(), 0);
+    std::vector<uint64_t> chunkBytes;                 // payload sizes as we fill
+    if (split) {
+        if (split->chunkSize < 1024) return fail(error, "split: chunk size must be at least 1 KB");
+        auto matches = [](const std::vector<std::string>& globs, const std::string& path) -> int {
+            for (size_t g = 0; g < globs.size(); ++g) if (globMatch(globs[g].c_str(), path.c_str())) return int(g);
+            return -1;
+        };
+        // Rank every unique blob by the best of the paths that share it.
+        struct Ranked { size_t blob; bool mandatory; int prio; size_t first; };
+        std::vector<Ranked> ranks;
+        std::vector<long> rankIndex(blobs.size(), -1);
+        for (size_t k = 0; k < blobs.size(); ++k) {
+            size_t owner = blobs[k].dupOf >= 0 ? size_t(blobs[k].dupOf) : k;
+            const std::string& path = inputs_[order[k]].path;
+            bool mand = matches(split->base, path) >= 0;
+            int pr = matches(split->priority, path);
+            if (pr < 0) pr = int(split->priority.size());
+            if (rankIndex[owner] < 0) { rankIndex[owner] = long(ranks.size()); ranks.push_back({owner, mand, pr, k}); }
+            else { Ranked& r = ranks[size_t(rankIndex[owner])]; r.mandatory = r.mandatory || mand; r.prio = std::min(r.prio, pr); }
+        }
+        std::stable_sort(ranks.begin(), ranks.end(), [](const Ranked& a, const Ranked& b) {
+            if (a.mandatory != b.mandatory) return a.mandatory;
+            if (a.prio != b.prio) return a.prio < b.prio;
+            return a.first < b.first;
+        });
+        // Base estimate: header + uncompressed TOC (an upper bound) + aligned blobs.
+        uint64_t toc = 4;
+        for (size_t k = 0; k < blobs.size(); ++k) toc += kEntrySize + inputs_[order[k]].path.size();
+        uint64_t base = kHeaderSize + toc + 16 * 60;   // + room for a chunk table of a few entries
+        auto aligned = [](uint64_t n) { return (n + 15) & ~uint64_t(15); };
+        std::vector<std::pair<uint64_t, std::string>> mandatoryList;
+        bool baseOpen = split->fillBase;
+        for (const Ranked& r : ranks) {
+            uint64_t sz = aligned(storedOf(blobs[r.blob]).size());
+            if (r.mandatory) {
+                base += sz;
+                mandatoryList.emplace_back(sz, inputs_[order[r.first]].path);
+                continue;
+            }
+            if (baseOpen && (split->baseSize == 0 || base + sz <= split->baseSize)) { base += sz; continue; }
+            baseOpen = false; // keep download order: once something is out, everything after is out
+            if (chunkBytes.empty() || chunkBytes.back() + sz > split->chunkSize - kChunkHeaderSize) {
+                if (chunkBytes.size() >= 255) return fail(error, "split: more than 255 chunks — raise the chunk size");
+                if (sz > split->chunkSize - kChunkHeaderSize)
+                    st.warnings.push_back(inputs_[order[r.first]].path + " (" + formatBytes(sz) + ") is larger than the chunk size: it gets a chunk of its own");
+                chunkBytes.push_back(0);
+            }
+            chunkBytes.back() += sz;
+            chunkOf[r.blob] = uint8_t(chunkBytes.size());
+        }
+        if (split->baseSize && base > split->baseSize) {
+            std::sort(mandatoryList.rbegin(), mandatoryList.rend());
+            std::string msg = "split: the files that must ship with the build take " + formatBytes(base) + ", more than the limit " +
+                              formatBytes(split->baseSize) + "; largest:";
+            for (size_t i = 0; i < mandatoryList.size() && i < 5; ++i) msg += " " + mandatoryList[i].second + " (" + formatBytes(mandatoryList[i].first) + ")";
+            return fail(error, msg);
+        }
+    }
+    for (size_t k = 0; k < blobs.size(); ++k) if (blobs[k].dupOf >= 0) chunkOf[k] = chunkOf[size_t(blobs[k].dupOf)];
+
+    // ---- data: base blobs into `out`, chunked blobs into their chunk files
     out.assign(kHeaderSize, '\0');
+    chunkData.assign(chunkBytes.size(), std::string(kChunkHeaderSize, '\0'));
     std::vector<uint64_t> offsets(blobs.size());
     for (size_t k = 0; k < blobs.size(); ++k) {
         Blob& b = blobs[k];
         if (b.dupOf >= 0) { offsets[k] = offsets[size_t(b.dupOf)]; continue; }
-        while (out.size() % 16) out += '\0';
-        offsets[k] = out.size();
-        out += b.codec == Codec::Zstd ? b.stored : b.raw;
+        std::string& dst = chunkOf[k] ? chunkData[chunkOf[k] - 1u] : out;
+        while (dst.size() % 16) dst += '\0';
+        offsets[k] = dst.size();
+        dst += storedOf(b);
     }
 
     std::string toc, strings;
@@ -249,20 +347,47 @@ bool PackWriter::writeToString(std::string& out, const WriteOptions& opt, WriteS
     for (size_t k = 0; k < blobs.size(); ++k) {
         const Blob& src = blobs[k].dupOf >= 0 ? blobs[size_t(blobs[k].dupOf)] : blobs[k];
         const std::string& path = inputs_[order[k]].path;
-        uint64_t stored = src.codec == Codec::Zstd ? src.stored.size() : src.raw.size();
+        uint64_t stored = storedOf(src).size();
         put64(toc, offsets[k]); put64(toc, stored); put64(toc, src.raw.size()); put64(toc, src.hash);
         put32(toc, uint32_t(strings.size()));
         toc += char(uint8_t(path.size())); toc += char(uint8_t(path.size() >> 8));
-        toc += char(src.codec); toc += '\0';
+        toc += char(src.codec); toc += char(chunkOf[k]);
         strings += path;
         content.str(path); content.u64(src.hash);
 
         WriteStats::Item it{path, src.raw.size(), stored, src.codec, blobs[k].dupOf >= 0};
+        it.chunk = chunkOf[k];
         st.rawBytes += it.rawSize;
         if (it.duplicate) ++st.duplicates;
         st.items.push_back(std::move(it));
     }
     toc += strings;
+
+    // Chunk headers need the content hash; the chunk table needs the finished chunks.
+    uint64_t chunkTable = 0;
+    if (!chunkData.empty()) {
+        if (result) *result = SplitResult{};
+        chunkTable = toc.size();
+        put32(toc, uint32_t(chunkData.size()));
+        for (size_t c = 0; c < chunkData.size(); ++c) {
+            std::string h = "RPKC";
+            put32(h, 1); put32(h, uint32_t(c + 1)); put32(h, 0); put64(h, content.value()); put64(h, 0);
+            std::memcpy(chunkData[c].data(), h.data(), kChunkHeaderSize);
+            char name[64];
+            std::snprintf(name, sizeof name, "%s.%03zu.rpkc", split->chunkPrefix.c_str(), c + 1);
+            auto sha = sha256(chunkData[c].data(), chunkData[c].size());
+            put64(toc, chunkData[c].size());
+            toc.append(reinterpret_cast<const char*>(sha.data()), sha.size());
+            std::string nm = name;
+            toc += char(uint8_t(nm.size())); toc += char(uint8_t(nm.size() >> 8));
+            toc += nm;
+            if (result) {
+                SplitResult::Chunk ch{nm, chunkData[c].size(), 0, toHex(sha.data(), sha.size())};
+                for (auto& it : st.items) if (it.chunk == c + 1 && !it.duplicate) ++ch.files;
+                result->chunks.push_back(ch);
+            }
+        }
+    }
 
     uint32_t flags = (opt.external || external_) ? kFlagExternal : 0;
     std::string tocStored = toc;
@@ -276,14 +401,21 @@ bool PackWriter::writeToString(std::string& out, const WriteOptions& opt, WriteS
     out += tocStored;
 
     std::string h = "RPAK";
-    put32(h, kPackVersion); put32(h, flags); put32(h, uint32_t(blobs.size()));
+    put32(h, chunkData.empty() ? kPackVersion : kPackVersionSplit); put32(h, flags); put32(h, uint32_t(blobs.size()));
     put64(h, tocOff); put64(h, tocStored.size()); put64(h, toc.size());
     put64(h, hashBytes(toc.data(), toc.size()));
-    put64(h, content.value()); put64(h, 0);
+    put64(h, content.value()); put64(h, chunkTable);
     std::memcpy(out.data(), h.data(), kHeaderSize);
 
     st.packBytes = out.size();
     st.contentHash = content.value();
+    if (result) {
+        result->baseBytes = out.size();
+        result->totalBytes = out.size();
+        for (auto& c : chunkData) result->totalBytes += c.size();
+    }
+    if (split && split->totalBudget && result && result->totalBytes > split->totalBudget)
+        return fail(error, "split: the whole content takes " + formatBytes(result->totalBytes) + ", more than the limit " + formatBytes(split->totalBudget));
     return true;
 }
 
