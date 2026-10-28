@@ -352,6 +352,7 @@ void Rts2DView::submit(Renderer3D& r, const MapGrid& grid, float lh) {
         r.drawCustomShadow([this, &r](gfx::Device& dev) { batch_.flushCasters(dev, r.lightViewProj()); });
     r.drawCustom([this, &r, &grid, lh](gfx::Device& dev) {
         refreshTiles(dev, grid, lh);
+        r.lights.bind(2, 1);   // unlit sprites: day/night tint + light map (lighting agent); the lit path rebinds its frame
         SpriteLighting lighting;
         lighting.bind = [&r] { r.bindLitFrame(); };
         lighting.ref = referenceLight();

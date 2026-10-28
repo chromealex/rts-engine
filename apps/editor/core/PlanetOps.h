@@ -15,15 +15,14 @@ namespace rts::editor {
 
 void registerPlanetOps(Workspace& ws);
 
-// The body's JSON in map.extra["world"]["bodies"] (by id or decimal index); null when missing.
-Json* planetBody(MapDoc& doc, const std::string& id, std::string* err = nullptr);
+// A surface body of the open planet map (MapData::bodies, by id or decimal index); null when missing.
+DocBody* planetBody(MapDoc& doc, const std::string& id, std::string* err = nullptr);
 // Unit direction of a face point (face 0..5, a / b in cell units 0..N); float version of RtsSphere.
 render::float3 planetDir(int face, float a, float b, int faceSize);
 // One brush dab on a body (no undo snapshot; call doc.beginEdit() once per stroke). radius in cells,
-// strength as terrain_sculpt. Creates the corners array when missing. Returns the number of corners changed.
+// strength as terrain_sculpt. Returns the number of corners changed.
 int planetSculpt(MapDoc& doc, const std::string& body, Sculpt op, render::float3 dir, float radius, float strength, uint32_t seed = 1);
-// Cells within the radius get map character `cell` (rows of faces[f]) or material layer (0..3, -1 = by kind:
-// rows faces[f].material). Returns the number of cells changed.
+// Cells within the radius get map character `cell` or material layer (0..3, -1 = by kind: rows faces[f].material). Returns the number of cells changed.
 int planetPaint(MapDoc& doc, const std::string& body, render::float3 dir, float radius, char cell);
 int planetMaterial(MapDoc& doc, const std::string& body, render::float3 dir, float radius, int layer);
 

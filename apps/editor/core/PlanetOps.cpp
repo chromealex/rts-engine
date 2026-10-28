@@ -1,6 +1,7 @@
 #include "PlanetOps.h"
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <map>
 #include <stdexcept>
 #include "modules/rts/RtsMap.h"
@@ -39,39 +40,8 @@ const CornerCache& cornersOf(int N) {
     for (size_t k = 0; k < c.dirs.size(); ++k) c.dirs[k] = c.dirs[size_t(c.canon[k])];
     return cache.emplace(N, std::move(c)).first->second;
 }
-int faceSizeOf(const Json& b) { return int(std::clamp<int64_t>(b["faceSize"].integer(0), 0, 1024)); }
 
-Json& cornersArray(Json& body, int N) {
-    Json& t = body.member("terrain");
-    const size_t n = size_t(6 * (N + 1) * (N + 1));
-    Json* c = t.find("corners");
-    if (!c || !c->isArray() || c->size() != n) {
-        Json a = Json::array();
-        for (size_t i = 0; i < n; ++i) a.push(Json::number(int64_t(0)));
-        t.set("corners", a);
-        c = t.find("corners");
-    }
-    return *c;
-}
 // rows of faces[f][key], padded to N x N with `fill`
-std::vector<std::string> faceRows(Json& body, int f, int N, const char* key, char fill) {
-    std::vector<std::string> rows(size_t(N), std::string(size_t(N), fill));
-    const Json& r = body["terrain"]["faces"][size_t(f)][key];
-    for (size_t y = 0; y < r.size() && int(y) < N; ++y) {
-        const std::string s = r[y].str();
-        for (size_t x = 0; x < s.size() && int(x) < N; ++x) rows[y][x] = s[x];
-    }
-    return rows;
-}
-void setFaceRows(Json& body, int f, const char* key, const std::vector<std::string>& rows) {
-    Json& t = body.member("terrain");
-    if (!t["faces"].isArray()) t.set("faces", Json::array());
-    Json& faces = *t.find("faces");
-    while (faces.size() < 6) faces.push(Json::object());
-    Json a = Json::array();
-    for (auto& r : rows) a.push(Json::string(r));
-    faces.at(size_t(f)).set(key, a);
-}
 float angleOf(float3 a, float3 b) { return std::acos(std::clamp(dot(a, b), -1.0f, 1.0f)); }
 float3 readDir(const Json& p, int N) {
     if (p["dir"].isArray() && p["dir"].size() >= 3) return render::normalize({float(p["dir"][0].toDouble()), float(p["dir"][1].toDouble()), float(p["dir"][2].toDouble())});
@@ -82,14 +52,12 @@ float3 readDir(const Json& p, int N) {
 }
 } // namespace
 
-Json* planetBody(MapDoc& doc, const std::string& id, std::string* err) {
-    Json* w = doc.data.extra.find("world");
-    Json* bodies = w ? w->find("bodies") : nullptr;
-    if (!bodies || !bodies->isArray()) { if (err) *err = "the map has no world block (planets)"; return nullptr; }
-    for (size_t i = 0; i < bodies->size(); ++i) {
-        Json& b = bodies->at(i);
-        if (b.getStr("id") == id || std::to_string(i) == id) {
-            if (faceSizeOf(b) <= 0 || b.getStr("kind") == "star") { if (err) *err = "body '" + id + "' has no surface"; return nullptr; }
+DocBody* planetBody(MapDoc& doc, const std::string& id, std::string* err) {
+    if (!doc.data.planet()) { if (err) *err = "the map has no world block (planets)"; return nullptr; }
+    for (size_t i = 0; i < doc.data.bodies.size(); ++i) {
+        DocBody& b = doc.data.bodies[i];
+        if (b.id == id || std::to_string(i) == id) {
+            if (!b.surface()) { if (err) *err = "body '" + id + "' has no surface"; return nullptr; }
             return &b;
         }
     }
@@ -105,17 +73,16 @@ float3 planetDir(int face, float a, float b, int N) {
 }
 
 int planetSculpt(MapDoc& doc, const std::string& id, Sculpt op, float3 dir, float radius, float strength, uint32_t seed) {
-    Json* body = planetBody(doc, id);
+    DocBody* body = planetBody(doc, id);
     if (!body) return 0;
-    const int N = faceSizeOf(*body);
+    const int N = body->faceSize;
     const CornerCache& cc = cornersOf(N);
-    Json& corners = cornersArray(*body, N);
-    auto& items = corners.itemsMut();
+    std::vector<int16_t>& items = body->corners;
+    items.resize(cc.dirs.size(), 0);
     const float cellAngle = 2.0f * kQuarterPi / float(N);   // ~ one cell at the face centre
     const float ang = std::max(radius, 0.5f) * cellAngle;
     dir = render::normalize(dir);
-    // affected canonical corners with weights
-    std::vector<std::pair<int, float>> hit;
+    std::vector<std::pair<int, float>> hit;   // affected canonical corners with weights
     float target = 0, wsum = 0;
     for (size_t k = 0; k < cc.dirs.size(); ++k) {
         if (cc.canon[k] != int(k)) continue;
@@ -123,27 +90,26 @@ int planetSculpt(MapDoc& doc, const std::string& id, Sculpt op, float3 dir, floa
         if (a > ang) continue;
         const float t = 1 - a / ang;
         hit.push_back({int(k), t * t * (3 - 2 * t)});
-        target += float(items[k].integer()) * t; wsum += t;
+        target += float(items[k]) * t; wsum += t;
     }
     if (hit.empty()) return 0;
     target = wsum > 0 ? target / wsum : 0;
-    // smooth: mean of the corners within ~1.5 cells (3D neighbourhood, seam-free)
-    std::vector<float> smooth;
+    std::vector<float> smooth;   // smooth: mean of the corners within ~1.5 cells (3D, seam-free)
     if (op == Sculpt::Smooth) {
         smooth.resize(hit.size());
         const float nb = cellAngle * 1.5f;
         for (size_t h = 0; h < hit.size(); ++h) {
-            float s = 0, n = 0;
+            float sm = 0, n = 0;
             const float3 d0 = cc.dirs[size_t(hit[h].first)];
             for (size_t k = 0; k < cc.dirs.size(); ++k)
-                if (cc.canon[k] == int(k) && angleOf(cc.dirs[k], d0) <= nb) { s += float(items[k].integer()); n += 1; }
-            smooth[h] = n > 0 ? s / n : float(items[size_t(hit[h].first)].integer());
+                if (cc.canon[k] == int(k) && angleOf(cc.dirs[k], d0) <= nb) { sm += float(items[k]); n += 1; }
+            smooth[h] = n > 0 ? sm / n : float(items[size_t(hit[h].first)]);
         }
     }
     std::map<int, int16_t> out;
     for (size_t h = 0; h < hit.size(); ++h) {
         const auto [k, w] = hit[h];
-        float v = float(items[size_t(k)].integer());
+        float v = float(items[size_t(k)]);
         const float3 d = cc.dirs[size_t(k)];
         switch (op) {
             case Sculpt::Raise: v += strength * 16.0f * w; break;
@@ -160,40 +126,69 @@ int planetSculpt(MapDoc& doc, const std::string& id, Sculpt op, float3 dir, floa
         out[k] = int16_t(std::clamp(std::lround(v), -32768l, 32767l));
     }
     int changed = 0;
-    for (size_t k = 0; k < cc.dirs.size(); ++k) { // write every duplicate of a changed canonical corner
+    for (size_t k = 0; k < cc.dirs.size(); ++k) { // every duplicate of a changed canonical corner (seams equal)
         auto it = out.find(cc.canon[k]);
         if (it == out.end()) continue;
-        if (items[k].integer() != it->second) ++changed;
-        items[k] = Json::number(int64_t(it->second));
+        if (items[k] != it->second) ++changed;
+        items[k] = it->second;
     }
     doc.touched();
     return changed;
 }
 
-static int paintRows(MapDoc& doc, const std::string& id, float3 dir, float radius, const char* key, char fill, char value) {
-    Json* body = planetBody(doc, id);
+static int paintCells(MapDoc& doc, const std::string& id, float3 dir, float radius, const std::function<bool(DocBody&, int, int, int)>& set) {
+    DocBody* body = planetBody(doc, id);
     if (!body) return 0;
-    const int N = faceSizeOf(*body);
+    const int N = body->faceSize;
     const float ang = std::max(radius, 0.5f) * 2.0f * kQuarterPi / float(N);
     dir = render::normalize(dir);
     int changed = 0;
-    for (int f = 0; f < 6; ++f) {
-        std::vector<std::string> rows = faceRows(*body, f, N, key, fill);
-        bool any = false;
+    for (int f = 0; f < 6; ++f)
         for (int y = 0; y < N; ++y)
-            for (int x = 0; x < N; ++x) {
-                if (angleOf(planetDir(f, float(x) + 0.5f, float(y) + 0.5f, N), dir) > ang) continue;
-                if (rows[size_t(y)][size_t(x)] != value) { rows[size_t(y)][size_t(x)] = value; ++changed; any = true; }
-            }
-        if (any) setFaceRows(*body, f, key, rows);
-    }
+            for (int x = 0; x < N; ++x)
+                if (angleOf(planetDir(f, float(x) + 0.5f, float(y) + 0.5f, N), dir) <= ang && set(*body, f, x, y)) ++changed;
     if (changed) doc.touched();
     return changed;
 }
 
-int planetPaint(MapDoc& doc, const std::string& id, float3 dir, float radius, char cell) { return paintRows(doc, id, dir, radius, "rows", '.', cell); }
+int planetPaint(MapDoc& doc, const std::string& id, float3 dir, float radius, char cell) {
+    return paintCells(doc, id, dir, radius, [cell](DocBody& b, int f, int x, int y) {
+        char& c = b.cells[b.cellIndex(f, x, y)];
+        if (c == cell) return false;
+        c = cell;
+        return true;
+    });
+}
+
+// material rows per face: faces[f].material (digits 0..3, '.' = by cell kind), kept in DocBody::faceExtra
 int planetMaterial(MapDoc& doc, const std::string& id, float3 dir, float radius, int layer) {
-    return paintRows(doc, id, dir, radius, "material", '.', layer >= 0 && layer <= 3 ? char('0' + layer) : '.');
+    DocBody* body = planetBody(doc, id);
+    if (!body) return 0;
+    const int N = body->faceSize;
+    std::vector<std::vector<std::string>> rows(6, std::vector<std::string>(size_t(N), std::string(size_t(N), '.')));
+    for (int f = 0; f < 6 && f < int(body->faceExtra.size()); ++f) {
+        const Json& r = body->faceExtra[size_t(f)]["material"];
+        for (size_t y = 0; y < r.size() && int(y) < N; ++y) {
+            const std::string t = r[y].str();
+            for (size_t x = 0; x < t.size() && int(x) < N; ++x) rows[size_t(f)][y][x] = t[x];
+        }
+    }
+    const char v = layer >= 0 && layer <= 3 ? char('0' + layer) : '.';
+    bool touchedFace[6] = {};
+    const int n = paintCells(doc, id, dir, radius, [&](DocBody&, int f, int x, int y) {
+        char& c = rows[size_t(f)][size_t(y)][size_t(x)];
+        if (c == v) return false;
+        c = v; touchedFace[f] = true;
+        return true;
+    });
+    body->faceExtra.resize(6, Json::object());
+    for (int f = 0; f < 6; ++f) {
+        if (!touchedFace[f]) continue;
+        Json a = Json::array();
+        for (auto& r : rows[size_t(f)]) a.push(Json::string(r));
+        body->faceExtra[size_t(f)].set("material", a);
+    }
+    return n;
 }
 
 void registerPlanetOps(Workspace& ws) {
@@ -221,11 +216,11 @@ void registerPlanetOps(Workspace& ws) {
          where, [w, needMap](const Json& p) {
              needMap();
              std::string err;
-             Json* b = planetBody(w->map, p.getStr("body"), &err);
+             DocBody* b = planetBody(w->map, p.getStr("body"), &err);
              if (!b) throw std::runtime_error(err);
              Sculpt op = Sculpt::Raise;
              if (!parseSculpt(p.getStr("op"), op)) throw std::runtime_error("op must be raise, lower, smooth, flatten, noise or set");
-             const int N = int((*b)["faceSize"].integer());
+             const int N = b->faceSize;
              w->map.beginEdit();
              int n = 0;
              if (p["points"].isArray()) {
@@ -246,7 +241,7 @@ void registerPlanetOps(Workspace& ws) {
             "dir": {"type": "array", "items": {"type": "number"}}})", [w, needMap](const Json& p) {
              needMap();
              std::string err;
-             Json* b = planetBody(w->map, p.getStr("body"), &err);
+             DocBody* b = planetBody(w->map, p.getStr("body"), &err);
              if (!b) throw std::runtime_error(err);
              static const std::pair<const char*, char> kinds[] = {{"ground", '.'}, {"water", '~'}, {"blocked", '#'}, {"nobuild", ','}, {"shallow", '='}, {"ramp", '/'}, {"rock", 'R'}};
              const std::string k = p.getStr("kind");
@@ -254,7 +249,7 @@ void registerPlanetOps(Workspace& ws) {
              for (auto& [n, v] : kinds) if (k == n) c = v;
              if (!c) throw std::runtime_error("unknown kind '" + k + "'");
              w->map.beginEdit();
-             const int n = planetPaint(w->map, p.getStr("body"), readDir(p, int((*b)["faceSize"].integer())), float(p["radius"].toDouble(3)), c);
+             const int n = planetPaint(w->map, p.getStr("body"), readDir(p, b->faceSize), float(p["radius"].toDouble(3)), c);
              w->note({Change::Map, 0, 0, -1, -1, -1, "Планета " + p.getStr("body") + ": " + k});
              return okJson("Планета " + p.getStr("body") + ": «" + k + "», клеток: " + std::to_string(n));
          });
@@ -262,10 +257,10 @@ void registerPlanetOps(Workspace& ws) {
          where, [w, needMap](const Json& p) {
              needMap();
              std::string err;
-             Json* b = planetBody(w->map, p.getStr("body"), &err);
+             DocBody* b = planetBody(w->map, p.getStr("body"), &err);
              if (!b) throw std::runtime_error(err);
              w->map.beginEdit();
-             const int n = planetMaterial(w->map, p.getStr("body"), readDir(p, int((*b)["faceSize"].integer())), float(p["radius"].toDouble(3)), int(p["layer"].integer(0)));
+             const int n = planetMaterial(w->map, p.getStr("body"), readDir(p, b->faceSize), float(p["radius"].toDouble(3)), int(p["layer"].integer(0)));
              w->note({Change::Map, 0, 0, -1, -1, -1, "Планета " + p.getStr("body") + ": материал"});
              return okJson("Планета " + p.getStr("body") + ": материал, клеток: " + std::to_string(n));
          });
@@ -274,21 +269,19 @@ void registerPlanetOps(Workspace& ws) {
                    [w, needMap](const Json&) {
                        needMap();
                        Json r = Json::object(), list = Json::array();
-                       const Json& bodies = w->map.data.extra["world"]["bodies"];
-                       for (const Json& b : bodies.items()) {
+                       for (const DocBody& b : w->map.data.bodies) {
                            Json e = Json::object();
-                           for (const char* k : {"id", "kind", "radius", "faceSize", "seaLevel", "orbitAltitude"}) if (b.has(k)) e.set(k, b[k]);
-                           if (b.has("orbit")) e.set("orbit", b["orbit"]);
-                           const Json& c = b["terrain"]["corners"];
-                           if (c.size()) {
-                               int64_t mn = 1 << 30, mx = -(1 << 30);
-                               for (const Json& v : c.items()) { mn = std::min(mn, v.integer()); mx = std::max(mx, v.integer()); }
-                               e.set("heightMin", Json::number(double(mn) / 16.0, 2)); e.set("heightMax", Json::number(double(mx) / 16.0, 2));
+                           e.set("id", Json::string(b.id));
+                           for (const char* k : {"kind", "radius", "seaLevel", "orbitAltitude", "orbit"}) if (b.meta.has(k)) e.set(k, b.meta[k]);
+                           e.set("faceSize", Json::number(int64_t(b.faceSize)));
+                           if (!b.corners.empty()) {
+                               auto [mn, mx] = std::minmax_element(b.corners.begin(), b.corners.end());
+                               e.set("heightMin", Json::number(double(*mn) / 16.0, 2)); e.set("heightMax", Json::number(double(*mx) / 16.0, 2));
                            }
                            list.push(e);
                        }
                        r.set("bodies", list);
-                       r.set("start", Json::string(w->map.data.extra["world"].getStr("start")));
+                       r.set("start", Json::string(w->map.data.worldExtra.getStr("start")));
                        r.set("summary", Json::string("Тел: " + std::to_string(list.size())));
                        return r;
                    }});

@@ -1,7 +1,10 @@
 // Models: the selected type as the game draws it (portrait with its idle clip), with what its model
 // contains — clips, nodes, materials, variants, baked skinning — and the warnings of its view
-// block. Model files are watched: saving a .glb / .gltf / .obj / .fbx reloads the views.
-// Agents get the same information through the `model_info` operation.
+// block. Model files are watched: saving a model file reloads the views. Formats the runtime does
+// not read (.blend, .lwo, .x, ...) are converted to a "<file>.glb" sidecar with modelconv (next to
+// rtsbuild) when they are first used and whenever they change. Agents get the same information
+// through the `model_info` operation.
+#include <cstdio>
 #include <filesystem>
 #include "../Editor.h"
 #include "modules/rts/view/RtsPortrait.h"
@@ -130,8 +133,14 @@ public:
         bool changed = false;
         for (const auto& f : ed.view().modelFiles()) {
             std::error_code ec;
-            const auto t = fs::last_write_time(fs::path(dir) / f, ec);
+            const fs::path src = fs::path(dir) / f;
+            const auto t = fs::last_write_time(src, ec);
             if (ec) continue;
+            if (!render::isNativeModelFormat(f)) {   // converted format: keep its sidecar up to date
+                const fs::path side = fs::path(src.string() + ".glb");
+                std::error_code e2;
+                if ((!fs::exists(side, e2) || fs::last_write_time(side, e2) < t) && convert(ed, src.string())) changed = true;
+            }
             auto it = stamps_.find(f);
             if (it == stamps_.end()) stamps_[f] = t;
             else if (it->second != t) { it->second = t; changed = true; ed.ws().log("view", "модель изменена: " + f); }
@@ -140,6 +149,43 @@ public:
     }
 
 private:
+    // modelconv sits next to rtsbuild; one attempt per file and modification (no retry loops)
+    bool convert(Editor& ed, const std::string& src) {
+        std::error_code ec;
+        const auto t = fs::last_write_time(src, ec);
+        auto& tried = tried_[src];
+        if (tried == t) return false;
+        tried = t;
+        fs::path tool = fs::path(ed.ws().buildTool).parent_path() /
+#if defined(_WIN32)
+                        "modelconv.exe";
+#else
+                        "modelconv";
+#endif
+        if (!fs::exists(tool, ec)) {
+            ed.ws().log("view", "нужна конвертация " + src + ", но modelconv не найден рядом с rtsbuild");
+            return false;
+        }
+        const std::string cmd = "\"" + tool.string() + "\" \"" + src + "\" 2>&1";
+#if defined(_WIN32)
+        FILE* p = _popen(cmd.c_str(), "r");
+#else
+        FILE* p = popen(cmd.c_str(), "r");
+#endif
+        if (!p) return false;
+        std::string out;
+        char buf[256];
+        while (std::fgets(buf, sizeof buf, p)) out += buf;
+#if defined(_WIN32)
+        const int rc = _pclose(p);
+#else
+        const int rc = pclose(p);
+#endif
+        ed.ws().log("view", (rc == 0 ? "сконвертирована модель " : "не удалось сконвертировать ") + src + (rc == 0 ? std::string() : ": " + out));
+        return rc == 0;
+    }
+
+    std::map<std::string, fs::file_time_type> tried_;
     int type_ = 0, owner_ = 1;
     double time_ = 0, sinceCheck_ = 0;
     bool portraitInit_ = false, opRegistered_ = false;
