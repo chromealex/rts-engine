@@ -9,6 +9,7 @@ namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // Campaign
 #include "DataOps.h"
 #include "BalanceOps.h"
 #include "LightOps.h"
+#include "ScriptOps.h"
 #include "PostFxOps.h"
 #include "PlanetOps.h"
 #include "OverlayOps.h"
@@ -172,7 +173,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerMaterialOps(*this); registerPostFxOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerMaterialOps(*this); registerPostFxOps(*this); registerScriptOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -1138,7 +1139,7 @@ void Workspace::registerCoreOps() {
             cfg.seed = uint64_t(std::max(0, pi(p, "seed", 1)));
             Simulation sim(cfg, std::make_unique<game::RtsModule>());
             const Json simMap = mapForSim(map.toJson(), project.dir);
-            sim.setup(project.rulesJson, simMap);
+            sim.setup(project.simRules(simMap), simMap);
             auto& mod = *dynamic_cast<game::RtsModule*>(&sim.module());
             game::AIConfig ai;
             int diff = pi(p, "difficulty", 1);

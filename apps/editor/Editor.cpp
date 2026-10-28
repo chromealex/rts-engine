@@ -626,7 +626,7 @@ void Editor::startPlay(int humanSlot) {
             return true;
         };
         if (!game::applyTilesToMap(mapJson, read, &terr)) throw std::runtime_error(terr);
-        sim_->setup(ws_.project.rulesJson, mapJson);
+        sim_->setup(ws_.project.simRules(mapJson), mapJson);
         playIds_ = mapEntityIds(*sim_, *simModule(), mapJson);
         view_.lights().configure(ws_.project.manifest["lighting"], mapJson["lighting"], mapJson["lights"]); // day/night, map lights
     } catch (const std::exception& e) {

@@ -223,7 +223,10 @@ void GameClient::startMatch(size_t idx) {
         cfg.seed = uint64_t(std::time(nullptr));
         if (const char* sd = std::getenv("RTS_SEED")) cfg.seed = uint64_t(std::strtoull(sd, nullptr, 10));   // testing: reproducible matches
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
-        sim_->setup(rulesJson_, map);
+        Json rules = rulesJson_;
+        if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
+        sim_->setup(rules, map);
+        if (viewScripts_.load(*sim_, rules, map, uint8_t(spectator_ ? 0 : human_))) viewScripts_.attach(*sim_);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
         configurePostFx(map);
         quality_.reset(int(r3d_.shadowQuality()), int(r3d_.lights.quality()));
@@ -651,6 +654,21 @@ void GameClient::processEvents() {
     }
 }
 
+// View scripts: presentation requests -> notices, particle effects, sounds (never into the sim).
+void GameClient::runViewScripts(float dt) {
+    if (!viewScripts_.active()) return;
+    viewScripts_.update(*sim_, dt);
+    for (auto& r : viewScripts_.takeRequests()) {
+        if (r.kind == game::ViewRequest::Notice) notice(r.text);
+        else if (r.kind == game::ViewRequest::Effect) fx_.particles().play(r.text, {r.x, 0.5f, r.z});
+        else {
+            audio::PlayParams pp;
+            pp.positional = r.positioned; pp.x = r.x; pp.z = r.z;
+            audio_.play(r.text, pp);
+        }
+    }
+}
+
 void GameClient::frame(gfx::Device& dev, double dt) {
     time_ += dt;
     float alpha = 0;
@@ -757,6 +775,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
                        screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
             fx_.addLights(r3d_.lights);   // particle lights ("light" module)
         }
+        runViewScripts(screen_ == Screen::Playing ? float(dt) : 0.0f);
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);

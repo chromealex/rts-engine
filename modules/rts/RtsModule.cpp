@@ -27,6 +27,9 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     setupMap(sim, mapIn);
     loadTriggers(rules_, rulesJson, mapIn, triggers_);
     mechSetup(sim, mapIn);   // agent-mech
+    // Lua: the engine's standard library (rule-level mechanics, modules/rts/lua) + the game's scripts
+    script_ = std::make_unique<ScriptEngine>(*this);
+    script_->load(sim, rulesJson, mapIn);
 
     // System order is part of the rules: changing it changes outcomes (and replays).
     sim.addSystem("economy", [this](Simulation& s) { sysEconomy(s); });
@@ -36,7 +39,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (rules_.settlers) sim.addSystem("settlers", [this](Simulation& s) { sysSettlers(s); });
     if (rules_.lanes.enabled) sim.addSystem("lanes", [this](Simulation& s) { sysLanes(s); });
     sim.addSystem("garrison", [this](Simulation& s) { sysGarrison(s); });
-    sim.addSystem("waves", [this](Simulation& s) { sysWaves(s); });
+    sim.addSystem("waves", [this](Simulation& s) { script_->callStd(s, StdFn::Waves); });   // lua/waves.lua
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
     if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
@@ -54,8 +57,11 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("capture", [this](Simulation& s) { sysCapture(s); });
     sim.addSystem("creep", [this](Simulation& s) { sysCreep(s); });
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
-    sim.addSystem("victory", [this](Simulation& s) { sysVictory(s); });
-    sim.addSystem("triggers", [this](Simulation& s) { sysTriggers(s); }); // last: sees every event of the tick
+    sim.addSystem("victory", [this](Simulation& s) { script_->callStd(s, StdFn::Victory); });   // lua/victory.lua
+    sim.addSystem("triggers", [this](Simulation& s) {   // last: sees every event of the tick (lua/triggers.lua)
+        if (!triggers_.defs.empty()) script_->callStd(s, StdFn::Triggers);
+    });
+    if (script_->hasUserScripts()) sim.addSystem("scripts", [this](Simulation& s) { script_->tick(s); }); // after triggers: same events
     sysCreep(sim);
     sysEconomy(sim); // initial supply/tech counts
     // big maps: build the hierarchical pathing graph now (it is derived data, so this only moves the cost
@@ -951,23 +957,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         return;
     }
 
-    if (cmd.type == kCmdAutoBuild) {
-        uint16_t type = kNoType;
-        if (cmd.param >= 0 && size_t(cmd.param) < rules_.types.size()) {
-            if (std::find(rules_.autoBuildPool.begin(), rules_.autoBuildPool.end(), uint16_t(cmd.param)) != rules_.autoBuildPool.end()) type = uint16_t(cmd.param);
-        } else {
-            std::vector<uint16_t> options;
-            for (uint16_t t : rules_.autoBuildPool) if (canTrain(sim, cmd.player, t)) options.push_back(t);
-            if (!options.empty()) type = options[sim.rng().below(uint32_t(options.size()))];
-        }
-        if (type == kNoType || !canTrain(sim, cmd.player, type)) return;
-        Vec3 spot;
-        if (!findAutoSpot(sim, cmd.player, type, spot)) { sim.emit({kEvNotEnough, cmd.player, kNullEntity, kNullEntity, 254, {}}); return; }
-        if (!pay(sim, cmd.player, autoBuildCost(sim, cmd.player, type), {})) return;
-        gs.autoBuilt[cmd.player]++;
-        placeStructure(sim, cmd.player, type, spot, kNullEntity, false);
-        return;
-    }
+    if (cmd.type == kCmdAutoBuild) { script_->callStd(sim, StdFn::AutoBuild, {cmd.player, cmd.param}); return; }   // lua/commands.lua
 
     std::vector<Entity> sel;
     for (Entity e : cmd.units) {
@@ -1159,14 +1149,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             placeStructure(sim, cmd.player, st, cmd.point, kNullEntity, true);
             return; // one placement per command
         }
-        case kCmdSell: {
-            if (!t.structure || !t.sellable) break;
-            refund(sim, cmd.player, t.cost, rules_.sellRefund * (w.get<Unit>(e).hp / fxMax(t.maxHp, kOne)));
-            sim.emit({kEvSold, cmd.player, e, kNullEntity, w.get<Unit>(e).type, w.get<Transform>(e).pos});
-            w.get<Unit>(e).hp = Fixed{};
-            w.get<Unit>(e).flags |= kUnitSilent;
-            break;
-        }
+        case kCmdSell: script_->callStd(sim, StdFn::Sell, {cmd.player, int64_t(e.packed())}); break;   // lua/commands.lua
         case kCmdDeploy: {
             if (t.deploysTo == kNoType) break;
             Vec3 at = w.get<Transform>(e).pos;
@@ -1380,6 +1363,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);

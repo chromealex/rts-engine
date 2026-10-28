@@ -176,7 +176,9 @@ void GameClient::startNetMatch() {
         std::string terr; // 2D tile maps: same as offline, or the match desyncs from the server's replay
         if (!applyTilesToMap(map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_ = std::make_unique<Simulation>(net_->simConfig(), std::make_unique<RtsModule>());
-        sim_->setup(Json::parse(rulesText), map);
+        Json rules = Json::parse(rulesText);
+        if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
+        sim_->setup(rules, map);
         configurePostFx(map);
     } catch (const std::exception& e) {
         netError_ = e.what();

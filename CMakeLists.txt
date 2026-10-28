@@ -843,3 +843,36 @@ endif()
 if(TARGET rtsmcp)   # KTX2 zstd in rts_models: rtsmcp links no pack writer, so it takes the decoder
     target_link_libraries(rtsmcp PRIVATE rts_models rts_zstd_dec)
 endif()
+
+# ---------------------------------------------------------------------------
+# Scripting (scripting agent): Lua 5.4 (third_party/lua, MIT) compiled as C without the os / io /
+# package / debug libraries (same build on web, iOS, Android, desktop). Simulation scripts are
+# deterministic (fx numbers, float guard in rts_luaconf.h); docs/scripting.md.
+# ---------------------------------------------------------------------------
+set(RTS_LUA_SRC lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
+    llex.c lmathlib.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c
+    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c)
+list(TRANSFORM RTS_LUA_SRC PREPEND third_party/lua/)
+add_library(rts_lua STATIC ${RTS_LUA_SRC})
+target_include_directories(rts_lua PUBLIC third_party/lua)
+set_target_properties(rts_lua PROPERTIES LINKER_LANGUAGE C)
+if(MSVC)
+    target_compile_options(rts_lua PRIVATE /W0)
+else()
+    target_compile_options(rts_lua PRIVATE -w)
+endif()
+target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp
+    modules/rts/RtsScriptStd.cpp)
+# the engine's standard Lua library (rule-level mechanics) is compiled in: modules/rts/lua/*.lua
+file(GLOB RTS_STD_LUA CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/*.lua)
+set(RTS_STD_LUA_H ${CMAKE_CURRENT_BINARY_DIR}/gen/RtsStdLua.h)
+add_custom_command(OUTPUT ${RTS_STD_LUA_H}
+    COMMAND ${CMAKE_COMMAND} -DOUT=${RTS_STD_LUA_H} -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua -P ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/embed.cmake
+    DEPENDS ${RTS_STD_LUA} ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/embed.cmake VERBATIM)
+target_sources(rts_game PRIVATE ${RTS_STD_LUA_H})
+target_include_directories(rts_game PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/gen)
+target_link_libraries(rts_game PUBLIC rts_lua)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/ScriptOps.cpp)
+endif()
+target_sources(rts_game_view PRIVATE modules/rts/view/RtsViewScript.cpp)

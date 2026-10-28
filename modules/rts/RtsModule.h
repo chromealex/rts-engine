@@ -7,6 +7,7 @@
 //   RtsWorld.cpp     vision (with heights), creep, control points, regions, waves, neutrals, victory
 #pragma once
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 #include "../../engine/sim/CommonComponents.h"
@@ -14,6 +15,7 @@
 #include "RtsData.h"
 #include "RtsMap.h"
 #include "RtsTriggers.h"
+#include "RtsScript.h"
 #include "RtsMech.h"
 #include <memory>
 
@@ -457,6 +459,8 @@ struct GameState {
 // ---------------------------------------------------------------- module
 class RtsModule final : public GameModule {
 public:
+    RtsModule();
+    ~RtsModule() override;
     std::string name() const override { return "rts"; }
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
@@ -466,6 +470,7 @@ public:
 
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
+    ScriptEngine* scripts() const { return script_.get(); }   // the Lua VM (standard library + game scripts)
     // The map the simulation was set up from when the map had a "generate" block (nullptr otherwise):
     // presentation reads terrainMaterial / heights / regions from it (agent-terrain-gen).
     const Json* generatedMap() const { return generated_.isObject() ? &generated_ : nullptr; }
@@ -670,9 +675,6 @@ private:
     void sysCapture(Simulation& sim);
     void sysCreep(Simulation& sim);
     void sysVision(Simulation& sim);
-    void sysWaves(Simulation& sim);
-    void sysVictory(Simulation& sim);
-    void sysTriggers(Simulation& sim);
     void sysDungeon(Simulation& sim);     // RtsDungeon.cpp: jobs, needs, portals, territory, possession
     void setupDungeon(Simulation& sim, const Json& map);
     void applyDungeonCommand(Simulation& sim, const Command& cmd);
@@ -713,8 +715,6 @@ private:
     bool runLaneWalk(Simulation& sim, Entity e, Order& o);
     bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
     void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);
-    void runTriggerActions(Simulation& sim, size_t def, uint8_t player, Entity unit, Vec3 where);
-    bool triggerConditions(Simulation& sim, const TriggerDef& d, uint8_t player);
 
     // fidelity mechanics hooks (RtsOriginals.cpp)
     void sysOriginals(Simulation& sim);
@@ -746,6 +746,7 @@ private:
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
+    std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
     // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
     void sysFidelity(Simulation& sim);
     void hashFidelity(Simulation& sim, Hasher& h);
