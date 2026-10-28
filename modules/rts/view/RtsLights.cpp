@@ -105,6 +105,7 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
     LightSystem& ls = r.lights;
     addContactShadows(r, s, grid, view);
     ls.setNightGlow(night_ * 1.5f + dusk_ * 0.4f);
+    ls.setWaterReflections(waterRefl_);
     {   // clouds drift with the wind in game time; a storm covers the sky
         const float clouds = preview_ ? previewClouds_ : clouds_, storm = preview_ ? previewStorm_ : storm_;
         const float cover = (cycle_ || preview_) ? std::max(clouds, storm * 0.85f) : 0.0f;
@@ -132,33 +133,30 @@ void RtsLights::draw(Renderer3D& r, const RtsScene& s, double time, const std::v
         }
         if (o.type >= types_.size()) continue;
         const TypeLights& L = types_[o.type];
-        if (!L.glow || (o.build < 1.0f && !L.whileBuilding)) continue;
+        if (L.glows.empty()) continue;
         const UnitType& t = rules_->types[o.type];
         const float scale = float(t.view.getFx("scale", Fixed::fromInt(1)).toDouble());
-        float3 p{o.pos.x, view.heightAt(grid, o.pos.x, o.pos.z) + L.height * scale + ((t.layer & kLayerAir) ? 2.4f : 0.0f), o.pos.z};
-        float in = L.intensity * glowK;
-        if (L.flicker > 0) { // two incommensurate waves per object read as fire, not as a pulse
-            float ph = o.pos.x * 1.7f + o.pos.z * 2.3f;
-            in *= 1.0f + L.flicker * (0.6f * std::sin(tt * 9.0f + ph) + 0.4f * std::sin(tt * 23.0f + ph * 1.9f));
+        const float3 ground{o.pos.x, view.heightAt(grid, o.pos.x, o.pos.z) + ((t.layer & kLayerAir) ? 2.4f : 0.0f), o.pos.z};
+        const float yaw = std::atan2(o.facing.z, o.facing.x), ph = o.pos.x * 1.7f + o.pos.z * 2.3f;
+        for (const Glow& g : L.glows) {
+            if (o.build < 1.0f && !g.whileBuilding) continue;
+            PointLight l = glowLight(g, ground, yaw, scale, tt, ph);
+            l.haloAlpha = haloK * std::min(l.intensity / std::max(g.intensity, 0.01f), 1.3f);
+            l.beam = g.spot ? g.beam * haloK : 0.0f;   // shafts show at dusk and night
+            l.intensity *= glowK;
+            ls.add(l);
         }
-        PointLight l{p, L.radius * scale, L.color, in, 0};
-        l.halo = L.halo * scale;
-        l.haloAlpha = haloK * std::min(in / std::max(L.intensity, 0.01f), 1.3f);
-        ls.add(l);
     }
     for (const MapLight& m : mapLights_) { // decorative lights: once the cell has been explored
         if (vision && !vision->empty()) {
             int x = int(std::floor(m.x)), y = int(std::floor(m.z));
             if (!grid.inside(x, y) || (*vision)[size_t(grid.index(x, y))] == 0) continue;
         }
-        float in = m.intensity * glowK;
-        if (m.flicker > 0) {
-            float ph = m.x * 1.7f + m.z * 2.3f;
-            in *= 1.0f + m.flicker * (0.6f * std::sin(tt * 9.0f + ph) + 0.4f * std::sin(tt * 23.0f + ph * 1.9f));
-        }
-        PointLight l{{m.x, view.heightAt(grid, m.x, m.z) + m.height, m.z}, m.radius, m.color, in, 0.3f};
-        l.halo = std::max(m.halo, 0.0f);
+        PointLight l = glowLight(m, {m.x, view.heightAt(grid, m.x, m.z), m.z}, 0.0f, 1.0f, tt, m.x * 1.7f + m.z * 2.3f);
+        l.intensity *= glowK;
+        l.priority = 0.3f;
         l.haloAlpha = haloK;
+        l.beam = m.spot ? m.beam * haloK : 0.0f;
         ls.add(l);
     }
     emitActive(ls, time);

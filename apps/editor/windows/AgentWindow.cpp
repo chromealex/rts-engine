@@ -20,7 +20,7 @@ public:
         ImGui::TextWrapped("Подключить агента (Claude Code):");
         ImGui::TextDisabled("%s", cmd.c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Копировать")) ImGui::SetClipboardText(cmd.c_str());
+        if (ImGui::SmallButton(ICON_COPY " Копировать")) ImGui::SetClipboardText(cmd.c_str());
         ImGui::Checkbox("Камера Scene следует за правками агента", &ed.followAgent);
         ImGui::SeparatorText("Действия");
         ImGui::BeginChild("##feed", ImVec2(0, 0), ImGuiChildFlags_Borders);

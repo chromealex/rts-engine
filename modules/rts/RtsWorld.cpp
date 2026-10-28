@@ -45,25 +45,73 @@ void RtsModule::sysVision(Simulation& sim) {
             if (v != 2) { v = 2; gs.visibleCells[q].push_back(int32_t(i)); }
         }
     };
+    // 3D line of sight: ground height per cell (heightfield corners or cliff levels) and an occlusion
+    // height that adds dynamic blockers (types with vision.blocks, smoke areas, undug rock).
+    // Integer units of 1/64 so the ray test is exact and deterministic.
+    const bool losAll = los || rules_.fog.lineOfSight;
+    std::vector<int64_t>& base = gs.visionBase;
+    std::vector<int64_t>& occ = gs.visionOcc;
+    if (losAll) {
+        const size_t n = size_t(W) * size_t(H);
+        {   // terrain can change (digging, sculpt ops): rebuilt on every vision pass, W*H additions
+            base.assign(n, 0);
+            const int64_t lv = sumUnits(rules_.levelHeight);
+            for (int y = 0; y < H; ++y)
+                for (int x = 0; x < W; ++x)
+                    base[size_t(y * W + x)] = g.hf ? cellSum(x, y) : int64_t(g.level[size_t(y * W + x)]) * lv;
+        }
+        occ = base;
+        auto raise = [&](int x, int y, int64_t h) {
+            if (x < 0 || y < 0 || x >= W || y >= H) return;
+            int64_t& o = occ[size_t(y * W + x)];
+            o = std::max(o, base[size_t(y * W + x)] + h);
+        };
+        const int64_t rock = sumUnits(rules_.fog.rockHeight);
+        if (rock > 0 && g.dig.size() == n)
+            for (size_t i = 0; i < n; ++i) if (g.dig[i]) occ[i] = std::max(occ[i], base[i] + rock);
+        w.each<Unit, Transform>([&](Entity, Unit& u, Transform& tr) {
+            const UnitType& t = rules_.types[u.type];
+            if (t.visionBlock.raw <= 0 || u.hp.raw <= 0) return;
+            const int64_t h = sumUnits(t.visionBlock);
+            if (t.structure) {
+                const Fixed half = Fixed::fromRatio(1, 2);
+                const int x0 = int((tr.pos.x - Fixed::fromInt(t.footprintW) / 2 + half).floorInt()), y0 = int((tr.pos.z - Fixed::fromInt(t.footprintH) / 2 + half).floorInt());
+                for (int y = 0; y < t.footprintH; ++y) for (int x = 0; x < t.footprintW; ++x) raise(x0 + x, y0 + y, h);
+            } else {
+                raise(int(tr.pos.x.floorInt()), int(tr.pos.z.floorInt()), h);
+            }
+        });
+        if (rules_.advancedEffects)
+            w.each<Area, Transform>([&](Entity, Area& a, Transform& tr) {
+                if (a.effList < 0 || sim.tick() < a.fireAt) return;
+                const EffectDef& ef = rules_.payloads[size_t(a.effList)][size_t(a.effIndex)];
+                if (ef.delivery.blocksVision.raw <= 0) return;
+                const int64_t h = sumUnits(ef.delivery.blocksVision);
+                const int rr = int(a.radius.floorInt()), cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+                for (int y = cy - rr; y <= cy + rr; ++y)
+                    for (int x = cx - rr; x <= cx + rr; ++x)
+                        if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rr * rr) raise(x, y, h);
+            });
+    }
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || o.player >= np || (u.flags & kUnitInHand)) return;
         const UnitType& t = rules_.types[u.type];
         int r = int(stat(sim, e, Stat::Sight).toInt());
         int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
         const bool air = (t.layer & kLayerAir) != 0;
-        if (los && !air && g.inside(cx, cy)) {
-            const int64_t eye = cellSum(cx, cy) + eyeUp;
+        if (losAll && !air && !t.seesOver && g.inside(cx, cy)) {
+            const int64_t eye = base[size_t(cy * W + cx)] + eyeUp + sumUnits(t.eyeHeight);
             for (int y = std::max(0, cy - r); y <= std::min(H - 1, cy + r); ++y)
                 for (int x = std::max(0, cx - r); x <= std::min(W - 1, cx + r); ++x) {
                     int dx = x - cx, dy = y - cy;
                     if (dx * dx + dy * dy > r * r) continue;
-                    // march the cells between eye and target: hidden if the ground rises above the sight line
+                    // march the cells between eye and target: hidden if ground or a blocker rises above the sight line
                     const int k = std::max(std::abs(dx), std::abs(dy));
-                    const int64_t tgt = cellSum(x, y) + targetUp;
+                    const int64_t tgt = base[size_t(y * W + x)] + targetUp;
                     bool visible = true;
-                    for (int s = 1; s < k && visible; ++s) {
-                        int sx = cx + (dx * s * 2 + (dx >= 0 ? k : -k)) / (2 * k), sy = cy + (dy * s * 2 + (dy >= 0 ? k : -k)) / (2 * k);
-                        if (cellSum(sx, sy) * k > eye * (k - s) + tgt * s) visible = false;
+                    for (int st = 1; st < k && visible; ++st) {
+                        int sx = cx + (dx * st * 2 + (dx >= 0 ? k : -k)) / (2 * k), sy = cy + (dy * st * 2 + (dy >= 0 ? k : -k)) / (2 * k);
+                        if (occ[size_t(sy * W + sx)] * k > eye * (k - st) + tgt * st) visible = false;
                     }
                     if (visible) see(o.player, size_t(y * W + x));
                 }

@@ -4,6 +4,13 @@
 //   "light":      { "color": [1, 0.6, 0.3], "radius": 4, "intensity": 1.5, "height": 1.2,
 //                   "flicker": 0.2, "halo": 0.8, "whileBuilding": false }   constant light
 //                   ("halo": world size of the glow sprite, false = none; default radius * 0.2)
+//                 or an array of such lights (headlights + engine glow, ...). Spot lights:
+//                   "type": "spot", "angle": 40 (cone, degrees), "softness": 0.35, "pitch": 35
+//                   (degrees below the horizon), "yaw": 0 (degrees from the object's facing),
+//                   "sweep": 45, "sweepSpeed": 25 (searchlight swing, degrees and degrees/s),
+//                   "offset": [forward, side] (in the object's frame, e.g. headlights [0.5, ±0.2]),
+//                   "beam": 0.45 (visible light shaft, 0 = none; default only for height >= 1.5).
+//                   Spot defaults: radius 9, intensity 2.2, height 1.5, white.
 //   "attackLight":     { "color", "radius", "intensity", "time", "halo" }   muzzle flash
 //   "projectileLight": { "color", "radius", "intensity", "halo" }           its projectiles
 //   "hitLight":        { ... }                                              impact of its attacks
@@ -23,11 +30,13 @@
 //     "clouds": 0.5,      cloud shadow coverage 0..1 (0 = clear sky)
 //     "cloudStrength": 0.45, "cloudScale": 1, "wind": [1.2, 0.5]   (world units / s)
 //     "storm": 0,         0..1: overcast + lightning flashes (deterministic in game time)
+//     "waterReflections": true,   planar reflections on water (High tier only)
 //     "preset": "desert" }   desert | snow | volcanic | overcast | cave (underground: permanent
 //                         night, almost no ambient); sets palettes and defaults, fields still win
 // Decorative lights (lanterns, lava, campfires) in the map's "lights" array:
 //   [{ "x": 10, "z": 12, "height": 1, "color": [1, 0.6, 0.3], "radius": 4, "intensity": 1.5,
 //      "flicker": 0.2, "halo": 0.8 }]   ("pos": [x, z] works too); shown once the cell is explored.
+//   Spot fields as for types; "yaw" is absolute here (0 = +X, 90 = +Z).
 // Without the block the scene keeps the renderer's default (noon) lighting.
 // Testing: RTS_TIME_OF_DAY=0..1 sets the start time, RTS_NIGHT=0..1 forces a fixed night amount.
 // At night emissive materials glow brighter (Renderer3D::lights.setNightGlow).
@@ -55,7 +64,20 @@ public:
     void setNight(float n) { forcedNight_ = n; }          // < 0: follow the cycle
     // Editor preview: overrides time of day / clouds / storm until switched off.
     void setPreview(bool on, float timeOfDay, float clouds, float storm) { preview_ = on; previewTime_ = timeOfDay; previewClouds_ = clouds; previewStorm_ = storm; }
-    struct MapLight { render::float3 color{1, 0.6f, 0.3f}; float x = 0, z = 0, height = 1, radius = 4, intensity = 1.5f, flicker = 0, halo = -1; };
+    // A constant light (an entry of a type's "light", or a map light): point or spot.
+    struct Glow {
+        render::float3 color{1, 0.62f, 0.32f};
+        float radius = 4, intensity = 1.5f, height = 1, flicker = 0, halo = -1;
+        bool whileBuilding = false, spot = false;
+        float angle = 40, softness = 0.6f, pitch = 35, yaw = 0, sweep = 0, sweepSpeed = 25;
+        float beam = 0.45f;            // spot: visible light shaft strength (0 = none)
+        float forward = 0, side = 0;   // offset in the object's frame
+    };
+    struct MapLight : Glow { float x = 0, z = 0; };
+    static Glow parseGlow(const Json& j);
+    // The renderer light of a Glow standing on `ground`, facing `yaw` (radians, 0 = +X) at time t
+    // (flicker, sweep; `phase` desynchronises objects). Intensity before day/night scaling.
+    static render::PointLight glowLight(const Glow& g, render::float3 ground, float yaw, float scale, float t, float phase);
     static std::vector<MapLight> parseMapLights(const Json& lights);
     const std::vector<MapLight>& mapLights() const { return mapLights_; }
     float night() const { return night_; }
@@ -66,9 +88,7 @@ public:
 
     struct Flash { bool on = false; render::float3 color; float radius = 0, intensity = 0, time = 0, halo = -1; };
     struct TypeLights {
-        bool glow = false, whileBuilding = false;
-        render::float3 color;
-        float radius = 0, intensity = 0, height = 1, flicker = 0, halo = 0;
+        std::vector<Glow> glows;         // constant lights ("light": object or array)
         float contact = -1;          // < 0 automatic
         bool contactBox = false;
         Flash attack, projectile, hit, death;
@@ -99,6 +119,7 @@ private:
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
     float lightning_ = 0;
     std::string preset_;
+    bool waterRefl_ = true;
     Palette day_, night_p_;
     bool preview_ = false;
     float previewTime_ = 0.5f, previewClouds_ = 0, previewStorm_ = 0;

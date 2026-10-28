@@ -153,6 +153,9 @@ struct UnitType {
     bool invulnerable = false;
     // body / movement
     Fixed radius = Fixed::fromRatio(1, 2);     // body radius: collisions, pathing clearance, edge-to-edge ranges
+    Fixed visionBlock{};                       // "vision": {"blocks": h} — sight blocker of that height over its cells (trees, walls)
+    Fixed eyeHeight{};                         // "vision": {"eye": h} — extra eye height (watch towers see further over obstacles)
+    bool seesOver = false;                     // "vision": {"seesOver": true} — ignores obstacles (air units always do)
     Fixed mass = Fixed::fromInt(1);            // push resistance (default 4 * radius^2)
     uint8_t layer = kLayerGround;
     uint8_t pathLayer = kLayerGround;          // layer | slope class << 4: what pathing / passability get
@@ -294,6 +297,11 @@ enum class FogMode : uint8_t { Full, Explored, None };
 struct FogRules {
     FogMode mode = FogMode::Full;
     bool shareAllies = true;                  // allies see what each other sees
+    // 3D line of sight on any terrain model: ground heights (cliff levels or heightfield) and
+    // dynamic blockers (types with vision.blocks, smoke areas, undug rock) hide what lies behind.
+    // Heightfield maps with heights.blockVision use line of sight anyway.
+    bool lineOfSight = false;
+    Fixed rockHeight = Fixed::fromInt(2);     // undug diggable rock as a blocker (0 = transparent)
 };
 
 struct HeightRules {

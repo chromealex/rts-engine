@@ -37,7 +37,14 @@
     "regions": "Regions: {count}",
     "claim": "Claim",
     "auto_build": "Build",
-    "menu": "Menu"
+    "menu": "Menu",
+    "dig": "Dig",
+    "undig": "Undig",
+    "erase_room": "Remove room",
+    "road": "Road",
+    "remove_road": "Remove road",
+    "drop": "Drop ({count}/{max})",
+    "release": "Leave body"
   },
 
   "mode": {
@@ -46,7 +53,16 @@
     "rally": "Rally point",
     "ability": "Ability: choose a target",
     "claim": "Choose a neighbouring region",
-    "place": "Build: choose a place (Esc to cancel)"
+    "place": "Build: choose a place (Esc to cancel)",
+    "skill": "{name}: choose a target",
+    "dig": "Dig: drag over rock (right click: done)",
+    "undig": "Drag to clear dig marks",
+    "room": "{name}: drag over your floor (right click: done)",
+    "erase_room": "Remove room: drag over it",
+    "road": "Road: drag to lay it (right click: done)",
+    "remove_road": "Remove road: drag over it",
+    "drop": "Drop: click a spot (Shift: everyone)",
+    "possessed": "WASD or right button: walk, left button: attack, Esc: leave"
   },
 
   "card": {
@@ -78,7 +94,12 @@
     "reinforce": "Reinforce",
     "hero": "Level {level}  (XP {xp})",
     "energy": "Energy {energy}/{max}",
-    "cancel_build": "Cancel construction"
+    "cancel_build": "Cancel construction",
+    "cooldown": "in {seconds} s",
+    "pick_up": "To hand",
+    "slap": "Slap",
+    "possess": "Possess",
+    "connect_road": "Connect road"
   },
 
   "pause": {
@@ -112,7 +133,13 @@
     "send_hint_touch": "Swipe from your building to a target",
     "shadows": "Shadows",
     "leave_match": "Leave match",
-    "ping": "ping {ms} ms"
+    "ping": "ping {ms} ms",
+    "howto": "How to play",
+    "howto_like": "Plays like:",
+    "howto_goal": "Goal",
+    "howto_steps": "How to play",
+    "howto_tip": "Tip",
+    "close": "Close"
   },
 
   "lobby": {

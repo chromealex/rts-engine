@@ -1,0 +1,13 @@
+// sporelanes — en. Keys: modules/rts/RtsLocalize.h; how-to keys: engine/ui docs.
+{
+  "@language": "English",
+
+  // how to play (UI: "How to play" screen)
+  "howto.like": "Mushroom Wars 2 and Galcon: garrisons grow by themselves and squads march along lanes between buildings.",
+  "howto.goal": "Capture every enemy building.",
+  "howto.tip": "Strike from two sides at once: the enemy cannot shift spores in time.",
+  "howto.step1": "The hive, huts and towers grow spores; the hive holds up to 40 and grows fastest.",
+  "howto.step2": "Drag from your building to a target: the squad takes the nearest lane. The share sent is on the card, or keys 1–4.",
+  "howto.step3": "Opposing squads on one lane collide and die — pick empty paths.",
+  "howto.step4": "Towers hit squads walking past."
+}
