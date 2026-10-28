@@ -123,17 +123,29 @@ Json result(const FxCheck& c, const std::string& summary) {
 // "#rrggbb" multiply + uniform scale of everything with a length in it (templates).
 void tintAndScale(fx::EffectDef& d, fx::float4 tint, float k) {
     auto mulc = [&](std::vector<fx::FxColorKey>& keys) { for (auto& c : keys) { c.rgba.x *= tint.x; c.rgba.y *= tint.y; c.rgba.z *= tint.z; } };
+    for (auto& f : d.forceFields) { f.position = f.position * k; f.radius *= k; f.startRadius *= k; f.length *= k; f.direction = f.direction * k; f.gravity *= k; }
     for (auto& e : d.emitters) {
         mulc(e.color);
         mulc(e.trail.color);
         if (e.light.enabled) { e.light.color.x *= tint.x; e.light.color.y *= tint.y; e.light.color.z *= tint.z; e.light.radius *= k; }
-        e.size = {e.size.min * k, e.size.max * k};
-        e.speed = {e.speed.min * k, e.speed.max * k};
+        e.size.scale(k);
+        e.speed.scale(k);
         e.radius *= k; e.gravity = e.gravity * k; e.offset = e.offset * k; e.box = e.box * k; e.velocity = e.velocity * k;
-        e.noise.strength *= k; e.noise.frequency /= k; e.speedLimit *= k; e.collision.height *= k;
-        if (e.perMeter > 0) e.perMeter /= k;
-        e.colorSpeed = {e.colorSpeed.min * k, e.colorSpeed.max * k};
-        e.sizeSpeed = {e.sizeSpeed.min * k, e.sizeSpeed.max * k};
+        e.noise.strength.scale(k); e.noise.frequency /= k; e.speedLimit.scale(k); e.collision.height *= k;
+        if (e.perMeter.max > 0 || e.perMeter.curved()) e.perMeter.scale(1 / k);
+        e.colorSpeed.scale(k);
+        e.sizeSpeed.scale(k);
+        // the rest of Unity's modules (lengths and speeds)
+        e.donutRadius *= k; e.length *= k; e.randomPosition *= k;
+        if (e.size3D) { e.sizeY.scale(k); e.sizeZ.scale(k); }
+        auto& v = e.velocityOverLife;
+        v.x.scale(k); v.y.scale(k); v.z.scale(k); v.radial.scale(k); v.orbitalOffset = v.orbitalOffset * k;
+        e.force.x.scale(k); e.force.y.scale(k); e.force.z.scale(k);
+        if (e.speedLimitAxes.enabled) { e.speedLimitAxes.x.scale(k); e.speedLimitAxes.y.scale(k); e.speedLimitAxes.z.scale(k); }
+        e.spinBySpeed.speed.scale(k); e.lifeBySpeed.speed.scale(k); e.framesBySpeed.scale(k);
+        for (auto& pl : e.collision.planes) pl.point = pl.point * k;
+        for (auto& sv : e.trigger.volumes) { sv.center = sv.center * k; sv.radius *= k; }
+        if (e.trail.minDistance > 0) e.trail.minDistance *= k;
     }
 }
 

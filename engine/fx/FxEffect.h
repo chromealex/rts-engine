@@ -91,6 +91,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 #include "../data/Json.h"
 #include "../render/Math3D.h"
@@ -132,6 +133,12 @@ struct FxRange {
     bool constant() const { return !curved() && min == max; }
     float at(float t, float r) const;               // t 0..1 (clamped), r 0..1 (random per particle)
     float average() const;                          // over t and r
+    void scale(float k) {                           // every value (bounds and curves) times k
+        min *= k; max *= k;
+        if (min > max) std::swap(min, max);
+        for (auto& c : curve) c.k *= k;
+        for (auto& c : curveMin) c.k *= k;
+    }
     bool operator==(const FxRange&) const = default;
 };
 float sampleKeys(const std::vector<FxSizeKey>& keys, float t, float def = 1);   // piecewise linear, clamped

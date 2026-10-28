@@ -64,6 +64,15 @@ struct Reader {
         char m[96];
         std::snprintf(m, sizeof m, "must be in %g..%g", double(lo), double(hi));
         if (j.isNumber()) { float x = num(j, 0); if (x < lo || x > hi) return fail(key, m); r = {x, x}; return; }
+        if (j.isArray() && j.size() > 0 && j[size_t(0)].isArray()) {   // [[t, v], ...]: shorthand for { "curve": ... }
+            FxRange c;
+            if (!keysIn(j, c.curve, -1e9f, 1e9f)) return fail(key, "expected [[t, value], ...]");
+            c.min = 1e30f; c.max = -1e30f;
+            for (auto& k : c.curve) { c.min = std::min(c.min, k.k); c.max = std::max(c.max, k.k); }
+            if (c.min < lo || c.max > hi) return fail(key, m);
+            r = c;
+            return;
+        }
         if (j.isObject()) {
             for (auto& [k, v] : j.members())
                 if (k != "curve" && k != "curveMin" && k != "comment") return fail(std::string(key) + "." + k, "unknown field (curve, curveMin)");
@@ -251,7 +260,7 @@ bool qualityFromName(const std::string& s, FxQuality& out) {
 float EmitterDef::endTime() const {
     if (loop && (continuous() || !bursts.empty())) return std::numeric_limits<float>::infinity();
     float t = continuous() ? duration : 0.0f;
-    for (auto& b : bursts) t = std::max(t, b.time + float(std::max(0, b.cycles - 1)) * b.interval);
+    for (auto& b : bursts) t = std::max(t, b.cycles > 0 ? b.time + float(b.cycles - 1) * b.interval : std::max(duration, b.time));
     return delay.max + t;
 }
 
