@@ -17,6 +17,10 @@
     {
       "file": "maps/two_worlds.json",
       "title": "Two Worlds (1v1)"
+    },
+    {
+      "file": "maps/big_planet.json",
+      "title": "Big Planet (1v1, flow fields)"
     }
   ],
   "orientation": "landscape",

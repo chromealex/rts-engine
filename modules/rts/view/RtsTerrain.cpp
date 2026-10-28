@@ -4,6 +4,7 @@
 #include "RtsTerrainSurface.h"
 #include "RtsView.h"
 #include <algorithm>
+#include <cstdio>
 
 namespace rts::game {
 
@@ -13,7 +14,19 @@ using namespace render;
 // mesh: heightfield corners (two triangles per cell) when the map has them, otherwise levels + fine
 // heights + ramps.
 float RtsView::heightAt(const MapGrid& g, float x, float z) const {
+    if (terrain_.detailActive()) return terrain_.surfaceAt(g, x, z);   // the sub-cell detail surface that is drawn
     return terrain::heightAt(g, rules_ ? float(rules_->levelHeight.toDouble()) : 1.5f, x, z);
+}
+
+void RtsView::setTerrainDetail(const Json& map) {
+    terrain::DetailSurface d;
+    std::vector<uint8_t> splat;
+    std::string err;
+    if (terrain::loadMapDetail(map, read_, d, splat, &err)) terrain_.setDetail(&d, &splat);
+    else {
+        if (!err.empty()) std::fprintf(stderr, "[terrain] %s\n", err.c_str());
+        terrain_.setDetail(nullptr);
+    }
 }
 
 void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {

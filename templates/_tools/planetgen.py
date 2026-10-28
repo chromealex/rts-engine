@@ -94,7 +94,54 @@ def compact(obj):
     import re
     return re.sub(r'\[\s+(-?\d+(?:,\s+-?\d+)*)\s+\]', lambda m: '[' + ', '.join(m.group(1).split(',\n')).replace('\n', '').replace('  ', ' ') + ']', s)
 
+def build_big():
+    """Big Planet: faceSize 128 (98k cells: planet HPA* active), rocky obstacles and lakes, groups of 8+ and the
+    scripted swarms march along shared flow fields (map movement.flowField)."""
+    import random
+    N = 128
+    rng = random.Random(11)
+    rows = [['.'] * N for _ in range(6 * N)]
+    for _ in range(6 * N * N // 90):
+        f, x, y, r = rng.randrange(6), rng.randrange(N), rng.randrange(N), rng.randint(1, 4)
+        if f in (4, 5) and abs(x - N / 2) < 16 and abs(y - N / 2) < 16: continue   # keep the bases clear
+        ch = '#' if rng.random() < 0.65 else '~'
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                if 0 <= x + dx < N and 0 <= y + dy < N and dx * dx + dy * dy <= r * r: rows[f * N + y + dy][x + dx] = ch
+    faces = [{"rows": [''.join(rows[f * N + y]) for y in range(N)]} for f in range(6)]
+    ents = []
+    c = N / 2 + 0.5
+    def both(t, x, y, owner=0):
+        ents.append({"type": t, "owner": owner, "at": at("terra", 4, x, y)})
+        f, mx, my = mirror(4, x, y, N)
+        ents.append({"type": t, "owner": (3 - owner) if owner else 0, "at": at("terra", f, mx, my)})
+    both("commander", c, c, 1)
+    for (dx, dy) in [(-6, -6), (6, -6), (-6, 6), (6, 6), (0, -10), (0, 10)]: both("metal_spot", c + dx, c + dy)
+    for (dx, dy) in [(-11, 0), (11, 0)]: both("wreck_rock", c + dx, c + dy)
+    for f in (0, 1, 2, 3):
+        for (dx, dy) in [(0, 0), (-20, 20), (20, -20)]:
+            ents.append({"type": "metal_spot", "owner": 0, "at": at("terra", f, c + dx, c + dy)})
+    return {
+        "name": "Big Planet",
+        "players": [{"name": "Синие", "team": 1, "start": at("terra", 4, c, c)},
+                    {"name": "Красные", "team": 2, "start": at("terra", 5, N - c, c)}],
+        "movement": {"flowField": {"minGroup": 8}},
+        "world": {
+            "start": "terra",
+            "bodies": [
+                {"id": "sun", "kind": "star", "radius": 60, "visual": {"color": [255, 220, 160]}},
+                {"id": "terra", "kind": "planet", "radius": 80, "faceSize": N, "seaLevel": -2, "orbitAltitude": 10,
+                 "orbit": {"around": "sun", "radius": 1000, "period": 1200, "phase": 0.1},
+                 "terrain": {"faces": faces, "corners": corners(N, lambda d: terra_height(d) * 3)}},
+            ],
+        },
+        "entities": ents,
+    }
+
 if __name__ == "__main__":
     path = os.path.join(ROOT, "planets", "maps", "two_worlds.json")
     with open(path, "w", encoding="utf-8") as f: f.write(compact(build()) + "\n")
+    print("wrote", path)
+    path = os.path.join(ROOT, "planets", "maps", "big_planet.json")
+    with open(path, "w", encoding="utf-8") as f: f.write(json.dumps(build_big(), ensure_ascii=False, separators=(",", ":")) + "\n")
     print("wrote", path)

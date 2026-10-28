@@ -66,6 +66,12 @@ struct MapData {
     std::vector<int16_t> heights;       // fine height, 1/16 units
     std::vector<int16_t> corners;       // heightfield corner heights (w+1)*(h+1), 1/16 units; empty = none
     std::string cornersFile;            // terrain.cornersFile as read (relative to the game folder); "" = inline / default name
+    // visual detail heightmap (terrain.detail, docs/terrain.md): (w*k+1)*(h*k+1) int16 1/16 units; empty = none.
+    // detailSplat: optional RGBA8 layer weights per detail sample (painted materials at detail resolution).
+    int detailScale = 0;
+    std::vector<int16_t> detail;
+    std::vector<uint8_t> detailSplat;
+    std::string detailFile;             // terrain.detail.file as read ("" = default name next to the map)
     std::vector<std::string> fieldResources;  // resource ids used by fields
     std::vector<int8_t> fieldRes;       // index into fieldResources, -1 none
     std::vector<uint8_t> fieldAmt;      // 0..9 (fraction of the resource's cellMax)
@@ -109,6 +115,7 @@ public:
     // simulation loader reads); save() writes the blob to the .r16 file and never into the JSON.
     Json toJson() const;
     std::string cornersFileName() const;                                          // relative, e.g. maps/big.r16
+    std::string detailFileName() const;                                           // maps/<map>.detail.r16
     std::string bodyCornersFileName(const DocBody& b) const;                      // maps/<map>.<body>.r16
     static std::string cornersPath(const std::string& mapFile, const std::string& rel); // absolute file
     std::string toJsonText() const { return toJson().dump(); }

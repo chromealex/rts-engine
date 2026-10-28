@@ -67,6 +67,8 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // planets: HPA* on bodies above the cell threshold (RtsHpaSphere.cpp). RTS_PLANET_HPA=1 / 0 forces it on / off
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;
+    g.flowMaxFields = rules_.movement.flow.maxFields;
+    g.flowBudgetBytes = size_t(rules_.movement.flow.budgetMB) << 20;
     if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
         for (auto& t : rules_.types)
@@ -215,6 +217,9 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
 
     // victory
     gs.victory = map.has("victory") ? loadVictory(map["victory"], rules_.victory) : rules_.victory;
+    // a map may switch flow fields on / tune them for itself ("movement": {"flowField": {...}}): big horde maps
+    if (const Json& ff = map["movement"]["flowField"]; ff.isObject()) loadFlowFieldRules(ff, rules_.movement.flow, "map movement.flowField");
+    else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players
     const size_t np = sim.players().size();
@@ -987,7 +992,10 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     if (w.alive(cmd.target)) if (auto* t = w.tryGet<Transform>(cmd.target)) target = t->pos;
     // attack-move of a group: spread into an arc facing the goal, flanks ahead (they wrap around the enemy)
     std::vector<std::pair<Entity, Vec3>> arc;
-    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3) {
+    // big groups to one point share a flow field (rules movement.flowField.minGroup); no arc for them
+    const bool flowGroup = rules_.movement.flow.minGroup > 0 && movers >= rules_.movement.flow.minGroup &&
+                           (cmd.type == kCmdMove || cmd.type == kCmdAttack || cmd.type == kCmdPatrol || cmd.type == kCmdSmart);
+    if (cmd.type == kCmdAttack && !w.alive(cmd.target) && movers >= 3 && !flowGroup) {
         Vec3 c{};
         Fixed maxR{};
         std::vector<Entity> ms;
@@ -1020,6 +1028,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         Order o;
         o.point = flat(target);
         o.target = w.alive(cmd.target) ? cmd.target : kNullEntity;
+        o.flow = flowGroup && !(t.layer & kLayerAir);
         switch (cmd.type) {
         case kCmdMove:
             o.type = OrderType::Move; o.target = kNullEntity; o.param = movers;

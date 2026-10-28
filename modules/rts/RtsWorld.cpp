@@ -360,6 +360,8 @@ void RtsModule::sysWaves(Simulation& sim) {
         o.type = OrderType::AttackMove;
         o.point = flat(goal);
         o.param = 4;
+        o.flow = rules_.movement.flow.waves;   // hordes share flow fields (goal area sized for the whole wave)
+        if (o.flow) o.param = int32_t(std::min<size_t>(spawned.size(), 400));
         issue(sim, n, o, false);
     }
     for (auto& [n, wi] : routed) if (w.alive(n)) mechWaveRoute(sim, n, gs.waves[wi].route);
