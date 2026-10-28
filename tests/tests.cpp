@@ -5482,7 +5482,8 @@ TEST(sphere_cells_and_dirs_round_trip) {
             if (s.cellFromDir(d) != id) ++bad;
             int f; Fixed a, b;
             s.faceFromDir(d * Fixed::fromInt(37), f, a, b);          // any length works
-            if (f != c.face || fxAbs(a - (Fixed::fromInt(c.x) + Fixed::fromRatio(1, 2))) > Fixed::fromRatio(1, 50)) ++bad;
+            // stage 1: the inverse warp is linear inside a cell (exact at cell edges), up to ~0.07 cell off at the centre
+            if (f != c.face || fxAbs(a - (Fixed::fromInt(c.x) + Fixed::fromRatio(1, 2))) > Fixed::fromRatio(1, 10)) ++bad;
         }
         CHECK(bad == 0);
     }
