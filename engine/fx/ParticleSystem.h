@@ -59,8 +59,12 @@ struct FxHandle {
 
 struct FxFog { float3 color{0.62f, 0.70f, 0.80f}; float density = 0; };  // Renderer3D::lighting fog (linear colour)
 
+// A light carried by particles ("light" module): the apps add these to Renderer3D::lights.
+struct FxPointLight { float3 pos; float radius = 1; float3 color{1, 1, 1}; float intensity = 1; };
+
 struct FxStats {
     int particles = 0, instances = 0, drawn = 0, batches = 0, drawCalls = 0;
+    int trailQuads = 0;     // ribbon segments drawn (included in drawn)
     int dropped = 0;        // spawns refused by the budget (since the last resetStats)
     int culled = 0;         // one-shots not started: off-screen or too far
     float fill = 0;         // drawn particle area / screen area: the overdraw particles add
@@ -82,6 +86,8 @@ public:
     FxQuality quality() const { return quality_; }
     void setFileReader(FileReader r) { reader_ = std::move(r); }
     void setTextureLoader(TextureLoader l);
+    // Ground height for "collision" (world y = 0 without it): RtsView::heightAt in the apps.
+    void setGroundHeight(std::function<float(float x, float z)> fn);
 
     // Effects by name: "explosion" loads "fx/explosion.json" through the file reader (once).
     // Returns -1 when missing or invalid; the reason is in errors().
@@ -109,6 +115,9 @@ public:
     void setView(const render::RTSCamera& cam, const render::mat4& viewProj, int fbW, int fbH);
     void update(float dt);
     void render(const FxFog& fog);
+    // Lights of emitters with a "light" module (after update): appended to `out`, at most `maxLights`
+    // in total (fewer on low tiers). Call between Renderer3D::beginScene and render.
+    void collectLights(std::vector<FxPointLight>& out, int maxLights = 32) const;
 
     const FxStats& stats() const { return stats_; }
     void resetStats() { stats_.dropped = stats_.culled = 0; }

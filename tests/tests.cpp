@@ -5169,6 +5169,175 @@ TEST(overlay_conditions_on_sim_state) {
     CHECK(ov.popupCount() == 0);
 }
 
+// ---------------- particle modules for richer effects / Unity imports (vfx tools) ----------------
+TEST(fx_modules_parse_round_trip_and_errors) {
+    std::vector<std::string> errs;
+    fx::EffectDef d = fxParse(R"({"emitters": [{ "texture": "fx/t.png", "blend": "premultiplied", "align": "upright", "aspect": [1, 2],
+        "offset": [0, 1, 0], "bursts": [[0, 5], { "time": 0.2, "count": [2, 4], "cycles": 3, "interval": 0.1 }],
+        "startColor": ["#ff0000", "#0000ff"], "space": "local", "maxParticles": 40, "velocity": [0, 2, 0], "speedLimit": 4,
+        "colorBySpeed": { "speed": [0, 3], "color": [[0, "#ffffff"], [1, "#ff0000"]] }, "sizeBySpeed": { "speed": [0, 3], "size": [[0, 1], [1, 2]] },
+        "noise": { "strength": 1, "frequency": 0.5, "scroll": 0.2 }, "frames": [2, 2], "cycles": 2, "startFrame": [0, 3],
+        "shape": "cone", "arc": 180, "thickness": 0.5, "radial": -0.5, "radius": 1, "hidden": false,
+        "collision": { "height": 0.1, "bounce": 0.3, "dampen": 0.2, "lifeLoss": 0.1, "minKillSpeed": 0.5 },
+        "subEmitters": [{ "on": "death", "effect": "pop", "chance": 0.5, "inheritColor": true }],
+        "trail": { "time": 0.4, "width": [[0, 1], [1, 0]], "color": "#ffffff80", "blend": "alpha", "inheritColor": false },
+        "light": { "color": "#ff8000", "radius": 2, "intensity": 1.5, "ratio": 0.5, "max": 3, "sizeAffectsRadius": true } }]})", &errs);
+    for (auto& e : errs) std::printf("    %s\n", e.c_str());
+    CHECK(errs.empty() && d.emitters.size() == 1);
+    const auto& e = d.emitters[0];
+    CHECK(e.blend == fx::FxBlend::Premultiplied && e.align == fx::FxAlign::Upright && e.shape == fx::FxShape::Cone);
+    CHECK(e.bursts.size() == 2 && e.bursts[1].cycles == 3 && e.bursts[1].count.max == 4 && e.startColorPair && e.localSpace);
+    CHECK(e.maxParticles == 40 && e.velocity.y == 2 && e.speedLimit == 4 && e.colorBySpeed.size() == 2 && e.sizeBySpeed.size() == 2);
+    CHECK(e.noise.strength == 1 && e.cycles == 2 && e.startFrame.max == 3 && e.arc == 180 && e.radial == -0.5f);
+    CHECK(e.collision.enabled && e.collision.bounce > 0.29f && e.subEmitters.size() == 1 && e.subEmitters[0].on == fx::FxSubEvent::Death);
+    CHECK(e.trail.enabled && e.trail.blend == fx::FxBlend::Alpha && !e.trail.inheritColor && e.light.enabled && e.light.max == 3);
+    CHECK(d.lifetime() > 0.4f && !d.looping());
+    fx::EffectDef back;
+    std::vector<std::string> e2;
+    CHECK(fx::parseEffect(fx::effectToJson(d), "t.json", back, e2) && e2.empty());   // the editor's save keeps every module
+    const auto& b = back.emitters[0];
+    CHECK(b.bursts.size() == 2 && b.bursts[1].interval > 0.09f && b.startColorPair && b.localSpace && b.trail == e.trail);
+    CHECK(b.subEmitters.size() == 1 && b.subEmitters[0].effect == "pop" && b.light.sizeAffectsRadius && b.collision.minKillSpeed > 0.49f);
+    CHECK(b.noise.scroll > 0.19f && b.colorSpeed.max == 3 && b.aspect.max == 2 && b.offset.y == 1 && b.thickness == 0.5f);
+    // an old effect writes none of the new keys
+    fx::EffectDef plain = fxParse(R"({"emitters": [{ "burst": 3 }]})");
+    std::string text = fx::effectToJson(plain).dump(-1);
+    for (const char* k : {"bursts", "trail", "light", "noise", "space", "aspect", "subEmitters", "collision", "radial"})
+        CHECK(text.find(k) == std::string::npos);
+    // readable errors inside modules
+    fxParse(R"({"emitters": [{ "burst": 1, "trail": { "tme": 1 }, "radial": 2, "subEmitters": [{ "on": "spawn", "effect": "x" }] }]})", &errs);
+    CHECK(errs.size() == 3);
+    bool trailKey = false;
+    for (auto& x : errs) trailKey |= x.find("trail.tme: unknown field") != std::string::npos;
+    CHECK(trailKey);
+    fxParse(R"({"emitters": [{ "bursts": [[0, 2]], "loop": true }]})", &errs);
+    CHECK(errs.size() == 1 && errs[0].find("duration") != std::string::npos);
+}
+
+TEST(fx_modules_simulate_bursts_limits_subs_collision_lights) {
+    auto make = [] { auto ps = std::make_unique<fx::ParticleSystem>(); ps->setQuality(fx::FxQuality::High); ps->init(nullptr); return ps; };
+    {   // timed bursts with cycles
+        auto ps = make();
+        int id = ps->define("b", fxParse(R"({"emitters": [{ "bursts": [[0, 5], { "time": 0.1, "count": 3, "cycles": 2, "interval": 0.05 }], "life": 5 }]})"));
+        ps->play(id, {0, 0, 0});
+        ps->update(0.05f);
+        CHECK(ps->stats().particles == 5);
+        for (int i = 0; i < 4; ++i) ps->update(0.05f);
+        CHECK(ps->stats().particles == 11);
+    }
+    {   // looping bursts repeat every duration; per-emitter cap
+        auto ps = make();
+        int id = ps->define("l", fxParse(R"({"emitters": [{ "bursts": [[0, 2]], "loop": true, "duration": 0.5, "life": 10 },
+                                                          { "burst": 50, "maxParticles": 7, "life": 10 }]})"));
+        fx::FxHandle h = ps->play(id, {0, 0, 0});
+        for (int i = 0; i < 25; ++i) ps->update(0.05f);   // t = 1.25: bursts at 0, 0.5, 1.0
+        CHECK(ps->stats().particles == 6 + 7);
+        CHECK(ps->playing(h));
+    }
+    {   // death sub-emitter plays another effect where the particle died
+        auto ps = make();
+        ps->define("pop", fxParse(R"({"emitters": [{ "burst": 2, "life": 1, "speed": 0 }]})"));
+        int id = ps->define("p", fxParse(R"({"emitters": [{ "burst": 3, "life": 0.1, "speed": 0, "subEmitters": [{ "on": "death", "effect": "pop" }] }]})"));
+        ps->play(id, {0, 0, 0});
+        for (int i = 0; i < 8; ++i) ps->update(0.02f);
+        CHECK(ps->stats().particles == 6);
+        int self = ps->define("self", fxParse(R"({"emitters": [{ "burst": 1, "life": 0.05, "subEmitters": [{ "on": "death", "effect": "self" }] }]})"));
+        ps->clear();
+        ps->play(self, {0, 0, 0});
+        for (int i = 0; i < 40; ++i) ps->update(0.02f);
+        CHECK(ps->stats().particles == 0 && ps->stats().instances == 0);   // recursion stops at the depth limit
+    }
+    {   // ground collision: falling particles stay above the ground height function
+        auto ps = make();
+        ps->setGroundHeight([](float, float) { return 0.5f; });
+        int id = ps->define("c", fxParse(R"({"emitters": [{ "burst": 20, "life": 3, "speed": [0, 1], "gravity": [0, -10, 0],
+            "collision": { "bounce": 0 } }]})"));
+        ps->play(id, {0, 2, 0});
+        for (int i = 0; i < 100; ++i) ps->update(0.02f);
+        CHECK(ps->stats().particles == 20);
+        std::vector<fx::FxPointLight> none;
+        ps->collectLights(none);
+        CHECK(none.empty());
+    }
+    {   // particle lights: ratio, max per effect, quality off
+        auto ps = make();
+        int id = ps->define("li", fxParse(R"({"emitters": [{ "burst": 30, "life": 2, "color": "#ffffffff",
+            "light": { "color": "#ff8000", "radius": 2, "max": 4 } }]})"));
+        ps->play(id, {0, 0, 0});
+        ps->play(id, {5, 0, 0});
+        ps->update(0.02f);
+        std::vector<fx::FxPointLight> lights;
+        ps->collectLights(lights);
+        CHECK(lights.size() == 8 && lights[0].radius > 1.9f && lights[0].color.y < 0.6f);
+        lights.clear();
+        ps->collectLights(lights, 3);
+        CHECK(lights.size() == 3);
+        ps->setQuality(fx::FxQuality::Off);
+        lights.clear();
+        ps->collectLights(lights);
+        CHECK(lights.empty());
+    }
+    {   // local space follows the moving effect, world space stays behind (positions read through particle lights)
+        auto ps = make();
+        auto at = [&](const char* space) {
+            ps->clear();
+            int id = ps->define(space, fxParse((std::string(R"({"emitters": [{ "burst": 1, "rate": 0.01, "loop": true, "life": 5, "speed": 0, "space": ")") +
+                                               space + R"(", "color": "#ffffffff", "light": { "radius": 1 } }]})").c_str()));
+            fx::FxHandle h = ps->play(id, {0, 0, 0});
+            ps->update(0.02f);
+            ps->move(h, {3, 0, 0});
+            ps->update(0.02f);
+            std::vector<fx::FxPointLight> l;
+            ps->collectLights(l);
+            return l.empty() ? -1.0f : l[0].pos.x;
+        };
+        CHECK(std::fabs(at("local") - 3) < 1e-3f);
+        CHECK(std::fabs(at("world")) < 1e-3f);
+    }
+}
+
+TEST(fx_unity_importer_output_is_valid) {
+    // Runs tools/importers/unity_vfx on the synthetic Unity project and loads every effect it wrote.
+    if (std::system("python3 -c \"import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)\" > /dev/null 2>&1") != 0) {
+        std::printf("    (skipped: python3 not found)\n");
+        return;
+    }
+    const std::string src = std::string(RTS_SOURCE_DIR);
+    const std::string out = (std::filesystem::temp_directory_path() / "rts_unity_vfx_test").string();
+    std::filesystem::remove_all(out);
+    std::filesystem::create_directories(out);
+    const std::string cmd = "python3 \"" + src + "/tools/importers/unity_vfx/import.py\" --source \"" + src +
+                            "/tests/data/unity_vfx/Assets/FX\" --game \"" + out + "\" --json > \"" + out + "/report.json\"";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile(out + "/report.json");
+    CHECK(rep["effects"].size() == 3);
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.init(nullptr);
+    ps.setFileReader([&](const std::string& p, std::string& text) {
+        std::ifstream f(out + "/" + p, std::ios::binary);
+        if (!f) return false;
+        text.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    });
+    for (auto& e : rep["effects"].items()) {
+        int id = ps.effect(e.getStr("name"));
+        CHECK(id >= 0);
+        if (id >= 0) { ps.play(id, {0, 0, 0}); for (int i = 0; i < 60; ++i) ps.update(1 / 30.0f); }
+    }
+    for (auto& e : ps.errors()) std::printf("    %s\n", e.c_str());
+    CHECK(ps.errors().empty());
+    const fx::EffectDef* ex = ps.def(ps.effect("explosion"));
+    CHECK(ex && ex->emitters.size() == 4);
+    if (ex && ex->emitters.size() == 4) {
+        CHECK(ex->emitters[2].trail.enabled && ex->emitters[2].light.enabled && ex->emitters[2].collision.enabled);
+        CHECK(ex->emitters[2].subEmitters.size() == 1 && ex->emitters[2].align == fx::FxAlign::Velocity);
+        CHECK(ex->emitters[1].bursts.size() == 2 && ex->emitters[1].noise.strength > 0);
+    }
+    CHECK(std::filesystem::exists(out + "/fx/textures/smoke.png"));
+    std::filesystem::remove_all(out);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;

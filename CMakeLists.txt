@@ -603,3 +603,20 @@ if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/OverlayOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_overlay_data)
 endif()
+
+# VFX tools (vfx tools agent): Unity particle importer tests (Python, stdlib only) and the fx_* editor
+# operations (list / get / set / delete / templates / import_unity / bind; fx_preview in the editor GUI).
+# ---------------------------------------------------------------------------
+if(RTS_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME unity_vfx_importer COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/importers/unity_vfx/test_import.py)
+    endif()
+endif()
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/FxOps.cpp apps/editor/core/FxTemplates.cpp)
+    target_link_libraries(rts_editor_core PUBLIC rts_game_fx)
+endif()
+if(TARGET rts_editor)
+    target_sources(rts_editor PRIVATE apps/editor/EditorFxOps.cpp)   # fx_preview (GUI)
+endif()

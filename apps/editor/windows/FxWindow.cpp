@@ -1,6 +1,8 @@
 // "Эффекты": particle effects of the open game (games/<id>/fx/*.json) with a live preview, tier
 // switch (how it looks on an old Android) and an overdraw meter; plus the event bindings (fx.json).
-// Agents get the same through MCP: fx_list, fx_get, fx_set.
+// Agents get the same through MCP (apps/editor/core/FxOps.cpp): fx_list, fx_get, fx_set, fx_delete,
+// fx_templates, fx_import_unity, fx_bind, and fx_preview (EditorFxOps.cpp); their writes bump
+// Editor::fxRevision and this window re-reads.
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -66,7 +68,15 @@ public:
     }
 
     void update(Editor& ed, double) override {
-        if (!opsRegistered_) { registerOps(ed); opsRegistered_ = true; }
+        if (ed.fxRevision != revision_) {   // an agent changed fx files: list, open effect (unless being edited), bindings
+            revision_ = ed.fxRevision;
+            listDirty_ = true;
+            if (!sel_.empty() && !dirty_ && !bindings_) {
+                if (fs::exists(fxDir(ed) / (sel_ + ".json"))) select(ed, sel_);
+                else sel_.clear();
+            }
+            if (bindings_) openBindings(ed);
+        }
         if (ed.ws().project.dir != project_) {
             project_ = ed.ws().project.dir;
             listDirty_ = true;
@@ -467,64 +477,6 @@ private:
         return ch;
     }
 
-    // ------------------------------------------------------------------ MCP
-    void registerOps(Editor& ed) {
-        Editor* e = &ed;
-        auto add = [&](const char* name, const char* desc, const char* schema, Workspace::OpFn fn) {
-            ed.ws().registerOp({name, desc, Json::parse(schema), std::move(fn), true});
-        };
-        add("fx_list", "Particle effects of the open game (fx/*.json) and warnings of the event bindings (fx/fx.json).", R"({"properties": {}})",
-            [this, e](const Json&) {
-                refreshList(*e);
-                Json r = Json::object(), list = Json::array(), warn = Json::array();
-                for (auto& n : names_) list.push(Json::string(n));
-                for (auto& w : e->fxWarnings) warn.push(Json::string(w));
-                r.set("effects", list);
-                r.set("warnings", warn);
-                return r;
-            });
-        add("fx_get", "Read an effect file (name without .json; 'fx' = the event bindings). Returns the raw text. Format: engine/fx/FxEffect.h, bindings: modules/rts/fx/RtsFx.h.",
-            R"({"properties": {"name": {"type": "string"}}, "required": ["name"]})", [this, e](const Json& p) {
-                const std::string n = p.getStr("name");
-                if (!validName(n)) throw std::runtime_error("bad effect name '" + n + "'");
-                std::string text;
-                if (!readText(fxDir(*e) / (n + ".json"), text)) throw std::runtime_error("fx/" + n + ".json not found");
-                Json r = Json::object();
-                r.set("name", Json::string(n));
-                r.set("text", Json::string(text));
-                return r;
-            });
-        add("fx_set", "Create or replace an effect (name without .json; 'fx' = the event bindings) from 'text' (JSON). Effects are validated first; "
-                      "the play-test reloads them. Returns errors/warnings.",
-            R"({"properties": {"name": {"type": "string"}, "text": {"type": "string"}}, "required": ["name", "text"]})", [this, e](const Json& p) {
-                const std::string n = p.getStr("name"), text = p.getStr("text");
-                if (!validName(n)) throw std::runtime_error("bad effect name '" + n + "' (a-z, 0-9, _)");
-                Json j = Json::parse(text);   // throws on syntax errors
-                std::vector<std::string> errs;
-                if (n != "fx") {
-                    EffectDef d;
-                    if (!fx::parseEffect(j, "fx/" + n + ".json", d, errs)) {
-                        Json r = Json::object(), a = Json::array();
-                        for (auto& x : errs) a.push(Json::string(x));
-                        r.set("ok", Json::fromBool(false));
-                        r.set("errors", a);
-                        return r;
-                    }
-                } else if (!j.isObject()) throw std::runtime_error("fx.json must be an object");
-                if (!writeText(fxDir(*e) / (n + ".json"), text)) throw std::runtime_error("cannot write fx/" + n + ".json");
-                e->reloadFx();
-                listDirty_ = true;
-                if (n == sel_ && !bindings_) select(*e, n);
-                if (n == "fx" && bindings_) openBindings(*e);
-                Json r = Json::object(), warn = Json::array();
-                for (auto& w : e->fxWarnings) warn.push(Json::string(w));
-                r.set("ok", Json::fromBool(true));
-                r.set("summary", Json::string("Эффект сохранён: fx/" + n + ".json"));
-                r.set("warnings", warn);
-                return r;
-            });
-    }
-
     gfx::Device* dev_ = nullptr;
     fx::ParticleSystem preview_;
     render::TextureCache textures_;
@@ -538,7 +490,7 @@ private:
     double nextPlay_ = 0, lastTime_ = -1;
     float speed_ = 1, moveT_ = 0;
     bool listDirty_ = true, bindings_ = false, dirty_ = false, rawIsSource_ = true, loop_ = true, moving_ = false, played_ = false;
-    bool opsRegistered_ = false;
+    int revision_ = 0;
 };
 
 RTS_EDITOR_WINDOW(FxWindow);
