@@ -306,6 +306,8 @@ struct TechDef {
     Fixed time = Fixed::fromInt(30);
     std::vector<Requirement> requires_;
     std::vector<std::pair<ModTarget, StatMod>> effects;
+    int requiresAnyCount = 0;                  // "requiresAny": {"count": 2, "of": [...]}: that many different types of the list (AoE ages)
+    std::vector<uint16_t> requiresAny;
 };
 
 struct FactionStart { uint16_t type = 0; Fixed dx{}, dz{}; int count = 1; };

@@ -209,6 +209,15 @@ void loadOriginals(Rules& r, const Json& j, EffectParser& ep) {
             ++ai;
         }
     }
+    size_t ki = 0;
+    for (auto& [id, kj] : j["techs"].members()) {
+        TechDef& t = r.techs[ki++];
+        if (const Json& ra = kj["requiresAny"]; ra.isObject()) {
+            any = true;
+            t.requiresAnyCount = int(ra.getInt("count", 1));
+            for (auto& x : ra["of"].items()) t.requiresAny.push_back(typeId(r, "tech '" + id + "' requiresAny", x.str()));
+        }
+    }
     for (size_t k = 0; k < r.types.size(); ++k) if (!r.types[k].playerMods.empty()) r.playerModTypes.push_back(uint16_t(k));
     for (size_t k = 0; k < r.resources.size(); ++k) if (!r.resources[k].perUnitMods.empty()) r.perUnitResources.push_back(uint16_t(k));
     for (auto& t : r.types) {

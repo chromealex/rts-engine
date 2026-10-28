@@ -979,6 +979,11 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (std::find(t.researches.begin(), t.researches.end(), k) == t.researches.end()) break;
             auto& eco = gs.players[cmd.player];
             if (int(eco.researched[k]) >= rules_.techs[k].levels || eco.researching[k] || !requirementsMet(sim, cmd.player, rules_.techs[k].requires_)) break;
+            if (rules_.techs[k].requiresAnyCount > 0) {   // AoE ages: N different buildings of the previous age
+                int have = 0;
+                for (uint16_t ty : rules_.techs[k].requiresAny) if (eco.typeCount[ty] > 0) ++have;
+                if (have < rules_.techs[k].requiresAnyCount) break;
+            }
             if (int(prod->queue.size()) >= rules_.maxQueue) break;
             if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, techCost(sim, cmd.player, k), {})) break;
             eco.researching[k] = 1;
