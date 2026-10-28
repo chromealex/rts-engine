@@ -77,7 +77,7 @@ bool RtsModule::filterOk(Simulation& sim, const TargetFilter& f, Entity e, uint8
     if (t.level < f.minLevel || t.level > f.maxLevel) return false;
     if (enemy) {
         uint32_t fl = statusFlags(sim, e);
-        if ((fl & kStInvisible) && !(fl & kStRevealed)) return false;
+        if ((fl & kStInvisible) && !(fl & kStRevealed) && !(rules_.mech.detection && detected(sim, e, owner))) return false;
     }
     if (!f.area.empty()) {
         int a = triggers_.findArea(f.area);

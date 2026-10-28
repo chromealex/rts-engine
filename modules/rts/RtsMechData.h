@@ -1,3 +1,4 @@
+// Included by RtsData.h after Stat / StatMod / layers.
 // Data of the mechanics added for the "top-100 strategy games" plan (agent-mech): stances, retreat,
 // transports and garrisoned infantry, ... Parsed in RtsMechData.cpp from optional JSON blocks; a game
 // that uses none of them loads, plays and hashes exactly as before.
@@ -25,12 +26,26 @@ struct TransportDef {
     bool weaponFromCargo = false;          // shoots with the first passenger's weapons (IFV)
 };
 
+// "toggle" on an ability: casting switches a status on and off (cloak, burrow, siege mode), draining energy.
+struct ToggleDef { int ability = -1; int16_t status = -1; Fixed drain{}; };
+
+struct VeterancyTable {
+    std::vector<Fixed> xp;                 // xp needed for rank 2, 3, ...
+    std::vector<StatMod> perLevel;         // per rank above 1
+    bool set = false;
+};
+
 struct MechType {
     StanceMode stance = StanceMode::Aggressive;
     bool stanceSet = false;
     bool retreatPoint = false;             // retreating units run to the nearest own one
     int cargoSize = 1;                     // slots a passenger takes
     TransportDef transport;
+    Fixed detects{};                       // >0: reveals invisible enemies within this radius (detector)
+    std::vector<ToggleDef> toggles;
+    int veterancy = -1;                    // -1: rules table, 0: none, 1: own table below
+    VeterancyTable vetTable;
+    Fixed killXp{};                        // xp its killer gets: explicit "xp", else its cost x veterancy.fromCost
 };
 
 struct MechRules {
@@ -42,6 +57,14 @@ struct MechRules {
     Fixed retreatSpeed = Fixed::fromRatio(5, 4);
     Fixed retreatDamageTaken = Fixed::fromRatio(3, 4);
     bool transports = false;
+    bool detection = false;                // any type detects
+    Fixed maxDetect{};
+    bool toggles = false;
+    bool veterancy = false;
+    VeterancyTable vet;                    // rules "veterancy"
+    bool vetHeal = true;                   // rank up heals fully
+    Fixed vetFromCost = Fixed::fromInt(1); // xp for a kill without "xp": victim cost x this
+    bool follow = false;                   // guard / follow orders given (derived at runtime, not data)
 };
 
 } // namespace rts::game

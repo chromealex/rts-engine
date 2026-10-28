@@ -222,7 +222,8 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
             OrderType ot = OrderType(so.order - 1);
             if (ot == OrderType::Gather || ot == OrderType::Build || ot == OrderType::Repair) so.action = kActWork;
         }
-        if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {
+        if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer) && !m->canSee(sim, e, viewer)) so.visible = false;   // cloaked, not detected
+        else if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {
             // enemies only when visible; neutral structures (resources) once explored
             int x = int(t.pos.x.floorInt()), y = int(t.pos.z.floorInt());
             uint8_t v = gs.grid.inside(x, y) ? gs.vision[viewer][size_t(gs.grid.index(x, y))] : 0;

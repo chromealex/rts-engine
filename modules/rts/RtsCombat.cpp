@@ -43,7 +43,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
             const UnitType& ct = rules_.types[cu->type];
             if (ct.invulnerable || !(ct.layer & layers)) return;
             if (!hostile(sim, o.player, w.get<Owner>(cand).player)) return;
-            if (rules_.advancedEffects) { uint32_t fl = statusFlags(sim, cand); if ((fl & kStInvisible) && !(fl & kStRevealed)) return; }
+            if (rules_.advancedEffects) { uint32_t fl = statusFlags(sim, cand); if ((fl & kStInvisible) && !(fl & kStRevealed) && !(rules_.mech.detection && detected(sim, cand, o.player))) return; }
             Vec3 cp = w.get<Transform>(cand).pos;
             Fixed d = dist2D(cp, tr.pos);
             if (d > sight) return;
@@ -89,6 +89,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     }
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
+    if (rules_.mech.veterancy && w.alive(source)) mechOnHit(sim, target, source);   // agent-mech
     sim.emit({kEvHit, sourceOwner, target, source, fin.raw, w.get<Transform>(target).pos});
     // creeps fight back as a camp
     if (auto* g = w.tryGet<Guard>(target); g && w.alive(source) && w.has<Unit>(source)) {
@@ -302,6 +303,7 @@ void RtsModule::castAbility(Simulation& sim, Entity caster, int index, Entity ta
     if (a.target == TargetKind::Self || a.target == TargetKind::None) { target = caster; point = w.get<Transform>(caster).pos; }
     if (w.alive(target) && w.has<Transform>(target)) point = w.get<Transform>(target).pos;
     sim.emit({kEvAbility, owner, caster, target, index, point});
+    if (rules_.mech.toggles && mechToggle(sim, caster, index)) return;   // agent-mech: cloak / burrow / siege mode
     if (!rules_.advancedEffects) { applyEffects(sim, caster, owner, casterType, a.effects, target, point); return; }
     const AbilityDef& al = abilityFor(sim, caster, index);
     pay(sim, owner, al.cost, {}, false);
@@ -559,7 +561,7 @@ void RtsModule::sysDeath(Simulation& sim) {
         const Vec3 pos = w.get<Transform>(e).pos;
         const bool silent = u.flags & kUnitSilent;
         if (auto* f = w.tryGet<Footprint>(e)) gs.grid.block(f->x, f->y, f->w, f->h, -1);
-        if (rules_.mech.transports) mechOnDeath(sim, e);   // agent-mech: passengers
+        if (mechOn(sim)) mechOnDeath(sim, e);   // agent-mech: passengers, veterancy
         if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty() && gs.players[owner].typeCountAll[u.type] > 0)
             gs.players[owner].typeCountAll[u.type]--;
         if (auto* ex = w.tryGet<Extractor>(e)) {
