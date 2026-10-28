@@ -95,7 +95,7 @@ void registerGenOps(Workspace& ws) {
 
     add("gen_presets",
         "List the map generator presets (built into the engine + the game's rules 'mapgen.presets'): id, title, genre, default params. "
-        "Planet presets (rocky, ocean, moon) are for world.bodies[].generate.",
+        "Planet presets (rocky, ocean, moon) build a whole planet map (map_generate) or one body's terrain (world.bodies[].generate).",
         R"({"properties": {}})",
         [w](const Json&) {
             Json r = Json::object();
@@ -115,7 +115,9 @@ void registerGenOps(Workspace& ws) {
         "seed, players (1..8), symmetry (auto | none | point | mirror | mirror-y | mirror4 | rot4 | rotational), params (overrides, "
         "see gen_presets). The open map's player 1 objects are the start kit and its neutral objects decide what is placed "
         "(useTemplate: false = rules heuristics). Result: starts, path lengths between starts (engine pathfinder), connectivity, "
-        "warnings. mode: 'bake' (default) writes a static map (undoable); 'match' only stores a 'generate' block so every match "
+        "warnings. Planet presets (rocky, ocean, moon) build a whole planet map: bodies from the open map's world block (or sun + "
+        "planet + moon), params.layout 'shared' (all players on one body, polar rotational symmetry) or 'separate' (one identical "
+        "planet each), moons get params.moonResources x the resources. mode: 'bake' (default) writes a static map (undoable); 'match' only stores a 'generate' block so every match "
         "generates a new map from the match seed ('seed': 'match'); 'fixed' stores the block with this seed.",
         R"({"properties": {"preset": {"type": "string"}, "seed": {"type": "integer"}, "players": {"type": "integer"},
             "symmetry": {"type": "string"}, "params": {"type": "object"}, "mode": {"type": "string", "enum": ["bake", "match", "fixed"]},
@@ -135,12 +137,18 @@ void registerGenOps(Workspace& ws) {
             w->map.data.extra.erase("generate");
             r.set("ok", Json::fromBool(true));
             r.set("generated", g);
-            r.set("size", Json::parse("[" + std::to_string(w->map.data.w) + ", " + std::to_string(w->map.data.h) + "]"));
+            std::string where = std::to_string(w->map.data.w) + "x" + std::to_string(w->map.data.h);
+            if (w->map.data.planet()) {   // planet maps: bodies with their face sizes
+                where = g.getStr("layout");
+                for (auto& b : w->map.toJson()["world"]["bodies"].items())
+                    if (b.getInt("faceSize", 0) > 0) where += " " + b.getStr("id") + ":" + std::to_string(b.getInt("faceSize"));
+                r.set("layout", Json::string(where));
+            } else r.set("size", Json::parse("[" + std::to_string(w->map.data.w) + ", " + std::to_string(w->map.data.h) + "]"));
             r.set("entities", Json::number(int64_t(w->map.data.entities.size())));
             std::string warn;
             for (auto& x : g["warnings"].items()) warn += "; " + x.str();
-            r.set("summary", str("Сгенерировано: " + o.preset + " seed " + std::to_string(o.seed) + ", " + std::to_string(w->map.data.w) + "x" +
-                                 std::to_string(w->map.data.h) + (g.getBool("connected", true) ? "" : ", базы не связаны") + warn));
+            r.set("summary", str("Сгенерировано: " + o.preset + " seed " + std::to_string(o.seed) + ", " + where +
+                                 (g.getBool("connected", true) ? "" : ", базы не связаны") + warn));
             return r;
         });
 }

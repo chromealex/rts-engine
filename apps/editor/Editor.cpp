@@ -519,7 +519,10 @@ void Editor::renderGame(Viewport& vp, const RTSCamera& cam) {
     auto& gs = simModule()->state(*sim_);
     // fields / creep changing during play are read by the terrain shader: build once per play session
     if (!playTerrainBuilt_) {
-        if (const Json* gm = simModule()->generatedMap()) view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h); // map "generate"
+        if (const Json* gm = simModule()->generatedMap()) {   // map "generate": the view shows what the sim was built from
+            if ((*gm)["world"].isObject()) { view_.setWorld(*gm); worldHash_ = 0; }
+            view_.setTerrainMaterial((*gm)["terrainMaterial"], gs.grid.w, gs.grid.h);
+        }
         view_.buildTerrain(*dev_, gs.grid);
         playTerrainBuilt_ = true;
     }
