@@ -1,0 +1,50 @@
+/* Clan Lands: UI skin (linked after engine/ui/theme.rcss). Northern clans: slate stone, carved wood, rune bronze.
+   Title font: fonts/title.ttf (Ruslan Display, SIL OFL, fonts/OFL.txt). */
+
+body { color: #e9e4d8; }
+h1 { font-family: title; color: #d9a85b; font-size: 30dp; font-weight: normal; letter-spacing: 2dp; }
+h2 { color: #9c9686; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #9c9686; }
+.error { color: #ff7e66; }
+
+.panel {
+    background-color: #1d2224eb;
+    border: 2dp #7a6a4f;
+    border-radius: 0;
+}
+
+button {
+    color: #efe8d8;
+    border: 1dp #565048;
+    border-radius: 0;
+    decorator: vertical-gradient(#3b3d3aff #262826ff);
+}
+button:hover { decorator: vertical-gradient(#4b4d48ff #30322fff); border-color: #d9a85b; }
+button:active { decorator: vertical-gradient(#262826ff #3b3d3aff); }
+button.active { border-color: #d9a85b; color: #f3c983; }
+button.disabled:hover { decorator: vertical-gradient(#3b3d3aff #262826ff); border-color: #565048; }
+button .cost { color: #cfa66a; }
+button .tip { color: #ff7e66; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #d9a85b; }
+
+#card .title { color: #d9a85b; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff7e66; }
+.notice { color: #f6d79a; }
+#selbox { border-color: #d9a85b; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#374044ff #0f1213ff); }
+input.text { background-color: #121516; border-color: #565048; color: #e9e4d8; }
+input.text:focus { border-color: #d9a85b; }
+#lobby .slot.mine { border-color: #d9a85b; }
+#lobby .roomtitle { color: #d9a85b; font-family: title; }
+
+#kb { background-color: #1d2224eb; border-color: #7a6a4f; }
+#kb .key { color: #efe8d8; border-color: #565048; border-radius: 0; decorator: vertical-gradient(#3b3d3aff #262826ff); }
+#kb .key:active { border-color: #d9a85b; }
+#kb .key.on { border-color: #d9a85b; color: #f3c983; }
+
+.panel { border-left-width: 4dp; }
+#menu h1 { text-align: center; }

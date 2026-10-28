@@ -159,6 +159,42 @@ def num(s, default=0):
 
 # ------------------------------------------------------------------ landscape (our generator)
 
+def smooth(kinds, fixed=()):
+    """Dune II tiles only know the 4 edge neighbours (mask16): one-cell notches and spikes would show
+    as square holes. Smooth every kind like the original maps: fill cells enclosed on 3 sides, drop
+    cells held by at most one side. Mountains count as rock (they stand on it). `fixed` cells stay."""
+    fixed = set(fixed)
+
+    def group(k):
+        return ('r', 'm') if k == 'r' else (k,)
+    # Pruning mountains off the sand can leave new spikes: repeat until stable (twice is enough).
+    for _pass in range(3):
+        for kind, lower in (('r', 's'), ('d', 's'), ('m', 'r')):
+            for _ in range(4):
+                changed = False
+                for y in range(64):
+                    for x in range(64):
+                        if (x, y) in fixed:
+                            continue
+                        n = sum(1 for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0))
+                                if not (0 <= x + dx < 64 and 0 <= y + dy < 64) or kinds[y + dy][x + dx] in group(kind))
+                        here = kinds[y][x]
+                        if here not in group(kind) and n >= 3 and (kind != 'm' or here == 'r'):
+                            kinds[y][x] = kind
+                            changed = True
+                        elif here == kind and n <= 1:
+                            kinds[y][x] = lower
+                            changed = True
+                if not changed:
+                    break
+        # Dune II mountains always rise from rock: a mountain cell touching sand becomes rock.
+        for y in range(64):
+            for x in range(64):
+                if kinds[y][x] == 'm' and any(kinds[yy][xx] in ('s', 'd') for yy in range(max(0, y - 1), min(64, y + 2))
+                                              for xx in range(max(0, x - 1), min(64, x + 2))):
+                    kinds[y][x] = 'r'
+
+
 def landscape(seed, protect):
     """64x64 kinds: 's' sand, 'd' dunes, 'r' rock, 'm' mountain. `protect`: cells that must be rock."""
     rng = Rng(seed)
@@ -189,12 +225,7 @@ def landscape(seed, protect):
                 kinds[y][x] = 'r'
             elif sample(dune, 16, x, y) > 0.62:
                 kinds[y][x] = 'd'
-    # Dune II mountains always rise from rock: a mountain cell touching sand becomes rock.
-    for y in range(64):
-        for x in range(64):
-            if kinds[y][x] == 'm' and any(kinds[yy][xx] in ('s', 'd') for yy in range(max(0, y - 1), min(64, y + 2))
-                                          for xx in range(max(0, x - 1), min(64, x + 2))):
-                kinds[y][x] = 'r'
+    smooth(kinds)
     # Bases sit on rock in the original missions: grow a plateau around every protected cell.
     for (x, y) in protect:
         for dy in range(-2, 3):
@@ -274,12 +305,24 @@ def convert_scenario(name, text, rules_types, report):
     seed = num(mp.get('Seed', '0'))
     kinds = landscape(seed, [c for c in protect if x0 <= c[0] < x0 + w and y0 <= c[1] < y0 + h])
     # Units never start inside mountains; sandworms need sand.
-    for tid, _o, ex, ey in entities:
+    def nearest_sand(c, taken=()):
+        for r in range(0, 8):
+            ring = [(c[0] + dx, c[1] + dy) for dy in range(-r, r + 1) for dx in range(-r, r + 1)
+                    if max(abs(dx), abs(dy)) == r and 0 <= c[0] + dx < 64 and 0 <= c[1] + dy < 64
+                    and kinds[c[1] + dy][c[0] + dx] in ('s', 'd') and (c[0] + dx, c[1] + dy) not in taken]
+            if ring:
+                return min(ring, key=lambda p: (abs(p[0] - c[0]) + abs(p[1] - c[1]), p[1], p[0]))
+        kinds[c[1]][c[0]] = 's'      # no sand nearby: dig one cell rather than lose the entity
+        return c
+
+    for i, (tid, o, ex, ey) in enumerate(entities):
         cx, cy = int(ex), int(ey)
         if not (0 <= cx < 64 and 0 <= cy < 64):
             continue
-        if tid == 'sandworm':
-            kinds[cy][cx] = 's'
+        if tid == 'sandworm' and kinds[cy][cx] not in ('s', 'd'):
+            # Sandworms need sand: move the worm, don't dig a hole in the rock.
+            sx, sy = nearest_sand((cx, cy))
+            entities[i] = (tid, o, sx + 0.5, sy + 0.5)
         elif kinds[cy][cx] == 'm':
             kinds[cy][cx] = 'r'
 
@@ -302,11 +345,48 @@ def convert_scenario(name, text, rules_types, report):
                         kinds[yy][xx] = 's'
                     if kinds[yy][xx] in ('s', 'd'):
                         density[yy][xx] = max(density[yy][xx], max(1, min(9, int(round(9 * (1.0 - d) + 2)))))
+    blooms = set()
     for pos in [p for p in mp.get('Bloom', '').split(',') if p.strip()]:
         c = cell(pos.strip())
-        if c is not None:
-            kinds[c[1]][c[0]] = 's'
-            entities.append(('spice_bloom', 0, c[0] + 0.5, c[1] + 0.5))
+        if c is None:
+            continue
+        # A bloom lies on sand: move it to the nearest sand cell rather than dig a hole in the rock.
+        best = nearest_sand(c, blooms)
+        blooms.add(best)
+        entities.append(('spice_bloom', 0, best[0] + 0.5, best[1] + 0.5))
+    # Field carving and unit fixes leave notches again: smooth once more, keeping what must stay.
+    keep = set(blooms) | set(protect)
+    keep |= {(x, y) for y in range(64) for x in range(64) if density[y][x]}
+    keep |= {(int(ex), int(ey)) for tid, _o, ex, ey in entities if tid == 'sandworm'}
+    for (x, y) in keep:
+        if density[y][x] and kinds[y][x] == 'd':
+            kinds[y][x] = 's'           # the spice tile covers it; a dune under it would leave dune spikes
+    smooth(kinds, keep)
+    for y in range(64):
+        for x in range(64):
+            if density[y][x] and kinds[y][x] not in ('s', 'd'):
+                density[y][x] = 0
+
+    # Spice uses the same 4-neighbour tiles: trim one-cell spikes and fill one-cell gaps of the fields.
+    for _ in range(8):
+        changed = False
+        for y in range(64):
+            for x in range(64):
+                near = [density[y + dy][x + dx] for dx, dy in ((0, -1), (1, 0), (0, 1), (-1, 0))
+                        if 0 <= x + dx < 64 and 0 <= y + dy < 64 and density[y + dy][x + dx]]
+                if density[y][x] and len(near) <= 1 and (x, y) not in blooms:
+                    density[y][x] = 0
+                    changed = True
+                elif not density[y][x] and len(near) >= 3 and kinds[y][x] in ('s', 'd'):
+                    density[y][x] = min(near)
+                    changed = True
+        if not changed:
+            break
+
+    # Trimmed spice may leave bare sand pockets in the rock: close them.
+    keep = set(blooms) | set(protect) | {(x, y) for y in range(64) for x in range(64) if density[y][x]}
+    keep |= {(int(ex), int(ey)) for tid, _o, ex, ey in entities if tid == 'sandworm'}
+    smooth(kinds, keep)
 
     # Tile layer (tilesets/dune.json): the engine derives terrain cells and spice fields from it.
     code = {'s': ',', 'd': ',', 'r': 'R', 'm': '#'}
@@ -524,7 +604,9 @@ def write_tileset(files, pal, out):
         'name': 'Dune II', 'atlas': 'tilesets/dune.png', 'tileSize': [tw, th], 'columns': cols, 'filter': 'nearest',
         'terrains': [
             {'id': 'sand', 'char': 's', 'cell': ',', 'color': [0.84, 0.6, 0.35], 'tiles': [L]},
-            {'id': 'rock', 'char': 'r', 'cell': 'R', 'color': [0.45, 0.42, 0.36], 'under': 'sand', 'tiles': [L + 16], 'autotile': auto(1)},
+            # mountains stand on rock: for rock edges they count as rock (no sand rims inside massifs)
+            {'id': 'rock', 'char': 'r', 'cell': 'R', 'color': [0.45, 0.42, 0.36], 'under': 'sand', 'tiles': [L + 16],
+             'autotile': dict(auto(1), **{'with': ['mountain']})},
             {'id': 'dunes', 'char': 'd', 'cell': ',', 'color': [0.8, 0.55, 0.3], 'under': 'sand', 'tiles': [L + 32], 'autotile': auto(17)},
             {'id': 'mountain', 'char': 'm', 'cell': '#', 'color': [0.35, 0.25, 0.15], 'under': 'rock', 'tiles': [L + 48], 'autotile': auto(33)},
             {'id': 'spice', 'char': 'o', 'cell': ',', 'color': [0.85, 0.45, 0.25], 'field': {'resource': 'spice', 'density': 5},

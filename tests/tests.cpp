@@ -4689,6 +4689,44 @@ TEST(models_baked_clips_match_the_pose) {
     CHECK(bakedRow(*m, walk, 1.0f) == b.clips[size_t(walk)].firstRow); // loop wraps to frame 0
 }
 
+// ---------------- fog of war modes (rules / map "fogOfWar") and the view look ----------------
+#include "modules/rts/view/RtsFog.h"
+TEST(fog_of_war_modes_and_look) {
+    auto withFog = [](const char* mode, bool inMap) {
+        Json rules = Json::parseFile(kSkirmish + "/rules.json"), map = Json::parseFile(kSkirmish + "/maps/valley.json");
+        Json f = Json::object();
+        f.set("mode", Json::string(mode));
+        (inMap ? map : rules).set("fogOfWar", f);
+        SimConfig cfg; cfg.seed = 2;
+        auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+        sim->setup(rules, map);
+        for (int i = 0; i < 40; ++i) sim->step();
+        return sim;
+    };
+    auto count = [](Simulation& s, uint8_t p, uint8_t v) {
+        auto& vis = mod(s).state(s).vision[p];
+        return std::count(vis.begin(), vis.end(), v);
+    };
+    auto full = withFog("full", false), explored = withFog("explored", false), none = withFog("none", false), mapNone = withFog("none", true);
+    const auto cells = std::ptrdiff_t(mod(*full).state(*full).grid.w * mod(*full).state(*full).grid.h);
+    CHECK(count(*full, 1, 0) > cells / 2);                 // most of the map unexplored
+    CHECK(count(*explored, 1, 0) == 0 && count(*explored, 1, 1) > cells / 2);
+    CHECK(count(*none, 1, 2) == cells && count(*mapNone, 2, 2) == cells);
+    Entity enemyHall = findType(*none, "townhall", 2);
+    CHECK(enemyHall.valid() && mod(*none).isVisible(*none, 1, none->world().get<Transform>(enemyHall).pos));
+    CHECK(!mod(*full).isVisible(*full, 1, full->world().get<Transform>(findType(*full, "townhall", 2)).pos));
+    bool threw = false;
+    try { Json r = Json::parseFile(kSkirmish + "/rules.json"); Json f = Json::object(); f.set("mode", Json::string("fuzzy")); r.set("fogOfWar", f); game::loadRules(r); }
+    catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    // view look: rules first, game.json overrides per key; colours in 0..255 or 0..1
+    game::FogLook L = game::parseFogLook(Json::parse(R"({"color": [255, 0, 0], "style": "grid", "softness": 3, "grid": {"show": "all", "alpha": 0.3}})"),
+                                         Json::parse(R"({"softness": 1, "explored": 0.2})"));
+    CHECK(L.color[0] == 1.0f && L.color[1] == 0.0f && L.style == game::FogLook::Grid && L.softness == 1 && L.gridEverywhere);
+    CHECK(std::fabs(L.explored - 0.2f) < 1e-6f && std::fabs(L.gridAlpha - 0.3f) < 1e-6f);
+    CHECK(!game::parseFogLook(Json::parse(R"({"mode": "none"})"), Json()).show);
+}
+
 // ---------------- Lighting (lighting agent): GPU-free logic ----------------
 #include "modules/rts/view/RtsLights.h"
 #include "engine/render/QualityGovernor.h"

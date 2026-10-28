@@ -285,6 +285,17 @@ struct VictoryRules {
     Fixed share = Fixed::fromRatio(9, 10);       // territory: share of claimable cells that wins
 };
 
+// Fog of war (rules "fogOfWar"; a map may override "mode"). Visual keys of the block (colour,
+// style, softness, grid ...) belong to the view and are ignored here.
+//   full (default): unexplored black, explored dim, enemies only in sight
+//   explored: the whole map starts explored (terrain known), enemies still only in sight
+//   none: no fog at all, everyone sees everything
+enum class FogMode : uint8_t { Full, Explored, None };
+struct FogRules {
+    FogMode mode = FogMode::Full;
+    bool shareAllies = true;                  // allies see what each other sees
+};
+
 struct HeightRules {
     bool blockVision = true;                  // lower ground can't see higher ground
     Fixed missUphill{};                       // chance (0..1) to miss a target standing higher
@@ -388,6 +399,7 @@ struct Rules {
     Fixed autoBuildGrowth{};                  // cost grows by x per structure already auto-built
     VictoryRules victory;
     HeightRules heights;
+    FogRules fog;
     TerrainRules terrain;
     RegionRules regions;
     std::vector<DiggableDef> diggables;

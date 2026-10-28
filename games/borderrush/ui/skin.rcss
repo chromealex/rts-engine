@@ -1,0 +1,54 @@
+/* Border Rush: UI skin (linked after engine/ui/theme.rcss). Territory rush (portrait): bright flat colours on white.
+   Title font: fonts/title.ttf (Rubik Mono One, SIL OFL, fonts/OFL.txt). */
+
+body { color: #20242c; }
+h1 { font-family: title; color: #ff4f5a; font-size: 24dp; font-weight: normal; }
+h2 { color: #6b7280; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #6b7280; }
+.error { color: #e0303b; }
+
+.panel {
+    background-color: #ffffffee;
+    border: 0 #ffffff;
+    border-radius: 14dp;
+}
+
+button {
+    color: #ffffff;
+    border: 1dp #e0303b;
+    border-radius: 22dp;
+    decorator: vertical-gradient(#ff5a64ff #ef3f4bff);
+}
+button:hover { decorator: vertical-gradient(#ff7179ff #ff4f5aff); border-color: #2f80ed; }
+button:active { decorator: vertical-gradient(#ef3f4bff #ff5a64ff); }
+button.active { border-color: #2f80ed; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#ff5a64ff #ef3f4bff); border-color: #e0303b; }
+button .cost { color: #ffe1e3; }
+button .tip { color: #e0303b; }
+
+progress { background-color: #20242c20; }
+progress fill { background-color: #2f80ed; }
+
+#card .title { color: #ff4f5a; }
+#card .header { border-top-color: #20242c18; }
+#topbar .item.warn { color: #e0303b; }
+.notice { color: #20242c; }
+#selbox { border-color: #2f80ed; background-color: #2f80ed22; }
+#modal-bg { background-color: #20242c50; }
+#menu-bg { decorator: vertical-gradient(#eaeaeaff #bfbfbfff); }
+input.text { background-color: #f3f4f6; border-color: #e0303b; color: #20242c; }
+input.text:focus { border-color: #2f80ed; }
+#lobby .slot.mine { border-color: #2f80ed; }
+#lobby .roomtitle { color: #ff4f5a; font-family: title; }
+
+#kb { background-color: #ffffffee; border-color: #ffffff; }
+#kb .key { color: #ffffff; border-color: #e0303b; border-radius: 22dp; decorator: vertical-gradient(#ff5a64ff #ef3f4bff); }
+#kb .key:active { border-color: #2f80ed; }
+#kb .key.on { border-color: #2f80ed; color: #ffffff; }
+
+button.active { decorator: vertical-gradient(#4a94f5ff #2f80edff); border-color: #1d63c4; }
+button .hotkey { color: #ffd1d4; }
+.notice { color: #ffffff; }
+#modehint { background-color: #20242cd0; }
+#topbar .item { font-weight: bold; }
+#menu h1 { text-align: center; }

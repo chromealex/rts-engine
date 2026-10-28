@@ -16,6 +16,7 @@
 // splat, High = splat + normal maps + triplanar cliffs (RTS_TERRAIN=low|medium|high overrides).
 // Without the block every tier draws the classic vertex colours.
 #pragma once
+#include "RtsFog.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -62,6 +63,8 @@ public:
     void draw(render::Renderer3D& r, const MapGrid& g, const std::vector<uint8_t>* vision, bool flatDig);
     bool built() const { return built_; }
     bool shaderFog() const { return heightfield_; }
+    // Fog of war look + processed field from RtsFog (fade, blur); null = raw vision, default look.
+    void setFog(const std::vector<uint8_t>* field, const FogLook& look, bool changed) { fogField_ = field; fogLook_ = look; fogFieldChanged_ = fogFieldChanged_ || changed; }
     const TerrainLook& look() const { return look_; }
 
     struct Stats { int chunks = 0, drawn = 0, lodMax = 0; uint64_t triangles = 0; double buildMs = 0; int rebuilt = 0; };
@@ -106,6 +109,9 @@ private:
     // per-cell textures
     gfx::TextureHandle cellTex_, dynTex_, splatTex_, visionTex_, white_, flatN_, gray_;
     std::vector<uint8_t> cellPx_, dynPx_, splatPx_, visionPx_;
+    const std::vector<uint8_t>* fogField_ = nullptr;
+    FogLook fogLook_;
+    bool fogFieldChanged_ = true;
     int texW_ = 0, texH_ = 0, dynRow_ = 0;
     bool visionInit_ = false;
     std::vector<uint8_t> materialLayer_;

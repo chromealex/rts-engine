@@ -1,0 +1,52 @@
+/* Green Hills: UI skin (linked after engine/ui/theme.rcss). 2D pixel kingdom: chunky square frames, meadow greens.
+   Title font: fonts/title.ttf (Press Start 2P, SIL OFL, fonts/OFL.txt). */
+
+body { color: #f4f8e8; }
+h1 { font-family: title; color: #ffe36e; font-size: 18dp; font-weight: normal; line-height: 30dp; }
+h2 { color: #a7c48e; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #a7c48e; }
+.error { color: #ff6e5e; }
+
+.panel {
+    background-color: #1d3a1df2;
+    border: 3dp #e8d9a0;
+    border-radius: 0;
+}
+
+button {
+    color: #f4f8e8;
+    border: 1dp #0f220f;
+    border-radius: 0;
+    decorator: vertical-gradient(#3f7a32ff #2c5a23ff);
+}
+button:hover { decorator: vertical-gradient(#4f9140ff #356a2aff); border-color: #ffe36e; }
+button:active { decorator: vertical-gradient(#2c5a23ff #3f7a32ff); }
+button.active { border-color: #ffe36e; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#3f7a32ff #2c5a23ff); border-color: #0f220f; }
+button .cost { color: #ffe9a0; }
+button .tip { color: #ff6e5e; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #ffe36e; }
+
+#card .title { color: #ffe36e; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff6e5e; }
+.notice { color: #ffe36e; }
+#selbox { border-color: #ffe36e; background-color: #ffffff18; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#376e37ff #0f1f0fff); }
+input.text { background-color: #10220f; border-color: #0f220f; color: #f4f8e8; }
+input.text:focus { border-color: #ffe36e; }
+#lobby .slot.mine { border-color: #ffe36e; }
+#lobby .roomtitle { color: #ffe36e; font-family: title; }
+
+#kb { background-color: #1d3a1df2; border-color: #e8d9a0; }
+#kb .key { color: #f4f8e8; border-color: #0f220f; border-radius: 0; decorator: vertical-gradient(#3f7a32ff #2c5a23ff); }
+#kb .key:active { border-color: #ffe36e; }
+#kb .key.on { border-color: #ffe36e; color: #ffffff; }
+
+button { border-width: 2dp; }
+h2 { font-family: title; font-size: 9dp; letter-spacing: 0; }
+#card .title { font-size: 11dp; }
+#menu h1 { text-align: center; }

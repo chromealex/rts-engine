@@ -1,0 +1,51 @@
+/* Frost Crown: UI skin (linked after engine/ui/theme.rcss). Northern kingdom: frosted steel, ice blue, silver.
+   Title font: fonts/title.ttf (Old Standard TT, SIL OFL, fonts/OFL.txt). */
+
+body { color: #e6f1fb; }
+h1 { font-family: title; color: #cfe8ff; font-size: 28dp; font-weight: normal; text-transform: uppercase; letter-spacing: 3dp; }
+h2 { color: #8fb0cc; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #8fb0cc; }
+.error { color: #ff8b8b; }
+
+.panel {
+    background-color: #0c1726e6;
+    border: 1dp #8fc9ff;
+    border-radius: 2dp;
+}
+
+button {
+    color: #e8f3ff;
+    border: 1dp #3d5d80;
+    border-radius: 2dp;
+    decorator: vertical-gradient(#27476bff #16283fff);
+}
+button:hover { decorator: vertical-gradient(#33608fff #1c3552ff); border-color: #a9dcff; }
+button:active { decorator: vertical-gradient(#16283fff #27476bff); }
+button.active { border-color: #a9dcff; color: #ffffff; }
+button.disabled:hover { decorator: vertical-gradient(#27476bff #16283fff); border-color: #3d5d80; }
+button .cost { color: #bfe3ff; }
+button .tip { color: #ff8b8b; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #a9dcff; }
+
+#card .title { color: #cfe8ff; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff8b8b; }
+.notice { color: #d8f0ff; }
+#selbox { border-color: #a9dcff; background-color: #a9dcff22; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#162b48ff #060c14ff); }
+input.text { background-color: #08111c; border-color: #3d5d80; color: #e6f1fb; }
+input.text:focus { border-color: #a9dcff; }
+#lobby .slot.mine { border-color: #a9dcff; }
+#lobby .roomtitle { color: #cfe8ff; font-family: title; }
+
+#kb { background-color: #0c1726e6; border-color: #8fc9ff; }
+#kb .key { color: #e8f3ff; border-color: #3d5d80; border-radius: 2dp; decorator: vertical-gradient(#27476bff #16283fff); }
+#kb .key:active { border-color: #a9dcff; }
+#kb .key.on { border-color: #a9dcff; color: #ffffff; }
+
+.panel { border-top-width: 3dp; }
+#menu h1 { text-align: center; }
+h2 { letter-spacing: 3dp; }

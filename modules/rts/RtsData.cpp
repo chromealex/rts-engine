@@ -121,6 +121,14 @@ Rules loadRules(const Json& j) {
     r.levelHeight = j.getFx("levelHeight", r.levelHeight);
     r.waveClock = j.getFx("waveClock");
     r.victory = loadVictory(j["victory"], r.victory);
+    if (const Json& f = j["fogOfWar"]; f.isObject()) {
+        std::string m = f.getStr("mode", "full");
+        if (m == "full") r.fog.mode = FogMode::Full;
+        else if (m == "explored") r.fog.mode = FogMode::Explored;
+        else if (m == "none" || m == "off") r.fog.mode = FogMode::None;
+        else throw std::runtime_error("fogOfWar.mode: unknown '" + m + "' (full, explored, none)");
+        r.fog.shareAllies = f.getBool("shareAllies", true);
+    }
     if (const Json& h = j["heights"]; h.isObject()) {
         r.heights.blockVision = h.getBool("blockVision", true);
         r.heights.missUphill = h.getFx("missUphill");

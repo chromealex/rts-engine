@@ -40,6 +40,7 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `waveClock` | seconds; structures with `waveSpawn` release their units together on this clock (lane battlers) |
 | `autoBuild` | `{"pool": [types], "cost": {res: n}, "growth": 0.5}` — a BUILD button: the sim picks a type from the pool and a spot next to the base automatically; cost grows by `growth` per structure already auto-built |
 | `victory` | `"noStructures"` (default), `"noUnits"`, `"noEntities"`, `"keyUnits"` (lose when all `key` objects die), or an object: `{"mode": "tickets", "tickets": 500, "drain": 1}`, `{"mode": "survive", "seconds": 600}`, `{"mode": "score", "seconds": 240, "keyLoses": true}`, `{"mode": "territory", "share": 0.9}` (a team owning that share of all claimable cells wins; a player with no territory is out) |
+| `fogOfWar` | `{"mode": "full"}` — fog of war: `full` (default: unexplored black, explored dim), `explored` (the whole map starts explored, enemies only in sight), `none` (no fog, everyone sees everything); `shareAllies` (true). A map may override `mode`. The other keys are visual, see "Fog of war look" |
 | `heights` | `{"blockVision": true, "missUphill": 0.3, "rangePerLevel": 1, "damagePerLevel": 0.1}` — cliff levels: lower ground can't see up, shots uphill can miss, higher ground adds range and damage. With `terrain.model: "heightfield"` the advantage is the height difference / `levelHeight` (fractional), `missUphill` scales with it (full chance from one level below) and vision follows real line of sight |
 | `terrain` | `{"model": "heightfield", "maxSlope": {"ground": 0.8, "sand": 0.6}, "buildSlope": 0.35, "uphillSpeed": 0.5, "downhillSpeed": 0.2, "eyeHeight": 1, "targetHeight": 0.5}` — terrain model, see "Heightfield terrain". `model`: `"levels"` (default: cliff levels + ramps), `"flat"` (levels ignored), `"heightfield"`. Other keys of this block are visual (view) and ignored by the simulation |
 | `regions` | `{"claimCost": {"food": 100}, "claimCostGrowth": 0.5, "buildOnlyOwned": true, "productionPerRegion": 0.1}` — territory (Northgard; with flags: Z) |
@@ -1138,3 +1139,27 @@ the tile), one static mesh.
 Editor: window **Тайлы** (palette, brush, autotile on/off, atlas picker; paints in the Scene view).
 Agents: `tileset_list`, `tiles_init {tileset, fill | fromTerrain}`, `tile_paint {terrain, x, y, radius | rect, tile?}`,
 `tile_info {x, y}`, `tiles_remove`.
+
+## Fog of war look
+
+Visual keys of rules.json `"fogOfWar"` (game.json `"fogOfWar"` overrides key by key; editor window
+**Туман войны**, or `rules_merge {path: "fogOfWar", value: {...}}` over MCP):
+
+```json
+"fogOfWar": {
+  "mode": "full",                 // simulation: full | explored | none (see rules table)
+  "show": true,                   // false: no fog drawn (enemies outside sight stay hidden)
+  "color": [8, 10, 14],           // 0..255 or 0..1
+  "unexplored": 0.92, "explored": 0.47,   // opacity over never-seen / seen-before ground
+  "style": "smooth",              // smooth | cells | grid (cells + lines) | pattern (dithered edge, classic)
+  "softness": 2,                  // blur radius in cells (smooth, pattern)
+  "fade": 0.3,                    // seconds for a cell to clear / fog over
+  "noise": 0.0,                   // 0..1 cloudy moving edges
+  "height": 1.3,                  // sheet height above the ground (covers units and low buildings)
+  "grid": {"show": "fog", "color": [255, 255, 255], "alpha": 0.15}   // none | fog | all
+}
+```
+
+Weak GPUs (shadow quality off/low) draw `smooth` as `cells` without noise. Heightfield maps draw
+the fog in the terrain shader (colour, transparency, cells, grid; `pattern` and `noise` are
+sheet-only).
