@@ -739,6 +739,7 @@ private:
     void hashSettlers(Simulation& sim, Hasher& h);
     void sysLanes(Simulation& sim);       // RtsLanes.cpp
     void rebuildLanes(Simulation& sim);
+    void rebuildLanesSphere(Simulation& sim, const std::vector<Entity>& nodes);   // planets: same-body pairs, on the surface
     bool runLaneWalk(Simulation& sim, Entity e, Order& o);
     bool attackSlot(Simulation& sim, Entity e, Entity target, Fixed range, Vec3& out); // melee surround
     void moveToVia(Simulation& sim, Entity e, Vec3 goal, Fixed radius, bool aroundAllies);

@@ -646,24 +646,30 @@ void RtsAI::dungeon(Simulation& sim, RtsModule& m) {
             g.nearestPassable(hx, hy, kLayerGround, 4);
             if (g.inside(hx, hy)) { q.push_back(g.index(hx, hy)); reach[size_t(q[0])] = 1; }
             static const int dx4[4] = {1, -1, 0, 0}, dy4[4] = {0, 0, 1, -1};
+            // 4-neighbour k of a cell (planets: across face seams), -1 none
+            auto nb = [&](int c, int k) {
+                if (g.surf) return g.surf->neighbor(c, k);
+                const int nx = c % g.w + dx4[k], ny = c / g.w + dy4[k];
+                return g.inside(nx, ny) ? g.index(nx, ny) : -1;
+            };
             for (size_t qi = 0; qi < q.size(); ++qi) {
                 int x = q[qi] % g.w, y = q[qi] / g.w;
                 for (int k = 0; k < 4; ++k) {
-                    int nx = x + dx4[k], ny = y + dy4[k];
-                    if (!g.inside(nx, ny) || reach[size_t(g.index(nx, ny))] || !g.canStep(x, y, nx, ny, kLayerGround)) continue;
-                    reach[size_t(g.index(nx, ny))] = 1;
-                    q.push_back(g.index(nx, ny));
+                    const int n = nb(q[qi], k);
+                    if (n < 0 || reach[size_t(n)]) continue;
+                    if (g.surf ? !g.canMoveCells(q[qi], n, kLayerGround) : !g.canStep(x, y, n % g.w, n / g.w, kLayerGround)) continue;
+                    reach[size_t(n)] = 1;
+                    q.push_back(n);
                 }
             }
             std::vector<std::pair<Fixed, int>> cands;
             for (int c : q) {
-                int x = c % g.w, y = c / g.w;
                 for (int k = 0; k < 4; ++k) {
-                    int nx = x + dx4[k], ny = y + dy4[k];
-                    if (!g.inside(nx, ny)) continue;
-                    size_t n = size_t(g.index(nx, ny));
+                    const int nc = nb(c, k);
+                    if (nc < 0) continue;
+                    size_t n = size_t(nc);
                     if (!g.dig[n] || (g.digMark[n] & bit)) continue;
-                    Fixed score = dist(g.cellCenter(nx, ny), goal);
+                    Fixed score = dist(g.centerOf(nc), goal);
                     if (!R.diggables[g.dig[n] - 1u].yields.empty()) score -= Fixed::fromInt(6); // veins first
                     cands.push_back({score, int(n)});
                 }
@@ -672,7 +678,7 @@ void RtsAI::dungeon(Simulation& sim, RtsModule& m) {
             cands.erase(std::unique(cands.begin(), cands.end()), cands.end());
             for (size_t k = 0; k < cands.size() && k < 3; ++k) {
                 Command c; c.type = kCmdDig;
-                c.point = g.cellCenter(cands[k].second % g.w, cands[k].second / g.w);
+                c.point = g.centerOf(cands[k].second);
                 c.param = rectParam(1, 1, 0);
                 send(sim, c);
             }

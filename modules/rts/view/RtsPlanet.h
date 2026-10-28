@@ -57,6 +57,22 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings 
 // has an ocean) from `visual` (loadPlanetWorld of the same map; may be empty).
 PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::vector<uint8_t>& gridFlags, const PlanetWorld& visual);
 
+// Seam-aware box blur of a per-grid-cell byte field of a planet map (fog of war): every face is blurred as an
+// (N + 2r)^2 image whose border comes from the neighbouring faces across the seams (Surface::offset; past a cube
+// corner the nearest edge cell), separable and integer (same result everywhere), never across stacked face rows
+// or into other bodies / void cells. The padding index table is built once per surface and radius.
+class PlanetFieldBlur {
+public:
+    explicit PlanetFieldBlur(std::shared_ptr<const Surface> s) : S_(std::move(s)) {}
+    void operator()(std::vector<uint8_t>& field, int radius);
+private:
+    std::shared_ptr<const Surface> S_;
+    int radius_ = -1;
+    std::vector<std::vector<int32_t>> pad_;   // per body: 6 faces x (N+2r)^2 grid cells
+    std::vector<uint8_t> src_;
+    std::vector<uint16_t> row_;
+};
+
 // Sim-space positions of planet maps: body b's things live around Surface::anchor(b) (RtsSurface.h).
 inline render::float3 anchorF(int body) { return {float(Surface::kSphereOrigin + body * Surface::kBodySpacing), 0, 0}; }
 inline bool onSphereF(render::float3 p) { return p.x >= float(Surface::kSphereOrigin - Surface::kBodySpacing / 2); }

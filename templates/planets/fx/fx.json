@@ -1,0 +1,25 @@
+// Visual effects for "Planets" (see modules/rts/fx/RtsFx.h): effect files copied from templates/skirmish (built-in
+// particle textures only). On planets the effects stand on the local surface: gravity, smoke and debris follow the
+// body's up direction (docs/planets.md).
+{
+  "events": {
+    "attack":         { "effect": "hit_spark", "scale": 0.8, "height": 0.6 },
+    "hit":            { "effect": "explosion", "scale": 0.9 },
+    "died.unit":      { "effect": "explosion_big", "scale": 0.8 },
+    "died.air":       { "effect": "explosion", "scale": 0.8 },
+    "died.structure": { "effect": "explosion_big", "scale": 1.4, "height": 0.4 },
+    "buildPlaced":    { "effect": "build_dust", "scale": 0.7 },
+    "buildDone":      "build_dust",
+    "ready":          "unit_ready",
+    "levelUp":        "level_up",
+    "damaged":        { "effect": "fire_smoke", "height": 1.4, "below": 0.5 },
+    "trail":          "arrow_trail"
+  },
+  "types": {
+    "hammer":       { "hit": { "effect": "explosion_big", "scale": 0.7 } },
+    "gunship":      { "trail": "boulder_trail" },
+    "metal_spot":   { "died": null, "damaged": null },
+    "wreck_rock":   { "died": { "effect": "build_dust", "scale": 1.2 }, "damaged": null },
+    "wreck":        { "died": { "effect": "build_dust", "scale": 0.8 }, "damaged": null }
+  }
+}
