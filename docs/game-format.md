@@ -817,7 +817,7 @@ games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and t
 
 | id | like | recipe |
 |---|---|---|
-| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, creep camps (`neutral.leash`, `bounty`), siege demolisher |
+| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, chain lightning (`chain` delivery, `levels`), rejuvenation (HoT status, `charges`, `smart`), bloodlust; hunters with frost-arrow `onHit`, demolisher artillery strike (delayed `area`), creep camps (`neutral.leash`, `bounty`), siege demolisher |
 | `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
 | `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
 | `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
@@ -832,6 +832,7 @@ games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and t
 | `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
 | `hearthhaul` | Knights and Merchants | `storage: buildings`, storehouse, recipe chains (woodcutter → sawmill, farm → mill → bakery, armoury), serf `carrier`s, `roadNetwork`, delivered construction materials, `trainFrom: recruit`, inn `needs` with `starve` |
 | `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |
+| `spellbunkers` | Bunker Wars / Mushroom Wars 2 skills | sporelanes + mana/morale `regen`, named `statuses`, 26 player skills (structure / group / player targets, areas moving along lanes, chains over structures), per-player `loadout` of 16, an `autoEvery` map skill and a `passive` |
 
 ## 2D games
 

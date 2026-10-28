@@ -1832,7 +1832,8 @@ TEST(sample_games_bot_matches_deterministic) {
         {"ambersands", "maps/spice_basin.json"}, {"metaltide", "maps/twin_craters.json"}, {"fourages", "maps/highland.json"},
         {"holdtheline", "maps/crossroads.json"}, {"lastcolony", "maps/last_valley.json"}, {"clanlands", "maps/fjords.json"},
         {"flagsectors", "maps/sector_strip.json"}, {"laneclash", "maps/long_lane.json"}, {"underlord", "maps/two_keeps.json"},
-        {"borderrush", "maps/five_lands.json"}, {"hearthhaul", "maps/green_dale.json"}, {"sporelanes", "maps/spore_field.json"}};
+        {"borderrush", "maps/five_lands.json"}, {"hearthhaul", "maps/green_dale.json"}, {"sporelanes", "maps/spore_field.json"},
+        {"spellbunkers", "maps/rune_field.json"}};
     for (auto& g : games) {
         std::string dir = std::string(RTS_SOURCE_DIR) + "/games/" + g[0];
         std::vector<Command> cmds;
