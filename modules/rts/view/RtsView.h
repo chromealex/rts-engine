@@ -24,6 +24,7 @@
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
 #include "RtsFog.h"
+#include "RtsPlanetGroundFx.h"
 #include "RtsPlanetRender.h"
 #include "RtsOverlays.h"
 #include "RtsTerrainRender.h"
@@ -178,6 +179,14 @@ public:
     // Fog of war of a body as drawn (6 * N * N, 0 unexplored .. 255 visible); empty = no fog.
     const std::vector<uint8_t>& planetVision(int body) const { static const std::vector<uint8_t> none; return body >= 0 && size_t(body) < planetVision_.size() ? planetVision_[size_t(body)] : none; }
     double planetSeconds() const { return planetSeconds_; }
+    // Particles on planets live in the body-local space of the body the camera looks at (moves with it):
+    // the body and its body-local -> view-world matrix this frame (after updatePlanetCamera).
+    int planetFxBody() const { return planetCam_.body(); }
+    render::mat4 planetFxSpace() const;
+    // particle placement: sim position -> body-local of the camera body, `lift` above the ground (lift < -1e8:
+    // keep the position as it is, e.g. a flyer); false on other bodies. Ground altitude of a body-local point.
+    bool planetFxPlace(render::float3 sim, float lift, render::float3& out, render::float3& up) const;
+    float planetFxAltitude(render::float3 local) const;
     // Object frame in the view world (columns: east, up, south, ground point); false when not on a body.
     bool planetPlacement(const SceneObject& o, render::mat4& out) const;
     void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }
@@ -329,6 +338,8 @@ private:
     render::float3 camPos_;
     // planets
     PlanetRenderer planets_;
+    RtsPlanetGroundFx planetGroundFx_;   // territory / roads on sphere faces
+    std::vector<uint8_t> territoryDemo_;  // RTS_PLANET_TERRITORY_DEMO (testing the overlay)
     PlanetCamera planetCam_;
     PlanetViewFrame pframe_;
     double planetSeconds_ = 0;

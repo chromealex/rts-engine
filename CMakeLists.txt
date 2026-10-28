@@ -364,7 +364,7 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp
     modules/rts/view/RtsFog.cpp
-    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp)
+    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
 # Helper: package content + platform metadata around an executable.

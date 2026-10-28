@@ -77,6 +77,29 @@ bool RtsView::facePoint(int body, int face, float x, float y, float3& local) con
     return true;
 }
 
+mat4 RtsView::planetFxSpace() const {
+    return pframe_.matrix() * mat4::translate(planets_.world().center(planetCam_.body(), planetSeconds_));
+}
+
+bool RtsView::planetFxPlace(float3 sim, float lift, float3& out, float3& up) const {
+    int body; float3 local;
+    if (!simToBody(sim, body, local) || body != planetCam_.body()) return false;
+    const PlanetSurface* s = planets_.surface(body);
+    up = normalize(local);
+    if (!s || lift < -1e8f) { out = local; return true; }
+    const float3 ground = s->surfacePoint(up);
+    const float above = length(local) - length(ground);
+    out = above > 0.6f ? local + up * lift : ground + up * lift;   // orbit / flying: from where it is
+    return true;
+}
+
+float RtsView::planetFxAltitude(float3 local) const {
+    const PlanetSurface* s = planets_.surface(planetCam_.body());
+    if (!s) return 1e9f;
+    const float l = length(local);
+    return l - (s->radius() + s->heightAt(local * (1.0f / std::max(l, 1e-6f))));
+}
+
 float3 RtsView::bodyToView(int body, float3 local) const {
     return pframe_.toView(planets_.world().center(body, planetSeconds_) + local);
 }
@@ -198,6 +221,25 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
         std::fprintf(stderr, "[planet] t=%.0f transit %d orbit-units %d on-other-bodies %d\n", s.seconds, tr, orbit, moon);
     }
     planets_.draw(r, pframe_, s.seconds, planetCam_.body(), blend);
+    static const bool terrDemo = std::getenv("RTS_PLANET_TERRITORY_DEMO") != nullptr;
+    if (terrDemo && Wd.sim) { // testing: owner slots within 4 cells of each player's structures (the sim does not claim on spheres yet)
+        territoryDemo_.assign(grid.flags.size(), 0);
+        for (auto& o : s.objects) {
+            if (o.body < 0 || o.owner == 0 || o.isProjectile || o.type >= rules_->types.size() || !rules_->types[o.type].structure) continue;
+            const PlanetSurface* sf = planets_.surface(o.body);
+            if (!sf) continue;
+            int f; float a, b;
+            sf->faceFromDir(normalize(o.pos), f, a, b);
+            const int cx = int(a), cy = int(b);
+            for (int dy = -4; dy <= 4; ++dy)
+                for (int dx = -4; dx <= 4; ++dx) {
+                    if (dx * dx + dy * dy > 16) continue;
+                    const int c = Wd.sim->offset(Wd.sim->gridCell(o.body, f, std::clamp(cx, 0, sf->faceSize() - 1), std::clamp(cy, 0, sf->faceSize() - 1)), dx, dy);
+                    if (c >= 0 && (grid.flags[size_t(c)] & kCellGround) && !territoryDemo_[size_t(c)]) territoryDemo_[size_t(c)] = o.owner;
+                }
+        }
+    }
+    if (dev_ && rules_) planetGroundFx_.draw(*dev_, r, planets_, pframe_, s.seconds, time, vision, grid, groundFx_, *rules_, terrDemo ? &territoryDemo_ : nullptr);
     handleEvents(s);
     const float3 eye = r.camera().eye();
     const PlanetWorld& W = planets_.world();
