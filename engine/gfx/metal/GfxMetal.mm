@@ -232,10 +232,10 @@ public:
         if (d.blend != BlendMode::Opaque) {
             ca.blendingEnabled = YES;
             ca.rgbBlendOperation = ca.alphaBlendOperation = MTLBlendOperationAdd;
-            ca.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-            ca.destinationRGBBlendFactor = d.blend == BlendMode::Alpha ? MTLBlendFactorOneMinusSourceAlpha : MTLBlendFactorOne;
+            ca.sourceRGBBlendFactor = d.blend == BlendMode::Premultiplied ? MTLBlendFactorOne : MTLBlendFactorSourceAlpha;
+            ca.destinationRGBBlendFactor = d.blend == BlendMode::Additive ? MTLBlendFactorOne : MTLBlendFactorOneMinusSourceAlpha;
             ca.sourceAlphaBlendFactor = MTLBlendFactorOne;
-            ca.destinationAlphaBlendFactor = d.blend == BlendMode::Alpha ? MTLBlendFactorOneMinusSourceAlpha : MTLBlendFactorOne;
+            ca.destinationAlphaBlendFactor = d.blend == BlendMode::Additive ? MTLBlendFactorOne : MTLBlendFactorOneMinusSourceAlpha;
         }
         NSError* err = nil;
         MTPipeline p;
