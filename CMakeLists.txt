@@ -196,8 +196,9 @@ add_library(rts_models STATIC
     engine/render/Model.cpp
     engine/render/ModelGltf.cpp
     engine/render/ModelObj.cpp
-    engine/render/Animation.cpp)
-target_link_libraries(rts_models PUBLIC rts_engine)
+    engine/render/Animation.cpp
+    engine/render/TextureCodec.cpp)
+target_link_libraries(rts_models PUBLIC rts_engine rts_zstd_dec)
 
 set(RTS_RUNTIME_SRC
     engine/platform/PlatformCommon.cpp

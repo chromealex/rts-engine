@@ -14,6 +14,7 @@
 #include <vector>
 #include "../gfx/Gfx.h"
 #include "Math3D.h"
+#include "TextureCodec.h"
 
 namespace rts::render {
 
@@ -54,6 +55,9 @@ struct Image {
     std::string name;               // file name or "#index" for embedded images
     int width = 0, height = 0;
     std::vector<uint8_t> rgba;      // CPU copy, released after upload
+    // KTX2 source: raw GPU blocks of every mip level (rgba then holds the CPU-decoded level 0
+    // as a fallback). Shared so Image stays cheap to copy; null for PNG/JPEG/TGA.
+    std::shared_ptr<CompressedImage> compressed;
     bool repeat = true, nearest = false;
     gfx::TextureHandle tex;
 };
