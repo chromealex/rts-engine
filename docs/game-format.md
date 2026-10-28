@@ -1023,6 +1023,65 @@ Types can be assembled from a chassis and parts (Master of Orion, Galactic Civil
 - `slots`: a count, or a count per part `slot` kind; too many parts is a load error.
 - The type's own keys (besides `design`) are applied last.
 
+## Field battles, big armies, logistics (agent-mech stage 4)
+
+Tested in `tests/tests_mech.inc` (`mech_battle`, `mech_flow_fields`, `mech_logistics`; `RTS_BENCH_ARMY=1500` runs a
+3000-unit benchmark).
+
+### Morale, rout, fatigue, charge (Total War, Close Combat)
+
+```json
+"morale": {"max": 100, "regen": 2, "hitLoss": 100, "allyDeath": 6, "allyRadius": 6, "flankSide": 1.5, "flankRear": 2,
+           "waver": 40, "rout": 20, "rally": 60, "routSpeed": 1.25, "waverAttack": 0.85, "tags": ["soldier"],
+           "general": {"tags": ["general"], "radius": 10, "regen": 6, "death": 30}},
+"fatigue": {"run": 2, "fight": 4, "recover": 5, "tired": 50, "exhausted": 85, "tiredMul": 0.85, "exhaustedMul": 0.6}
+```
+
+- Morale (per unit, `"morale": 120` on a type overrides `max`) falls by `hitLoss` x the share of max hp a hit takes,
+  times `flankSide` / `flankRear` when the attacker is beside / behind the unit's facing; by `allyDeath` when an own unit
+  dies within `allyRadius` (`general.death` within twice `general.radius` when a general dies). It recovers by `regen`
+  per second, plus `general.regen` near an own general.
+- Below `waver` the unit wavers (attack speed x `waverAttack`); below `rout` it routs: drops its orders, runs away from
+  the nearest enemy (speed x `routSpeed`), does not fight and recovers only when no enemy is in sight, until `rally`.
+  Event `morale` (value 0 steady, 1 wavering, 2 routing). The AI walks idle generals to its shakiest soldiers.
+- Fatigue 0..100 grows by `run` per second moving and `fight` per second shooting, drops by `recover` when idle; above
+  `tired` / `exhausted` speed and attack speed are multiplied by `tiredMul` / `exhaustedMul`.
+- `"charge": {"bonus": 1.5, "run": 3, "shock": 15, "cooldown": 8}` on a type: after running `run` cells, the first blow
+  deals `bonus` x damage and costs the target `shock` morale.
+- MCP state shows `morale`, `moraleState`, `fatigue`, `supplied`.
+
+### Supply lines (Rise of Nations, Hearts of Iron)
+
+`"supply": {"tags": ["soldier"], "attrition": 0.01, "speed": 0.8, "attack": 0.8}` and `"supplyRadius": 12` on depot
+types: units farther than that from every finished own or allied depot lose `attrition` x max hp per second and move
+and attack slower.
+
+### Big armies (BA)
+
+`"flowFields": true` (or `{"minCells": 8, "cache": 16}`): ground paths of at least `minCells` follow a flow field of the
+goal cell (one reverse Dijkstra shared by every unit sent there; the path is a pure function of the grid, the cache only
+saves work), and attack-move groups of more than 24 form a block of rows instead of one wide arc. Separation and RVO
+neighbour lookups always use a one-cell grid (results identical to the spatial-hash version). Benchmark (ARM VM, -O3):
+3000 units fighting, about 13 ms per tick.
+
+### Conveyors, producers, crafters (Mindustry, Factorio)
+
+```json
+"belt":    {"structure": {"footprint": [1, 1]}, "conveyor": {"speed": 4}},
+"drill":   {"structure": {"footprint": [2, 2]}, "beltOutput": {"resource": "ore", "amount": 1, "interval": 0.5}},
+"smelter": {"structure": {"footprint": [2, 2]}, "craft": {"in": {"ore": 2}, "out": {"plate": 1}, "time": 1}},
+"core":    {"structure": {"footprint": [2, 2]}, "beltInput": ["plate"]}
+```
+
+- A conveyor piece carries one packet per cell at `speed` cells per second in its direction (east, south, west, north):
+  set by `build_line` (along the line's main axis), map entity `"dir": "e"`, or command `rotate`
+  (`{"cmd": "rotate", "units": [...], "dir": "n"}`; without `dir` it turns clockwise).
+- Producers put a packet on a free adjacent belt that does not point back into them every `interval`; crafters take
+  their inputs from belts (up to twice a batch), work `time` seconds (scaled by staff / power) and put outputs on belts.
+- A structure with `beltInput` (resource list or `"any"`) takes packets into its owner's stock (event `delivered`).
+- Belts are ordinary structures (blocking, destructible); a packet on a destroyed belt is lost. The AI does not lay
+  belts yet. MCP state: a belt's `dir` and `carries`, a crafter's `input` / `output`.
+
 ## Save states (agent-mech)
 
 `Simulation::serialize()` returns the whole dynamic state as bytes (versioned, little-endian, identical on every
