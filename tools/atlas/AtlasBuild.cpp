@@ -158,6 +158,9 @@ AtlasConfig AtlasConfig::fromGame(const Json& game, const std::string& profile) 
     const Json& a = game["atlas"];
     bool lowEnd = profile == "web" || profile == "android" || profile.find("low") != std::string::npos;
     c.pack.maxPage = lowEnd ? 2048 : 4096;
+    // GLES3 / WebGL2 / Metal sample any size; multiples of 4 keep pages block-compression friendly
+    // and waste far less memory than powers of two (pow2 stays available for old formats).
+    c.pack.pow2 = false;
     if (a.isNull()) return c;
     if (!a.isObject()) bad("must be an object");
     for (auto& [k, v] : a.members()) {
@@ -172,7 +175,7 @@ AtlasConfig AtlasConfig::fromGame(const Json& game, const std::string& profile) 
         if (mp.has(profile)) c.pack.maxPage = int(mp.getInt(profile));
         else if (mp.has("default")) c.pack.maxPage = int(mp.getInt("default"));
     } else if (!mp.isNull()) bad("maxPage must be a number or {\"<profile>\": size, \"default\": size}");
-    std::string ps = a.getStr("pageSize", "pow2");
+    std::string ps = a.getStr("pageSize", "mul4");
     if (ps != "pow2" && ps != "mul4") bad("pageSize must be \"pow2\" or \"mul4\"");
     c.pack.pow2 = ps == "pow2";
     if (c.pack.maxPage < 64 || c.pack.maxPage > 16384 || (c.pack.pow2 ? !isPow2(c.pack.maxPage) : c.pack.maxPage % 4 != 0))

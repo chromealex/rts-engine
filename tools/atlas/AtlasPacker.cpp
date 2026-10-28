@@ -27,31 +27,27 @@ bool MaxRects::insert(int w, int h, bool allowRotate, PackRect& out, bool& rotat
 }
 
 void MaxRects::place(const PackRect& r) {
-    std::vector<PackRect> next;
-    next.reserve(free_.size() + 4);
+    // Free rects are kept maximal (none contains another). Split pieces are subsets of the rect
+    // they came from, so only new pieces can be redundant: prune them against everything else.
+    std::vector<PackRect> keep, fresh;
+    keep.reserve(free_.size() + 4);
     for (const PackRect& f : free_) {
-        if (r.x >= f.x + f.w || r.x + r.w <= f.x || r.y >= f.y + f.h || r.y + r.h <= f.y) { next.push_back(f); continue; }
-        if (r.x > f.x) next.push_back({f.x, f.y, r.x - f.x, f.h});
-        if (r.x + r.w < f.x + f.w) next.push_back({r.x + r.w, f.y, f.x + f.w - (r.x + r.w), f.h});
-        if (r.y > f.y) next.push_back({f.x, f.y, f.w, r.y - f.y});
-        if (r.y + r.h < f.y + f.h) next.push_back({f.x, r.y + r.h, f.w, f.y + f.h - (r.y + r.h)});
+        if (r.x >= f.x + f.w || r.x + r.w <= f.x || r.y >= f.y + f.h || r.y + r.h <= f.y) { keep.push_back(f); continue; }
+        if (r.x > f.x) fresh.push_back({f.x, f.y, r.x - f.x, f.h});
+        if (r.x + r.w < f.x + f.w) fresh.push_back({r.x + r.w, f.y, f.x + f.w - (r.x + r.w), f.h});
+        if (r.y > f.y) fresh.push_back({f.x, f.y, f.w, r.y - f.y});
+        if (r.y + r.h < f.y + f.h) fresh.push_back({f.x, r.y + r.h, f.w, f.y + f.h - (r.y + r.h)});
     }
-    free_ = std::move(next);
-    prune();
-}
-
-void MaxRects::prune() {
     auto inside = [](const PackRect& a, const PackRect& b) { return a.x >= b.x && a.y >= b.y && a.x + a.w <= b.x + b.w && a.y + a.h <= b.y + b.h; };
-    std::vector<char> dead(free_.size(), 0);
-    for (size_t i = 0; i < free_.size(); ++i) {
-        if (dead[i]) continue;
-        for (size_t j = 0; j < free_.size(); ++j) {
-            if (i == j || dead[j]) continue;
-            if (inside(free_[i], free_[j])) { dead[i] = 1; break; }
-        }
+    size_t untouched = keep.size();
+    for (size_t i = 0; i < fresh.size(); ++i) {
+        bool redundant = false;
+        for (size_t k = 0; k < untouched && !redundant; ++k) redundant = inside(fresh[i], keep[k]);
+        // among new pieces, drop i if contained in j (equal pieces: keep the first one)
+        for (size_t j = 0; j < fresh.size() && !redundant; ++j)
+            if (j != i && inside(fresh[i], fresh[j]) && (!inside(fresh[j], fresh[i]) || j < i)) redundant = true;
+        if (!redundant) keep.push_back(fresh[i]);
     }
-    std::vector<PackRect> keep;
-    for (size_t i = 0; i < free_.size(); ++i) if (!dead[i]) keep.push_back(free_[i]);
     free_ = std::move(keep);
 }
 
