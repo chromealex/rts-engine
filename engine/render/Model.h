@@ -1,6 +1,6 @@
 // Models: node hierarchy, meshes, PBR materials, textures, skins and animation clips.
 //
-// Sources: glTF 2.0 (.gltf / .glb), Wavefront OBJ (+ .mtl), and procedural meshes built with
+// Sources: glTF 2.0 (.gltf / .glb), Wavefront OBJ (+ .mtl), FBX (.fbx), and procedural meshes built with
 // MeshBuilder (the built-in shapes). Every source ends up in the same Model structure, so the
 // renderer, the animation system and the game view treat them identically.
 //
@@ -168,12 +168,14 @@ struct Model {
 
 using FileReader = std::function<bool(const std::string& path, std::string& out)>;
 
-// Loads .gltf / .glb / .obj by extension. Throws std::runtime_error with a readable message
+// Loads .gltf / .glb / .obj / .fbx by extension. Throws std::runtime_error with a readable message
 // ("models/knight.glb: accessor 3 out of range"). Unsupported optional features are reported in
 // `warnings` and skipped (morph targets, compressed meshes fall back to an error).
 std::unique_ptr<Model> loadModel(const std::string& path, const FileReader& read, std::vector<std::string>* warnings = nullptr);
 std::unique_ptr<Model> loadGltf(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
 std::unique_ptr<Model> loadObj(const std::string& path, const std::string& text, const FileReader& read, std::vector<std::string>* warnings);
+// FBX (binary / ASCII) through ufbx; converted to Y up, right-handed, metres.
+std::unique_ptr<Model> loadFbx(const std::string& path, const std::string& bytes, const FileReader& read, std::vector<std::string>* warnings);
 // PNG / JPEG / TGA from memory into RGBA8. Returns false on failure.
 bool decodeImage(const std::string& bytes, Image& out);
 

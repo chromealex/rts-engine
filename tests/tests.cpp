@@ -1265,7 +1265,7 @@ TEST(models_gltf_readable_errors) {
     catch (const std::exception& e) { threw = std::string(e.what()).find("missing.glb") != std::string::npos; }
     CHECK(threw);
     threw = false;
-    try { loadModel("x.fbx", mapReader({{"x.fbx", "data"}}), nullptr); }
+    try { loadModel("x.blend", mapReader({{"x.blend", "data"}}), nullptr); }
     catch (const std::exception& e) { threw = std::string(e.what()).find("unsupported model format") != std::string::npos; }
     CHECK(threw);
     // accessor pointing past its buffer view
@@ -1356,7 +1356,7 @@ TEST(models_sample_assets_load) {
     const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/showcase/models/";
     std::vector<std::string> warn;
     auto golem = loadModel(dir + "golem.glb", diskReader(), &warn);
-    CHECK(golem->clips.size() == 4 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
+    CHECK(golem->clips.size() == 6 && golem->skins.size() == 1 && golem->skins[0].joints.size() == 8);
     CHECK(golem->findClip("Death") >= 0 && golem->images.size() == 3);
     auto tank = loadModel(dir + "tank.glb", diskReader(), &warn);
     CHECK(tank->variants.size() == 2 && tank->findNode("Turret") >= 0 && tank->findVariant("winter") == 1);
@@ -1604,6 +1604,74 @@ TEST(ktx2_rejects_bad_files) {
     CHECK(garbageFails);
     Image img;
     CHECK(!decodeImage(basis, img) && !decodeImage(good.substr(0, 90), img));
+}
+
+// ---------------- models (models agent): FBX loader ----------------
+TEST(models_fbx_skinned_cube) {
+    using namespace modeltest;
+    std::vector<std::string> warn;
+    const std::string path = std::string(RTS_SOURCE_DIR) + "/tests/data/models/cube.fbx";
+    auto m = loadModel(path, diskReader(), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    CHECK(m->nodes.size() == 3 && m->meshes.size() == 1 && m->skins.size() == 1 && m->clips.size() == 1);
+    const int box = m->findNode("Box"), root = m->findNode("Root"), top = m->findNode("Top");
+    CHECK(box >= 0 && root >= 0 && top >= 0);
+    if (box < 0 || root < 0 || top < 0) return;
+    CHECK(m->nodes[size_t(top)].parent == root && m->nodes[size_t(box)].mesh == 0 && m->nodes[size_t(box)].skin == 0);
+    CHECK(near(m->nodes[size_t(top)].t.y, 1.0f));                       // 100 cm -> 1 m
+    // one primitive per material, 6 quads -> 12 triangles
+    const MeshDef& md = m->meshes[0];
+    CHECK(md.primitives.size() == 2);
+    uint32_t tris = 0;
+    for (auto& p : md.primitives) tris += p.indexCount / 3;
+    CHECK(tris == 12);
+    const int crate = m->findMaterial("Crate"), glass = m->findMaterial("Glass");
+    CHECK(crate >= 0 && glass >= 0);
+    if (crate >= 0) CHECK(near(m->materials[size_t(crate)].baseColor.x, 0.8f) && m->materials[size_t(crate)].alpha == AlphaMode::Opaque);
+    if (glass >= 0) {
+        const Material& g = m->materials[size_t(glass)];
+        CHECK(g.alpha == AlphaMode::Blend && g.baseColor.w < 0.99f && g.emissive.z > 0.1f);
+    }
+    // bounds in metres, Y up
+    CHECK(near(m->boundsMin.x, -0.5f) && near(m->boundsMax.x, 0.5f) && near(m->boundsMin.y, 0) && near(m->boundsMax.y, 2));
+    // skin: weights normalized, bind pose palette = identity
+    for (auto& p : md.primitives) {
+        CHECK(!p.jointPalette.empty() && p.jointPalette.size() <= 2);
+        std::vector<mat4> pal;
+        paletteMatrices(*m, m->skins[0], p, m->bindWorld, pal);
+        bool identity = true;
+        for (auto& x : pal) for (int i = 0; i < 16; ++i) identity &= near(x.m[i], (i % 5 == 0) ? 1.0f : 0.0f);
+        CHECK(identity);
+        for (uint32_t i = 0; i < p.indexCount; ++i) {
+            const ModelVertex& v = m->vertices[m->indices[p.firstIndex + i]];
+            const int sum = v.weights[0] + v.weights[1] + v.weights[2] + v.weights[3];
+            CHECK(sum >= 254 && sum <= 256);
+        }
+    }
+    // animation: Root moves 1 m along X, Top turns 90 degrees about Y over one second
+    const AnimClip& clip = m->clips[0];
+    CHECK(clip.name == "Bend" && near(clip.duration, 1, 0.02f));
+    Pose pose;
+    bindPose(*m, pose);
+    sampleClip(clip, 1.0f, pose);
+    const quat e = quat::axisAngle({0, 1, 0}, 1.5707963f);
+    CHECK(near(pose[size_t(root)].t.x, 1, 0.01f));
+    CHECK(near(std::fabs(pose[size_t(top)].r.y), e.y, 0.01f) && near(std::fabs(pose[size_t(top)].r.w), e.w, 0.01f));
+    sampleClip(clip, 0.5f, pose);
+    CHECK(near(pose[size_t(root)].t.x, 0.5f, 0.01f));
+}
+
+TEST(models_fbx_readable_errors) {
+    using namespace modeltest;
+    bool threw = false;
+    try { loadModel("units/broken.fbx", mapReader({{"units/broken.fbx", "this is not an FBX file at all"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("units/broken.fbx") != std::string::npos; std::printf("  (expected) %s\n", e.what()); }
+    CHECK(threw);
+    threw = false;
+    try { loadModel("units/thing.xyz", mapReader({{"units/thing.xyz", "x"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find(".fbx") != std::string::npos; }
+    CHECK(threw);
 }
 
 int main() {

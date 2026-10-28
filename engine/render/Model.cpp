@@ -120,7 +120,12 @@ std::unique_ptr<Model> loadModel(const std::string& path, const FileReader& read
     std::unique_ptr<Model> m;
     if (ext == ".gltf" || ext == ".glb") m = loadGltf(path, bytes, read, warnings);
     else if (ext == ".obj") m = loadObj(path, bytes, read, warnings);
-    else throw std::runtime_error(path + ": unsupported model format '" + ext + "' (use .gltf, .glb or .obj)");
+#if defined(RTS_NO_FBX)
+    else if (ext == ".fbx") throw std::runtime_error(path + ": FBX import is disabled in this build (RTS_FBX=OFF); convert to .glb");
+#else
+    else if (ext == ".fbx") m = loadFbx(path, bytes, read, warnings);
+#endif
+    else throw std::runtime_error(path + ": unsupported model format '" + ext + "' (use .gltf, .glb, .obj or .fbx)");
     m->path = path;
     return m;
 }
