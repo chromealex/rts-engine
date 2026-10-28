@@ -330,6 +330,7 @@ struct GameState {
     SpatialHash hash;
     bool roadsOnly = false;
     std::vector<std::vector<uint8_t>> vision; // per player per cell: 0 unexplored, 1 explored, 2 visible
+    std::vector<std::vector<int32_t>> visibleCells; // per player: cells at 2 (derived, so fog reset is O(visible))
     // regions
     int regionCount = 0;
     std::vector<uint8_t> regionOwner;
@@ -397,6 +398,11 @@ public:
     Fixed typeStat(Simulation& sim, uint8_t player, uint16_t type, Stat s, Fixed base) const;
     int membersAlive(Simulation& sim, Entity e) const;
     int levelAt(Simulation& sim, Vec3 p) const;
+    // Heightfield terrain (rules terrain.model "heightfield"): ground height under p (0 otherwise), and the
+    // height advantage of a over b in cliff levels - whole levels on cliff maps, fractional on heightfields.
+    Fixed groundHeight(Simulation& sim, Vec3 p) const;
+    Fixed heightAdvantage(Simulation& sim, Vec3 a, Vec3 b) const;
+    Fixed slopeSpeed(Simulation& sim, Vec3 p, Vec2 dir) const;   // uphill / downhill speed factor (1 off heightfields)
     int regionAt(Simulation& sim, Vec3 p) const;
     bool canClaim(Simulation& sim, uint8_t player, int region, std::vector<Amount>* cost = nullptr) const;
     Entity findNearestFieldCell(Simulation& sim, Vec3 p, int res, Vec3& out, int maxRadius = 24) const;

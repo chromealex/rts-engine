@@ -2579,6 +2579,94 @@ TEST(atlas_texture_library_is_transparent) {
     CHECK(dev.alive == 0);
 }
 
+// ------------------------------------------------------------------ heightfield terrain (agent-terrain-sim)
+// corners in 1/16 units, row-major (w+1)*(h+1)
+static std::string cornersJson(int w, int h, const std::function<int(int, int)>& f) {
+    std::string out = "[";
+    for (int y = 0; y <= h; ++y)
+        for (int x = 0; x <= w; ++x) out += (x || y ? "," : "") + std::to_string(f(x, y));
+    return out + "]";
+}
+static std::string hfMap(int w, int h, const std::function<int(int, int)>& f, const std::string& extra) {
+    std::string rows;
+    for (int y = 0; y < h; ++y) rows += std::string(y ? "," : "") + "\"" + std::string(size_t(w), '.') + "\"";
+    return "{\"size\":[" + std::to_string(w) + "," + std::to_string(h) + "],\"players\":[{\"name\":\"A\",\"team\":1},{\"name\":\"B\",\"team\":2}]," +
+           "\"terrain\":{\"rows\":[" + rows + "],\"corners\":" + cornersJson(w, h, f) + "}" + extra + "}";
+}
+
+TEST(terrain_surface_height_and_slope) {
+    game::MapGrid g;
+    g.init(2, 2);
+    g.corner = {0, 16, 32, 0, 16, 32, 0, 16, 32};     // plane rising 1 unit per cell along x
+    g.enableHeightfield(Fixed::fromInt(1));
+    CHECK(g.surfaceHeight(Fixed::fromInt(0), Fixed::fromInt(0)) == Fixed{});
+    CHECK(g.surfaceHeight(Fixed::fromRatio(1, 2), Fixed::fromRatio(3, 2)) == Fixed::fromRatio(1, 2));
+    CHECK(g.surfaceHeight(Fixed::fromRatio(5, 4), Fixed::fromInt(1)) == Fixed::fromRatio(5, 4));
+    CHECK(g.surfaceHeight(Fixed::fromInt(9), Fixed::fromInt(9)) == Fixed::fromInt(2));   // clamped to the map
+    CHECK(g.cellHeight(1, 0) == Fixed::fromRatio(3, 2));
+    CHECK(g.slope[0] == 256 && g.slope[1] == 256);       // rise 1 per cell, 1/256 units
+    CHECK(g.level[1] == 1 && g.level[0] == 0);           // cliff level = floor(h / levelHeight)
+    Vec3 gr = g.gradient(Fixed::fromRatio(1, 2), Fixed::fromRatio(1, 2));
+    CHECK(gr.x == Fixed::fromInt(1) && gr.z == Fixed{});
+    // bilinear inside a twisted cell
+    g.corner = {0, 16, 0, 16, 0, 16, 0, 16, 0};
+    g.enableHeightfield(Fixed::fromInt(1));
+    CHECK(g.surfaceHeight(Fixed::fromRatio(1, 2), Fixed::fromRatio(1, 2)) == Fixed::fromRatio(1, 2));
+    CHECK(g.slope[0] >= 256);                            // steep edges count even without a gradient
+}
+
+TEST(terrain_slope_passability_per_type) {
+    const char* rules = R"({
+      "terrain": {"model": "heightfield", "maxSlope": {"ground": 0.7}, "material": "ignored-visual-key"},
+      "types": {
+        "tank": {"move": {"speed": 2, "radius": 0.4}},
+        "kbot": {"move": {"speed": 2, "radius": 0.4, "maxSlope": 2.5}},
+        "plane": {"move": {"speed": 3, "layer": "air"}}
+      }})";
+    // a wall at x=10..11: rises 2 units over one cell (slope 2) except a gentle gap at the bottom rows
+    auto f = [](int x, int y) { return (x == 11 && y < 12) ? 32 : 0; };
+    auto sim = makeSimJson(rules, hfMap(24, 16, f, R"(,"entities":[])"));
+    auto& R = mod(*sim).rules();
+    auto& g = mod(*sim).state(*sim).grid;
+    const game::UnitType& tank = R.types[size_t(R.findType("tank"))];
+    const game::UnitType& kbot = R.types[size_t(R.findType("kbot"))];
+    CHECK(g.hf && R.terrain.heightfield());
+    CHECK(!g.passable(10, 5, tank.pathLayer) && g.passable(10, 5, kbot.pathLayer));
+    CHECK(g.passable(10, 14, tank.pathLayer));
+    std::vector<Vec3> path;
+    CHECK(g.findPath(g.cellCenter(4, 5), g.cellCenter(18, 5), tank.pathLayer, path));
+    bool detour = false;
+    for (auto& p : path) if (p.z.floorInt() >= 12) detour = true;
+    CHECK(detour);                                        // the tank goes around through the gentle gap
+    CHECK(g.findPath(g.cellCenter(4, 5), g.cellCenter(18, 5), kbot.pathLayer, path) && path.size() == 1); // straight over
+    CHECK(!g.areaBuildable(10, 4, 2, 2) && g.areaBuildable(3, 3, 2, 2));
+    bool threw = false;
+    try { game::loadRules(Json::parse(R"({"terrain": {"model": "hills"}, "types": {"a": {}}})")); } catch (const std::exception& e) {
+        threw = std::string(e.what()).find("terrain.model") != std::string::npos;
+    }
+    CHECK(threw);
+}
+
+TEST(terrain_line_of_sight_behind_ridge) {
+    const char* rules = R"({
+      "terrain": {"model": "heightfield", "maxSlope": 3},
+      "types": {"scout": {"move": {"speed": 2}, "sight": 14}}})";
+    // ridge 4 units high around x=12, valley floor 0 on both sides
+    auto f = [](int x, int) { int d = std::abs(x - 12); return d >= 3 ? 0 : (3 - d) * 22; };
+    auto sim = makeSimJson(rules, hfMap(32, 8, f, R"(,"entities":[{"type":"scout","owner":1,"pos":[5.5,4.5]},{"type":"scout","owner":2,"pos":[30.5,4.5]}])"));
+    run(*sim, 1);
+    auto& gs = mod(*sim).state(*sim);
+    auto vis = [&](int x) { return gs.vision[1][size_t(gs.grid.index(x, 4))] == 2; };
+    CHECK(vis(6) && vis(10) && vis(12));                  // up to the crest
+    CHECK(!vis(16) && !vis(17));                          // behind the ridge: hidden
+    // the same map as plain cliff levels sees everything in range
+    std::string flatRules = R"({"types": {"scout": {"move": {"speed": 2}, "sight": 14}}})";
+    auto sim2 = makeSimJson(flatRules, hfMap(32, 8, f, R"(,"entities":[{"type":"scout","owner":1,"pos":[5.5,4.5]},{"type":"scout","owner":2,"pos":[30.5,4.5]}])"));
+    run(*sim2, 1);
+    CHECK(mod(*sim2).state(*sim2).vision[1][size_t(gs.grid.index(17, 4))] == 2);
+    CHECK(!mod(*sim2).state(*sim2).grid.hf);
+}
+
 TEST(audio_3d_distance_models_and_pose) {
     audio::DistanceDef d;
     d.minDistance = 10; d.maxDistance = 50;
@@ -3836,6 +3924,163 @@ TEST(bw_more_primitives) {
     int tot = 0;
     w.each<game::Garrison, Owner>([&](Entity, game::Garrison& g, Owner& o) { if (o.player == 2) { tot += g.count; g.growth = Fixed{}; } });
     (void)tot; (void)a2;
+}
+
+TEST(terrain_hpa_path_matches_astar) {
+    // 256x256 maze-ish grid: walls with gaps; HPA* (big-map mode) vs plain unbounded A*
+    game::MapGrid g;
+    g.init(256, 256);
+    for (int x = 20; x < 256; x += 37)
+        for (int y = 0; y < 256; ++y) if ((y + x) % 90 > 6) g.flags[size_t(g.index(x, y))] = 0;
+    for (int y = 30; y < 256; y += 53)
+        for (int x = 0; x < 230; ++x) if (x % 70 > 5) g.flags[size_t(g.index(x, y))] = 0;
+    auto lengthOf = [](Vec3 from, const std::vector<Vec3>& p) { Fixed l{}; for (auto& q : p) { l += (q - from).xz().length(); from = q; } return l; };
+    Random rng(9);
+    int compared = 0;
+    for (int i = 0; i < 30; ++i) {
+        int x0 = int(rng.below(256)), y0 = int(rng.below(256)), x1 = int(rng.below(256)), y1 = int(rng.below(256));
+        if (!g.passable(x0, y0, game::kLayerGround) || !g.passable(x1, y1, game::kLayerGround)) continue;
+        std::vector<Vec3> a, b;
+        g.hpaMinCells = 1 << 30;
+        bool okA = g.findPath(g.cellCenter(x0, y0), g.cellCenter(x1, y1), game::kLayerGround, a, 256 * 256);
+        g.hpaMinCells = 0;
+        bool okB = g.findPath(g.cellCenter(x0, y0), g.cellCenter(x1, y1), game::kLayerGround, b, 40000);
+        CHECK(okA == okB);
+        if (!okA) continue;
+        Fixed la = lengthOf(g.cellCenter(x0, y0), a), lb = lengthOf(g.cellCenter(x0, y0), b);
+        CHECK(lb <= la * Fixed::fromRatio(115, 100) + Fixed::fromInt(4));   // near-optimal
+        for (size_t k = 0; k + 1 < b.size(); ++k)                           // every leg is walkable
+            CHECK(g.lineWalkable(g.cellX(b[k].x), g.cellY(b[k].z), g.cellX(b[k + 1].x), g.cellY(b[k + 1].z), game::kLayerGround));
+        ++compared;
+    }
+    CHECK(compared >= 10 && g.hpaStats[0] >= 10);
+    // a structure on the only gap (x=94, y=0..2) between two pockets: the touched clusters are rebuilt
+    std::vector<Vec3> p;
+    g.hpaMinCells = 0;
+    CHECK(g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p));
+    g.block(94, 0, 1, 3, +1);
+    CHECK(!g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p));
+    g.hpaMinCells = 1 << 30;
+    CHECK(!g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p, 256 * 256)); // truly cut off
+    g.hpaMinCells = 0;
+    g.block(94, 0, 1, 3, -1);
+    CHECK(g.findPath(g.cellCenter(60, 10), g.cellCenter(120, 10), game::kLayerGround, p));
+}
+
+TEST(terrain_incremental_clearance_matches_full) {
+    game::MapGrid g;
+    g.init(40, 30);
+    for (int y = 5; y < 25; ++y) g.flags[size_t(g.index(20, y))] = 0;
+    g.updateClearance();
+    g.block(8, 8, 3, 2, +1);
+    g.block(30, 2, 2, 2, +1);
+    g.block(8, 8, 3, 2, -1);
+    g.block(1, 26, 4, 4, +1);
+    CHECK(!g.clearanceDirty);
+    std::vector<uint8_t> inc = g.clearance;
+    g.updateClearance();
+    CHECK(inc == g.clearance);
+}
+
+TEST(terrain_heightfield_match_is_deterministic) {
+    const std::string dir = std::string(RTS_SOURCE_DIR) + "/games/metaltide";
+    Json rules = Json::parseFile(dir + "/rules.json"), map = Json::parseFile(dir + "/maps/twin_craters.json");
+    CHECK(game::loadRules(rules).terrain.heightfield());
+    auto run = [&] {
+        SimConfig cfg; cfg.seed = 3;
+        Simulation sim(cfg, std::make_unique<game::RtsModule>());
+        sim.setup(rules, map);
+        CHECK(mod(sim).state(sim).grid.hf);
+        std::vector<game::RtsAI> bots;
+        for (auto& p : sim.players()) bots.emplace_back(p.slot, 3);
+        for (int i = 0; i < 20 * 150; ++i) { for (auto& b : bots) b.update(sim); sim.step(); }
+        // units stand on the surface
+        bool onGround = true;
+        sim.world().each<game::Mobile, Transform>([&](Entity, game::Mobile&, Transform& t) {
+            if (t.pos.y != mod(sim).state(sim).grid.surfaceHeight(t.pos.x, t.pos.z)) onGround = false;
+        });
+        CHECK(onGround);
+        return sim.checksum();
+    };
+    uint64_t a = run(), b = run();
+    CHECK(a == b);
+    // the corners take part in the checksum only with model "heightfield"
+    Json flatRules = Json::parse(R"({"types": {"u": {"move": {"speed": 1}}}})");
+    std::string m = flatMap(8, 8, "");
+    Json withCorners = Json::parse(m);
+    Json cs = Json::array();
+    for (int i = 0; i < 81; ++i) cs.push(Json::number(int64_t(i % 5)));
+    withCorners.member("terrain").set("corners", cs);
+    SimConfig cfg;
+    Simulation s1(cfg, std::make_unique<game::RtsModule>()), s2(cfg, std::make_unique<game::RtsModule>());
+    s1.setup(flatRules, Json::parse(m));
+    s2.setup(flatRules, withCorners);
+    CHECK(s1.checksum() == s2.checksum());
+}
+
+TEST(terrain_corners_file_roundtrip) {
+    std::vector<int16_t> c = {0, -5, 300, 32767, -32768, 7, 1, 2, 3};
+    std::string bytes = game::encodeCorners(c);
+    CHECK(bytes.size() == 18 && uint8_t(bytes[2]) == 0xfb && uint8_t(bytes[3]) == 0xff);
+    Json map = Json::parse(R"({"size": [2, 2], "terrain": {"cornersFile": "maps/x.r16"}})");
+    bool ok = game::applyCornersFile(map, [&](const std::string& p, std::string& out) { out = bytes; return p == "maps/x.r16"; }, nullptr);
+    CHECK(ok);
+    std::vector<int16_t> back;
+    CHECK(game::decodeCorners(map["terrain"], 2, 2, back, nullptr) && back == c);
+    std::string err;
+    CHECK(!game::decodeCorners(map["terrain"], 3, 3, back, &err) && err.find("expected 32 bytes") != std::string::npos);
+    Json missing = Json::parse(R"({"terrain": {"cornersFile": "maps/none.r16"}})");
+    CHECK(!game::applyCornersFile(missing, [](const std::string&, std::string&) { return false; }, &err));
+}
+
+// ---- terrain rendering (agent-terrain): the view's surface math (RtsTerrainSurface.h)
+#include "modules/rts/view/RtsTerrainSurface.h"
+
+TEST(terrain_view_surface_levels_matches_classic) {
+    game::MapGrid g;
+    g.init(6, 4);
+    for (auto& f : g.flags) f = game::kCellGround;
+    for (int y = 0; y < 4; ++y) for (int x = 3; x < 6; ++x) g.level[size_t(g.index(x, y))] = 1;
+    g.flags[size_t(g.index(2, 1))] |= game::kCellRamp;
+    const float lh = 1.5f;
+    CHECK(std::fabs(game::terrain::heightAt(g, lh, 0.5f, 0.5f) - 0.0f) < 1e-5f);
+    CHECK(std::fabs(game::terrain::heightAt(g, lh, 4.5f, 2.5f) - 1.5f) < 1e-5f);
+    // ramp at (2,1) rises east towards level 1: linear in x
+    CHECK(std::fabs(game::terrain::heightAt(g, lh, 2.25f, 1.5f) - 0.375f) < 1e-4f);
+    CHECK(std::fabs(game::terrain::heightAt(g, lh, 2.75f, 1.5f) - 1.125f) < 1e-4f);
+}
+
+TEST(terrain_view_surface_heightfield_matches_mesh_triangles) {
+    game::MapGrid g;
+    g.init(2, 2);
+    g.corner = {0, 16, 32, 16, 64, 16, 0, 16, 0};   // (w+1)*(h+1), 1/16 units
+    // corners exact
+    for (int Y = 0; Y <= 2; ++Y)
+        for (int X = 0; X <= 2; ++X)
+            CHECK(std::fabs(game::terrain::heightAt(g, 1.5f, float(X), float(Y)) - float(g.corner[size_t(Y * 3 + X)]) / 16.0f) < 1e-5f);
+    // on the diagonal (0,0)-(1,1) of cell (0,0): linear between corner (0,0) = 0 and (1,1) = 4
+    CHECK(std::fabs(game::terrain::heightAt(g, 1.5f, 0.5f, 0.5f) - 2.0f) < 1e-5f);
+    // triangle (0,0),(1,0),(1,1): at (0.75, 0.25) = 0 + 1 * 0.75 + (4 - 1) * 0.25
+    CHECK(std::fabs(game::terrain::heightAt(g, 1.5f, 0.75f, 0.25f) - 1.5f) < 1e-5f);
+    // triangle (0,0),(0,1),(1,1): at (0.25, 0.75) = 0 + (4 - 1) * 0.25 + 1 * 0.75
+    CHECK(std::fabs(game::terrain::heightAt(g, 1.5f, 0.25f, 0.75f) - 1.5f) < 1e-5f);
+    // the view agrees with the simulation's bilinear surface at corners and cell centres within the diagonal error
+    for (int Y = 0; Y <= 2; ++Y)
+        for (int X = 0; X <= 2; ++X)
+            CHECK(std::fabs(float(g.surfaceHeight(Fixed::fromInt(X), Fixed::fromInt(Y)).toDouble()) - game::terrain::heightAt(g, 1.5f, float(X), float(Y))) < 1e-3f);
+    // outside the map: clamped to the border
+    CHECK(std::fabs(game::terrain::heightAt(g, 1.5f, -3.0f, -3.0f) - 0.0f) < 1e-5f);
+}
+
+TEST(terrain_view_grid_corner_from_levels) {
+    game::MapGrid g;
+    g.init(4, 4);
+    for (auto& f : g.flags) f = game::kCellGround;
+    for (int y = 0; y < 4; ++y) for (int x = 0; x < 4; ++x) g.level[size_t(g.index(x, y))] = int8_t(x >= 2 ? 2 : 0);
+    // a corner on the cliff edge averages the two plateaus; inside a plateau it is the plateau height
+    CHECK(std::fabs(game::terrain::gridCorner(g, 1.0f, 1, 2) - 0.0f) < 1e-5f);
+    CHECK(std::fabs(game::terrain::gridCorner(g, 1.0f, 3, 2) - 2.0f) < 1e-5f);
+    CHECK(std::fabs(game::terrain::gridCorner(g, 1.0f, 2, 2) - 1.0f) < 1e-5f);
 }
 
 int main() {

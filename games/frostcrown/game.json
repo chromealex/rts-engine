@@ -12,6 +12,18 @@
       "title": "Frozen Pass (1v1)"
     }
   ],
+  "terrain": {
+    // terrain materials (docs/game-format.md "Terrain materials"); textures: tools/terrain/make_textures.py (CC0)
+    "layers": [
+      {"id": "snow",  "texture": "textures/terrain/snow_repeat.png",  "normal": "textures/terrain/snow_n_repeat.png",  "scale": 6},
+      {"id": "earth", "texture": "textures/terrain/earth_repeat.png", "normal": "textures/terrain/earth_n_repeat.png", "scale": 4},
+      {"id": "path",  "texture": "textures/terrain/path_repeat.png",  "normal": "textures/terrain/path_n_repeat.png",  "scale": 3},
+      {"id": "rock",  "texture": "textures/terrain/rock_repeat.png",  "normal": "textures/terrain/rock_n_repeat.png",  "scale": 4}
+    ],
+    "cells": {"grass": "snow", "sand": "path", "ramp": "path", "rock": "rock", "blocked": "rock", "lakebed": "earth", "shallows": "earth", "dug": "earth"},
+    "cliff": {"texture": "textures/terrain/rock_repeat.png", "normal": "textures/terrain/rock_n_repeat.png", "scale": 3, "slope": [0.3, 0.55]},
+    "water": {"mode": "bodies", "color": [0.55, 0.70, 0.82, 0.85]}
+  },
   "orientation": "landscape",
   "icon": "icon.png"
 }
