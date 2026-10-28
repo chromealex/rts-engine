@@ -16,7 +16,7 @@ public:
 
     void draw(Editor& ed) override {
         ui::inputString("##filter", filter_);
-        if (filter_.empty()) { ImGui::SameLine(12); ImGui::TextDisabled("поиск"); }
+        if (filter_.empty()) { ImGui::SameLine(16); ImGui::TextDisabled(ICON_SEARCH "  поиск"); }
         auto& d = ed.doc().data;
         const auto& rules = ed.rules();
         auto match = [&](const std::string& s) { return filter_.empty() || s.find(filter_) != std::string::npos; };

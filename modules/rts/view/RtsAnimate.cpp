@@ -117,7 +117,7 @@ void RtsView::emitClipEvents(EntityAnim& st, const ModelChoice& ch, const SceneO
     }
 }
 
-void RtsView::animate(EntityAnim& st, const SceneObject& o, float dt, const MapGrid* grid) {
+void RtsView::animate(EntityAnim& st, const SceneObject& o, float dt, const MapGrid* grid, const float3* viewPos) {
     const TypeLook& L = looks_[o.type];
     const ModelChoice& ch = L.models[size_t(st.choice)];
     // ---- kinematics from the interpolated positions
@@ -149,7 +149,7 @@ void RtsView::animate(EntityAnim& st, const SceneObject& o, float dt, const MapG
     // ---- animation LOD: off screen -> clips only keep time; far away -> pose updated less often
     bool updatePose = true;
     if (animLod_ && st.poseValid) {
-        const float3 p = o.pos;
+        const float3 p = viewPos ? *viewPos : o.pos;
         const float4 c = viewProj_ * float4{p.x, p.y + 0.5f, p.z, 1};
         const bool onScreen = c.w > 0 && std::fabs(c.x) < c.w * 1.2f && std::fabs(c.y) < c.w * 1.2f;
         const float camDist = length(camPos_ - p);

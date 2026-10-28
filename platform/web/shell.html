@@ -7,12 +7,23 @@
 <style>
   html, body { margin: 0; height: 100%; background: #0f1214; overflow: hidden; }
   canvas { display: block; width: 100vw; height: 100vh; outline: none; touch-action: none; }
-  #status { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
-            color: #cfd6dc; font: 15px system-ui, sans-serif; pointer-events: none; }
+  #status { position: fixed; inset: 0; display: flex; align-items: flex-end; justify-content: center; padding-bottom: calc(8% + 18px);
+            box-sizing: border-box; color: #cfd6dc; font: 13px system-ui, sans-serif; pointer-events: none; z-index: 2; }
+  /* Launch splash until the wasm runs (colours/logo from game.json "splash", injected by rtsbuild);
+     the engine then draws its own animated splash on the same background. */
+  #rts-splash { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+                background: var(--rts-splash-bg, #0f1214); transition: opacity .35s; z-index: 1; }
+  #rts-splash img { display: none; width: var(--rts-splash-logo, 40vmin); max-height: 60vh; object-fit: contain;
+                    animation: rts-pulse 1.6s ease-in-out infinite; }
+  #rts-splash-bar { position: absolute; left: 30%; right: 30%; bottom: 8%; height: 6px; border-radius: 3px; overflow: hidden;
+                    background: rgba(255, 255, 255, .18); }
+  #rts-splash-bar div { width: 0; height: 100%; background: var(--rts-splash-bar, #e0b040); transition: width .2s; }
+  @keyframes rts-pulse { 50% { transform: scale(1.04); } }
 </style>
 </head>
 <body>
 <canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<div id="rts-splash"><img id="rts-splash-logo" alt=""><div id="rts-splash-bar"><div></div></div></div>
 <div id="status">Loading…</div>
 <script>
   // URL query → command line, e.g. index.html?map=0&spectate → --map 0 --spectate
@@ -21,14 +32,28 @@
     new URLSearchParams(location.search).forEach(function (v, k) { a.push('--' + k); if (v) a.push(v); });
     return a;
   }
+  var splash = document.getElementById('rts-splash'), splashBar = document.querySelector('#rts-splash-bar div');
+  if (window.RTS_SPLASH && RTS_SPLASH.logo) {
+    var logo = document.getElementById('rts-splash-logo');
+    logo.src = RTS_SPLASH.logo; logo.style.display = 'block';
+  }
+  // "Downloading data... (12345/67890)" from the .data preload drives the bar
+  function splashProgress(t) {
+    var m = /\((\d+)\/(\d+)\)/.exec(t || '');
+    if (m && +m[2] > 0) splashBar.style.width = Math.min(100, 100 * m[1] / m[2]) + '%';
+  }
+  function hideSplash() {
+    splashBar.style.width = '100%'; splash.style.opacity = 0;
+    setTimeout(function () { splash.style.display = 'none'; }, 400);
+  }
   if (!document.createElement('canvas').getContext('webgl2'))
     document.getElementById('status').textContent = 'Нужен браузер с поддержкой WebGL 2';
   var Module = {
     arguments: argsFromQuery(),
     canvas: document.getElementById('canvas'),
-    setStatus: function (t) { var s = document.getElementById('status'); s.textContent = t; s.style.display = t ? 'flex' : 'none'; },
+    setStatus: function (t) { var s = document.getElementById('status'); s.textContent = t; s.style.display = t ? 'flex' : 'none'; splashProgress(t); },
     monitorRunDependencies: function (left) { if (!left) Module.setStatus(''); },
-    onRuntimeInitialized: function () { Module.setStatus(''); Module.canvas.focus(); }
+    onRuntimeInitialized: function () { Module.setStatus(''); hideSplash(); Module.canvas.focus(); }
   };
   window.onerror = function () { Module.setStatus('Error: see the browser console'); };
 </script>

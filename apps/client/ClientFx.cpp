@@ -35,6 +35,7 @@ void ClientFx::shutdown() {
 void ClientFx::startMatch(Simulation& sim, uint8_t viewer, const game::RtsView& view, const game::MapGrid& grid) {
     ps_.clear();
     bridge_.setHeightFn([&view, &grid](float x, float z) { return view.heightAt(grid, x, z); });
+    ps_.setGroundHeight([&view, &grid](float x, float z) { return view.heightAt(grid, x, z); });   // "collision" module
     bridge_.setPlayerColorFn([](int p) { return game::RtsView::playerColor(p); });
     bridge_.attach(sim, viewer);
     attached_ = true;
@@ -51,6 +52,12 @@ void ClientFx::update(Simulation& sim, const game::RtsScene& scene, const render
     ps_.setView(cam, viewProj, fbW, fbH);
     if (attached_ && dt > 0) bridge_.update(sim, &scene.objects);
     ps_.update(dt);
+}
+
+void ClientFx::addLights(render::LightSystem& lights) {
+    lightBuf_.clear();
+    ps_.collectLights(lightBuf_);
+    for (auto& l : lightBuf_) lights.add(l.pos, l.radius, l.color, l.intensity);
 }
 
 void ClientFx::render(const render::Lighting& lighting) { ps_.render({lighting.fogColor, lighting.fogDensity}); }

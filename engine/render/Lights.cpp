@@ -35,15 +35,18 @@ bool LightSystem::init(gfx::Device& dev) {
     pd.attrs[0] = {0, gfx::VertexFormat::Float2, 0};
     pd.attrs[1] = {1, gfx::VertexFormat::Float2, 8};
     pd.attrs[2] = {2, gfx::VertexFormat::Float4, 16};
-    pd.attrCount = 3; pd.stride = sizeof(MapVertex);
+    pd.attrs[3] = {3, gfx::VertexFormat::Float4, 32};
+    pd.attrs[4] = {4, gfx::VertexFormat::Float4, 48};
+    pd.attrCount = 5; pd.stride = sizeof(MapVertex);
     pd.indexType = gfx::IndexType::None;
     pd.cull = gfx::CullMode::None;
     pd.blend = gfx::BlendMode::Additive;
     pd.depthTest = false; pd.depthWrite = false;
     pd.label = "lightmap";
     pipe_ = dev.createPipeline(pd);
-    gfx::BufferDesc bd; bd.usage = gfx::Usage::Dynamic; bd.size = kMaxLights * 6 * sizeof(MapVertex); bd.label = "lightmap";
+    gfx::BufferDesc bd; bd.usage = gfx::Usage::Dynamic; bd.size = kMaxLights * 6 * sizeof(MapVertex) * 2; bd.label = "lightmap";
     vb_ = dev.createBuffer(bd);
+    vbCap_ = bd.size;
     const uint8_t zero[4] = {0, 0, 0, 0};
     gfx::TextureDesc td; td.width = td.height = 1; td.data = zero; td.label = "nolight";
     black_ = dev.createTexture(td);
@@ -65,8 +68,9 @@ bool LightSystem::init(gfx::Device& dev) {
     hp.depthTest = true; hp.depthWrite = false;
     hp.label = "halo";
     haloPipe_ = dev.createPipeline(hp);
-    gfx::BufferDesc hb; hb.usage = gfx::Usage::Dynamic; hb.size = 256 * 6 * sizeof(HaloVertex); hb.label = "halos";
+    gfx::BufferDesc hb; hb.usage = gfx::Usage::Dynamic; hb.size = 2048 * 6 * sizeof(HaloVertex); hb.label = "halos";
     haloVB_ = dev.createBuffer(hb);
+    smallCap_ = hb.size;
     gfx::ShaderDesc ds = hs;
     ds.glslFragment = shaders::kDecalFS; ds.msl = shaders::kDecalMSL; ds.label = "contact shadow";
     decalShader_ = dev.createShader(ds);
@@ -76,6 +80,16 @@ bool LightSystem::init(gfx::Device& dev) {
     dp.blend = gfx::BlendMode::Alpha;
     dp.label = "contact shadow";
     decalPipe_ = dev.createPipeline(dp);
+    gfx::ShaderDesc bs = hs;
+    bs.glslFragment = shaders::kBeamFS; bs.msl = shaders::kBeamMSL; bs.label = "light shaft";
+    beamShader_ = dev.createShader(bs);
+    if (!beamShader_.valid()) return false;
+    gfx::PipelineDesc bp = hp;
+    bp.shader = beamShader_;
+    bp.label = "light shaft";
+    beamPipe_ = dev.createPipeline(bp);
+    gfx::BufferDesc bb = hb; bb.label = "light shafts";
+    beamVB_ = dev.createBuffer(bb);
     gfx::BufferDesc db = hb; db.label = "contact shadows";
     decalVB_ = dev.createBuffer(db);
     setQuality(quality_);
@@ -100,6 +114,18 @@ void LightSystem::createMap(int size) {
     mapDepth_ = dev_->createTexture(dd);
 }
 
+size_t LightSystem::stream(gfx::BufferHandle buf, size_t& cursor, size_t capacity, const void* data, size_t bytes) {
+    // Wrapping is safe as long as one frame uploads less than the capacity: by the time the ring
+    // comes back to an offset, that frame's copy is no longer in flight. A single upload larger
+    // than the ring starts at 0 and grows the buffer (updateBuffer reallocates; rare, at startup).
+    cursor = (cursor + 15) & ~size_t(15);
+    if (cursor + bytes > capacity) cursor = 0;
+    const size_t at = cursor;
+    dev_->updateBuffer(buf, data, bytes, at);
+    cursor += bytes;
+    return at;
+}
+
 void LightSystem::setQuality(LightQuality q) {
     quality_ = q;
     if (!dev_) return;
@@ -111,12 +137,18 @@ void LightSystem::setQuality(LightQuality q) {
 void LightSystem::shutdown() {
     if (!dev_) return;
     createMap(0);
+    if (reflColor_.valid()) dev_->destroyTexture(reflColor_);
+    if (reflDepth_.valid()) dev_->destroyTexture(reflDepth_);
+    reflColor_ = reflDepth_ = {};
     dev_->destroyTexture(black_);
     dev_->destroyBuffer(vb_);
     dev_->destroyBuffer(haloVB_);
     dev_->destroyBuffer(decalVB_);
     dev_->destroyPipeline(decalPipe_);
     dev_->destroyShader(decalShader_);
+    dev_->destroyPipeline(beamPipe_);
+    dev_->destroyBuffer(beamVB_);
+    dev_->destroyShader(beamShader_);
     dev_->destroyPipeline(pipe_);
     dev_->destroyPipeline(haloPipe_);
     dev_->destroyShader(shader_);
@@ -127,6 +159,7 @@ void LightSystem::shutdown() {
 void LightSystem::begin(const RTSCamera& cam, float aspect) {
     lights_.clear();
     decals_.clear();
+    reflReady_ = false;
     focus_ = cam.target;
     {
         const mat4 v = cam.view();   // rows 0/1 of the view matrix: camera right / up in world space
@@ -147,7 +180,8 @@ void LightSystem::begin(const RTSCamera& cam, float aspect) {
         minX = std::min(minX, g.x); maxX = std::max(maxX, g.x);
         minZ = std::min(minZ, g.z); maxZ = std::max(maxZ, g.z);
     }
-    extent_ = std::clamp(std::max(maxX - minX, maxZ - minZ) + 6.0f, 16.0f, 256.0f);
+    // margin: lights (and long spot beams) just off screen still reach into view; the soft edge stays off screen
+    extent_ = std::clamp(std::max(maxX - minX, maxZ - minZ) * 1.15f + 12.0f, 16.0f, 256.0f);
     // texel snapping keeps the blobs from shimmering while the camera pans
     const float texel = extent_ / float(std::max(mapSize_, 16));
     originX_ = std::floor(((minX + maxX) * 0.5f - extent_ * 0.5f) / texel) * texel;
@@ -170,7 +204,8 @@ void LightSystem::pickPixelLights() {
             const PointLight& l = lights_[i];
             float dx = l.pos.x - focus_.x, dz = l.pos.z - focus_.z;
             float lum = l.color.x * 0.3f + l.color.y * 0.55f + l.color.z * 0.15f;
-            score.push_back({lum * l.intensity * l.radius * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
+            const float spotK = l.spot() ? 1.5f : 1.0f;   // beams show their cone best on the precise path
+            score.push_back({lum * l.intensity * l.radius * spotK * (1.0f + l.priority) / (1.0f + std::sqrt(dx * dx + dz * dz) * 0.08f), i});
         }
         n = std::min<int>(kMaxPixelLights, int(score.size()));
         std::partial_sort(score.begin(), score.begin() + n, score.end(), [](auto& a, auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
@@ -178,7 +213,8 @@ void LightSystem::pickPixelLights() {
             const PointLight& l = lights_[score[size_t(k)].second];
             perPixel_[score[size_t(k)].second] = 1;
             u_.pos[k][0] = l.pos.x; u_.pos[k][1] = l.pos.y; u_.pos[k][2] = l.pos.z; u_.pos[k][3] = l.radius;
-            u_.col[k][0] = l.color.x * l.intensity; u_.col[k][1] = l.color.y * l.intensity; u_.col[k][2] = l.color.z * l.intensity; u_.col[k][3] = 0;
+            u_.col[k][0] = l.color.x * l.intensity; u_.col[k][1] = l.color.y * l.intensity; u_.col[k][2] = l.color.z * l.intensity; u_.col[k][3] = l.cosInner;
+            u_.spot[k][0] = l.dir.x; u_.spot[k][1] = l.dir.y; u_.spot[k][2] = l.dir.z; u_.spot[k][3] = l.spot() ? l.cosOuter : -2.0f;
         }
     }
     u_.info[0] = float(n);
@@ -188,7 +224,11 @@ void LightSystem::renderMap() {
     pickPixelLights();
     if (quality_ == LightQuality::Off || !map_.valid() || !pipe_.valid()) { mapReady_ = false; return; }
     // Low: refresh every other frame; the old map stays valid because it is world-aligned.
-    if (quality_ == LightQuality::Low && (++mapFrame_ & 1u) && mapReady_) return;
+    // Only when the map already covers this view's area: two views a frame (editor) differ.
+    const float texel = extent_ / float(std::max(mapSize_, 16));
+    const bool sameArea = std::fabs(originX_ - mapX_) < texel * 0.5f && std::fabs(originZ_ - mapZ_) < texel * 0.5f &&
+                          std::fabs(extent_ - mapExtent_) < texel * 0.5f;
+    if (quality_ == LightQuality::Low && (++mapFrame_ & 1u) && mapReady_ && sameArea) return;
     verts_.clear();
     const float inv = 2.0f / extent_, k = 1.0f / kMapRange;
     for (size_t i = 0; i < lights_.size(); ++i) {
@@ -198,8 +238,12 @@ void LightSystem::renderMap() {
         if (cx + r < -1 || cx - r > 1 || cy + r < -1 || cy - r > 1) continue;
         const float cr = std::min(l.color.x * l.intensity * k, 1.0f), cg = std::min(l.color.y * l.intensity * k, 1.0f),
                     cb = std::min(l.color.z * l.intensity * k, 1.0f);
-        const MapVertex a{cx - r, cy - r, -1, -1, cr, cg, cb, 1}, b{cx + r, cy - r, 1, -1, cr, cg, cb, 1},
-                        c{cx + r, cy + r, 1, 1, cr, cg, cb, 1}, d{cx - r, cy + r, -1, 1, cr, cg, cb, 1};
+        const float h = std::max(l.pos.y - (l.groundY > -1e8f ? l.groundY : l.pos.y - 1.0f), 0.1f);
+        const float co = l.spot() ? l.cosOuter : -2.0f;
+        const MapVertex a{cx - r, cy - r, -1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
+                        b{cx + r, cy - r, 1, -1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
+                        c{cx + r, cy + r, 1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0},
+                        d{cx - r, cy + r, -1, 1, cr, cg, cb, 1, l.dir.x, l.dir.y, l.dir.z, h, co, l.cosInner, l.radius, 0};
         verts_.insert(verts_.end(), {a, b, c, a, c, d});
     }
     mapReady_ = true;
@@ -215,8 +259,7 @@ void LightSystem::renderMap() {
     dev_->beginPass(p);
     dev_->setViewport({0, 0, mapSize_, mapSize_});
     dev_->setPipeline(pipe_);
-    dev_->updateBuffer(vb_, verts_.data(), verts_.size() * sizeof(MapVertex));
-    dev_->setVertexBuffer(vb_);
+    dev_->setVertexBuffer(vb_, stream(vb_, vbCursor_, vbCap_, verts_.data(), verts_.size() * sizeof(MapVertex)));
     dev_->draw(uint32_t(verts_.size()));
     dev_->endPass();
 }
@@ -228,7 +271,37 @@ void LightSystem::setClouds(float coverage, float strength, float scale, float o
     u_.sky[0] = coverage > 0.0f ? std::clamp(strength, 0.0f, 1.0f) : 0.0f;
 }
 
-void LightSystem::bind(int uniformSlot, int textureSlot) {
+bool LightSystem::beginReflection(int viewW, int viewH, float3 clear) {
+    if (!reflectionsWanted() || viewW <= 0 || viewH <= 0) return false;
+    const int w = std::max(viewW / 2, 16), h = std::max(viewH / 2, 16);
+    if (w != reflW_ || h != reflH_ || !reflColor_.valid()) {
+        if (reflColor_.valid()) dev_->destroyTexture(reflColor_);
+        if (reflDepth_.valid()) dev_->destroyTexture(reflDepth_);
+        gfx::TextureDesc td;
+        td.width = w; td.height = h; td.renderTarget = true; td.filter = gfx::Filter::Linear; td.label = "water reflection";
+        reflColor_ = dev_->createTexture(td);
+        gfx::TextureDesc dd = td;
+        dd.format = gfx::PixelFormat::Depth; dd.filter = gfx::Filter::Nearest; dd.label = "water reflection depth";
+        reflDepth_ = dev_->createTexture(dd);
+        reflW_ = w; reflH_ = h;
+    }
+    if (!reflColor_.valid() || !reflDepth_.valid()) return false;
+    viewW_ = float(viewW); viewH_ = float(viewH);
+    gfx::PassDesc p;
+    p.colorTarget = reflColor_;
+    p.depthTarget = reflDepth_;
+    p.clearColor[0] = clear.x; p.clearColor[1] = clear.y; p.clearColor[2] = clear.z; p.clearColor[3] = 1;
+    dev_->beginPass(p);
+    dev_->setViewport({0, 0, w, h});
+    return true;
+}
+
+void LightSystem::endReflection() {
+    dev_->endPass();
+    reflReady_ = true;
+}
+
+void LightSystem::bind(int uniformSlot, int textureSlot, int reflectionSlot) {
     if (!dev_) return;
     const bool useMap = mapReady_ && mapHasLights_ && quality_ != LightQuality::Off;
     u_.map[0] = mapX_; u_.map[1] = mapZ_; u_.map[2] = 1.0f / mapExtent_; u_.map[3] = useMap ? 1.0f : 0.0f;
@@ -236,8 +309,13 @@ void LightSystem::bind(int uniformSlot, int textureSlot) {
     u_.info[2] = dev_->info().renderTargetFlipY ? 1.0f : 0.0f;
     u_.info[3] = nightGlow_;
     if (quality_ == LightQuality::Off) u_.info[0] = 0;
+    // the reflection is sampled by gl_FragCoord of the main view (its size, not the half-res target)
+    u_.sky[1] = reflReady_ ? 0.9f : 0.0f;
+    u_.sky[2] = 1.0f / viewW_; u_.sky[3] = 1.0f / viewH_;
+    u_.env[0] = quality_ == LightQuality::Medium || quality_ == LightQuality::High ? 1.0f : 0.0f;
     dev_->setUniforms(uniformSlot, &u_, sizeof u_);
     dev_->setTexture(textureSlot, useMap ? map_ : black_);
+    if (reflectionSlot >= 0) dev_->setTexture(reflectionSlot, reflReady_ ? reflColor_ : black_);
 }
 
 void LightSystem::addContactShadow(float3 c, float hx, float hz, float strength, bool box, float softness) {
@@ -248,12 +326,11 @@ void LightSystem::addContactShadow(float3 c, float hx, float hz, float strength,
     decals_.insert(decals_.end(), {v0, v1, v2, v0, v2, v3});
 }
 
-void LightSystem::drawHalos(const mat4& viewProj) {
-    if (dev_ && !decals_.empty() && decalPipe_.valid()) {
+void LightSystem::drawHalos(const mat4& viewProj, bool decals) {
+    if (dev_ && decals && !decals_.empty() && decalPipe_.valid()) {
         dev_->setPipeline(decalPipe_);
         dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);
-        dev_->updateBuffer(decalVB_, decals_.data(), decals_.size() * sizeof(HaloVertex));
-        dev_->setVertexBuffer(decalVB_);
+        dev_->setVertexBuffer(decalVB_, stream(decalVB_, decalCursor_, smallCap_, decals_.data(), decals_.size() * sizeof(HaloVertex)));
         dev_->draw(uint32_t(decals_.size()));
     }
     if (!dev_ || quality_ == LightQuality::Off || !haloPipe_.valid()) return;
@@ -269,11 +346,35 @@ void LightSystem::drawHalos(const mat4& viewProj) {
                          v2{p2.x, p2.y, p2.z, 1, 1, cr, cg, cb, a}, v3{p3.x, p3.y, p3.z, -1, 1, cr, cg, cb, a};
         halos_.insert(halos_.end(), {v0, v1, v2, v0, v2, v3});
     }
+    // spot shafts: a strip from the light along the beam to where it meets the ground
+    beams_.clear();
+    const float3 fwd = normalize(cross(camUp_, camRight_));
+    for (const PointLight& l : lights_) {
+        if (!l.spot() || l.beam <= 0) continue;
+        const float h = std::max(l.pos.y - (l.groundY > -1e8f ? l.groundY : l.pos.y - 1.0f), 0.1f);
+        const float len = l.dir.y < -0.05f ? std::min(h / -l.dir.y, l.radius) : l.radius * 0.6f;
+        const float tanHalf = std::sqrt(std::max(1.0f - l.cosOuter * l.cosOuter, 0.0f)) / std::max(l.cosOuter, 0.05f);
+        const float w0 = 0.25f, w1 = std::max(len * tanHalf * 1.2f, w0 * 2.0f);
+        const float3 axis = l.dir * len, p0 = l.pos, p1 = l.pos + axis;
+        float3 side = cross(l.dir, fwd);
+        side = length(side) < 1e-3f ? camRight_ : normalize(side);
+        const float m = std::max({l.color.x, l.color.y, l.color.z, 1e-3f});
+        const float cr = l.color.x / m, cg = l.color.y / m, cb = l.color.z / m, a = std::min(l.beam, 1.0f);
+        const float3 a0 = p0 - side * w0, a1 = p0 + side * w0, b1 = p1 + side * w1, b0 = p1 - side * w1;
+        const HaloVertex v0{a0.x, a0.y, a0.z, -1, 0, cr, cg, cb, a}, v1{a1.x, a1.y, a1.z, 1, 0, cr, cg, cb, a},
+                         v2{b1.x, b1.y, b1.z, 1, 1, cr, cg, cb, a}, v3{b0.x, b0.y, b0.z, -1, 1, cr, cg, cb, a};
+        beams_.insert(beams_.end(), {v0, v1, v2, v0, v2, v3});
+    }
+    if (!beams_.empty() && beamPipe_.valid()) {
+        dev_->setPipeline(beamPipe_);
+        dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);
+        dev_->setVertexBuffer(beamVB_, stream(beamVB_, beamCursor_, smallCap_, beams_.data(), beams_.size() * sizeof(HaloVertex)));
+        dev_->draw(uint32_t(beams_.size()));
+    }
     if (halos_.empty()) return;
     dev_->setPipeline(haloPipe_);
     dev_->setUniforms(0, viewProj.m, sizeof viewProj.m);
-    dev_->updateBuffer(haloVB_, halos_.data(), halos_.size() * sizeof(HaloVertex));
-    dev_->setVertexBuffer(haloVB_);
+    dev_->setVertexBuffer(haloVB_, stream(haloVB_, haloCursor_, smallCap_, halos_.data(), halos_.size() * sizeof(HaloVertex)));
     dev_->draw(uint32_t(halos_.size()));
 }
 
