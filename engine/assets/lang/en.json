@@ -231,5 +231,45 @@
       "ffa4": "Free for all (4)",
       "1v1_low_end": "1 vs 1 (low-end devices)"
     }
+  },
+
+  "meta": {
+    "back": "‹ Back",
+    "play": "Play",
+    "shop": "Shop",
+    "profile": "Profile",
+    "settings": "Settings",
+    "items": "Items",
+    "products": "Purchases",
+    "free": "Free",
+    "level": "Level",
+    "xp": "XP",
+    "matches": "Matches",
+    "wins": "Wins",
+    "reset": "Reset progress",
+    "reset_confirm": "All progress, currency and items bought with it will be lost. Reset?",
+    "victory": "Victory!",
+    "defeat": "Defeat",
+    "continue": "Continue",
+    "ok": "OK",
+    "cancel": "Cancel",
+    "not_enough": "Not enough currency",
+    "owned": "Owned",
+    "thanks": "Thank you for the purchase!"
+  },
+
+  "currency": {
+    "gold": "gold",
+    "gems": "gems"
+  },
+
+  "shop": {
+    "watch": "Watch an ad",
+    "wait": {"one": "in {minutes} minute", "other": "in {minutes} minutes"}
+  },
+
+  "price": {
+    "gold": {"one": "{count} gold", "other": "{count} gold"},
+    "gems": {"one": "{count} gem", "other": "{count} gems"}
   }
 }

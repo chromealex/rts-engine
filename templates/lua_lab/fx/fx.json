@@ -1,0 +1,28 @@
+// Visual effects for "Iron and Gold": which effect plays for which event (see modules/rts/fx/RtsFx.h).
+// Every effect is a file next to this one (fx/<name>.json). They only use the built-in particle
+// textures (builtin:soft|spark|ring|smoke), so the example ships no images.
+{
+  "events": {
+    "died.unit":      "death_puff",
+    "died.air":       { "effect": "explosion", "scale": 0.7 },
+    "died.structure": { "effect": "explosion_big", "height": 0.4 },
+    "hit":            "hit_spark",
+    "buildPlaced":    { "effect": "build_dust", "scale": 0.7 },
+    "buildDone":      "build_dust",
+    "ready":          "unit_ready",
+    "levelUp":        "level_up",
+    "damaged":        { "effect": "fire_smoke", "height": 1.4, "below": 0.5 }
+  },
+  "types": {
+    "catapult": { "died": "explosion" },
+    "tree":     { "died": { "effect": "build_dust", "scale": 0.6 }, "damaged": null },
+    "goldmine": { "died": { "effect": "build_dust", "scale": 1.4 }, "damaged": null }
+  },
+  "weapons": {
+    "bow":     { "hit": "arrow_hit", "trail": "arrow_trail" },
+    "arrows":  { "hit": "arrow_hit", "trail": "arrow_trail" },
+    "boulder": { "hit": "explosion", "trail": "boulder_trail" },
+    "hammer":  { "hit": { "effect": "hit_spark", "scale": 1.6 }, "trail": "arrow_trail" },
+    "pick":    { "hit": null }
+  }
+}

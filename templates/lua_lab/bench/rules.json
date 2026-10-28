@@ -1,0 +1,12 @@
+// Minimal rules for the Lua bench: one structure per player keeps the match alive, dummies are idle neutral units.
+{
+  "victory": "noStructures",
+  "scripts": ["scripts/bench.lua"],
+  "scriptBudget": 200000000,
+  "supplyCap": 10,
+  "resources": {"gold": {"name": "Gold", "kind": "stock", "start": 0}},
+  "types": {
+    "hall":  {"name": "Hall", "health": {"max": 1000}, "structure": {"footprint": [3, 3]}, "sight": 6, "view": {"shape": "townhall"}},
+    "dummy": {"name": "Dummy", "health": {"max": 100}, "move": {"speed": 2, "radius": 0.3}, "sight": 2, "view": {"shape": "soldier"}}
+  }
+}

@@ -183,6 +183,11 @@ void Editor::registerGuiOps() {
             ps.push(pj);
         }
         r.set("players", ps);
+        if (auto* se = simModule()->scripts()) {   // Lua script errors (file:line), newest last
+            Json errs = Json::array();
+            for (auto& e : se->log()) if (e.error) errs.push(Json::string("t=" + std::to_string(e.tick) + " " + e.text));
+            r.set("scriptErrors", errs);
+        }
         return r;
     });
     add("device_list", "Device presets of the Game window simulator: id, name, group, size in points, scale, safe-area insets "
