@@ -45,8 +45,8 @@ struct FxTexture {
     gfx::TextureHandle tex;
     float u0 = 0, v0 = 0, u1 = 1, v1 = 1;
 };
-// Loads a sprite for a particle texture name (not "builtin:*"). Hook up the engine's sprite loader
-// here so particles go through the same path (and atlas packer) as every other sprite.
+// Loads a sprite for a particle texture name (not "builtin:*"). The apps connect
+// render::TextureCache::resolve here — the same loader (and future atlas packer) as every sprite.
 using TextureLoader = std::function<bool(const std::string& name, FxTexture& out)>;
 // Reads a content file (`fx/<name>.json`): platform::readContentFile in the apps.
 using FileReader = std::function<bool(const std::string& path, std::string& out)>;

@@ -7,8 +7,13 @@ namespace rts::client {
 void ClientFx::init(gfx::Device& dev, const game::Rules& rules) {
     ps_.setQuality(fx::defaultQualityFor(dev, platform::isTouchDevice()));
     ps_.setFileReader([](const std::string& path, std::string& out) { return platform::readContentFile(path, out); });
-    // Sprite textures for particles: connect the engine's sprite loader with ps_.setTextureLoader(...)
-    // (built-in textures work without it).
+    textures_.init(dev);
+    ps_.setTextureLoader([this](const std::string& name, fx::FxTexture& out) {
+        render::TextureRef r = textures_.resolve(name, false);   // linear filtering: particles scale a lot
+        if (!r.valid()) return false;
+        out = {r.tex, r.u0, r.v0, r.u1, r.v1};
+        return true;
+    });
     if (!ps_.init(&dev)) std::fprintf(stderr, "fx: %s\n", ps_.lastError().c_str());
     std::string text;
     Json bank;
@@ -24,6 +29,7 @@ void ClientFx::init(gfx::Device& dev, const game::Rules& rules) {
 void ClientFx::shutdown() {
     stopMatch();
     ps_.shutdown();
+    textures_.shutdown();
 }
 
 void ClientFx::startMatch(Simulation& sim, uint8_t viewer, const game::RtsView& view, const game::MapGrid& grid) {

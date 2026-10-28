@@ -1,0 +1,31 @@
+// Iron and Gold — ru. Keys: see modules/rts/RtsLocalize.h.
+{
+  "@language": "Русский",
+
+  // game.json
+  "game.name": "Железо и золото",
+  "map.valley.title": "Речная долина (1 на 1)",
+
+  // maps/valley.json
+  "map.valley.name": "Речная долина",
+  "map.valley.player.1": "Синие",
+  "map.valley.player.2": "Красные",
+
+  // rules.json resources
+  "resource.gold": "Золото",
+  "resource.wood": "Дерево",
+
+  // rules.json types
+  "type.peasant": "Крестьянин",
+  "type.footman": "Пехотинец",
+  "type.archer": "Лучник",
+  "type.catapult": "Катапульта",
+  "type.gryphon": "Грифон",
+  "type.townhall": "Ратуша",
+  "type.farm": "Ферма",
+  "type.barracks": "Казарма",
+  "type.workshop": "Мастерская",
+  "type.tower": "Сторожевая башня",
+  "type.goldmine": "Золотой рудник",
+  "type.tree": "Дерево"
+}

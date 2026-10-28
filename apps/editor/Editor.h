@@ -15,6 +15,7 @@
 #include "core/Net.h"
 #include "core/Workspace.h"
 #include "engine/fx/ParticleSystem.h"
+#include "engine/render/TextureCache.h"
 #include "engine/gfx/Gfx.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
@@ -196,6 +197,7 @@ private:
 
     fx::ParticleSystem gameFx_;
     game::RtsFx gameFxBridge_;
+    render::TextureCache fxTextures_;          // sprite textures of effects (same loader as sprites)
     double fxTime_ = -1;
     std::unique_ptr<Simulation> sim_;
     std::vector<game::RtsAI> bots_;

@@ -13,7 +13,7 @@ void RtsModule::sysTargeting(Simulation& sim) {
     World& w = sim.world();
     GameState& gs = state(sim);
     w.each<Combat, Unit, Owner, Transform>([&](Entity e, Combat& c, Unit& u, Owner& o, Transform& tr) {
-        if (o.player == 0 || (u.flags & (kUnitUnderConstruction | kUnitDisabled))) return;
+        if (o.player == 0 || (u.flags & (kUnitUnderConstruction | kUnitDisabled | kUnitInHand | kUnitPossessed))) return;
         if (++c.acquireTimer < 4) return;
         c.acquireTimer = 0;
         const UnitType& t = rules_.types[u.type];
@@ -83,9 +83,9 @@ void RtsModule::sysWeapons(Simulation& sim) {
         const UnitType& t = rules_.types[u.type];
         Fixed atkSpeed = fxMax(stat(sim, e, Stat::AttackSpeed), Fixed::fromRatio(1, 10));
         for (size_t i = 0; i < t.weapons.size() && i < 4; ++i) c.cooldown[i] = fxMax(Fixed{}, c.cooldown[i] - dt * atkSpeed);
-        if (u.flags & (kUnitUnderConstruction | kUnitDisabled)) return;
+        if (u.flags & (kUnitUnderConstruction | kUnitDisabled | kUnitInHand)) return;
         if (auto* b = w.tryGet<Buffs>(e); b && b->stunUntil > sim.tick()) return;
-        if (!w.alive(c.target) || !w.has<Unit>(c.target)) { c.target = kNullEntity; return; }
+        if (!w.alive(c.target) || !w.has<Unit>(c.target) || (w.get<Unit>(c.target).flags & kUnitInHand)) { c.target = kNullEntity; return; }
         const Unit& tu = w.get<Unit>(c.target);
         const UnitType& tt = rules_.types[tu.type];
         if (tu.hp.raw <= 0) return;
@@ -205,17 +205,23 @@ void RtsModule::castAbility(Simulation& sim, Entity caster, int index, Entity ta
     if (a.target == TargetKind::Self || a.target == TargetKind::None) { target = caster; point = w.get<Transform>(caster).pos; }
     if (w.alive(target) && w.has<Transform>(target)) point = w.get<Transform>(target).pos;
     sim.emit({kEvAbility, owner, caster, target, index, point});
+    applyEffects(sim, caster, owner, casterType, a.effects, target, point);
+}
+
+// Shared by unit abilities and player abilities (caster may be null: nukes, air strikes).
+void RtsModule::applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint16_t casterType, const std::vector<EffectDef>& effects, Entity target, Vec3 point) {
+    World& w = sim.world();
     const uint32_t ticks = sim.tickRate();
 
     struct Summon_ { uint16_t type; int count; uint32_t expire; };
     std::vector<Summon_> summons;
-    for (auto& ef : a.effects) {
+    for (auto& ef : effects) {
         // collect affected entities
         std::vector<Entity> hits;
         if (ef.radius.raw > 0) {
             state(sim).hash.query(point, ef.radius, [&](Entity s) {
                 auto* su = w.tryGet<Unit>(s);
-                if (!su || su->hp.raw <= 0 || dist2D(w.get<Transform>(s).pos, point) > ef.radius) return;
+                if (!su || su->hp.raw <= 0 || (su->flags & kUnitInHand) || dist2D(w.get<Transform>(s).pos, point) > ef.radius) return;
                 uint8_t so = w.get<Owner>(s).player;
                 bool enemy = hostile(sim, owner, so);
                 bool ally = so == owner || (so != 0 && so != kHostileNeutral && owner != kHostileNeutral && sim.allied(so, owner));
@@ -243,9 +249,10 @@ void RtsModule::castAbility(Simulation& sim, Entity caster, int index, Entity ta
             summons.push_back({ef.spawnType, ef.count, ef.duration.raw > 0 ? until : 0});
             break;
         case EffectKind::Blink: {
+            if (!w.alive(caster)) break;
             auto& g = state(sim).grid;
             int x = g.cellX(point.x), y = g.cellY(point.z);
-            const UnitType& ct = rules_.types[casterType];
+            const UnitType& ct = rules_.types[w.get<Unit>(caster).type];
             if (g.passable(x, y, ct.layer)) {
                 Transform& tr = w.get<Transform>(caster);
                 tr.pos = flat(point);
@@ -365,18 +372,22 @@ void RtsModule::grantKill(Simulation& sim, Entity victim, uint8_t killer) {
     });
     if (heroes.empty()) return;
     Fixed share = vt.xpValue / int64_t(heroes.size());
-    for (Entity h : heroes) {
-        Hero& hr = w.get<Hero>(h);
-        Unit& hu = w.get<Unit>(h);
-        const UnitType& ht = rules_.types[hu.type];
-        hr.xp += share;
-        while (size_t(hr.level - 1) < ht.xpLevels.size() && hr.xp >= Fixed::fromInt(ht.xpLevels[size_t(hr.level - 1)])) {
-            Fixed before = stat(sim, h, Stat::MaxHp);
-            ++hr.level;
-            Fixed after = stat(sim, h, Stat::MaxHp);
-            hu.hp += after - before;
-            sim.emit({kEvLevelUp, killer, h, kNullEntity, hr.level, w.get<Transform>(h).pos});
-        }
+    for (Entity h : heroes) addHeroXp(sim, h, share, killer);
+}
+
+void RtsModule::addHeroXp(Simulation& sim, Entity h, Fixed xp, uint8_t player) {
+    World& w = sim.world();
+    auto* hr = w.tryGet<Hero>(h);
+    if (!hr) return;
+    Unit& hu = w.get<Unit>(h);
+    const UnitType& ht = rules_.types[hu.type];
+    hr->xp += xp;
+    while (size_t(hr->level - 1) < ht.xpLevels.size() && hr->xp >= Fixed::fromInt(ht.xpLevels[size_t(hr->level - 1)])) {
+        Fixed before = stat(sim, h, Stat::MaxHp);
+        ++hr->level;
+        Fixed after = stat(sim, h, Stat::MaxHp);
+        hu.hp += after - before;
+        sim.emit({kEvLevelUp, player, h, kNullEntity, hr->level, w.get<Transform>(h).pos});
     }
 }
 
