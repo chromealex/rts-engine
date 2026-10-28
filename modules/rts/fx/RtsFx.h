@@ -55,6 +55,12 @@ public:
     // Ground height for effect positions (RtsView::heightAt) and team colours (RtsView::playerColor).
     void setHeightFn(std::function<float(float x, float z)> fn) { height_ = std::move(fn); }
     void setPlayerColorFn(std::function<fx::float4(int player)> fn) { playerColor_ = std::move(fn); }
+    // Curved worlds (planets), optional; unset = flat behaviour. place(simPos, lift, out, up): where an effect
+    // `lift` above the ground under a simulation position plays (particle space) and the local up there;
+    // false = not shown (e.g. another body than the one the camera looks at). Scene objects with
+    // SceneObject::body >= 0 are body-local: bodyToSim maps them back to simulation positions.
+    using PlaceFn = std::function<bool(fx::float3 sim, float lift, fx::float3& out, fx::float3& up)>;
+    void setPlaceFn(PlaceFn fn) { place_ = std::move(fn); }
 
     // Start/stop following a match. `viewer` = local player (0 = spectator: sees everything).
     void attach(Simulation& sim, uint8_t viewer);
@@ -64,7 +70,8 @@ public:
     // events since the last call, keeps projectile trails and "damaged" loops on their objects.
     void update(Simulation& sim, const std::vector<SceneObject>* scene);
 
-    int played() const { return played_; }   // effects started by events since attach (tests, overlay)
+    int played() const { return played_; }
+    int rejected() const { return rejected_; }   // curved worlds: events the place function did not show
 
     static constexpr float kAirHeight = 2.4f;   // RtsView draws flyers this high
 
@@ -93,10 +100,11 @@ private:
     std::shared_ptr<Collector> collector_;
     std::function<float(float, float)> height_;
     std::function<fx::float4(int)> playerColor_;
+    PlaceFn place_;
     std::unordered_map<uint64_t, Attached> trails_, damaged_;
     uint32_t frame_ = 0;
     uint8_t viewer_ = 0;
-    int played_ = 0;
+    int played_ = 0, rejected_ = 0;
 };
 
 } // namespace rts::game

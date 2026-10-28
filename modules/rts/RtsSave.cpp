@@ -68,7 +68,10 @@ void io(Archive& a, Veteran& x) { a(x.level, x.xp, x.lastHit); }
 void io(Archive& a, RallyPath& x) { a(x.points); }
 void io(Archive& a, MechShield& x) { a(x.hp, x.lastHit); }
 void io(Archive& a, Shield& x) { a(x.value, x.lastHit); }   // originals (StarCraft shields)
-void io(Archive& a, Eater& x) { a(x.kills); }               // originals (sandworm)
+void io(Archive& a, Eater& x) { a(x.kills); }
+void io(Archive& a, Weathering& x) { a(x.bare); }                 // fidelity (Dune II foundations)
+void io(Archive& a, TrapState& x) { a(x.charges, x.readyAt); }    // fidelity traps
+void io(Archive& a, TeleportBack& x) { a(x.home, x.at, x.caster); }   // fidelity group teleports               // originals (sandworm)
 void io(Archive& a, Formation& x) { a(x.group, x.shape, x.offset); }
 void io(Archive& a, BridgeLaid& x) { a(x.laid, x.cells); }
 void io(Archive& a, Ammo& x) { a(x.left, x.init); }
@@ -85,6 +88,7 @@ void io(Archive& a, MechState& x) {
       x.cover, x.bounties, x.roundPhase, x.roundIndex, x.phaseEnd, x.roundSnapshot);
 }
 void io(Archive& a, Suppression& x) { a(x.value); }
+void io(Archive& a, Morale& x) { a(x.value, x.fatigue, x.run, x.lastPos, x.chargeTick, x.lastCharge, x.lastFire, x.state, x.init, x.outOfSupply); }
 void io(Archive& a, Turret& x) { a(x.dir, x.init); }
 void io(Archive& a, Abandoned& x) { a(x.formerOwner); }
 void io(Archive& a, GrowState& x) { a(x.timer); }
@@ -143,6 +147,7 @@ void ioGrid(Archive& a, MapGrid& g) {
     ioRle(a, g.flags); ioRle(a, g.level); ioRle(a, g.height); ioRle(a, g.corner); ioRle(a, g.slope);
     ioRle(a, g.blocked); ioRle(a, g.creep); ioRle(a, g.fieldRes); ioRle(a, g.fieldAmt); ioRle(a, g.region);
     ioRle(a, g.dig); ioRle(a, g.digHp); ioRle(a, g.digMark); ioRle(a, g.territory); ioRle(a, g.room);
+    ioRle(a, g.foundation);   // fidelity: concrete slabs (Dune II)
 }
 
 void ioState(Archive& a, GameState& s) {
@@ -183,7 +188,8 @@ using kPools = PoolList<Transform, Owner, Unit, Orders, Mobile, Combat, Cargo, P
                         Garrison, Projectile, Hero, Transit, Squad, Buffs, AbilityState, Statuses, Area, Channel, GroupTag, Capture, Guard, Summon,
                         Needs, Possessed, PortalState, AutoTrainState, ClaimState, Advancer, Inventory, Workshop, Carrier, LaneWalker,
                         Stance, Retreating, Transport, Boarded, Veteran, RallyPath, MechShield, Shield, Eater, Formation, BridgeLaid, Ammo, Merging, Trader, ItemBag,
-                        Suppression, Turret, Abandoned, GrowState>;
+                        Suppression, Turret, Abandoned, GrowState, Morale,
+                        Weathering, TrapState, TeleportBack>;
 } // namespace
 
 bool RtsModule::serializeState(Simulation& sim, Archive& a) {

@@ -525,6 +525,32 @@ bool RtsModule::smartTarget(Simulation& sim, uint8_t player, int payload, Target
             if (sizes[i].second >= 3) pick(first[i].second, w.get<Transform>(first[i].second).pos, Fixed::fromInt(sizes[i].second));
         break;
     }
+    case SmartRule::OwnProducer: {
+        // an own producer that doesn't carry the payload's status yet: larva structures when the payload (or the
+        // status it gives, on expiry) adds charges (inject larvae), else structures producing something (chrono boost)
+        int16_t mark = -1;
+        bool larva = false;
+        std::vector<int> scan{payload};
+        for (size_t si = 0; si < scan.size() && si < 12; ++si) {
+            if (scan[si] < 0 || size_t(scan[si]) >= rules_.payloads.size()) continue;
+            for (auto& e : rules_.payloads[size_t(scan[si])]) {
+                if (e.payload >= 0) scan.push_back(e.payload);
+                if (e.kind == EffectKind::AddCharges) larva = true;
+                if (e.kind == EffectKind::Status && e.status >= 0) {
+                    if (mark < 0) mark = e.status;
+                    scan.push_back(rules_.statuses[size_t(e.status)].onExpire);
+                }
+            }
+        }
+        w.each<Production, Unit, Owner, Transform>([&](Entity c, Production& p, Unit& u, Owner& o, Transform& t) {
+            const UnitType& ut = rules_.types[u.type];
+            if (o.player != player || !ut.structure || (u.flags & kUnitUnderConstruction) || !inRange(t.pos)) return;
+            if (larva ? ut.chargesMax <= 0 : p.queue.empty()) return;
+            if (mark >= 0) if (auto* st = w.tryGet<Statuses>(c)) for (auto& in : st->list) if (in.def == uint16_t(mark)) return;
+            pick(c, t.pos, Fixed::fromInt(int64_t(p.queue.size()) - p.charges) - Fixed::fromInt(int64_t(c.index)) / 1000000);
+        });
+        break;
+    }
     case SmartRule::DebuffedOwn:
         w.each<Statuses, Owner, Transform>([&](Entity c, Statuses& st, Owner& o, Transform& t) {
             if (o.player != player || !inRange(t.pos)) return;

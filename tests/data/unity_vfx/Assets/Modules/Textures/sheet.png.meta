@@ -1,0 +1,44 @@
+fileFormatVersion: 2
+guid: c1000000000000000000000000000030
+TextureImporter:
+  internalIDToNameTable:
+  - first:
+      213: 4100000000000000001
+    second: sheet_star
+  - first:
+      213: 4100000000000000002
+    second: sheet_disc
+  serializedVersion: 11
+  textureType: 8
+  spriteMode: 2
+  spritePixelsToUnits: 32
+  alphaSource: 1
+  spriteSheet:
+    serializedVersion: 2
+    sprites:
+    - serializedVersion: 2
+      name: sheet_star
+      rect:
+        serializedVersion: 2
+        x: 0
+        y: 0
+        width: 32
+        height: 32
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      internalID: 4100000000000000001
+    - serializedVersion: 2
+      name: sheet_disc
+      rect:
+        serializedVersion: 2
+        x: 32
+        y: 0
+        width: 32
+        height: 32
+      alignment: 0
+      pivot: {x: 0.5, y: 0.5}
+      internalID: 4100000000000000002
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

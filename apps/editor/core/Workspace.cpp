@@ -12,6 +12,7 @@ namespace rts::editor { void registerCampaignOps(Workspace& ws); }   // Campaign
 #include "PlanetOps.h"
 #include "OverlayOps.h"
 #include "FxOps.h"
+#include "MaterialOps.h"
 #include "BrandingOps.h"
 #include "Projects.h"
 #include <algorithm>
@@ -170,7 +171,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerGenOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerFxOps(*this); registerOverlayOps(*this); registerBrandingOps(*this); registerPlanetOps(*this); registerScenarioOps(*this); registerCampaignOps(*this); registerSchemaOps(*this); registerMaterialOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {

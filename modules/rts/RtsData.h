@@ -306,6 +306,10 @@ struct UnitType {
     bool ownsRegion = false;                   // its region (and the territory cells of it) follow its owner (State.io states)
     int16_t deathFieldRes = -1;                // dying spreads a resource field (Dune spice bloom)
     Fixed deathFieldRadius = Fixed::fromInt(3), deathFieldAmount = Fixed::fromInt(100);
+    // ---- foundations and traps (RtsFidelity.cpp)
+    bool foundation = false;                   // concrete slab: once placed its cells become the owner's foundation, the slab goes away
+    bool weathers = true;                      // "weathers": false - never damaged by a missing foundation (walls, turrets)
+    int16_t trap = -1;                         // index into Rules::traps
     Json view;
 };
 
@@ -476,6 +480,29 @@ struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing 
 
 enum class CostModel : uint8_t { Upfront, Progressive };
 
+// Concrete foundations (Dune II): structures not standing on the owner's foundation cells start damaged and
+// weather down to `floor` of their max hp (scaled by the share of bare cells).
+struct FoundationRules {
+    bool enabled = false;
+    Fixed startHp = Fixed::fromRatio(1, 2);    // hp share of a fully bare structure when it is finished
+    Fixed decay = Fixed::fromRatio(1, 4);      // share of max hp lost per minute when fully bare
+    Fixed floor = Fixed::fromRatio(1, 2);      // weathering stops at this share (fully bare)
+    bool lostWithBuilding = true;              // a destroyed structure takes the foundation under it
+};
+
+// Traps (Dungeon Keeper, Stronghold, They Are Billions): a structure that fires a payload at enemies stepping near.
+struct TrapDef {
+    Fixed radius = Fixed::fromInt(1);          // trigger radius around the trap
+    TargetFilter filter;                       // who sets it off (enemy units by default)
+    int16_t payload = -1;                      // effects; target = the victim, point = its position
+    int charges = 0;                           // 0: unlimited
+    Fixed rearm = Fixed::fromInt(2);           // seconds before it can fire again
+    Fixed armTime{};                           // seconds after completion before it works
+    bool hidden = true;                        // invisible to enemies until it fires (detectors see it)
+    Fixed revealFor = Fixed::fromInt(3);       // visible this long after firing
+    bool removeWhenEmpty = true;               // destroyed when the last charge is used
+};
+
 struct Rules {
     MechRules mech;                           // agent-mech rules (RtsMechData.h)
     std::vector<ResourceDef> resources;
@@ -528,6 +555,11 @@ struct Rules {
     bool originals = false;                    // any fidelity mechanic (RtsOriginals.cpp) present: its system runs, its state is hashed
     std::vector<uint16_t> playerModTypes;      // types with playerMods (forges)
     std::vector<uint16_t> perUnitResources;    // resources with perUnit mods (morale)
+    // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
+    FoundationRules foundation;
+    std::vector<TrapDef> traps;
+    bool fidelity = false;                     // any of them present: their system runs, their state is hashed
+    int16_t stTrapHidden = -1, stTrapSeen = -1; // built-in statuses of hidden / exposed traps
 
     int findRoom(const std::string& id) const;
     int findDiggable(char c) const;
@@ -546,6 +578,7 @@ void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loa
 // Unit designs (UD): rules "designs": {"chassis": {...}, "parts": {...}} and types with "design": {"chassis", "parts"}
 // expand into plain type blocks. Returns a copy without "designs"; loadRules calls it when the block is present.
 Json expandDesigns(const Json& j);
+void loadMechStage4(Rules& r, const Json& j);   // RtsMechData4.cpp: morale, fatigue, charge, supply, conveyors
 VictoryRules loadVictory(const Json& j, const VictoryRules& def);
 
 } // namespace rts::game

@@ -385,7 +385,8 @@ void ParticleSystem::Impl::stepParticle(size_t& i, float dt, bool& removed) {
     const EmitterRT& er = rtOf(p);
     const bool modules = er.modules;
     const float t = lifeT(p);
-    p.vel += d.gravity * (dt * p.scale * p.grav);
+    if (upFn) p.vel += upRotate(upFn(p.pos), d.gravity) * (dt * p.scale * p.grav);   // curved worlds: towards the local down
+    else p.vel += d.gravity * (dt * p.scale * p.grav);
     if (d.drag.max > 0 || d.drag.curved()) {
         float k = d.drag.constant() ? d.drag.min : d.drag.at(t, prand(p.uid, 3));
         if (d.dragBySize) { float s = p.size / p.scale; k *= s * s; }
@@ -405,7 +406,7 @@ void ParticleSystem::Impl::stepParticle(size_t& i, float dt, bool& removed) {
             p.vel += fv * (p.scale * dt);
         }
         if (d.externalForces > 0) {
-            p.vel += wind * (d.externalForces * dt);
+            p.vel += (upFn ? upRotate(upFn(p.pos), wind) : wind) * (d.externalForces * dt);
             if (in && !e.def.forceFields.empty()) {
                 for (const FxForceField& ff : e.def.forceFields) {
                     const float3 c = in->pos + in->toWorld(ff.position) * in->scale;
@@ -499,7 +500,7 @@ void ParticleSystem::Impl::stepParticle(size_t& i, float dt, bool& removed) {
     }
     p.pos += vt * dt;
     p.vtot = vt;
-    if (d.spin.curved()) p.rot += d.spin.at(t, prand(p.uid, 31)) * kDeg * dt;
+    if (d.spin.curved()) p.rot += d.spin.at(t, prand(p.uid, 31)) * kDeg * dt * ((p.flags & 32) ? -1.0f : 1.0f);
     else p.rot += p.spin * dt;
     if (modules) {
         if (d.spinBySpeed.enabled) p.rot += speedLut(er.spinSpeed, d.spinBySpeed.speed, render::length(vt) / p.scale) * kDeg * dt;
@@ -510,7 +511,16 @@ void ParticleSystem::Impl::stepParticle(size_t& i, float dt, bool& removed) {
             const float rad = c.radius > 0 ? c.radius * 0.5f * p.size : 0.0f;
             const float before = render::length(p.vel);
             bool hit = false;
-            if (c.ground) {
+            if (c.ground && upFn && altFn) { // curved worlds: the ground along the local up
+                const float3 n = upFn(p.pos);
+                const float below = c.height * p.scale + rad - altFn(p.pos);
+                const float vn = render::dot(p.vel, n);
+                if (below > 0 && vn < 0) {
+                    p.pos += n * below;
+                    p.vel = (p.vel - n * vn) * (1 - c.dampen) - n * (vn * c.bounce);
+                    hit = true;
+                }
+            } else if (c.ground) {
                 float plane = (ground ? ground(p.pos.x, p.pos.z) : 0.0f) + c.height * p.scale;
                 if (p.pos.y - rad < plane && p.vel.y < 0) {
                     p.pos.y = plane + rad;
@@ -655,11 +665,15 @@ void ParticleSystem::shutdown() {
     TextureLoader keep = std::move(I.loader);
     MeshLoader keepMesh = std::move(I.meshLoader);
     auto ground = std::move(I.ground);
+    auto upFn = std::move(I.upFn);
+    auto altFn = std::move(I.altFn);
     const float3 wind = I.wind, light = I.lightDir;
     impl_ = std::make_unique<Impl>();
     impl_->loader = std::move(keep);
     impl_->meshLoader = std::move(keepMesh);
     impl_->ground = std::move(ground);
+    impl_->upFn = std::move(upFn);
+    impl_->altFn = std::move(altFn);
     impl_->wind = wind;
     impl_->lightDir = light;
     impl_->quality = quality_;
@@ -678,6 +692,12 @@ void ParticleSystem::setQuality(FxQuality q) {
 void ParticleSystem::setGroundHeight(std::function<float(float, float)> fn) { impl_->ground = std::move(fn); }
 void ParticleSystem::setWind(float3 wind) { impl_->wind = wind; }
 void ParticleSystem::setLightDir(float3 dir) { if (render::length(dir) > 1e-5f) impl_->lightDir = render::normalize(dir); }
+void ParticleSystem::setUpFunction(std::function<float3(float3)> fn) { impl_->upFn = std::move(fn); }
+void ParticleSystem::setAltitudeFunction(std::function<float(float3)> fn) { impl_->altFn = std::move(fn); }
+void ParticleSystem::setViewSpace(const mat4* toView) {
+    impl_->haveSpace = toView != nullptr;
+    if (toView) impl_->space = *toView;
+}
 
 void ParticleSystem::setTextureLoader(TextureLoader l) {
     impl_->loader = std::move(l);
@@ -879,7 +899,15 @@ void ParticleSystem::setView(const RTSCamera& cam, const mat4& viewProj, int fbW
     I.viewProj = viewProj;
     I.eye = cam.eye();
     float3 f = render::normalize(cam.target - I.eye);
-    I.right = render::normalize(render::cross(f, {0, 1, 0}));
+    float3 worldUp{0, 1, 0};
+    if (I.haveSpace) { // particles live in their own space: the camera into it, the projection from it
+        const mat4 inv = I.space.inverse();
+        I.viewProj = viewProj * I.space;
+        I.eye = inv.transformPoint(I.eye);
+        f = render::normalize(inv.transformDir(f));
+        worldUp = render::normalize(inv.transformDir(worldUp));
+    }
+    I.right = render::normalize(render::cross(f, worldUp));
     I.up = render::cross(I.right, f);
     I.p11 = 1.0f / std::tan(cam.fovY * 0.5f);
     I.fbW = std::max(1, fbW);

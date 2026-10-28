@@ -24,6 +24,7 @@
 #include "RtsGroundFx.h"
 #include "RtsLights.h"
 #include "RtsFog.h"
+#include "RtsPlanetGroundFx.h"
 #include "RtsPlanetRender.h"
 #include "RtsOverlays.h"
 #include "RtsTerrainRender.h"
@@ -183,6 +184,14 @@ public:
     // Fog of war of a body as drawn (6 * N * N, 0 unexplored .. 255 visible); empty = no fog.
     const std::vector<uint8_t>& planetVision(int body) const { static const std::vector<uint8_t> none; return body >= 0 && size_t(body) < planetVision_.size() ? planetVision_[size_t(body)] : none; }
     double planetSeconds() const { return planetSeconds_; }
+    // Particles on planets live in the body-local space of the body the camera looks at (moves with it):
+    // the body and its body-local -> view-world matrix this frame (after updatePlanetCamera).
+    int planetFxBody() const { return planetCam_.body(); }
+    render::mat4 planetFxSpace() const;
+    // particle placement: sim position -> body-local of the camera body, `lift` above the ground (lift < -1e8:
+    // keep the position as it is, e.g. a flyer); false on other bodies. Ground altitude of a body-local point.
+    bool planetFxPlace(render::float3 sim, float lift, render::float3& out, render::float3& up) const;
+    float planetFxAltitude(render::float3 local) const;
     // Object frame in the view world (columns: east, up, south, ground point); false when not on a body.
     bool planetPlacement(const SceneObject& o, render::mat4& out) const;
     void setFogLook(const FogLook& l) { fog_.setLook(l); fogMeshDirty_ = true; }
@@ -219,6 +228,7 @@ private:
     struct ModelChoice {
         render::Model* model = nullptr;
         std::vector<render::Material> materials;  // per-type copy with overrides applied
+        std::vector<int> nodeMaterial;            // "assign": node -> index into materials (-1 = the model's)
         render::mat4 fix;                         // forward axis, fit, offset
         ClipSpec clips[kAnimCount];
         bool hasClip[kAnimCount] = {};
@@ -283,6 +293,14 @@ private:
     void buildLook(gfx::Device& dev, const UnitType& t, TypeLook& out);
     bool loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, const std::string& path, ModelChoice& out);
     void configureChoice(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c, bool isShape);
+    // Material library (materials.json): a reference ("steel", {"use": "steel", ...}) flattened into
+    // one override object; library entries inherit with "base".
+    Json resolveMaterial(const UnitType& t, const Json& ref, int depth = 0);
+public:
+    // A material reference / override object applied to `mt` (textures load into `m`).
+    void applyMaterial(gfx::Device& dev, const UnitType& t, render::Model& m, render::Material& mt, const Json& ref);
+    const Json& materialLibrary() const { return materialLib_; }
+private:
     void configureExtras(gfx::Device& dev, const UnitType& t, const Json& view, ModelChoice& c);
     render::Model* loadModelCached(gfx::Device& dev, const UnitType& t, const std::string& path);
     int loadTexture(gfx::Device& dev, const UnitType& t, render::Model& m, const std::string& path);
@@ -307,6 +325,7 @@ private:
 
     const Rules* rules_ = nullptr;
     render::FileReader read_;
+    Json materialLib_ = Json::object();   // materials.json "materials"
     gfx::Device* dev_ = nullptr;
     std::map<std::string, std::unique_ptr<render::Model>> models_;  // by path; shapes as "shape:<name>"
     std::vector<TypeLook> looks_;
@@ -334,6 +353,8 @@ private:
     render::float3 camPos_;
     // planets
     PlanetRenderer planets_;
+    RtsPlanetGroundFx planetGroundFx_;   // territory / roads on sphere faces
+    std::vector<uint8_t> territoryDemo_;  // RTS_PLANET_TERRITORY_DEMO (testing the overlay)
     PlanetCamera planetCam_;
     PlanetViewFrame pframe_;
     double planetSeconds_ = 0;

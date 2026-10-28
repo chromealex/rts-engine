@@ -105,6 +105,15 @@ public:
     void setWind(float3 wind);
     // Towards the sun: shading of mesh particles (Renderer3D::lighting.sunDir).
     void setLightDir(float3 dir);
+    // Curved worlds (planets), all optional; unset = the flat behaviour, unchanged:
+    //  - up(pos): local "up" at a particle position. Gravity / wind (given with +Y up) turn onto it;
+    //    ground-aligned / upright particles follow it.
+    //  - altitude(pos): height above the ground along up ("collision" ground instead of setGroundHeight).
+    //  - view space: particles live in their own stable space (planets: body-local of the camera's body) and
+    //    are drawn through `toView` (that space -> the renderer's world); setView() takes the renderer's camera.
+    void setUpFunction(std::function<float3(float3 pos)> fn);
+    void setAltitudeFunction(std::function<float(float3 pos)> fn);
+    void setViewSpace(const render::mat4* toView);
 
     // Effects by name: "explosion" loads "fx/explosion.json" through the file reader (once).
     // Returns -1 when missing or invalid; the reason is in errors().

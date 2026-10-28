@@ -152,7 +152,7 @@ constexpr const char* kKnownKeys[] = {
     "alignToDirection", "arcMode", "arcSpeed", "arcSpread", "sizeY", "sizeZ", "rotation3D", "gravityScale", "colorMin", "sizeOverLifeMin",
     "sizeOverLifeY", "sizeOverLifeZ", "spin3D", "spinBySpeed", "velocityOverLife", "force", "speedLimitAxes", "limitDampen", "dragBySize",
     "dragBySpeed", "inheritVelocity", "lifeBySpeed", "externalForces", "row", "frameOverTime", "framesBySpeed", "flip", "sprites", "pivot",
-    "cameraStretch", "sort", "sortOrder", "minScreenSize", "maxScreenSize", "meshes", "ringBuffer", "trigger"};
+    "cameraStretch", "sort", "sortOrder", "minScreenSize", "maxScreenSize", "meshes", "ringBuffer", "trigger", "flipRotation"};
 
 bool knownKey(const std::string& k, std::initializer_list<const char*> keys) {
     for (const char* n : keys) if (k == n) return true;
@@ -545,6 +545,7 @@ void parseModules(const Json& e, Reader& r, EmitterDef& d) {
     r.number("sphericalDirection", d.sphericalDirection, 0, 1);
     r.number("randomPosition", d.randomPosition, 0, 100);
     r.boolean("alignToDirection", d.alignToDirection);
+    r.number("flipRotation", d.flipRotation, 0, 1);
     r.choice("arcMode", d.arcMode, kArcNames);
     r.number("arcSpeed", d.arcSpeed, -100, 100);
     r.number("arcSpread", d.arcSpread, 0, 1);
@@ -817,6 +818,7 @@ void modulesToJson(const EmitterDef& d, Json& e) {
     if (d.sphericalDirection) e.set("sphericalDirection", numJ(d.sphericalDirection));
     if (d.randomPosition) e.set("randomPosition", numJ(d.randomPosition));
     if (d.alignToDirection) e.set("alignToDirection", Json::fromBool(true));
+    if (d.flipRotation) e.set("flipRotation", numJ(d.flipRotation));
     if (d.arcMode != base.arcMode) {
         e.set("arcMode", Json::string(kArcNames[size_t(d.arcMode)]));
         e.set("arcSpeed", numJ(d.arcSpeed));

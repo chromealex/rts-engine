@@ -146,6 +146,8 @@ void Editor::drawGamePicker() {
     ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_Borders);
 
     std::string browsed;
+    if (!status.empty() && status.rfind("Не удалось", 0) == 0)   // open failed: say why right here
+        ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), ICON_WARNING " %s", status.c_str());
     if (H.tab == 0) {
         ui::heading("Проекты");
         ImGui::SameLine(std::max(140.0f, ImGui::GetWindowContentRegionMax().x - 400));

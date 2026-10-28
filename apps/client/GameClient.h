@@ -279,6 +279,8 @@ private:
     Mode mode_ = Mode::Normal;
     Entity placeProducer_;   // sidebar placement: structure comes from this producer
     int abilityIndex_ = -1;
+    bool pairFirst_ = false;      // pointPair player ability: the first point is chosen
+    float pairX_ = 0, pairZ_ = 0;
     int placeType_ = -1;
     int roomIndex_ = -1;          // Mode::Room: rules.rooms index, -1 = erase
     bool rectDrag_ = false;       // rect tools: dragging from (rectX_, rectY_)

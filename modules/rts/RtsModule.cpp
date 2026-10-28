@@ -44,6 +44,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
     if (rules_.advancedEffects) sim.addSystem("effects", [this](Simulation& s) { sysEffects(s); });
     if (rules_.originals) sim.addSystem("originals", [this](Simulation& s) { sysOriginals(s); }); // RtsOriginals.cpp
+    if (rules_.fidelity) sim.addSystem("fidelity", [this](Simulation& s) { sysFidelity(s); });    // RtsFidelity.cpp
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
     sim.addSystem("movement", [this](Simulation& s) { sysMovement(s); });
     if (state(sim).surface) sim.addSystem("transit", [this](Simulation& s) { sysTransit(s); });
@@ -477,6 +478,7 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
     if (t.hero && rules_.originals) onHeroSpawn(sim, e, owner);
+    if (rules_.fidelity && t.structure) spawnFidelity(sim, e, underConstruction);   // slabs, weathering, traps
     sim.emit({kEvSpawned, owner, e, kNullEntity, type, pos});
     return e;
 }
@@ -1334,6 +1336,7 @@ bool RtsModule::findAutoSpot(Simulation& sim, uint8_t player, uint16_t type, Vec
             if (!canPlace(sim, player, type, p)) continue;
             Vec2 d = S ? S->toPlane(c, p - c).xz() : (p - c).xz();
             Fixed score = d.length() - d.dot(away) / 2;     // close to the core, behind it
+            if (rules_.fidelity) { Fixed fs = spotScoreFidelity(sim, player, type, x0, y0, d, away); if (fs >= Fixed::fromInt(1 << 19)) continue; score += fs; }
             if (score < bestScore) { bestScore = score; out = p; found = true; }
         }
     return found;
@@ -1377,6 +1380,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     if (rules_.settlers) hashSettlers(sim, h);
     if (rules_.advancedEffects) hashEffects(sim, h);
     if (rules_.originals) hashOriginals(sim, h);
+    if (rules_.fidelity) hashFidelity(sim, h);
     if (rules_.lanes.enabled) {
         h.u32(gs.laneSignature); h.u32(uint32_t(gs.lanes.size()));
         for (auto& l : gs.lanes) { h.u32(uint32_t(l.points.size())); if (!l.points.empty()) h.v3(l.points[l.points.size() / 2]); }
