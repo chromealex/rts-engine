@@ -192,6 +192,7 @@ void GameClient::startMatch(size_t idx) {
         sim_ = std::make_unique<Simulation>(cfg, std::make_unique<RtsModule>());
         sim_->setup(rulesJson_, map);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
+        quality_.reset(int(r3d_.shadowQuality()), int(r3d_.lights.quality()));
     } catch (const std::exception& e) {
         error_ = e.what(); sim_.reset(); return;
     }
@@ -604,6 +605,11 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         auto& g = mod().state(*sim_).grid;
         cam_.target.x = std::clamp(cam_.target.x, 0.0f, float(g.w));
         cam_.target.z = std::clamp(cam_.target.z, 0.0f, float(g.h));
+        if (quality_.update(dt)) { // too slow for these tiers: step down (keeps the pause menu in sync)
+            r3d_.setShadowQuality(ShadowQuality(quality_.shadows()));
+            r3d_.lights.setQuality(rts::render::LightQuality(quality_.lights()));
+            shadowQuality_ = boundShadowQuality_ = quality_.shadows();
+        }
 
         if (!netMatch_) {
             for (auto& b : bots_) b.update(*sim_);
