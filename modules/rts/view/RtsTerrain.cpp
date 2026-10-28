@@ -3,6 +3,7 @@
 #include "../RtsModule.h"
 #include "RtsTerrainSurface.h"
 #include "RtsView.h"
+#include <algorithm>
 
 namespace rts::game {
 
@@ -16,6 +17,17 @@ float RtsView::heightAt(const MapGrid& g, float x, float z) const {
 }
 
 void RtsView::buildTerrain(gfx::Device& dev, const MapGrid& g) {
+    if (planets_.active()) { // planet maps: the flat sim grid lies on face 2 of the start body (RtsPlanetView.cpp)
+        demoW_ = g.w; demoH_ = g.h;
+        if (const PlanetSurface* s = planets_.surface(demoBody_)) {
+            const float N = float(s->faceSize());
+            demoScale_ = std::min(1.0f, N * 0.9f / float(std::max(std::max(g.w, g.h), 1)));
+            demoOff_[0] = (N - float(g.w) * demoScale_) * 0.5f; demoOff_[1] = (N - float(g.h) * demoScale_) * 0.5f;
+        }
+        fog_.build(dev, g.w, g.h, [](float, float) { return 0.0f; });   // field only (the sheet is not drawn)
+        hasTerrain_ = true;
+        return;
+    }
     const bool flatDig = groundFx_.drawsDig() && g.dig.size() == g.flags.size(); // RtsGroundFx draws the rock blocks
     // ground overlays follow the surface: rebuild them whenever terrain geometry changed
     if (terrain_.build(dev, g, flatDig) || !hasTerrain_) groundFx_.invalidate();

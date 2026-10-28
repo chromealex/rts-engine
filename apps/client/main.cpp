@@ -208,6 +208,7 @@ void GameClient::startMatch(size_t idx) {
     selection_.clear();
     for (auto& g : groups_) g.clear();
     view_.setTiles(map["tiles"]);
+    view_.setWorld(map);   // planets: map "world" block (no block: flat view, unchanged)
     view_.setTerrainMaterial(map["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     sceneFromSim(*sim_, scene_, 0, spectator_ ? 0 : human_);
@@ -223,6 +224,7 @@ void GameClient::startMatch(size_t idx) {
 }
 
 void GameClient::fitCamera() {
+    if (planet()) { view_.planetCamera().reset(view_.planets().world(), view_.planets().world().start, view_.planets().surface(view_.planets().world().start), scene_.seconds); return; }
     auto& g = mod().state(*sim_).grid;
     float3 c{g.w * 0.5f, 0, g.h * 0.5f};
     bool small = std::max(g.w, g.h) <= 48;
@@ -238,6 +240,10 @@ void GameClient::fitCamera() {
 // ------------------------------------------------------------------ picking / selection
 
 bool GameClient::groundAt(float sx, float sy, float3& out) const {
+    if (planet()) { // planet picking -> flat sim coordinates (until the sim has bodies)
+        int body; float3 local;
+        return view_.pickPlanet(cam_, sx, sy, platform::windowWidth(), platform::windowHeight(), body, local) && view_.bodyToFlat(body, local, out);
+    }
     return cam_.screenToGround(sx, sy, platform::windowWidth(), platform::windowHeight(), out);
 }
 
@@ -254,7 +260,7 @@ Entity GameClient::pick(float sx, float sy) const {
         }
         if (t.layer & kLayerAir) { // flyers are drawn above the ground: test in screen space
             float2 sp;
-            if (cam_.worldToScreen({o.pos.x, 2.4f, o.pos.z}, platform::windowWidth(), platform::windowHeight(), sp)) {
+            if (objectScreen(o, 2.4f, sp)) {
                 float d = std::hypot(sp.x - sx, sp.y - sy);
                 if (d < 22 && d * 0.05f < bestD) { best = o.entity; bestD = d * 0.05f; }
             }
@@ -285,7 +291,7 @@ void GameClient::selectBox(float x0, float y0, float x1, float y1, bool add) {
         if (!o.visible || o.isProjectile || o.owner != human_) continue;
         float2 sp;
         float y = (rules_.types[o.type].layer & kLayerAir) ? 2.4f : 0.3f;
-        if (!cam_.worldToScreen({o.pos.x, y, o.pos.z}, platform::windowWidth(), platform::windowHeight(), sp)) continue;
+        if (!objectScreen(o, y, sp)) continue;
         if (sp.x < x0 || sp.x > x1 || sp.y < y0 || sp.y > y1) continue;
         (rules_.types[o.type].structure ? structs : units).push_back(o.entity);
     }
@@ -301,7 +307,7 @@ void GameClient::selectSameType(Entity e) {
     for (auto& o : scene_.objects) {
         if (o.owner != human_ || o.isProjectile || o.type != u->type || !o.visible) continue;
         float2 sp;
-        if (cam_.worldToScreen(o.pos, platform::windowWidth(), platform::windowHeight(), sp) && sp.x >= 0 && sp.y >= 0 &&
+        if (objectScreen(o, o.pos.y, sp) && sp.x >= 0 && sp.y >= 0 &&
             sp.x <= platform::windowWidth() && sp.y <= platform::windowHeight())
             selection_.push_back(o.entity);
     }
@@ -357,6 +363,7 @@ void GameClient::event(const Event& e) {
     if (e.type == EventType::FocusGained) audio_.setPaused(false);
     if (screen_ == Screen::Paused && e.type == EventType::KeyDown && e.key == Key::Escape && !uiWants) { setScreen(Screen::Playing); return; }
     if (screen_ != Screen::Playing || !sim_) return;
+    if (planet() && planetCameraEvent(e, uiWants)) return;   // orbit camera (ClientPlanet.cpp)
     World& w = sim_->world();
     switch (e.type) {
     case EventType::MouseDown:
@@ -603,8 +610,11 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             if (key(Key::Left) || (noSel && key(Key::A)) || (edges && mouseX_ < 3)) cam_.target += right * -speed;
         }
         auto& g = mod().state(*sim_).grid;
+        if (planet()) planetCameraKeys(dt);
+        else {
         cam_.target.x = std::clamp(cam_.target.x, 0.0f, float(g.w));
         cam_.target.z = std::clamp(cam_.target.z, 0.0f, float(g.h));
+        }
         if (quality_.update(dt)) { // too slow for these tiers: step down (keeps the pause menu in sync)
             r3d_.setShadowQuality(ShadowQuality(quality_.shadows()));
             r3d_.lights.setQuality(rts::render::LightQuality(quality_.lights()));
@@ -641,12 +651,21 @@ void GameClient::frame(gfx::Device& dev, double dt) {
     gfx::PassDesc pass;
     pass.clearColor[0] = 0.55f; pass.clearColor[1] = 0.66f; pass.clearColor[2] = 0.78f;
     if (sim_) {
+        if (planet()) { // orbit camera -> view-world RTSCamera; space is black
+            cam_ = view_.updatePlanetCamera(scene_.seconds, float(dt), dev.framebufferHeight());
+            pass.clearColor[0] = pass.clearColor[1] = pass.clearColor[2] = 0.0f;
+        }
         r3d_.beginScene(cam_, dev.framebufferWidth(), dev.framebufferHeight());
         auto& gs = mod().state(*sim_);
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
-        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
-                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-        if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
+        if (!planet()) // particles are placed in flat map coordinates: not on planets yet
+            fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                       screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
+        if (mode_ == Mode::Place && placeType_ >= 0 && planet()) {
+            bool ok;
+            Vec3 c = placeCentre(mouseX_, mouseY_, ok);
+            if (ok) view_.drawGhost(r3d_, uint16_t(placeType_), {float(c.x.toDouble()), 0, float(c.z.toDouble())}, mod().canPlace(*sim_, human_, uint16_t(placeType_), c), mod().state(*sim_).grid, time_);
+        } else if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
             if (ok) {
@@ -660,7 +679,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             }
         }
         r3d_.render(pass);
-        fx_.render(r3d_.lighting);
+        if (!planet()) fx_.render(r3d_.lighting);
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
         pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.12f; pass.clearColor[2] = 0.14f;
