@@ -5772,6 +5772,7 @@ TEST(icons_generate_platform_sets) {
     branding::Image strip = branding::splashStrip(splash::parseSpec(game["splash"]), (dir / "game").string(), {0, 0.5f}, 160, 90, &pw);
     CHECK(strip.width > 320 && strip.height > 90);
     fs::remove_all(dir);
+}
 
 // ---------------- Lua scripting (scripting agent) ----------------
 #include "modules/rts/RtsScript.h"
