@@ -13,8 +13,8 @@
   "buildRadius": 2,
   "sellRefund": 0.5,
   "resources": {
+    "spice": {"name": "Пряность", "field": true, "regrow": 0, "cellMax": 100, "convertsTo": {"credits": 1}},   // first: drawn orange
     "credits": {"name": "Кредиты", "start": 1000, "capped": true, "storage": 0},
-    "spice": {"name": "Пряность", "field": true, "regrow": 0, "cellMax": 100, "convertsTo": {"credits": 1}},
     "power": {"name": "Энергия", "kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["defense", "radar"]}
   },
   "factions": {

@@ -14,6 +14,18 @@
       "title": "Spice Basin (1v1)"
     }
   ],
+  "terrain": {
+    // Arrakis: open sand everywhere, dark rock plateaus for the bases (textures from tools/terrain/make_textures.py, CC0)
+    "layers": [
+      {"id": "sand", "texture": "textures/terrain/path_repeat.png", "normal": "textures/terrain/path_n_repeat.png", "scale": 5, "tint": [1.25, 0.98, 0.62]},
+      {"id": "dune", "texture": "textures/terrain/earth_repeat.png", "normal": "textures/terrain/earth_n_repeat.png", "scale": 7, "tint": [1.3, 1.0, 0.6]},
+      {"id": "rock", "texture": "textures/terrain/rock_repeat.png", "normal": "textures/terrain/rock_n_repeat.png", "scale": 4, "tint": [0.75, 0.62, 0.5]}
+    ],
+    "cells": {"grass": {"layer": "sand", "color": [0.86, 0.68, 0.42]}, "sand": {"layer": "dune", "color": [0.8, 0.62, 0.38]},
+              "ramp": {"layer": "rock", "color": [0.52, 0.42, 0.34]}, "rock": {"layer": "rock", "color": [0.5, 0.4, 0.33]},
+              "blocked": {"layer": "rock", "color": [0.4, 0.32, 0.26]}, "lakebed": "dune", "shallows": "dune", "dug": "dune"},
+    "cliff": {"texture": "textures/terrain/rock_repeat.png", "normal": "textures/terrain/rock_n_repeat.png", "scale": 3, "slope": [0.3, 0.55]}
+  },
   "orientation": "landscape",
   "icon": "icon.png"
 }
