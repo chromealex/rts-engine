@@ -252,6 +252,7 @@ void RtsModule::sysProduction(Simulation& sim) {
             c.target = w.alive(pp.rallyTarget) ? pp.rallyTarget : kNullEntity;
             applyCommand(sim, c);
         }
+        if (w.has<RallyPath>(d.producer)) mechOnSpawn(sim, n, d.producer);   // agent-mech: rally waypoints
     }
     // squad reinforcement: one member at a time
     w.each<Squad, Unit, Owner>([&](Entity e, Squad& sq, Unit& u, Owner&) {

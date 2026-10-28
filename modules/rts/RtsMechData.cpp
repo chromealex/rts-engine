@@ -32,6 +32,27 @@ uint64_t tagsOf(const Rules& r, const std::string& where, const Json& j) {
     return m;
 }
 
+VeterancyTable vetTable(const std::string& where, const Json& v) {
+    VeterancyTable t;
+    t.set = true;
+    Fixed prev{};
+    for (auto& x : v["xp"].items()) {
+        if (x.fx() <= prev) fail(where + ".xp", "must increase");
+        prev = x.fx();
+        t.xp.push_back(x.fx());
+    }
+    for (auto& pl : v["perLevel"].items()) {
+        bool ok = false;
+        StatMod m;
+        m.stat = parseStat(pl.getStr("stat"), &ok);
+        if (!ok) fail(where + ".perLevel", "unknown stat '" + pl.getStr("stat") + "'");
+        m.add = pl.getFx("add");
+        m.mul = pl.getFx("mul", m.mul);
+        t.perLevel.push_back(m);
+    }
+    return t;
+}
+
 StanceMode stanceOf(const std::string& where, const std::string& s) {
     if (s == "aggressive") return StanceMode::Aggressive;
     if (s == "defensive") return StanceMode::Defensive;
@@ -51,6 +72,13 @@ void loadMechRules(Rules& r, const Json& j) {
         m.any = m.retreat = true;
         m.retreatSpeed = rt.getFx("speed", m.retreatSpeed);
         m.retreatDamageTaken = rt.getFx("damageTaken", m.retreatDamageTaken);
+    }
+    if (const Json& v = j["veterancy"]; v.isObject()) {
+        m.vet = vetTable("veterancy", v);
+        m.vetHeal = v.getBool("healOnLevel", true);
+        m.vetFromCost = v.getFx("fromCost", m.vetFromCost);
+        if (m.vet.xp.empty()) fail("veterancy.xp", "needs at least one rank");
+        m.any = m.veterancy = true;
     }
     size_t ti = 0;
     for (auto& [id, tj] : j["types"].members()) {
@@ -81,6 +109,35 @@ void loadMechRules(Rules& r, const Json& j) {
             d.weaponFromCargo = tr.getBool("weaponFromCargo", false);
             m.any = m.transports = true;
         }
+        if (const Json& dj = tj["detects"]; !dj.isNull()) {
+            mt.detects = dj.isObject() ? dj.getFx("radius") : dj.fx();
+            if (mt.detects.raw <= 0) fail(where + " detects", "expected a radius > 0");
+            m.any = m.detection = true;
+            if (mt.detects > m.maxDetect) m.maxDetect = mt.detects;
+        }
+        const Json& abs = tj["abilities"];
+        for (size_t ai = 0; ai < abs.size(); ++ai) {
+            const Json& tg = abs[ai]["toggle"];
+            if (tg.isNull()) continue;
+            ToggleDef d;
+            d.ability = int(ai);
+            int st = r.findStatus(tg.getStr("status"));
+            if (st < 0) fail(where + " ability " + std::to_string(ai) + " toggle.status", "unknown status '" + tg.getStr("status") + "'");
+            d.status = int16_t(st);
+            d.drain = tg.getFx("drain");
+            mt.toggles.push_back(d);
+            m.any = m.toggles = true;
+        }
+        if (const Json& v = tj["veterancy"]; !v.isNull()) {
+            if (v.type() == Json::Type::Bool) mt.veterancy = v.boolean() ? -1 : 0;
+            else { mt.veterancy = 1; mt.vetTable = vetTable(where + " veterancy", v); m.any = m.veterancy = true; }
+        }
+    }
+    ti = 0;
+    for (auto& [id, tj] : j["types"].members()) {
+        UnitType& t = r.types[ti++];
+        if (tj.has("xp")) t.mech.killXp = t.xpValue;
+        else { for (auto& a : t.cost) t.mech.killXp += a.value; t.mech.killXp = t.mech.killXp * m.vetFromCost; }
     }
     for (auto& t : r.types)
         if (t.mech.transport.slots > 0 && !t.mech.transport.killOnDeathSet) t.mech.transport.killOnDeath = t.structure ? Fixed{} : Fixed::fromInt(1);

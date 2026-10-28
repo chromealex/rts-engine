@@ -305,6 +305,7 @@ void RtsModule::sysWaves(Simulation& sim) {
     GameState& gs = state(sim);
     const uint32_t tick = sim.tick();
     std::vector<Entity> spawned;
+    std::vector<std::pair<Entity, size_t>> routed;   // agent-mech: wave units with a route (index into gs.waves)
     // scripted waves (They Are Billions, tower defense, survival maps)
     for (auto& wd : gs.waves) {
         if (wd.repeats >= 0 && wd.done > wd.repeats) continue;
@@ -319,6 +320,7 @@ void RtsModule::sysWaves(Simulation& sim) {
                 int cx = gs.grid.cellX(p.x), cy = gs.grid.cellY(p.z);
                 if (!gs.grid.nearestPassable(cx, cy, rules_.types[type].pathLayer, 6)) continue;
                 spawned.push_back(spawn(sim, type, wd.player, gs.grid.cellCenter(cx, cy)));
+                if (!wd.route.empty()) routed.push_back({spawned.back(), size_t(&wd - gs.waves.data())});
             }
         }
         sim.emit({kEvWave, wd.player, kNullEntity, kNullEntity, wd.done, wd.at});
@@ -359,6 +361,7 @@ void RtsModule::sysWaves(Simulation& sim) {
         o.param = 4;
         issue(sim, n, o, false);
     }
+    for (auto& [n, wi] : routed) if (w.alive(n)) mechWaveRoute(sim, n, gs.waves[wi].route);
 }
 
 // ================================================================= victory

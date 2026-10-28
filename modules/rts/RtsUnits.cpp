@@ -341,6 +341,7 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
         return runGather(sim, e, o);
     case OrderType::Board: return runBoard(sim, e, o);     // agent-mech
     case OrderType::Unload: return runUnload(sim, e, o);
+    case OrderType::Follow: return runFollow(sim, e, o);
     case OrderType::Return: {
         auto* cargo = w.tryGet<Cargo>(e);
         if (!cargo || cargo->res < 0 || cargo->amount.raw <= 0) return true;

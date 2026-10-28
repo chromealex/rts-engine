@@ -304,6 +304,13 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
             wd.spawn.push_back({uint16_t(t), int(s.getInt("count", 1))});
         }
         wd.at = readPos(wj["at"]);
+        for (auto& rp : wj["route"].items()) {   // agent-mech: area names or [x, z]
+            if (rp.isString()) {
+                const Json& a = map["areas"][rp.str()];
+                if (!a.isArray()) throw std::runtime_error("map wave route: unknown area '" + rp.str() + "'");
+                wd.route.push_back({a[0].fx() + a[2].fx() / 2, Fixed{}, a[1].fx() + a[3].fx() / 2});
+            } else wd.route.push_back(readPos(rp));
+        }
         wd.spread = wj.getFx("spread", wd.spread);
         wd.every = uint32_t((wj.getFx("every") * int64_t(sim.tickRate())).toInt());
         wd.growth = wj.getFx("growth", Fixed::fromInt(1));
@@ -571,7 +578,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
                 for (auto& m : rules_.statuses[in.def].mods)
                     if (m.stat == s) { add += m.add * in.stacks; for (int k = 0; k < in.stacks; ++k) mul *= m.mul; }
     }
-    if (mechOn(sim)) mul *= mechStatMul(sim, e, s);   // agent-mech states (retreat speed, cargo arrows)
+    if (mechOn(sim)) mechStatMod(sim, e, s, add, mul);   // agent-mech states (retreat speed, cargo arrows, veterancy)
     // Damage/Range/GatherRate/AttackSpeed "add" are fractional bonuses on top of 1 / absolute range
     return (base + add) * mul;
 }
@@ -814,7 +821,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
-    if (cmd.type >= kCmdStance || (rules_.mech.transports && cmd.type == kCmdSmart)) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
+    if (cmd.type >= kCmdStance || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue || mechOn(sim))) || (rules_.mech.transports && cmd.type == kCmdSmart)) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
     if (cmd.type == kCmdBuildRoad || cmd.type == kCmdConnectRoad) { applySettlersCommand(sim, cmd); return; }
 

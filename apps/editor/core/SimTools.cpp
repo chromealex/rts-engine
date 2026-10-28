@@ -38,6 +38,7 @@ const CmdName kCommands[] = {
     {"possess", kCmdPossess}, {"direct", kCmdDirect}, {"player_ability", kCmdPlayerAbility},
     {"build_road", kCmdBuildRoad}, {"connect_road", kCmdConnectRoad},
     {"stance", kCmdStance}, {"retreat", kCmdRetreat}, {"load", kCmdLoad}, {"unload", kCmdUnload},
+    {"guard", kCmdGuard}, {"follow", kCmdFollow},
 };
 
 Vec3 readPoint(const Json& p) {
@@ -72,7 +73,7 @@ std::string simEventNames() {
 }
 const char* orderName(OrderType t) {
     static const char* const n[] = {"move", "attackMove", "attack", "patrol", "gather", "return", "build", "repair",
-                                    "enter", "cast", "dig", "claimCell", "need", "haul", "board", "unload"};
+                                    "enter", "cast", "dig", "claimCell", "need", "haul", "board", "unload", "follow"};
     size_t i = size_t(t);
     return i < sizeof(n) / sizeof(n[0]) ? n[i] : "?";
 }

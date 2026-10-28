@@ -853,6 +853,32 @@ Optional blocks; a game without them plays exactly as before (stances and retrea
   Events `kEvLoaded` / `kEvUnloaded` (a = passenger, b = transport). The AI mans shooting structures (`fireFrom`:
   fighters; `damagePerCargo`: workers) when enemies are within 10 cells and lets workers out when it is safe.
 
+### Detection, toggles, veterancy, guard / follow, waypoints (agent-mech)
+
+```json
+"veterancy": {"xp": [100, 300, 700], "perLevel": [{"stat": "damage", "add": 0.1}, {"stat": "armor", "add": 1}], "healOnLevel": true, "fromCost": 1},
+"statuses": {"cloak": {"flags": ["invisible"]}, "burrowed": {"flags": ["invisible", "root", "disarm"]}},
+"types": {
+  "observer": {"detects": 9, ...},                                   // reveals invisible enemies within 9 cells (allies share it)
+  "ghost":    {"abilities": [{"id": "cloak", "target": "none", "toggle": {"status": "cloak", "drain": 1}}], ...},
+  "lurker":   {"abilities": [{"id": "burrow", "target": "none", "toggle": {"status": "burrowed"}}], ...},
+  "wall":     {"veterancy": false},                                   // or its own {"xp": [...], "perLevel": [...]}
+  "tank":     {"xp": 50, ...}                                         // xp its killer gets (default: its cost x fromCost)
+}
+```
+
+- **Detection**: invisible objects (status flag `invisible`) can be targeted by a side only when `revealed` or within
+  `detects` of one of its (or an ally's) detectors. `RtsModule::canSee(sim, e, viewer)` is the query for the view/UI.
+- **Toggle abilities**: casting switches the status on (until toggled off) and off; `drain` energy per second turns
+  it off when energy runs out. Cloak, burrow, submerge, siege mode (a status with mods / flags) are data.
+- **Veterancy** (ordinary units; heroes keep `hero`): the unit that dealt the last hit gets the victim's `xp`;
+  ranks apply `perLevel` per rank above 1 and heal on rank-up; event `kEvLevelUp` (value = rank).
+- **Guard / follow** (`kCmdGuard`, `kCmdFollow`, target = unit): follow within ~3 cells; guard also fights enemies
+  within 6 cells of the guarded unit.
+- **Rally waypoints**: `kCmdRally` with the queue flag (Shift) adds waypoints after the rally point; new units walk
+  them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
+- **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
@@ -861,7 +887,7 @@ room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point;
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
 optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
 `kCmdConnectRoad` (units = own structures), `kCmdStance` (param = stance), `kCmdRetreat`, `kCmdLoad` (target = transport),
-`kCmdUnload` (param 1 = drive to point first). `kCmdPlayerAbility` with a `structure` / `group` / `player`
+`kCmdUnload` (param 1 = drive to point first), `kCmdGuard` / `kCmdFollow` (target = unit). `kCmdPlayerAbility` with a `structure` / `group` / `player`
 ability takes the clicked object in `target` (or the nearest one to `point`).
 
 ## Triggers

@@ -119,7 +119,7 @@ bool RtsModule::applyMechCommand(Simulation& sim, const Command& cmd) {
         c.type = kCmdLoad;
         return applyMechCommand(sim, c);
     }
-    default: return false;
+    default: return applyMechCommand2(sim, cmd);   // RtsMechUnits.cpp
     }
 }
 
@@ -230,6 +230,7 @@ bool RtsModule::runUnload(Simulation& sim, Entity e, Order& o) {
 
 void RtsModule::mechOnDeath(Simulation& sim, Entity e) {
     World& w = sim.world();
+    mechVeteranKill(sim, e);
     if (auto* b = w.tryGet<Boarded>(e)) {   // a passenger died inside
         if (auto* tp = w.alive(b->carrier) ? w.tryGet<Transport>(b->carrier) : nullptr) {
             auto it = std::find(tp->cargo.begin(), tp->cargo.end(), e);
@@ -292,9 +293,8 @@ bool RtsModule::mechMayChase(Simulation& sim, Entity e, Vec3 targetPos) {
     return false;
 }
 
-Fixed RtsModule::mechStatMul(Simulation& sim, Entity e, Stat s) const {
+void RtsModule::mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed& mul) const {
     World& w = sim.world();
-    Fixed mul = kOne;
     if (s == Stat::Speed && w.has<Retreating>(e)) mul = mul * rules_.mech.retreatSpeed;
     if (s == Stat::Damage) {
         if (auto* tp = w.tryGet<Transport>(e)) {
@@ -302,7 +302,12 @@ Fixed RtsModule::mechStatMul(Simulation& sim, Entity e, Stat s) const {
             if (per.raw > 0) mul = mul * (kOne + per * int64_t(tp->cargo.size()));
         }
     }
-    return mul;
+    if (auto* v = w.tryGet<Veteran>(e); v && v->level > 1) {
+        const MechType& mt = rules_.types[w.get<Unit>(e).type].mech;
+        const VeterancyTable& tab = mt.veterancy == 1 ? mt.vetTable : rules_.mech.vet;
+        for (auto& pl : tab.perLevel)
+            if (pl.stat == s) { add += pl.add * (v->level - 1); for (int k = 1; k < v->level; ++k) mul = mul * pl.mul; }
+    }
 }
 
 Fixed RtsModule::mechDamageTaken(Simulation& sim, Entity e) const {
@@ -313,6 +318,7 @@ Fixed RtsModule::mechDamageTaken(Simulation& sim, Entity e) const {
 
 void RtsModule::sysMech(Simulation& sim) {
     World& w = sim.world();
+    mechTick(sim);   // RtsMechUnits.cpp: veterans, toggles, ...
     std::vector<Entity> addStance, dropRetreat;
     w.each<Unit, Transform>([&](Entity e, Unit& u, Transform& tr) {
         if (u.hp.raw <= 0) return;
@@ -377,6 +383,8 @@ void RtsModule::hashMech(Simulation& sim, Hasher& h, Entity e) {
     if (auto* rt = w.tryGet<Retreating>(e)) { h.u32(0x4E7E); h.u64(rt->to.packed()); }
     if (auto* tp = w.tryGet<Transport>(e)) { h.u32(0x7A45); h.u32(uint32_t(tp->cargo.size())); h.u32(uint32_t(tp->used)); h.u32(tp->unloading); }
     if (auto* b = w.tryGet<Boarded>(e)) { h.u32(0xB0A7); h.u64(b->carrier.packed()); h.u32(b->fires); }
+    if (auto* v = w.tryGet<Veteran>(e)) { h.u32(0x7E7E); h.i32(v->level); h.fx(v->xp); }
+    if (auto* rp = w.tryGet<RallyPath>(e)) { h.u32(0x9A11); h.u32(uint32_t(rp->points.size())); }
 }
 
 } // namespace rts::game

@@ -58,6 +58,8 @@ enum CommandType : uint16_t {
     kCmdRetreat,      // units: run to the nearest own retreatPoint (rules "retreat")
     kCmdLoad,         // units = passengers, target = transport (or units = transports, target = a passenger)
     kCmdUnload,       // units = transports; point: move there first (param 1), else unload where they stand
+    kCmdGuard,        // units follow `target` and fight what attacks near it
+    kCmdFollow,       // units follow `target`
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -130,7 +132,8 @@ enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Retur
                                  Need,       // param = NeedKind | room << 8, point = room cell (or target = structure)
                                  Haul,       // carrier job, see Carrier
                                  Board,      // agent-mech: walk to the transport `target` and get in
-                                 Unload };   // agent-mech (transports): go to `point` (state 0) then unload
+                                 Unload,     // agent-mech (transports): go to `point` (state 0) then unload
+                                 Follow };   // agent-mech: stay near `target`; param 1 = guard it
 
 struct Order {
     OrderType type = OrderType::Move;
@@ -311,6 +314,7 @@ struct WaveDef {
     Fixed growth = Fixed::fromInt(1);
     int repeats = 0;
     int done = 0;
+    std::vector<Vec3> route;   // agent-mech: waypoints (map areas / points) the wave walks before its objective
 };
 
 struct RoomZone { uint16_t type = 0; uint8_t owner = 0; std::vector<int32_t> cells; Vec3 center{}; };
@@ -480,7 +484,7 @@ public:
     bool applyMechCommand(Simulation& sim, const Command& cmd);   // true: handled (kCmdStance...; smart click on a transport)
     void sysMech(Simulation& sim);                                 // stances, retreat, transports
     void hashMech(Simulation& sim, Hasher& h, Entity e);           // per object, only components that exist
-    Fixed mechStatMul(Simulation& sim, Entity e, Stat s) const;    // multiplier from mech states (retreat speed...)
+    void mechStatMod(Simulation& sim, Entity e, Stat s, Fixed& add, Fixed& mul) const;   // retreat speed, cargo arrows, veterancy
     Fixed mechDamageTaken(Simulation& sim, Entity e) const;
     bool mechCanAcquire(Simulation& sim, Entity e) const;          // auto-targeting allowed (passive stance, cargo)
     bool mechMayChase(Simulation& sim, Entity e, Vec3 targetPos);  // defensive stance leash
@@ -491,6 +495,16 @@ public:
     void unloadOne(Simulation& sim, Entity carrier, size_t index);
     bool accepts(Simulation& sim, Entity carrier, Entity passenger) const;
     Entity nearestRetreatPoint(Simulation& sim, uint8_t owner, Vec3 from) const;
+    bool detected(Simulation& sim, Entity e, uint8_t viewer) const;      // an allied detector reveals it
+    bool canSee(Simulation& sim, Entity e, uint8_t viewer) const;        // not invisible to viewer (statuses + detectors)
+    bool mechToggle(Simulation& sim, Entity caster, int ability);        // true: a toggle ability, handled
+    void mechOnHit(Simulation& sim, Entity target, Entity source);       // veterancy: who hit last
+    void mechOnSpawn(Simulation& sim, Entity e, Entity producer);        // rally waypoints
+    bool runFollow(Simulation& sim, Entity e, Order& o);
+    bool applyMechCommand2(Simulation& sim, const Command& cmd);    // guard, follow, rally waypoints
+    void mechTick(Simulation& sim);                                  // veterans, toggles
+    void mechVeteranKill(Simulation& sim, Entity victim);
+    void mechWaveRoute(Simulation& sim, Entity e, const std::vector<Vec3>& route);
 
 private:
     Json generated_;                 // generated map (see generatedMap())
