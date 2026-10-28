@@ -1,6 +1,6 @@
 // rtsbuild — packages a game (content folder with game.json) for every platform.
 //
-//   rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>
+//   rtsbuild --project <project dir or .rtsproj> --target <macos|ios|android|web|windows|linux|all>
 //            [--engine <engine dir>] [--out <dir>] [--config Debug|Release]
 //            [--generate-only] [--team <Apple team id>] [--jobs N]
 //            [--no-pack] [--pack-level N] [--no-atlas] [--audio auto|off|desktop|mobile|web]
@@ -176,6 +176,7 @@ void copyDir(const fs::path& from, const fs::path& to) {
     for (auto it = fs::directory_iterator(from, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
         const std::string name = it->path().filename().string();
         if (name == "Builds" || name == "dist" || name == "logs" || name == "Logs" || name == ".rtsengine") continue;
+        if (it->path().extension() == ".rtsproj") continue;   // editor project file
         std::error_code e2;
         const bool ok = it->is_directory(e2) ? rts::pack::copyTree(it->path(), to / name, e2) : rts::pack::copyFileReplace(it->path(), to / name, e2);
         if (!ok) die("не удалось скопировать " + it->path().string() + " -> " + (to / name).string() + ": " + e2.message());
@@ -421,6 +422,7 @@ fs::path contentPack(Options& o) {
     rts::pack::IgnoreRules rules;
     rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
     for (const char* d : {"Builds/", "Logs/", "logs/", "dist/", ".rtsengine/"}) rules.add(d);   // project outputs and editor state
+    rules.add("*.rtsproj");   // the editor's project file (double-click target), not game content
     std::vector<std::string> notes;
     addImports(o, w, rules, notes);
     // Game folders produced by importers (tools/importers) carry converted third-party data.
@@ -933,7 +935,7 @@ void buildLinux(const Game& g, Options& o) {
 }
 
 void usage() {
-    std::cout << "usage: rtsbuild --project <content dir> --target <macos|ios|android|web|windows|linux|all>\n"
+    std::cout << "usage: rtsbuild --project <project dir or .rtsproj> --target <macos|ios|android|web|windows|linux|all>\n"
                  "                [--engine <dir>] [--out <dir>] [--config Debug|Release] [--generate-only] [--team <AppleTeamID>] [--jobs N]\n"
                  "                [--no-pack] [--pack-level 1..22] [--no-atlas] [--audio auto|off|desktop|mobile|web]\n"
               "                [--plugins name,name]   (native plugins; default: game.json \"plugins\")\n"
@@ -1030,6 +1032,9 @@ int main(int argc, char** argv) {
     }
     if (o.project.empty() || o.target.empty()) { usage(); return 2; }
     std::error_code ec;
+    // --project takes the folder, its game.json or its .rtsproj (the file the editor opens)
+    if (fs::is_regular_file(o.project, ec) && (o.project.extension() == ".rtsproj" || o.project.filename() == "game.json"))
+        o.project = fs::absolute(o.project, ec).parent_path();
     o.project = fs::canonical(o.project, ec);
     if (ec) die("папка проекта не найдена");
     o.engine = fs::canonical(o.engine, ec);

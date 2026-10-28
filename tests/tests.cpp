@@ -9889,3 +9889,213 @@ TEST(planet_fog_blur_seams_and_speed) {
     std::printf("  fog blur faceSize 256 (%zu cells), radius 2: old %.2f ms, new %.2f ms per update\n", n, tOld, tNew);
     CHECK(tNew < tOld);
 }
+
+// ---- project-file agent: <Title>.rtsproj (apps/editor/core/ProjectFile.h), OS file association
+// (FileAssoc.h, Linux part under a temporary HOME), editor / document icons (tools/branding/ProjectIcon.h)
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/FileAssoc.h"
+#include "apps/editor/core/ProjectFile.h"
+#include "apps/editor/core/Projects.h"
+#include "tools/branding/ProjectIcon.h"
+namespace {
+// HOME (and XDG_*) pointed at a fresh temp folder for the scope of a test: nothing reaches the real ~/.rtsengine
+struct TempHome {
+    std::filesystem::path dir;
+    std::string oldHome, oldData, oldConfig;
+    bool hadHome = false, hadData = false, hadConfig = false;
+    explicit TempHome(const char* tag) {
+        dir = std::filesystem::temp_directory_path() / (std::string("rts_") + tag + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(dir);
+        auto save = [](const char* k, std::string& v, bool& had) { if (const char* e = std::getenv(k)) { v = e; had = true; } };
+        save("HOME", oldHome, hadHome); save("XDG_DATA_HOME", oldData, hadData); save("XDG_CONFIG_HOME", oldConfig, hadConfig);
+#if !defined(_WIN32)
+        setenv("HOME", dir.string().c_str(), 1);
+        unsetenv("XDG_DATA_HOME");
+        unsetenv("XDG_CONFIG_HOME");
+#endif
+    }
+    ~TempHome() {
+#if !defined(_WIN32)
+        auto restore = [](const char* k, const std::string& v, bool had) { if (had) setenv(k, v.c_str(), 1); else unsetenv(k); };
+        restore("HOME", oldHome, hadHome); restore("XDG_DATA_HOME", oldData, hadData); restore("XDG_CONFIG_HOME", oldConfig, hadConfig);
+#endif
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+};
+std::string slurp(const std::filesystem::path& p) { std::ifstream f(p, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); }
+} // namespace
+
+TEST(project_file_create_resolve_migrate) {
+    namespace fs = std::filesystem;
+    using namespace rts::editor;
+    TempHome home("projfile");
+    std::string err;
+    // a new project from a template: its own <Title>.rtsproj, the template's one is not copied
+    const std::string dir = createProject(RTS_SOURCE_DIR, "skirmish", "Моя стратегия", (home.dir / "Projects").string(), "", &err);
+    CHECK(!dir.empty());
+    const fs::path file = fs::path(dir) / "Моя стратегия.rtsproj";
+    CHECK(fs::exists(file));
+    CHECK(!fs::exists(fs::path(dir) / "Iron and Gold.rtsproj"));
+    CHECK(findProjectFile(dir) == file.string());
+    ProjectFile pf;
+    CHECK(readProjectFile(file.string(), pf, &err));
+    CHECK(pf.format == 1 && pf.name == "Моя стратегия" && pf.manifest == "game.json" && pf.engine == engineVersion() && pf.created.size() == 10);
+    CHECK(!engineVersion().empty() && engineVersion() != "0.0.0");
+    // the recent list remembers the file
+    auto recent = recentProjects();
+    CHECK(!recent.empty() && recent[0].file == fs::weakly_canonical(file).string() && recent[0].exists);
+
+    // anything that means "this project" resolves to the folder
+    const std::string canon = fs::path(dir).lexically_normal().string();
+    CHECK(resolveProjectDir(file.string(), &err) == canon);
+    CHECK(resolveProjectDir(dir, &err) == canon);
+    CHECK(resolveProjectDir(dir + "/", &err) == canon);
+    CHECK(resolveProjectDir(dir + "/game.json", &err) == canon);
+    CHECK(resolveProjectDir(dir + "/rules.json", &err).empty() && err.find("not a project") != std::string::npos);
+    CHECK(resolveProjectDir(dir + "/nope.rtsproj", &err).empty() && err.find("not found") != std::string::npos);
+    CHECK(resolveProjectDir((home.dir / "Projects").string(), &err).empty() && err.find("game.json") != std::string::npos);
+    CHECK(isProjectFilePath("A/B/Game.RTSPROJ") && !isProjectFilePath("game.json"));
+
+    // a file from a newer editor is refused with a readable reason; unknown keys survive a rewrite
+    std::ofstream(fs::path(dir) / "future.rtsproj") << R"({"format": 9, "name": "x"})";
+    CHECK(!readProjectFile((fs::path(dir) / "future.rtsproj").string(), pf, &err) && err.find("newer") != std::string::npos);
+    fs::remove(fs::path(dir) / "future.rtsproj");
+    {
+        std::ofstream(file) << "// project\n{\"format\": 1, \"name\": \"Old\", \"custom\": {\"k\": 3}}\n";
+        ProjectFile n; n.name = "Моя стратегия";
+        CHECK(writeProjectFile(file.string(), n, &err));
+        Json j = Json::parseFile(file.string());
+        CHECK(j["custom"].getInt("k") == 3 && j.getStr("name") == "Моя стратегия" && j.getStr("manifest") == "game.json");
+    }
+
+    // migration: a project made before .rtsproj existed gets one when opened
+    const fs::path old = home.dir / "Projects" / "legacy";
+    fs::create_directories(old / "maps");
+    fs::copy_file(fs::path(RTS_SOURCE_DIR) / "templates/skirmish/rules.json", old / "rules.json");
+    std::ofstream(old / "game.json") << R"({"name": "Old Game", "rules": "rules.json", "maps": []})";
+    {
+        Workspace ws;
+        ws.engineDir = RTS_SOURCE_DIR;
+        CHECK(ws.openGame(old.string(), &err));
+        CHECK(ws.project.file == (fs::weakly_canonical(old) / "Old Game.rtsproj").string());
+        CHECK(fs::exists(old / "Old Game.rtsproj"));
+        bool created = true;
+        CHECK(ensureProjectFile(old.string(), &created) == ws.project.file && !created);
+        // and the .rtsproj path opens the project (double-click / argv / MCP open_game)
+        CHECK(ws.openGame(file.string(), &err));
+        CHECK(ws.project.dir == fs::weakly_canonical(dir).string() && ws.project.file == fs::weakly_canonical(file).string());
+        Json r = ws.call("open_game", Json::parse("{\"game\": \"" + (old / "Old Game.rtsproj").generic_string() + "\"}"));
+        CHECK(!r.has("error") && r.getStr("file").find("Old Game.rtsproj") != std::string::npos);
+        // template ids still work and the engine's templates are not rewritten
+        CHECK(ws.openGame("mushrooms", &err) && fs::path(ws.project.file).filename() == "Mushroom Clash.rtsproj");
+        CHECK(!ws.openGame((old / "missing.rtsproj").string(), &err) && !err.empty());
+    }
+}
+
+TEST(templates_have_project_files) {
+    namespace fs = std::filesystem;
+    using namespace rts::editor;
+    int n = 0;
+    for (auto& e : fs::directory_iterator(fs::path(RTS_SOURCE_DIR) / "templates")) {
+        if (!fs::exists(e.path() / "game.json")) continue;
+        ++n;
+        int files = 0;
+        for (auto& f : fs::directory_iterator(e.path())) files += isProjectFilePath(f.path().string());
+        const std::string pf = findProjectFile(e.path().string());
+        if (files != 1 || pf.empty()) { std::printf("  %s: %d .rtsproj files\n", e.path().filename().string().c_str(), files); CHECK(false); continue; }
+        ProjectFile p;
+        std::string err;
+        CHECK(readProjectFile(pf, p, &err));
+        const std::string name = Json::parseFile((e.path() / "game.json").string()).getStr("name");
+        if (p.name != name || fs::path(pf).filename().string() != projectFileName(name)) {
+            std::printf("  %s: .rtsproj '%s' vs game.json name '%s'\n", e.path().filename().string().c_str(), fs::path(pf).filename().string().c_str(), name.c_str());
+            CHECK(false);
+        }
+    }
+    CHECK(n > 10);
+    // rtsbuild's pack rule: a .rtsproj at the root is not content
+    rts::pack::IgnoreRules rules;
+    rules.add("*.rtsproj");
+    CHECK(rules.ignored("Iron and Gold.rtsproj", false) && !rules.ignored("rules.json", false));
+}
+
+TEST(project_document_icons) {
+    namespace fs = std::filesystem;
+    using namespace rts::branding;
+    TempHome home("projicon");
+    std::string err;
+    auto files = writeEditorIcons((home.dir / "icons").string(), &err);
+    CHECK(files.size() == 6);
+    rts::branding::Image doc;
+    CHECK(loadImageFile((home.dir / "icons" / "rtsproj.png").string(), doc, &err) && doc.width == 256 && doc.height == 256);
+    CHECK(doc.px(2, 2)[3] == 0 && doc.px(253, 2)[3] == 0);           // around the page: transparent (and the folded corner)
+    CHECK(doc.px(128, 128)[3] == 255 && doc.px(60, 30)[3] == 255);   // the page itself is opaque
+    CHECK(doc.px(210, 18)[3] == 0);                                  // cut-off corner of the fold
+    const std::string ico = slurp(home.dir / "icons" / "rtsproj.ico"), icns = slurp(home.dir / "icons" / "rtsproj.icns");
+    CHECK(ico.size() > 1000 && ico.compare(0, 4, std::string("\0\0\1\0", 4)) == 0 && uint8_t(ico[4]) == 7);
+    CHECK(icns.size() > 1000 && icns.compare(0, 4, "icns") == 0);
+    CHECK(slurp(home.dir / "icons" / "AppIcon.icns").compare(0, 4, "icns") == 0);
+    CHECK(projectDocumentIcon(16).width == 16 && editorAppIcon(48).width == 48);
+}
+
+#if defined(__linux__)
+TEST(file_assoc_linux_registration_temp_home) {
+    namespace fs = std::filesystem;
+    using namespace rts::editor;
+    TempHome home("assoc");
+    unsetenv("RTS_FILE_ASSOC");
+    // Exec= quoting (Desktop Entry spec)
+    CHECK(desktopExec("/usr/bin/rts_editor") == "/usr/bin/rts_editor %f");
+    CHECK(desktopExec("/opt/RTS Engine/rts_editor") == "\"/opt/RTS Engine/rts_editor\" %f");
+    CHECK(desktopExec("/o/a$b\\c 100%") == "\"/o/a\\\\$b\\\\\\\\c 100%%\" %f");
+    CHECK(xdgDataHome() == (home.dir / ".local" / "share").string() && xdgConfigHome() == (home.dir / ".config").string());
+
+    const std::string exe = "/opt/RTS Engine/rts_editor";
+    AssocStatus st = fileAssociationStatus(exe);
+    CHECK(st.supported && !st.registered && !st.otherDefault);
+    std::string msg;
+    CHECK(registerFileAssociation(exe, &msg));
+    const fs::path data = home.dir / ".local" / "share";
+    const std::string desk = slurp(data / "applications" / "rtsengine-editor.desktop");
+    CHECK(desk.find("Exec=\"/opt/RTS Engine/rts_editor\" %f\n") != std::string::npos);
+    CHECK(desk.find("MimeType=application/x-rtsengine-project;\n") != std::string::npos && desk.find("Icon=rtsengine-editor\n") != std::string::npos);
+    const std::string xml = slurp(data / "mime" / "packages" / "rtsengine-project.xml");
+    CHECK(xml.find("type=\"application/x-rtsengine-project\"") != std::string::npos && xml.find("<glob pattern=\"*.rtsproj\"") != std::string::npos);
+    CHECK(fs::exists(data / "icons/hicolor/48x48/mimetypes/application-x-rtsengine-project.png"));
+    CHECK(fs::exists(data / "icons/hicolor/256x256/apps/rtsengine-editor.png"));
+    CHECK(slurp(home.dir / ".config" / "mimeapps.list").find("application/x-rtsengine-project=rtsengine-editor.desktop") != std::string::npos);
+    st = fileAssociationStatus(exe);
+    CHECK(st.registered);
+    const bool mimeDb = std::system("command -v update-mime-database >/dev/null 2>&1") == 0;
+    if (mimeDb) CHECK(slurp(data / "mime" / "globs2").find("application/x-rtsengine-project:*.rtsproj") != std::string::npos);
+    if (std::system("command -v xdg-mime >/dev/null 2>&1") == 0) {
+        const std::string q = "xdg-mime query default application/x-rtsengine-project > '" + (home.dir / "q.txt").string() + "' 2>/dev/null";
+        CHECK(std::system(q.c_str()) == 0 && slurp(home.dir / "q.txt").find("rtsengine-editor.desktop") != std::string::npos);
+    }
+    std::printf("  registered under a temp HOME (update-mime-database: %s): %s\n", mimeDb ? "yes" : "no", msg.c_str());
+
+    // another editor build: not ours any more -> startup re-registers it
+    CHECK(!fileAssociationStatus("/other/rts_editor").registered);
+    CHECK(!ensureFileAssociation("/other/rts_editor").empty());
+    CHECK(fileAssociationStatus("/other/rts_editor").registered && !fileAssociationStatus(exe).registered);
+    CHECK(ensureFileAssociation("/other/rts_editor").empty());   // nothing to do
+    // the user picked another program: reported, never overridden at startup
+    {
+        std::string list = slurp(home.dir / ".config" / "mimeapps.list");
+        const std::string a = "application/x-rtsengine-project=rtsengine-editor.desktop";
+        list.replace(list.find(a), a.size(), "application/x-rtsengine-project=org.gnome.TextEditor.desktop");
+        std::ofstream(home.dir / ".config" / "mimeapps.list") << list;
+    }
+    st = fileAssociationStatus("/other/rts_editor");
+    CHECK(!st.registered && st.otherDefault && st.detail.find("org.gnome.TextEditor") != std::string::npos);
+    CHECK(ensureFileAssociation("/other/rts_editor").empty());
+    // the menu item does it on request
+    CHECK(registerFileAssociation("/other/rts_editor", &msg) && fileAssociationStatus("/other/rts_editor").registered);
+    // automated runs never touch the user's desktop
+    setenv("RTS_FILE_ASSOC", "off", 1);
+    CHECK(ensureFileAssociation("/third/rts_editor").empty() && !fileAssociationStatus("/third/rts_editor").registered);
+    unsetenv("RTS_FILE_ASSOC");
+}
+#endif
+#endif

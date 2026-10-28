@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- RTS Editor bundle (CMake target rts_editor). Games use Info.plist.in. Declares the project file
+     type: <Title>.rtsproj (UTI com.rtsengine.project) opens in the editor by double-click / Open With
+     (PlatformMac.mm application:openURLs: -> EventType::OpenFile). Icons: rts_projicon. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+    <key>CFBundleIdentifier</key><string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundleDisplayName</key><string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
+    <key>CFBundleVersion</key><string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key><string>11.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSSupportsAutomaticTermination</key><false/>
+    <key>NSSupportsSuddenTermination</key><false/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key><string>RTSEngine Project</string>
+            <key>CFBundleTypeRole</key><string>Editor</string>
+            <key>LSHandlerRank</key><string>Owner</string>
+            <key>CFBundleTypeIconFile</key><string>rtsproj</string>
+            <key>LSItemContentTypes</key>
+            <array><string>com.rtsengine.project</string></array>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key><string>com.rtsengine.project</string>
+            <key>UTTypeDescription</key><string>RTSEngine Project</string>
+            <key>UTTypeIconFile</key><string>rtsproj</string>
+            <!-- public.data, not public.json: the type is ours, so a double-click opens the editor
+                 instead of a text editor that claims JSON -->
+            <key>UTTypeConformsTo</key>
+            <array><string>public.data</string><string>public.content</string></array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key><array><string>rtsproj</string></array>
+                <key>public.mime-type</key><array><string>application/x-rtsengine-project</string></array>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>

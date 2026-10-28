@@ -146,7 +146,14 @@ struct PluginGlue {
 int g_pluginFrames = 0;
 } // namespace
 
+void requestOpenFile(const std::string& path) { if (!path.empty()) state().openFiles.push_back(path); }
+
 void pluginFrame() {
+    if (!state().openFiles.empty()) {
+        std::vector<std::string> files;
+        files.swap(state().openFiles);
+        for (auto& f : files) { Event e; e.type = EventType::OpenFile; e.path = f; dispatch(e); }
+    }
     plugins::pump();
     // a couple of frames in, the first screen is up and interactive (Yandex Games: LoadingAPI.ready)
     if (++g_pluginFrames == 3) plugins::detail::broadcast("lifecycle", "{\"event\":\"ready\"}");
