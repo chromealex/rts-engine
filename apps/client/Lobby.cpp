@@ -179,6 +179,7 @@ void GameClient::startNetMatch() {
         Json rules = Json::parse(rulesText);
         if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_->setup(rules, map);
+        configurePostFx(map);
     } catch (const std::exception& e) {
         netError_ = e.what();
         sim_.reset();

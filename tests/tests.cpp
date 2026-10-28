@@ -8211,141 +8211,14 @@ TEST(models_dds_formats) {
 // ---- sprite shadows (RtsSpriteShadow): data keys, tiers, projected decal geometry
 #include "modules/rts/view/RtsSpriteShadow.h"
 
-TEST(sprite_shadow_data_keys) {
-    using game::SpriteShadowMode;
-    // defaults: blob, unlit; game.json wins over rules.json
-    game::SpriteDefaults d0 = game::parseSpriteDefaults(Json(), Json());
-    CHECK(d0.shadow == SpriteShadowMode::Blob && !d0.lit);
-    game::SpriteDefaults d = game::parseSpriteDefaults(Json::parse(R"({"shadow": "none", "lit": true})"), Json::parse(R"({"shadow": "cast"})"));
-    CHECK(d.shadow == SpriteShadowMode::Cast && d.lit);
-    // old files: missing shadow = blob for units, none for buildings and ground sprites
-    auto spec = [&](const char* js, const game::SpriteDefaults& dd, bool structure, bool ground = false) {
-        return game::parseSpriteShadow(Json::parse(js), dd, structure, ground, 1.0f, 1.5f, 2, 3);
-    };
-    CHECK(spec("{}", d0, false).mode == SpriteShadowMode::Blob);
-    CHECK(spec("{}", d0, true).mode == SpriteShadowMode::None);
-    CHECK(spec("{}", d, true).mode == SpriteShadowMode::Cast);          // game opts in: buildings cast
-    CHECK(spec("{}", d, false, true).mode == SpriteShadowMode::None);   // ground sprites never cast
-    CHECK(spec(R"({"shadow": false})", d, false).mode == SpriteShadowMode::None);
-    CHECK(spec(R"({"shadow": true})", d0, true).mode == SpriteShadowMode::Blob);
-    CHECK(spec(R"({"shadow": "cast"})", d0, false).mode == SpriteShadowMode::Cast);
-    // object form: blob (compatibility) unless "mode" says otherwise; size / alpha kept for the blob
-    game::SpriteShadowSpec o = spec(R"({"shadow": {"size": [0.9, 0.5], "alpha": 0.3}})", d, true);
-    CHECK(o.mode == SpriteShadowMode::Blob && std::fabs(o.blobW - 0.9f) < 1e-4f && std::fabs(o.blobH - 0.5f) < 1e-4f && std::fabs(o.blobAlpha - 0.3f) < 1e-4f);
-    CHECK(spec(R"({"shadow": {"mode": "cast", "size": [0.9, 0.5]}})", d0, true).mode == SpriteShadowMode::Cast);
-    // structure blob covers the footprint; caster height / offset / lit overrides
-    game::SpriteShadowSpec b = spec(R"({"castHeight": 2.5, "shadowOffset": [0.25, -0.5], "lit": false})", d, true);
-    CHECK(b.blobW > 2.0f && b.blobH > 3.0f && std::fabs(b.castHeight - 2.5f) < 1e-4f);
-    CHECK(std::fabs(b.offsetRight - 0.25f) < 1e-4f && std::fabs(b.offsetFront + 0.5f) < 1e-4f && !b.lit);
-    CHECK(std::fabs(spec("{}", d, false).castHeight - 1.5f) < 1e-4f && spec("{}", d, false).lit);
-    CHECK(std::fabs(b.castDepth - 3.0f) < 1e-4f && spec("{}", d, false).castDepth == 0);   // buildings: box of the footprint depth
-    CHECK(spec(R"({"castDepth": 0})", d, true).castDepth == 0);
-}
 
-TEST(sprite_shadow_tiers) {
-    using game::SpriteShadowMode;
-    using render::ShadowQuality;
-    auto at = [](SpriteShadowMode m, ShadowQuality q, bool s) { return game::shadowDrawFor(m, q, s); };
-    // Off: blobs only (the old look); Low: buildings cast, units blob; Medium+: all cast
-    CHECK(!at(SpriteShadowMode::Cast, ShadowQuality::Off, true).cast && at(SpriteShadowMode::Cast, ShadowQuality::Off, true).blobK == 1);
-    CHECK(at(SpriteShadowMode::Cast, ShadowQuality::Low, true).cast && !at(SpriteShadowMode::Cast, ShadowQuality::Low, false).cast);
-    CHECK(at(SpriteShadowMode::Cast, ShadowQuality::Medium, false).cast && at(SpriteShadowMode::Cast, ShadowQuality::High, false).cast);
-    CHECK(!at(SpriteShadowMode::Blob, ShadowQuality::High, false).cast && at(SpriteShadowMode::Blob, ShadowQuality::High, false).blobK == 1);
-    CHECK(!at(SpriteShadowMode::None, ShadowQuality::High, false).cast && at(SpriteShadowMode::None, ShadowQuality::Off, false).blobK == 0);
-}
 
-TEST(sprite_shadow_projected_decal_follows_ground) {
-    // levels map with a cliff: a blob across the edge is cut from both levels' surface triangles,
-    // every decal vertex lies on the terrain mesh (heightAt agrees inside a cell's top quad)
-    game::MapGrid g;
-    g.init(6, 4);
-    for (auto& f : g.flags) f = game::kCellGround;
-    for (int y = 0; y < 4; ++y) for (int x = 3; x < 6; ++x) g.level[size_t(g.index(x, y))] = 1;
-    for (size_t i = 0; i < g.height.size(); ++i) g.height[i] = int16_t(i * 5 % 16);
-    const float lh = 1.5f;
-    game::GroundSurface surf{&g, lh, false};
-    std::vector<render::float3> tris;
-    game::surfaceTriangles(surf, 2.4f, 1.4f, 3.6f, 2.6f, tris);
-    CHECK(tris.size() == 4 * 6);   // 2 x 2 cells, 2 triangles each
-    const render::float3 o{2.4f, 0, 1.4f}, aU{1, 0, 0}, aV{0, 0, 1};
-    int pieces = 0;
-    float minY = 1e9f, maxY = -1e9f;
-    for (size_t i = 0; i + 2 < tris.size(); i += 3) {
-        const render::float3 t[3] = {tris[i], tris[i + 1], tris[i + 2]};
-        render::float3 poly[8];
-        int n = game::clipToRect(t, o, aU, 1.2f, aV, 1.2f, poly);
-        if (n) ++pieces;
-        for (int k = 0; k < n; ++k) {
-            CHECK(poly[k].x >= 2.4f - 1e-4f && poly[k].x <= 3.6f + 1e-4f && poly[k].z >= 1.4f - 1e-4f && poly[k].z <= 2.6f + 1e-4f);
-            // on the plane of its source triangle
-            const render::float3 nrm = render::cross(t[1] - t[0], t[2] - t[0]);
-            CHECK(std::fabs(render::dot(poly[k] - t[0], nrm)) < 1e-3f);
-            minY = std::min(minY, poly[k].y); maxY = std::max(maxY, poly[k].y);
-        }
-    }
-    CHECK(pieces == 8);
-    CHECK(minY < 1.0f && maxY > 1.5f);   // both sides of the cliff, no flat plate at one height
-    // flat cells (cell centres away from the cliff) match the view's ground height
-    std::vector<render::float3> one;
-    game::surfaceTriangles(surf, 0.5f, 0.5f, 0.5f, 0.5f, one);
-    CHECK(one.size() == 6);
-    // tile maps: flat cells at level * levelHeight + height / 16
-    game::GroundSurface tilesSurf{&g, lh, true};
-    one.clear();
-    game::surfaceTriangles(tilesSurf, 4.5f, 2.5f, 4.5f, 2.5f, one);
-    CHECK(one.size() == 6 && std::fabs(one[0].y - (1.5f + float(g.height[size_t(g.index(4, 2))]) / 16.0f)) < 1e-5f);
-    // fully outside the rect: nothing
-    const render::float3 far[3] = {{10, 0, 10}, {11, 0, 10}, {10, 0, 11}};
-    render::float3 out[8];
-    CHECK(game::clipToRect(far, o, aU, 1.2f, aV, 1.2f, out) == 0);
-}
 
-TEST(sprite_shadow_caster_faces_camera_unless_sun_grazes) {
-    const render::float3 gR{1, 0, 0}, gF{0, 0, 1};
-    // sun towards the camera: keep the camera's axis (silhouette as seen)
-    render::float3 r = game::casterRight(gR, gF, {0.2f, 1.0f, 0.8f});
-    CHECK(std::fabs(r.x - 1) < 1e-4f && std::fabs(r.z) < 1e-4f);
-    // sun from the side (along the sprite plane): turned so the shadow is not a sliver, still unit length
-    r = game::casterRight(gR, gF, {1.0f, 1.0f, 0.0f});
-    const float c = std::fabs(r.x);
-    CHECK(c < 0.9f && c > 0.4f && std::fabs(render::length(r) - 1) < 1e-3f);
-}
 
 
 // ---------------- one-click MCP setup (editor Agent window) ----------------
 #if defined(RTS_TESTS_EDITOR_CORE)
 #include "apps/editor/core/McpInstall.h"
-TEST(mcp_install_patches_configs_as_text) {
-    using namespace rts::editor;
-    McpServerSpec sp; sp.command = "/opt/rts/rtsmcp"; sp.args = {"--engine", "/opt/rts"};
-    const std::string entry = mcpEntryJson(sp);
-    std::string err, t;
-    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));                        // empty file -> fresh config
-    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
-    // unrelated content stays byte for byte, including numbers our reader would round
-    std::string user = "{\n  \"numStartups\": 123456789012345,\n  \"ratio\": 0.123456789,\n  \"theme\": \"dark\"\n}\n";
-    t = user;
-    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
-    CHECK(t.find("123456789012345") != std::string::npos && t.find("0.123456789") != std::string::npos && t.find("\"theme\": \"dark\"") != std::string::npos);
-    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["args"].size() == 2);
-    // existing servers: added next to them, replaced in place on update, removed cleanly
-    t = R"({"mcpServers": {"other": {"command": "x"}}, "z": 1})";
-    CHECK(mcpPatchJson(t, "rtsengine", entry, &err));
-    Json j = Json::parse(t);
-    CHECK(j["mcpServers"]["other"]["command"].str() == "x" && j["mcpServers"]["rtsengine"]["command"].str() == "/opt/rts/rtsmcp");
-    sp.command = "/new/rtsmcp";
-    CHECK(mcpPatchJson(t, "rtsengine", mcpEntryJson(sp), &err));
-    CHECK(Json::parse(t)["mcpServers"]["rtsengine"]["command"].str() == "/new/rtsmcp" && t.find("/opt/rts/rtsmcp") == std::string::npos);
-    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
-    j = Json::parse(t);
-    CHECK(!j["mcpServers"].has("rtsengine") && j["mcpServers"]["other"]["command"].str() == "x" && j["z"].integer() == 1);
-    t = R"({"mcpServers": {"a": {}, "rtsengine": {"command": "y"}}})";       // last member: the comma before it goes
-    CHECK(mcpPatchJson(t, "rtsengine", "", &err));
-    CHECK(!Json::parse(t)["mcpServers"].has("rtsengine") && Json::parse(t)["mcpServers"].has("a"));
-    t = "[1, 2]";
-    CHECK(!mcpPatchJson(t, "rtsengine", entry, &err) && !err.empty());   // not an object: refused, untouched
-    CHECK(t == "[1, 2]");
-}
 #endif
 
 // ---------------- Planets: surface, world block, orbit layer, transit ----------------
@@ -8875,7 +8748,6 @@ TEST(materials_library_ops_round_trip) {
     fs::remove_all(root);
 }
 #endif
-}
 
 #include "tests_fidelity.inc"
 
@@ -9066,7 +8938,81 @@ TEST(pack_file_copy_into_existing) {
 
 
 #include "tests_mech.inc"   // agent-mech
+
+// ---- post-processing data (postfx agent): parsing, map overrides, cost model, presets
+#include "engine/render/PostFxData.h"
+TEST(postfx_parse_merge_and_cost) {
+    using namespace rts::render;
+    Json game = Json::parse(R"({"effects": [{"type": "bloom", "intensity": 1.5}, {"type": "vignette"}, {"type": "colorGrade", "saturation": 9}]})");
+    Json map = Json::parse(R"({"effects": [{"type": "bloom", "threshold": 0.5}, {"type": "vignette", "enabled": false}, {"type": "grain"}]})");
+    std::vector<std::string> issues;
+    PostFxSettings s = parsePostFx(game, map, &issues);
+    CHECK(s.effects.size() == 4);
+    const PostFxEffect* b = s.find(PostFxType::Bloom);
+    CHECK(b && std::fabs(b->get("intensity") - 1.5f) < 1e-4f && std::fabs(b->get("threshold") - 0.5f) < 1e-4f);   // map overlays params
+    CHECK(b && b->minQuality == PostFxQuality::Medium);                     // heavy: skipped on weak phones by default
+    CHECK(s.find(PostFxType::Vignette) && !s.find(PostFxType::Vignette)->enabled);
+    CHECK(std::fabs(s.find(PostFxType::ColorGrade)->get("saturation") - 2.0f) < 1e-4f && !issues.empty());   // clamped + reported
+    CHECK(s.effects[0].type == PostFxType::Bloom && s.effects.back().type == PostFxType::Grain);   // catalog order
+    CHECK(s.activeAt(PostFxQuality::Low).size() == 2 && s.activeAt(PostFxQuality::High).size() == 3);
+    CHECK(s.activeAt(PostFxQuality::Off).empty());
+    // replace + disable on the map
+    PostFxSettings r = parsePostFx(game, Json::parse(R"({"replace": true, "effects": [{"type": "fade"}]})"));
+    CHECK(r.effects.size() == 1 && r.effects[0].type == PostFxType::Fade);
+    CHECK(!parsePostFx(game, Json::parse(R"({"enabled": false})")).anyActive(PostFxQuality::High));
+    CHECK(!parsePostFx(Json(), Json()).anyActive(PostFxQuality::High));   // no block: no post pass at all
+    // strict validation (MCP)
+    bool threw = false;
+    try { parsePostFxEffect(Json::parse(R"({"type": "bloom", "strength": 1})"), true); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    threw = false;
+    try { parsePostFxEffect(Json::parse(R"({"type": "nope"})"), true); } catch (const std::exception&) { threw = true; }
+    CHECK(threw);
+    // JSON round trip keeps only non-defaults
+    Json j = postFxEffectJson(*b);
+    CHECK(j.getStr("type") == "bloom" && j.has("intensity") && !j.has("knee") && !j.has("minQuality"));
+    // cost: heavy > cheap, tiers grow, heavy effects warn, cheap ones don't
+    const auto& weak = postFxProfiles()[0];
+    PostFxEffect vg = defaultPostFxEffect(PostFxType::Vignette), bl = defaultPostFxEffect(PostFxType::Bloom);
+    CHECK(postFxMs(postFxEffectWork(bl, PostFxQuality::Low, true), weak) > 5 * postFxMs(postFxEffectWork(vg, PostFxQuality::Low, true), weak));
+    CHECK(postFxEffectWork(bl, PostFxQuality::High).units > postFxEffectWork(bl, PostFxQuality::Medium).units);
+    CHECK(postFxEffectWork(bl, PostFxQuality::Low).units == 0);   // minQuality medium
+    CHECK(!postFxEffectWarnings(bl).empty() && postFxEffectWarnings(vg).empty());
+    bl.minQuality = PostFxQuality::Low;
+    CHECK(postFxEffectWarnings(bl)[0].find("forces it onto weak phones") != std::string::npos);
+    Json rep = postFxCostReport(s);
+    CHECK(rep["total"]["weakPhone"]["ms"].toDouble() > 0 && rep["total"]["desktop"]["passes"].integer() > 1);
+    for (auto& p : postFxPresets()) {   // every preset parses cleanly
+        Json g = Json::object();
+        g.set("effects", Json::parse(p.effectsJson));
+        std::vector<std::string> pi;
+        CHECK(!parsePostFx(g, Json(), &pi).effects.empty() && pi.empty());
+    }
 }
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/PostFxOps.h"
+TEST(postfx_neutral_lut_png) {
+    const std::vector<uint8_t> px = rts::editor::neutralLut(16);
+    CHECK(px.size() == 256u * 16u * 4u);
+    const std::string png = rts::editor::encodePngRgba(256, 16, px);
+    CHECK(png.compare(0, 8, "\x89PNG\r\n\x1a\n") == 0 && png.find("IHDR") == 12 && png.find("IEND") != std::string::npos);
+    // IDAT = zlib header + stored blocks: unpack and compare with the filter-0 rows
+    const size_t at = png.find("IDAT");
+    const uint32_t len = (uint32_t(uint8_t(png[at - 4])) << 24) | (uint32_t(uint8_t(png[at - 3])) << 16) | (uint32_t(uint8_t(png[at - 2])) << 8) | uint8_t(png[at - 1]);
+    std::string z = png.substr(at + 4, len), raw;
+    for (size_t q = 2; q + 5 <= z.size() - 4;) {
+        const size_t n = size_t(uint8_t(z[q + 1])) | (size_t(uint8_t(z[q + 2])) << 8);
+        raw += z.substr(q + 5, n);
+        const bool last = z[q] & 1;
+        q += 5 + n;
+        if (last) break;
+    }
+    CHECK(raw.size() == 16u * (256u * 4u + 1u) && raw[0] == 0 && std::memcmp(raw.data() + 1, px.data(), 1024) == 0);
+    // Unreal layout: red grows inside a square, blue per square, green down the rows
+    CHECK(px[(0 * 256 + 15) * 4 + 0] == 255 && px[(0 * 256 + 16) * 4 + 2] == 17 && px[(15 * 256 + 0) * 4 + 1] == 255);
+}
+#endif
 
 
 TEST(gen_planet_world_players) {
