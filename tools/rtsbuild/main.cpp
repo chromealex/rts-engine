@@ -50,6 +50,7 @@
 #include "tools/audiopack/AudioPack.h"
 #include "tools/rtsbuild/Branding.h"
 #include "tools/rtsbuild/FileRules.h"
+#include "tools/models/ModelConvert.h"
 
 #ifndef RTS_SOURCE_DIR
 #define RTS_SOURCE_DIR "."
@@ -397,6 +398,14 @@ fs::path contentPack(Options& o) {
     std::string err;
     if (w.addDirectory(game.string(), "", rules, &err) < 0 || w.addDirectory((o.engine / "engine" / "assets").string(), "engine", rts::pack::IgnoreRules{}, &err) < 0)
         die(err);
+    // models in formats the runtime doesn't read (.blend, .lwo, .x, ...) ship as glTF sidecars
+    // (tools/models/ModelConvert.h); their sources stay out of the pack
+    {
+        rts::models::ConvertReport mr;
+        if (!rts::models::applyModelConversion(w, mr, &err)) die(err);
+        for (auto& it : mr.items) info(std::string(it.ok ? "модель " : "предупреждение: модель ") + it.path + ": " + it.result);
+        for (auto& m : mr.warnings) info("предупреждение: " + m);
+    }
     // per-file settings from the Build window (exclude, zstd level, image size) before atlases
     std::string ruleErr;
     std::vector<rts::build::FileRule> fileRules = rts::build::readFileRules(o.gameJson, o.profile, &ruleErr);

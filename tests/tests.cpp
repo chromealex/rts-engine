@@ -6028,6 +6028,46 @@ TEST(icons_generate_platform_sets) {
     fs::remove_all(dir);
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// Converted formats: "<file>.glb" sidecars (tools/models/ModelConvert.h, models agent)
+// ---------------------------------------------------------------------------------------------
+TEST(models_converted_sidecar_loads_for_the_source_path) {
+    using namespace modeltest;
+    std::string glb;
+    CHECK(diskReader()(std::string(RTS_SOURCE_DIR) + "/games/showcase/models/sword.glb", glb));
+    CHECK(isNativeModelFormat("a/b.MDX") && isNativeModelFormat("x.vox") && !isNativeModelFormat("ship.lwo") && !isNativeModelFormat("noext"));
+    auto m = loadModel("units/ship.lwo", mapReader({{"units/ship.lwo", "LWO source"}, {"units/ship.lwo.glb", glb}}), nullptr);
+    CHECK(m && m->path == "units/ship.lwo" && !m->meshes.empty());
+    bool threw = false;
+    try { loadModel("units/raw.lwo", mapReader({{"units/raw.lwo", "LWO source"}}), nullptr); }
+    catch (const std::exception& e) { threw = std::string(e.what()).find("modelconv") != std::string::npos; }
+    CHECK(threw);
+}
+
+#if defined(RTS_TEST_MODELCONV)
+#include "tools/models/ModelConvert.h"
+TEST(models_pack_step_ships_sidecars_not_sources) {
+    using namespace rts::models;
+    CHECK(needsConversion("m/a.blend") && needsConversion("m/A.LWO") && !needsConversion("m/a.glb") && !needsConversion("m/a.mdx") &&
+          !needsConversion("m/a.png") && sidecarPath("m/a.x") == "m/a.x.glb");
+    rts::pack::PackWriter w;
+    CHECK(w.addData("models/ship.lwo", "source"));
+    CHECK(w.addData("models/ship.lwo.glb", "converted"));
+    CHECK(w.addData("models/broken.x", "not a model at all"));
+    CHECK(w.addData("models/tank.glb", "glb"));
+    ConvertReport rep;
+    std::string err;
+    CHECK(applyModelConversion(w, rep, &err));
+    const auto paths = w.paths();
+    auto has = [&](const std::string& p) { return std::find(paths.begin(), paths.end(), p) != paths.end(); };
+    CHECK(!has("models/ship.lwo") && has("models/ship.lwo.glb") && !has("models/broken.x") && has("models/tank.glb"));
+    int failed = 0;
+    for (const auto& it : rep.items) failed += it.ok ? 0 : 1;
+    CHECK(rep.items.size() == 2 && failed == 1);   // broken.x can't be converted (or no converter): reported
+}
+#endif
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
