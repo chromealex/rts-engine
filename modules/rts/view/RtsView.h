@@ -12,6 +12,7 @@
 #include "../../../engine/sim/Simulation.h"
 #include "../RtsData.h"
 #include "../RtsMap.h"
+#include "RtsLights.h"
 
 namespace rts::game {
 
@@ -25,12 +26,15 @@ struct SceneObject {
     int garrison = -1;           // shown when >= 0
     float carry = 0;             // > 0: carrying resources
     bool selected = false, hovered = false, visible = true, isProjectile = false;
+    uint16_t shooterType = UINT16_MAX; // projectiles: type of the unit that fired it (lights)
 };
 
 struct RtsScene {
     std::vector<SceneObject> objects;
     std::vector<std::pair<render::float3, render::float3>> roads;
     std::vector<render::float3> moveMarkers;
+    std::vector<SimEvent> events;        // of the last sim tick (dynamic lights: flashes)
+    uint32_t tick = 0;
     // drag-to-send arrows (Mushroom-Wars input) and box selection are drawn by the client
 };
 
@@ -46,6 +50,7 @@ public:
     static render::float4 playerColor(int player);
     float selectionRadius(uint16_t type) const;
     float heightAt(const MapGrid& grid, float x, float z) const;
+    RtsLights& lights() { return lights_; }
 
 private:
     struct Part { render::Mesh* mesh; render::mat4 xf; render::float4 color; bool team; };
@@ -60,6 +65,7 @@ private:
     std::vector<TypeLook> looks_;
     render::Mesh terrain_, water_, projectile_;
     bool hasTerrain_ = false;
+    RtsLights lights_;
 };
 
 // Build a scene from the live simulation (positions interpolated with alpha). `viewer` filters

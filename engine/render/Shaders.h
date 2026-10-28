@@ -5,6 +5,7 @@
 //   sun (Lambert + Blinn specular) x shadow map with hardware PCF
 //   + hemisphere ambient (sky/ground) + rim + distance fog + ACES tonemap, lighting in linear space.
 #pragma once
+#include "LightShaders.h"   // RTS_GLSL_LIGHTS / RTS_MSL_LIGHTS: dynamic point lights (U2, tex1)
 
 namespace rts::render::shaders {
 
@@ -43,6 +44,7 @@ void main() {
 
 inline const char* kLitFS =
     RTS_GLSL_BLOCKS
+    RTS_GLSL_LIGHTS
     R"(
 uniform highp sampler2DShadow tex0;
 in vec3 v_nrm;
@@ -105,6 +107,7 @@ void main() {
     float spec = pow(max(dot(n, H), 0.0), 40.0) * u_params.y;
     float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.25;
     vec3 col = base * (amb + sun * ndl * sh) + sun * spec * sh + amb * rim * base;
+    col += base * dynamicLight(v_wpos, n, V, u_params.y);
     col = mix(col, base, u_params.x) + base * u_params.w;
     float dist = length(u_camPos.xyz - v_wpos);
     col = mix(col, u_fog.rgb * u_fog.rgb, 1.0 - exp(-dist * u_fog.w));
@@ -114,7 +117,7 @@ void main() {
 )";
 
 inline const char* kLitMSL =
-    "#include <metal_stdlib>\nusing namespace metal;\n" RTS_MSL_BLOCKS
+    "#include <metal_stdlib>\nusing namespace metal;\n" RTS_MSL_BLOCKS RTS_MSL_LIGHTS
     R"(
 struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; };
 struct VOut { float4 pos [[position]]; float3 nrm; float3 wpos; float4 col; };
@@ -164,7 +167,8 @@ static float shadowFactor(constant U0& u, constant U1& f, float3 wpos, float3 n,
     return s / float(cnt);
 }
 fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], constant U1& f [[buffer(2)]],
-                        depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]]) {
+                        depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]],
+                        constant U2& l [[buffer(3)]], texture2d<float> tex1 [[texture(1)]], sampler s1 [[sampler(1)]]) {
     float4 albedo = u.color * in.col;
     float3 base = albedo.rgb * albedo.rgb;
     float3 n = normalize(in.nrm);
@@ -178,6 +182,7 @@ fragment float4 fs_main(VOut in [[stage_in]], constant U0& u [[buffer(1)]], cons
     float spec = pow(max(dot(n, H), 0.0), 40.0) * u.params.y;
     float rim = pow(1.0 - max(dot(n, V), 0.0), 3.0) * 0.25;
     float3 col = base * (amb + sun * ndl * sh) + sun * spec * sh + amb * rim * base;
+    col += base * dynamicLight(l, tex1, s1, in.wpos, n, V, u.params.y);
     col = mix(col, base, u.params.x) + base * u.params.w;
     float dist = length(f.camPos.xyz - in.wpos);
     col = mix(col, f.fog.rgb * f.fog.rgb, 1.0 - exp(-dist * f.fog.w));

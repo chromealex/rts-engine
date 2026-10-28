@@ -69,6 +69,7 @@ void Editor::init(gfx::Device& dev) {
     resetLayout_ = !fs::exists(iniPath, fec);
     r3d_.init(dev);
     r3d_.setShadowQuality(Renderer3D::defaultQualityFor(dev, false));
+    r3d_.lights.setQuality(rts::render::LightSystem::defaultQualityFor(dev, false));
     for (auto& f : WindowRegistry::factories()) {
         windows_.push_back(f());
         windows_.back()->open = windows_.back()->openByDefault();
