@@ -2611,6 +2611,224 @@ TEST(audio_speed_of_sound_delay) {
     CHECK(energy(b, 0, 2400) > 0.1);                                          // close sounds are immediate
 }
 
+// ---------------- Music (loops, layers, quantized transitions, stingers, ducking) ----------------
+#include "tools/audiopack/AudioPack.h"
+
+namespace {
+// 16-bit mono WAV from a function of time
+std::string wavOf(int rate, float seconds, const std::function<float(float)>& f) {
+    std::vector<int16_t> pcm(size_t(float(rate) * seconds));
+    for (size_t i = 0; i < pcm.size(); ++i) pcm[i] = int16_t(std::lrint(std::clamp(f(float(i) / float(rate)), -1.0f, 1.0f) * 20000.0f));
+    return audiopack::encodeWav(pcm, 1, rate);
+}
+float tone(float hz, float t) { return std::sin(6.2831853f * hz * t); }
+// Amplitude of `hz` in the left channel of `st` between two times (Goertzel).
+double level(const std::vector<float>& st, double hz, double from, double to) {
+    const size_t a = size_t(from * 48000), b = std::min(st.size() / 2, size_t(to * 48000));
+    if (b <= a) return 0;
+    const double w = 6.283185307 * hz / 48000, c = 2 * std::cos(w);
+    double s1 = 0, s2 = 0;
+    for (size_t i = a; i < b; ++i) { const double s0 = st[i * 2] + c * s1 - s2; s2 = s1; s1 = s0; }
+    return 2 * std::sqrt(std::max(0.0, s1 * s1 + s2 * s2 - c * s1 * s2)) / double(b - a);
+}
+} // namespace
+
+TEST(audio_music_loop_points) {
+    auto a = offlineAudio();
+    // 0..0.5 s: 200 Hz intro, 0.5..1 s: 800 Hz loop body
+    std::map<std::string, std::string> files = {{"m.wav", wavOf(48000, 1.0f, [](float t) { return t < 0.5f ? tone(200, t) : tone(800, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"match":[{"file":"m.wav","loopStart":0.5}]}})", nullptr, files));
+    a->playMusic("match", 0.01f);
+    auto b = renderBuf(*a, 3.0f);
+    CHECK(level(b, 200, 0.1, 0.45) > 0.3 && level(b, 800, 0.1, 0.45) < 0.03);   // intro once
+    CHECK(level(b, 800, 1.2, 2.9) > 0.3 && level(b, 200, 1.2, 2.9) < 0.03);     // then the loop body only
+}
+
+TEST(audio_music_layers_follow_intensity) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"base.wav", wavOf(48000, 1.0f, [](float t) { return 0.5f * tone(200, t); })},
+                                                {"drums.wav", wavOf(48000, 1.0f, [](float t) { return 0.5f * tone(1500, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"match":{"layers":[{"file":"base.wav"},{"file":"drums.wav","intensity":0.5}]}}})", nullptr, files));
+    CHECK(a->musicHasLayers("match"));
+    a->playMusic("match", 0.01f);
+    auto calm = renderBuf(*a, 1.5f);
+    CHECK(level(calm, 200, 0.5, 1.5) > 0.2 && level(calm, 1500, 0.5, 1.5) < 0.02);  // stems loop: still playing after 1 s
+    a->setMusicIntensity(1.0f);
+    auto fight = renderBuf(*a, 4.0f);
+    CHECK(level(fight, 1500, 3.0, 4.0) > 0.2 && level(fight, 200, 3.0, 4.0) > 0.2);
+    a->setMusicIntensity(0.0f);
+    auto after = renderBuf(*a, 5.0f);
+    CHECK(level(after, 1500, 4.0, 5.0) < 0.02);
+}
+
+TEST(audio_music_transition_on_bar) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"a.wav", wavOf(48000, 4.0f, [](float t) { return 0.5f * tone(300, t); })},
+                                                {"b.wav", wavOf(48000, 4.0f, [](float t) { return 0.5f * tone(900, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"calm":{"files":["a.wav"],"bpm":120,"beatsPerBar":4},"fight":"b.wav"}})", nullptr, files));
+    a->playMusic("calm", 0.01f);
+    renderBuf(*a, 0.3f);
+    a->playMusic("fight", 0.02f);                 // bar = 2 s at 120 bpm: the switch waits until 2.0 s
+    auto b = renderBuf(*a, 2.5f);                 // covers 0.3 .. 2.8 s
+    CHECK(level(b, 300, 0.9, 1.6) > 0.2 && level(b, 900, 0.0, 1.6) < 0.02);
+    CHECK(level(b, 900, 1.9, 2.4) > 0.2 && level(b, 300, 1.9, 2.4) < 0.02);
+    std::string err;
+    CHECK(!loadBank(*a, R"({"music":{"x":{"files":["a.wav"],"transition":"soon"}}})", &err, files) && err.find("unknown transition 'soon'") != std::string::npos);
+    CHECK(!loadBank(*a, R"({"music":{"x":{"files":["a.wav"],"layers":["b.wav"]}}})", &err, files) && err.find("either") != std::string::npos);
+}
+
+TEST(audio_stinger_sync_and_ducking) {
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"m.wav", wavOf(48000, 4.0f, [](float t) { return 0.5f * tone(300, t); })}};
+    CHECK(loadBank(*a, R"({"music":{"match":{"files":["m.wav"],"bpm":120}},
+        "sounds":{"sting":{"synth":{"wave":"sine","freq":1200,"duration":0.3},"bus":"music","sync":"beat","spatial":false},
+                  "say":{"synth":{"wave":"sine","freq":2000,"duration":1.0,"attack":0.01,"release":0.01},"bus":"voice","volume":0.3}}})", nullptr, files));
+    CHECK(a->sound(a->find("say"))->duckMusic > 0.3f);   // voice ducks music by default
+    a->playMusic("match", 0.01f);
+    renderBuf(*a, 0.1f);
+    a->play("sting");                                    // asked at 0.1 s: lands on the beat at 0.5 s
+    auto b = renderBuf(*a, 0.8f);                         // 0.1 .. 0.9 s
+    CHECK(level(b, 1200, 0.0, 0.35) < 0.02 && level(b, 1200, 0.42, 0.65) > 0.2);
+    renderBuf(*a, 1.0f);
+    const double before = level(renderBuf(*a, 0.5f), 300, 0.0, 0.5);
+    a->play("say");
+    auto during = renderBuf(*a, 0.8f);
+    const double ducked = level(during, 300, 0.3, 0.8);
+    CHECK(ducked < before * 0.75 && ducked > before * 0.45);           // voice ducks by 0.4 by default
+    renderBuf(*a, 2.5f);                                   // released after the voice ends
+    CHECK(level(renderBuf(*a, 0.5f), 300, 0.0, 0.5) > before * 0.95);
+    std::string err;
+    CHECK(!loadBank(*a, R"({"sounds":{"x":{"synth":{},"sync":"later"}}})", &err) && err.find("unknown sync") != std::string::npos);
+}
+
+TEST(audio_music_per_map) {
+    const std::string dir = "games/skirmish/";
+    Json rulesJson = Json::parse(readSource(dir + "rules.json"));
+    game::Rules rules = game::loadRules(rulesJson);
+    auto a = offlineAudio();
+    std::map<std::string, std::string> files = {{"m.wav", wavOf(48000, 0.5f, [](float t) { return tone(300, t); })}};
+    Json bank = Json::parse(R"({"music":{"match":"m.wav","match.valley":"m.wav"}})");
+    CHECK(loadBank(*a, bank.dump(), nullptr, files));
+    game::RtsAudio s;
+    CHECK(s.init(*a, rules, bank));
+    Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim.setup(rulesJson, Json::parse(readSource(dir + "maps/valley.json")));
+    s.attach(sim, 1, "maps/valley.json");
+    CHECK(a->currentMusic() == "match.valley");
+    s.attach(sim, 1, "maps/other.json");
+    CHECK(a->currentMusic() == "match");
+}
+
+// ---------------- Build-time compression (tools/audiopack) ----------------
+
+namespace {
+double snrDb(const std::vector<int16_t>& a, const std::vector<int16_t>& b) {
+    const size_t n = std::min(a.size(), b.size());
+    double s = 0, e = 0;
+    for (size_t i = 0; i < n; ++i) { s += double(a[i]) * a[i]; const double d = double(a[i]) - b[i]; e += d * d; }
+    return e > 0 ? 10 * std::log10(s / e) : 200;
+}
+std::vector<int16_t> sinePcm(int channels, size_t frames, int rate) {
+    std::vector<int16_t> p(frames * size_t(channels));
+    for (size_t i = 0; i < frames; ++i)
+        for (int c = 0; c < channels; ++c) p[i * size_t(channels) + size_t(c)] = int16_t(std::lrint(std::sin(6.2831853 * (440 + 220 * c) * double(i) / rate) * 16000));
+    return p;
+}
+} // namespace
+
+TEST(audiopack_adpcm_roundtrip) {
+    for (int ch : {1, 2}) {
+        for (size_t frames : {size_t(1), size_t(1017), size_t(1018), size_t(30000)}) {
+            auto pcm = sinePcm(ch, frames, 44100);
+            const std::string wav = audiopack::encodeAdpcm(pcm, ch, 44100);
+            audio::Clip c;
+            std::string err;
+            CHECK(audio::decodeClip(wav, c, err));
+            CHECK(c.channels == ch && c.sampleRate == 44100 && c.frames() >= frames && c.frames() <= frames + 7);
+            if (frames > 1000) CHECK(snrDb(pcm, c.pcm) > 30);
+            CHECK(wav.size() < pcm.size() * 2 / 3 || frames < 2000);   // about 4:1
+        }
+    }
+}
+
+TEST(audiopack_vorbis_roundtrip) {
+    auto pcm = sinePcm(2, 44100, 44100);
+    std::string ogg, ogg2, err;
+    CHECK(audiopack::encodeVorbis(pcm, 2, 44100, 0.4f, 7, ogg, &err));
+    CHECK(audiopack::encodeVorbis(pcm, 2, 44100, 0.4f, 7, ogg2, &err) && ogg == ogg2);   // reproducible builds
+    CHECK(ogg.size() < pcm.size() * 2 / 10);
+    audio::Clip c;
+    CHECK(audio::decodeClip(ogg, c, err));
+    CHECK(c.channels == 2 && c.frames() == 44100);
+    CHECK(snrDb(pcm, c.pcm) > 25);
+}
+
+TEST(audiopack_profiles_and_conversion) {
+    using audiopack::Codec;
+    audiopack::Settings st;
+    std::string err;
+    CHECK(audiopack::settingsFor(Json::parse("{}"), "desktop", st, &err) && st.sounds == Codec::Keep && st.music == Codec::Keep);
+    CHECK(audiopack::settingsFor(Json::parse("{}"), "mobile", st, &err) && st.sounds == Codec::Adpcm && st.music == Codec::Vorbis && st.maxRate == 32000);
+    CHECK(audiopack::settingsFor(Json::parse(R"({"build":{"desktop":{"music":"vorbis","musicQuality":0.6}}})"), "desktop", st, &err) &&
+          st.music == Codec::Vorbis && std::fabs(st.musicQuality - 0.6f) < 1e-3f);
+    CHECK(!audiopack::settingsFor(Json::parse(R"({"build":{"mobile":{"music":"mp4"}}})"), "mobile", st, &err) && err.find("unknown codec 'mp4'") != std::string::npos);
+    CHECK(!audiopack::settingsFor(Json::parse(R"({"build":{"mobile":{"bitrate":1}}})"), "mobile", st, &err) && err.find("unknown key 'bitrate'") != std::string::npos);
+    CHECK(audiopack::profileForTarget("android") == "mobile" && audiopack::profileForTarget("web") == "web" && audiopack::profileForTarget("macos") == "desktop");
+
+    // a bank with a positional effect, a UI sound kept on purpose, an already-lossy file and music
+    std::map<std::string, std::string> files = {
+        {"sfx/hit.wav", audiopack::encodeWav(sinePcm(2, 24000, 48000), 2, 48000)},
+        {"ui/click.wav", audiopack::encodeWav(sinePcm(1, 4800, 48000), 1, 48000)},
+        {"sfx/old.ogg", readSource("tests/data/audio/tone.ogg")},
+        {"music/a.wav", audiopack::encodeWav(sinePcm(2, 96000, 48000), 2, 48000)},
+    };
+    Json bank = Json::parse(R"({"sounds":{"hit":{"files":["sfx/hit.wav"]},"click":{"file":"ui/click.wav","bus":"ui","compress":"keep"},
+        "old":{"file":"sfx/old.ogg"}},"music":{"match":{"files":[{"file":"music/a.wav","loopStart":0.5}],"bpm":100}}})");
+    CHECK(audiopack::settingsFor(bank, "mobile", st, &err));
+    audiopack::Output out;
+    auto reader = [&](const std::string& p, std::string& o) { auto it = files.find(p); if (it == files.end()) return false; o = it->second; return true; };
+    CHECK(audiopack::convert(bank, reader, st, out, &err));
+    CHECK(out.files.count("sfx/hit.wav") && out.files.count("music/a.ogg") && !out.files.count("ui/click.wav") && !out.files.count("sfx/old.ogg"));
+    CHECK(out.replaced.size() == 1 && out.replaced[0] == "music/a.wav");
+    CHECK(out.report.after() < out.report.before() / 3);
+    audio::Clip hit;
+    CHECK(audio::decodeClip(out.files["sfx/hit.wav"], hit, err) && hit.channels == 1 && hit.sampleRate == 32000);  // mono, resampled
+    // the rewritten bank loads with the converted files, loop points and grid intact
+    auto a = offlineAudio();
+    Json nb = Json::parse(out.audioJson);
+    CHECK(nb["music"]["match"]["files"][size_t(0)].getStr("file") == "music/a.ogg");
+    CHECK(a->loadBank(nb, [&](const std::string& p, std::string& o) {
+        if (auto it = out.files.find(p); it != out.files.end()) { o = it->second; return true; }
+        return reader(p, o);
+    }, &err));
+    CHECK(a->warnings().empty());
+    CHECK(a->playMusic("match") && !a->sound(a->find("hit"))->clips.empty());
+}
+
+TEST(audiopack_stage_game_folder) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "rts_audiopack_test";
+    fs::remove_all(root);
+    fs::create_directories(root / "game" / "music");
+    auto write = [](const fs::path& p, const std::string& s) { std::ofstream f(p, std::ios::binary); f << s; };
+    write(root / "game" / "game.json", R"({"name":"T","audio":"sound.json"})");
+    write(root / "game" / "sound.json", R"({"music":{"match":"music/a.wav"},"build":{"web":{"musicQuality":0.1}}})");
+    write(root / "game" / "music" / "a.wav", audiopack::encodeWav(sinePcm(2, 48000, 48000), 2, 48000));
+    write(root / "game" / "rules.json", "{}");
+    audiopack::Report rep;
+    std::string err;
+    CHECK(audiopack::stageGame((root / "game").string(), (root / "web").string(), "web", rep, &err));
+    CHECK(fs::exists(root / "web" / "music" / "a.ogg") && !fs::exists(root / "web" / "music" / "a.wav") && fs::exists(root / "web" / "rules.json"));
+    CHECK(Json::parseFile((root / "web" / "sound.json").string())["music"].getStr("match") == "music/a.ogg");
+    CHECK(fs::exists(root / "game" / "music" / "a.wav"));                 // the project itself is untouched
+    CHECK(audiopack::stageGame((root / "game").string(), (root / "desktop").string(), "desktop", rep, &err));
+    CHECK(fs::exists(root / "desktop" / "music" / "a.wav") && rep.items.empty());   // desktop keeps files by default
+    write(root / "game" / "sound.json", R"({"sounds":{"x":{"file":"../../../etc/passwd"}},"build":{"web":{"sounds":"pcm"}}})");
+    CHECK(audiopack::stageGame((root / "game").string(), (root / "web2").string(), "web", rep, &err));
+    CHECK(rep.items.empty() && rep.warnings.size() == 1);                  // nothing outside the game folder is read
+    fs::remove_all(root);
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

@@ -11,7 +11,8 @@
 //
 // Lookup order for a unit: its type entry, then weapons/abilities by id, then "events".
 // Cue names: see kCueNames in RtsAudio.cpp (attack, hit, died, ready, buildDone, underAttack, ...).
-// Music playlists used automatically: "match", "battle" (heavy fighting nearby), "victory", "defeat".
+// Music playlists used automatically: "match", "battle" (heavy fighting nearby), "victory", "defeat";
+// "<name>.<map>" for one map. A layered "match" gets the fighting intensity instead of switching.
 #pragma once
 #include <array>
 #include <memory>
@@ -40,7 +41,8 @@ public:
     const std::vector<std::string>& warnings() const { return warnings_; }
 
     // Start listening to a match. `viewer` = the local player (0 = spectator: world sounds only).
-    void attach(Simulation& sim, uint8_t viewer);
+    // `map` (file name or stem): playlists "match.<map>", "battle.<map>", ... win over the generic ones.
+    void attach(Simulation& sim, uint8_t viewer, const std::string& map = "");
     void detach();
     // Once per frame after the simulation advanced: plays everything that happened since.
     void update(Simulation& sim, double dt);
@@ -87,6 +89,8 @@ private:
     float intensity_ = 0;
     double calmSince_ = 0;
     bool inBattle_ = false;
+    std::string map_;
+    std::string musicName(const char* base) const;
     int played_ = 0;
 };
 

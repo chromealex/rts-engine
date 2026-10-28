@@ -1,6 +1,7 @@
 #include "RtsAudio.h"
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include "../RtsModule.h"
 
 namespace rts::game {
@@ -148,7 +149,15 @@ bool RtsAudio::playAt(SoundId s, const Vec3& pos, bool positional, float height)
     return true;
 }
 
-void RtsAudio::attach(Simulation& sim, uint8_t viewer) {
+std::string RtsAudio::musicName(const char* base) const {
+    if (engine_ && !map_.empty()) {
+        std::string own = std::string(base) + "." + map_;
+        if (engine_->hasMusic(own)) return own;
+    }
+    return base;
+}
+
+void RtsAudio::attach(Simulation& sim, uint8_t viewer, const std::string& map) {
     detach();
     viewer_ = viewer;
     collector_ = std::make_shared<Collector>();
@@ -164,7 +173,10 @@ void RtsAudio::attach(Simulation& sim, uint8_t viewer) {
     calmSince_ = 0;
     inBattle_ = false;
     played_ = 0;
-    if (engine_ && !engine_->playMusic("match")) engine_->stopMusic(1.0f);
+    map_ = std::filesystem::path(map).stem().string();
+    if (!engine_) return;
+    engine_->setMusicIntensity(0);
+    if (!engine_->playMusic(musicName("match"))) engine_->stopMusic(1.0f);
 }
 
 void RtsAudio::detach() {
@@ -284,11 +296,15 @@ void RtsAudio::update(Simulation& sim, double dt) {
     // battle music: in when fighting is heavy near the camera, out after a calm period
     intensity_ *= float(std::exp(-dt / 4.0));
     if (intensity_ > 1.0f) calmSince_ = time_;
-    if (!inBattle_ && intensity_ > kBattleEnter && engine_->hasMusic("battle") && engine_->currentMusic() == "match") {
-        inBattle_ = engine_->playMusic("battle", 2.0f);
+    const std::string match = musicName("match"), battle = musicName("battle");
+    if (engine_->musicHasLayers(engine_->currentMusic())) {
+        // adaptive music: fighting near the camera fades the stems in, calm fades them out
+        engine_->setMusicIntensity(std::clamp(intensity_ / (1.5f * kBattleEnter), 0.0f, 1.0f));
+    } else if (!inBattle_ && intensity_ > kBattleEnter && engine_->hasMusic(battle) && engine_->currentMusic() == match) {
+        inBattle_ = engine_->playMusic(battle, 2.0f);
     } else if (inBattle_ && time_ - calmSince_ > kBattleLeave) {
         inBattle_ = false;
-        engine_->playMusic("match", 4.0f);
+        engine_->playMusic(match, 4.0f);
     }
 }
 
@@ -318,7 +334,7 @@ void RtsAudio::onCommand(Simulation& sim, Entity firstUnit, uint16_t commandType
 void RtsAudio::onMatchEnd(bool won) {
     play(won ? Cue::Victory : Cue::Defeat);
     if (!engine_) return;
-    const char* m = won ? "victory" : "defeat";
+    const std::string m = musicName(won ? "victory" : "defeat");
     if (engine_->hasMusic(m)) engine_->playMusic(m, 1.0f);
     else engine_->stopMusic(2.0f);
 }

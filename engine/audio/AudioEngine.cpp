@@ -82,6 +82,7 @@ struct AudioEngine::Impl {
     std::vector<double> lastPlay;
     std::vector<int> lastVariant;
     std::string currentMusic, pendingMusic;
+    float intensity = 0;
     float pendingFade = 0;
 
     float bankGain[size_t(Bus::Count)] = {1, 1, 1, 1, 1};
@@ -245,9 +246,9 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     }
 
     // RtsAudio reads the gameplay mapping sections; anything else is most likely a typo
-    static const std::set<std::string> kTopKeys = {"volume", "spatial", "sounds", "music", "events", "types", "weapons", "abilities"};
+    static const std::set<std::string> kTopKeys = {"volume", "spatial", "sounds", "music", "events", "types", "weapons", "abilities", "build"};
     for (auto& [k, unused] : bank.members())
-        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, spatial, sounds, music, events, types, weapons, abilities)");
+        if (!kTopKeys.count(k)) warnings.push_back("unknown section '" + k + "' (volume, spatial, sounds, music, events, types, weapons, abilities, build)");
 
     Environment env;
     if (const Json& sp = bank["spatial"]; !sp.isNull()) {
@@ -292,7 +293,7 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
     };
 
     static const std::set<std::string> kSoundKeys = {"file", "files", "synth", "volume", "pitch", "bus", "maxInstances", "model",
-                                                      "minDistance", "maxDistance", "rolloff", "air", "reverb", "far",
+                                                      "minDistance", "maxDistance", "rolloff", "air", "reverb", "far", "compress", "quality", "duckMusic", "sync",
                                                       "cooldown", "priority", "loop", "spatial"};
     for (auto& [name, j] : bank["sounds"].members()) {
         const std::string who = "sound '" + name + "'";
@@ -313,6 +314,10 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         d.priority = int(std::clamp<int64_t>(j.getInt("priority", 0), -100, 100));
         d.loop = j.getBool("loop", false);
         d.spatial = j.getBool("spatial", d.bus == Bus::Sfx || d.bus == Bus::Ambient);
+        d.duckMusic = std::clamp(num(j["duckMusic"], d.bus == Bus::Voice ? 0.4f : 0.0f), 0.0f, 1.0f);
+        if (const std::string sy = j.getStr("sync", "now"); sy == "beat") d.sync = 1;
+        else if (sy == "bar") d.sync = 2;
+        else if (sy != "now") return fail(who + ": unknown sync '" + sy + "' (now, beat, bar)");
         d.distance = env.defaults;
         if (std::string why; !parseDistance(j, d.distance, who, why)) return fail(why);
         if (const Json& far = j["far"]; !far.isNull()) {
@@ -355,25 +360,63 @@ bool AudioEngine::loadBank(const Json& bank, const FileReader& read, std::string
         else d.far = it->second;
     }
 
+    // music: "name": file | [entries] | {"files"|"layers": [...], options}; an entry is a file name or
+    // {"file", "loopStart", "loopEnd", "intensity"}
+    static const std::set<std::string> kMusicKeys = {"files", "layers", "shuffle", "loop", "volume", "bpm", "beatsPerBar",
+                                                     "offset", "transition", "loopStart", "loopEnd", "compress", "quality"};
     for (auto& [name, j] : bank["music"].members()) {
         const std::string who = "music '" + name + "'";
         auto pl = std::make_shared<Playlist>();
         pl->name = name;
-        std::vector<std::string> files;
-        const Json* list = &j;
+        auto entry = [&](const Json& e, MusicTrack& t, std::string& file) -> bool {
+            if (e.isString()) { file = e.str(); return true; }
+            if (!e.isObject() || !e["file"].isString()) return false;
+            file = e.getStr("file");
+            t.loopStart = e.has("loopStart") ? std::max(0.0f, num(e["loopStart"], 0)) : -1.0f;
+            t.loopEnd = std::max(0.0f, num(e["loopEnd"], 0));
+            t.intensity = std::clamp(num(e["intensity"], 0), 0.0f, 1.0f);
+            if (t.loopEnd > 0 && t.loopStart >= t.loopEnd) { warnings.push_back(who + ": loopStart must be before loopEnd"); t.loopStart = -1; }
+            return true;
+        };
+        auto load = [&](const Json& list, std::vector<MusicTrack>& out) -> bool {
+            std::vector<const Json*> items;
+            if (list.isArray()) for (auto& e : list.items()) items.push_back(&e);
+            else items.push_back(&list);
+            for (auto* e : items) {
+                MusicTrack t;
+                std::string file, bytes;
+                if (!entry(*e, t, file)) return false;
+                if (file.empty() || !read || !read(file, bytes)) { warnings.push_back(who + ": file not found '" + file + "'"); continue; }
+                t.bytes = std::make_shared<const std::string>(std::move(bytes));
+                out.push_back(std::move(t));
+            }
+            return true;
+        };
+        const char* shape = ": needs a file, an array of files, or {\"files\": [...]} / {\"layers\": [...]}";
         if (j.isObject()) {
-            list = &j["files"];
+            for (auto& [k, unused] : j.members())
+                if (!kMusicKeys.count(k)) warnings.push_back(who + ": unknown key '" + k + "'");
             pl->shuffle = j.getBool("shuffle", false);
             pl->loop = j.getBool("loop", true);
             pl->volume = std::clamp(num(j["volume"], 1), 0.0f, 4.0f);
-        }
-        if (list->isString()) files.push_back(list->str());
-        else if (list->isArray()) for (auto& f : list->items()) files.push_back(f.str());
-        if (files.empty()) return fail(who + ": needs a file name, an array of files or {\"files\": [...]}");
-        for (auto& f : files) {
-            std::string bytes;
-            if (f.empty() || !read || !read(f, bytes)) { warnings.push_back(who + ": file not found '" + f + "'"); continue; }
-            pl->tracks.push_back(std::make_shared<const std::string>(std::move(bytes)));
+            pl->bpm = std::clamp(num(j["bpm"], 0), 0.0f, 400.0f);
+            pl->beatsPerBar = int(std::clamp<int64_t>(j.getInt("beatsPerBar", 4), 1, 16));
+            pl->offset = std::max(0.0f, num(j["offset"], 0));
+            const std::string tr = j.getStr("transition", pl->bpm > 0 ? "bar" : "now");
+            if (tr == "now") pl->transition = Quantize::Now;
+            else if (tr == "beat") pl->transition = Quantize::Beat;
+            else if (tr == "bar") pl->transition = Quantize::Bar;
+            else return fail(who + ": unknown transition '" + tr + "' (now, beat, bar)");
+            if (j.has("layers")) {
+                if (j.has("files")) return fail(who + ": either \"files\" or \"layers\"");
+                if (!j["layers"].isArray() || !load(j["layers"], pl->layers)) return fail(who + shape);
+                pl->layerLoopStart = std::max(0.0f, num(j["loopStart"], 0));
+                pl->layerLoopEnd = std::max(0.0f, num(j["loopEnd"], 0));
+            } else if (j["files"].isNull() || !load(j["files"], pl->tracks)) {
+                return fail(who + shape);
+            }
+        } else if (j.isNull() || !load(j, pl->tracks)) {
+            return fail(who + shape);
         }
         music[name] = pl;
     }
@@ -456,6 +499,8 @@ VoiceId AudioEngine::play(SoundId id, const PlayParams& p) {
         c.pairDistance = d->distance;
         c.pairFrom = d->farFrom;
         c.delayFrames = delay;
+        c.duck = s.duckMusic;
+        c.sync = Quantize(s.sync);
         m.mixer.push(std::move(c));
     };
     const bool pair = spatial && d->far != kNoSound;
@@ -544,6 +589,23 @@ void AudioEngine::stopMusic(float fade) {
 
 const std::string& AudioEngine::currentMusic() const { return impl_->currentMusic; }
 
+bool AudioEngine::musicHasLayers(std::string_view name) const {
+    auto it = impl_->music.find(name);
+    return it != impl_->music.end() && !it->second->layers.empty();
+}
+
+void AudioEngine::setMusicIntensity(float v) {
+    Impl& m = *impl_;
+    m.intensity = std::clamp(v, 0.0f, 1.0f);
+    if (!m.mixing()) return;
+    MixCmd c;
+    c.kind = MixCmd::SetIntensity;
+    c.intensity = m.intensity;
+    m.mixer.push(std::move(c));
+}
+
+float AudioEngine::musicIntensity() const { return impl_->intensity; }
+
 // ------------------------------------------------------------------ volumes, pause
 
 void AudioEngine::setMasterVolume(float v) { impl_->userMaster = std::clamp(v, 0.0f, 1.0f); impl_->sendGains(); }
@@ -572,6 +634,7 @@ void AudioEngine::setPaused(bool p) {
         m.sendGains();
         m.sendListener();
         if (!m.pendingMusic.empty()) { m.startMusic(m.pendingMusic, m.pendingFade); m.pendingMusic.clear(); }
+        setMusicIntensity(m.intensity);
     }
 }
 
