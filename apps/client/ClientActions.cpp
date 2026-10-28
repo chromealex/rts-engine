@@ -97,7 +97,7 @@ void GameClient::buildTools(UiState& s) {
             b.active = mode_ == Mode::Skill && abilityIndex_ == int(i);
             const int idx = int(i);
             if (instantTarget(a.target)) b.id = addAction([this, idx] { Command c; c.type = kCmdPlayerAbility; c.param = idx; issue(c); }, b.enabled);
-            else b.id = addAction([this, idx] { mode_ = Mode::Skill; abilityIndex_ = idx; }, b.enabled);
+            else b.id = addAction([this, idx] { mode_ = Mode::Skill; abilityIndex_ = idx; pairFirst_ = false; }, b.enabled);
             s.tools.push_back(b);
         }
     }
@@ -180,7 +180,22 @@ bool GameClient::toolMouseDown(const Event& e) {
     if (e.button != 0) return false;
     if (mode_ == Mode::Skill) {
         float3 g;
-        if (groundAt(e.x, e.y, g)) {
+        const bool pair = abilityIndex_ >= 0 && size_t(abilityIndex_) < rules_.playerAbilities.size() &&
+                          rules_.playerAbilities[size_t(abilityIndex_)].target == TargetKind::PointPair;
+        if (pair && !pairFirst_) {   // first click: where from; the second click: where to
+            if (groundAt(e.x, e.y, g)) { pairFirst_ = true; pairX_ = g.x; pairZ_ = g.z; }
+            return true;
+        }
+        if (pair && groundAt(e.x, e.y, g)) {
+            Command c; c.type = kCmdPlayerAbility;
+            c.param = abilityIndex_ | RtsModule::packPoint2({fx(g.x), Fixed{}, fx(g.z)});
+            c.point = {fx(pairX_), Fixed{}, fx(pairZ_)};
+            issue(c);
+            pairFirst_ = false;
+            mode_ = Mode::Normal;
+            return true;
+        }
+        if (!pair && groundAt(e.x, e.y, g)) {
             Command c; c.type = kCmdPlayerAbility; c.param = abilityIndex_;
             c.point = {fx(g.x), Fixed{}, fx(g.z)};
             c.target = pick(e.x, e.y);

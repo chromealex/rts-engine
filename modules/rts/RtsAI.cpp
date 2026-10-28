@@ -46,6 +46,7 @@ void RtsAI::update(Simulation& sim) {
         else hasOther = true;
     });
     if (m->rules().originals) originals(sim, *m);
+    if (m->rules().fidelity && hasOther) fidelity(sim, *m);
     if (hasGarrisons) garrisonPlay(sim, *m);
     if (hasOther) {
         special(sim, *m);
@@ -207,8 +208,13 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
                 if (!m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DebuffedOwn, p2, t2) &&
                     !m.smartTarget(sim, player_, a.payload, TargetKind::Point, SmartRule::DensestEnemy, p2, t2)) return false;
             }
-            if (!m.smartTarget(sim, player_, a.payload, a.target, a.smart, pt, tg)) return false;
-            Command c; c.type = kCmdPlayerAbility; c.param = ai; c.point = pt; c.target = tg;
+            int64_t pair = 0;
+            if (a.target == TargetKind::PointPair) {   // from where to where (Chronosphere)
+                Vec3 to;
+                if (!m.pairTarget(sim, player_, a.payload, pt, to)) return false;
+                pair = RtsModule::packPoint2(to);
+            } else if (!m.smartTarget(sim, player_, a.payload, a.target, a.smart, pt, tg)) return false;
+            Command c; c.type = kCmdPlayerAbility; c.param = ai | pair; c.point = pt; c.target = tg;
             send(sim, c);
             lastSkillTick_ = sim.tick();
             return true;

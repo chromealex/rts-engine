@@ -6463,6 +6463,8 @@ TEST(orig_faction_only_types) {
     CHECK(m.canTrain(*sim, 2, uint16_t(m.rules().findType("devastator"))) && !m.canTrain(*sim, 2, uint16_t(m.rules().findType("sonic"))));
 }
 
+#include "tests_fidelity.inc"
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
