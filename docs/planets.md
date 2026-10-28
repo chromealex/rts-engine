@@ -90,8 +90,13 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
     free cell (no node-budget exhaustion on "walk up to a building" queries).
 - **Flow fields** (opt-in, `movement.flowField`; docs/pathfinding.md) work on planets too: full fields on small bodies,
   hierarchical over the planet HPA* graph on big ones; fields never extend to other bodies.
-- **Vision.** `visionSphere`: cells within sight (offset walk across seams), 3D sight line sampled once per cell against
-  the ground radius + blockers → hills and the horizon hide; air/orbit units see everything in range.
+- **Vision.** `RtsVision.cpp` (`visionSphereRef` = the definition): cells within sight (offset walk across seams), 3D sight
+  line sampled once per cell against the ground radius + blockers → hills and the horizon hide; air/orbit units see
+  everything in range. The fast pass (`visionSphereFast`) gives the same cells in the same order: a unit at the same exact
+  position, sight and type for a second pass keeps its list of visible cells and replays it (with the reference's skip of
+  cells already lit for the owner); lists are dropped when a 16 x 16 tile their sight lines sampled gets a new blocker /
+  dug cell. Moving units take the reference path with cheaper exact primitives (interior squares without seam folds, cell
+  centres and squared ground radii cached, sqrt-free distance test, division-free cell-edge walk). See docs/terrain.md § Vision.
 - **Footprints** lie inside one face (`footprintAt(t, c, x0, y0, surface)` gives a plain grid rect or -1).
 - **Bodies / orbits**: angle(t) = phase + t / period (turns), position via `fxCosTurns`/`fxSinTurns` in the parent's XZ
   plane; Fixed. Hashed (bodies, corners sample, transits) only when a world exists.
