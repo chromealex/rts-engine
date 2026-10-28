@@ -5811,6 +5811,55 @@ TEST(fx_mesh_particles_from_model_files) {
     CHECK(ps.errors().empty());
 }
 
+TEST(fx_unity_importer_all_modules_play) {
+    // The synthetic project exercising every ParticleSystem module: imported effects parse and play.
+    if (std::system("python3 -c \"import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)\" > /dev/null 2>&1") != 0) {
+        std::printf("    (skipped: python3 not found)\n");
+        return;
+    }
+    const std::string src = std::string(RTS_SOURCE_DIR);
+    const std::string out = (std::filesystem::temp_directory_path() / "rts_unity_vfx_modules").string();
+    std::filesystem::remove_all(out);
+    std::filesystem::create_directories(out);
+    const std::string cmd = "python3 \"" + src + "/tools/importers/unity_vfx/import.py\" --source \"" + src +
+                            "/tests/data/unity_vfx/Assets/Modules\" --game \"" + out + "\" --json > \"" + out + "/report.json\"";
+    CHECK(std::system(cmd.c_str()) == 0);
+    Json rep = Json::parseFile(out + "/report.json");
+    CHECK(rep["effects"].size() >= 5);
+    auto read = [&](const std::string& p, std::string& text) {
+        std::ifstream f(out + "/" + p, std::ios::binary);
+        if (!f) return false;
+        text.assign(std::istreambuf_iterator<char>(f), {});
+        return true;
+    };
+    fx::ParticleSystem ps;
+    ps.setQuality(fx::FxQuality::High);
+    ps.setFileReader(read);
+    ps.setMeshLoader([&](const std::string& name, fx::FxMesh& m) { return fx::meshFromModelFile(name, read, m); });
+    ps.init(nullptr);
+    for (auto& e : rep["effects"].items()) {
+        int id = ps.effect(e.getStr("name"));
+        CHECK(id >= 0);
+        if (id < 0) continue;
+        ps.play(id, {0, 0, 0});
+        int most = 0;
+        for (int i = 0; i < 90; ++i) { ps.update(1 / 30.0f); most = std::max(most, ps.stats().particles); }
+        CHECK(most > 0);
+        std::vector<fx::FxParticleInfo> parts;
+        ps.snapshot(parts);
+        bool finite = true;
+        for (auto& p : parts) finite = finite && std::isfinite(p.pos.x + p.pos.y + p.pos.z + p.size);
+        CHECK(finite);
+    }
+    int meshErrors = 0;
+    for (auto& e : ps.errors()) {
+        if (e.find("rock.fbx") != std::string::npos) { ++meshErrors; continue; }   // a stub file in the test data
+        std::printf("    %s\n", e.c_str());
+    }
+    CHECK(ps.errors().size() == size_t(meshErrors));
+    std::filesystem::remove_all(out);
+}
+
 // ---------------- Cube-sphere (RtsSphere) ----------------
 TEST(sphere_cells_and_dirs_round_trip) {
     using namespace rts::game;
