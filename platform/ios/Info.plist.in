@@ -17,6 +17,8 @@
     <key>UIApplicationSupportsIndirectInputEvents</key><true/>
     <key>UIStatusBarHidden</key><true/>
     <key>UILaunchScreen</key><dict/>
+    <!-- rtsbuild: LaunchScreen.storyboard from game.json "splash" (wins over UILaunchScreen) -->
+    ${RTS_IOS_LAUNCH_STORYBOARD}
     <key>UIRequiredDeviceCapabilities</key><array><string>metal</string></array>
     <key>UISupportedInterfaceOrientations</key>
     <array>

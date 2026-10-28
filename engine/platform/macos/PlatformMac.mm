@@ -165,6 +165,8 @@ static void updateSizes(NSView* view) {
     g_window.delegate = self;
     g_window.releasedWhenClosed = NO; // we keep using it until terminate (no ARC here)
     g_window.acceptsMouseMovedEvents = YES;
+    // shown until the first frame is presented (games: the splash background, see AppConfig::clearColor)
+    g_window.backgroundColor = [NSColor colorWithSRGBRed:S.cfg.clearColor[0] green:S.cfg.clearColor[1] blue:S.cfg.clearColor[2] alpha:1];
     self.view = [[RTSView alloc] initWithFrame:frame];
     g_window.contentView = self.view;
     [g_window center];

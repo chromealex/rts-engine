@@ -48,6 +48,7 @@
 #include "engine/pack/Unpacker.h"
 #include "tools/atlas/AtlasBuild.h"
 #include "tools/audiopack/AudioPack.h"
+#include "tools/rtsbuild/Branding.h"
 #include "tools/rtsbuild/FileRules.h"
 #include "tools/rtsbuild/Plugins.h"
 
@@ -304,6 +305,7 @@ SplitConfig splitConfig(const Options& o) {
     c.opt.base = {"game.json", "audio.json", "lang/*", "ui/*", "engine/*", "_atlas/*"};   // atlas pages hold the sprites
     c.opt.base.push_back(o.gameJson.getStr("rules", "rules.json"));
     if (std::string icon = o.gameJson.getStr("icon"); !icon.empty()) c.opt.base.push_back(icon);
+    for (auto& f : rts::build::splashBaseFiles(o.gameJson)) c.opt.base.push_back(f);   // the loading screen draws before any download
     const Json& maps = o.gameJson["maps"];
     if (maps.size() > 0) {
         std::string first = maps[size_t(0)].getStr("file");
@@ -570,74 +572,14 @@ std::string cmakeVars(const Game& g, const Options& o, const fs::path& content, 
     s += " -DRTS_GAME_EXECUTABLE=" + g.exe;
     s += " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF";
     if (!gen.empty()) s += " -DRTS_GEN_DIR=" + quote(gen);
+    s += " -DRTS_SPLASH_BACKGROUND=" + rts::build::splashBackgroundHex(o.gameJson);   // window colour before the first frame
     return s;
 }
 
-// ------------------------------------------------------------------ PNG (for default icons)
-uint32_t crc32(const uint8_t* d, size_t n, uint32_t c = 0xffffffffu) {
-    for (size_t i = 0; i < n; ++i) { c ^= d[i]; for (int k = 0; k < 8; ++k) c = (c >> 1) ^ (0xEDB88320u & (0u - (c & 1u))); }
-    return c;
-}
-void writePNG(const fs::path& path, int w, int h, const std::vector<uint8_t>& rgba) {
-    std::vector<uint8_t> raw;
-    for (int y = 0; y < h; ++y) { raw.push_back(0); raw.insert(raw.end(), rgba.begin() + size_t(y) * w * 4, rgba.begin() + size_t(y + 1) * w * 4); }
-    std::vector<uint8_t> z = {0x78, 0x01}; // zlib, stored blocks
-    uint32_t a = 1, b = 0;
-    for (uint8_t v : raw) { a = (a + v) % 65521; b = (b + a) % 65521; }
-    for (size_t off = 0; off < raw.size(); off += 65535) {
-        size_t n = std::min<size_t>(65535, raw.size() - off);
-        z.push_back(off + n >= raw.size() ? 1 : 0);
-        z.push_back(uint8_t(n)); z.push_back(uint8_t(n >> 8)); z.push_back(uint8_t(~n)); z.push_back(uint8_t((~n) >> 8));
-        z.insert(z.end(), raw.begin() + long(off), raw.begin() + long(off + n));
-    }
-    uint32_t adler = (b << 16) | a;
-    for (int i = 3; i >= 0; --i) z.push_back(uint8_t(adler >> (8 * i)));
-    std::vector<uint8_t> out = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
-    auto chunk = [&](const char* type, const std::vector<uint8_t>& data) {
-        uint32_t n = uint32_t(data.size());
-        for (int i = 3; i >= 0; --i) out.push_back(uint8_t(n >> (8 * i)));
-        std::vector<uint8_t> td(type, type + 4); td.insert(td.end(), data.begin(), data.end());
-        out.insert(out.end(), td.begin(), td.end());
-        uint32_t c = ~crc32(td.data(), td.size());
-        for (int i = 3; i >= 0; --i) out.push_back(uint8_t(c >> (8 * i)));
-    };
-    std::vector<uint8_t> ihdr = {uint8_t(w >> 24), uint8_t(w >> 16), uint8_t(w >> 8), uint8_t(w), uint8_t(h >> 24), uint8_t(h >> 16), uint8_t(h >> 8), uint8_t(h), 8, 6, 0, 0, 0};
-    chunk("IHDR", ihdr); chunk("IDAT", z); chunk("IEND", {});
-    fs::create_directories(path.parent_path());
-    std::ofstream f(path, std::ios::binary);
-    f.write(reinterpret_cast<const char*>(out.data()), std::streamsize(out.size()));
-}
-// Default icon: a mushroom on a green tile.
-void writeDefaultIcon(const fs::path& path, int size) {
-    std::vector<uint8_t> px(size_t(size) * size * 4);
-    for (int y = 0; y < size; ++y)
-        for (int x = 0; x < size; ++x) {
-            float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
-            float r = 0.27f, g = 0.47f, b = 0.30f;                              // background
-            float cx = u - 0.5f, cy = v - 0.47f;
-            bool cap = cy < 0.02f && (cx * cx) / 0.13f + (cy * cy) / 0.06f < 1.0f; // cap ellipse (upper half)
-            bool stem = std::fabs(cx) < 0.11f && v > 0.47f && v < 0.80f;
-            if (stem) { r = 0.93f; g = 0.88f; b = 0.76f; }
-            if (cap) {
-                r = 0.88f; g = 0.22f; b = 0.20f;
-                float sx = cx + 0.12f, sy = cy + 0.12f, tx = cx - 0.12f, ty = cy + 0.16f, qx = cx, qy = cy + 0.25f;
-                if (sx * sx + sy * sy < 0.0025f || tx * tx + ty * ty < 0.002f || qx * qx + qy * qy < 0.0018f) { r = g = b = 0.97f; }
-            }
-            size_t i = (size_t(y) * size + x) * 4;
-            px[i] = uint8_t(r * 255); px[i + 1] = uint8_t(g * 255); px[i + 2] = uint8_t(b * 255); px[i + 3] = 255;
-        }
-    writePNG(path, size, size, px);
-}
-
-// Master 1024x1024 icon: the game's icon.png or the generated default.
-fs::path masterIcon(const Game& g, const Options& o, const fs::path& gen) {
-    fs::path custom = o.project / g.icon;
-    std::error_code ec;
-    if (!g.icon.empty() && fs::exists(custom, ec)) return custom;
-    fs::path def = gen / "icon_1024.png";
-    writeDefaultIcon(def, 1024);
-    info("иконка: icon.png не найден, сгенерирована стандартная");
-    return def;
+// ------------------------------------------------------------------ icons + launch screens
+// game.json "icons" / "splash" -> per-platform files (tools/rtsbuild/Branding.cpp, tools/branding).
+rts::build::BrandingContext branding(const Game& g, const Options& o) {
+    return {o.project, o.gameJson, g.name, g.exe, g.id, g.orientation};
 }
 
 // ------------------------------------------------------------------ source export
@@ -660,18 +602,16 @@ std::string pluginsVar(const Options& o, const std::string& platform, const fs::
 
 // ------------------------------------------------------------------ targets
 void buildMac(const Game& g, Options& o) {
-    if (std::string(kHost) != "macos") { info("macOS-сборка возможна только на Mac — пропускаю"); return; }
+    if (std::string(kHost) != "macos") {
+        step("macOS: иконка (приложение собирается только на Mac)");
+        rts::build::brandMac(branding(g, o), o.out / "macos" / "gen", info);
+        info("macOS-сборка возможна только на Mac — пропускаю");
+        return;
+    }
     fs::path out = o.out / "macos", bdir = o.out / "_build" / "macos", gen = bdir / "gen";
     fs::create_directories(gen);
     step("macOS: иконка");
-    fs::path icon = masterIcon(g, o, gen);
-    fs::path iconset = gen / "AppIcon.iconset";
-    fs::create_directories(iconset);
-    for (int s : {16, 32, 128, 256, 512}) {
-        run("sips -z " + std::to_string(s) + " " + std::to_string(s) + " " + quote(icon) + " --out " + quote(iconset / ("icon_" + std::to_string(s) + "x" + std::to_string(s) + ".png")) + " >/dev/null");
-        run("sips -z " + std::to_string(s * 2) + " " + std::to_string(s * 2) + " " + quote(icon) + " --out " + quote(iconset / ("icon_" + std::to_string(s) + "x" + std::to_string(s) + "@2x.png")) + " >/dev/null");
-    }
-    run("iconutil -c icns " + quote(iconset) + " -o " + quote(gen / "AppIcon.icns"));
+    rts::build::brandMac(branding(g, o), gen, info);
 
     step("macOS: конфигурация CMake");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
@@ -691,7 +631,12 @@ void buildMac(const Game& g, Options& o) {
 }
 
 void buildIOS(const Game& g, Options& o) {
-    if (std::string(kHost) != "macos") { info("Xcode-проект для iOS генерируется только на Mac — пропускаю"); return; }
+    if (std::string(kHost) != "macos") {
+        step("iOS: иконки и экран запуска (Xcode-проект генерируется только на Mac)");
+        rts::build::brandIOS(branding(g, o), o.out / "ios" / "gen", info);
+        info("Xcode-проект для iOS генерируется только на Mac — пропускаю");
+        return;
+    }
     fs::path out = o.out / "ios", src = out / "src", xc = out / "xcode", gen = out / "gen";
     step("iOS: экспорт исходников и контента");
     fs::remove_all(src);
@@ -699,15 +644,9 @@ void buildIOS(const Game& g, Options& o) {
     placeContent(o, src / "content");
     rts::build::PluginSet plugins = pluginsFor(o, "ios");
     rts::build::writePluginsCMake(plugins, src); // src/plugins.cmake travels with the exported project
-    step("iOS: иконка (asset catalog)");
-    fs::path icon = masterIcon(g, o, gen);
-    fs::path set = gen / "Assets.xcassets" / "AppIcon.appiconset";
-    fs::create_directories(set);
-    run("sips -z 1024 1024 -s format png " + quote(icon) + " --out " + quote(set / "icon_1024.png") + " >/dev/null");
-    writeText(gen / "Assets.xcassets" / "Contents.json", "{ \"info\": { \"author\": \"rtsbuild\", \"version\": 1 } }\n");
-    writeText(set / "Contents.json",
-              "{\n  \"images\": [ { \"filename\": \"icon_1024.png\", \"idiom\": \"universal\", \"platform\": \"ios\", \"size\": \"1024x1024\" } ],\n"
-              "  \"info\": { \"author\": \"rtsbuild\", \"version\": 1 }\n}\n");
+    step("iOS: иконки (asset catalog) и экран запуска");
+    fs::remove_all(gen);
+    rts::build::brandIOS(branding(g, o), gen, info);
 
     step("iOS: генерация Xcode-проекта");
     std::string vars = cmakeVars(g, o, src / "content", gen);
@@ -800,12 +739,8 @@ void buildAndroid(const Game& g, Options& o) {
     rts::build::writePluginsCMake(plugins, proj / "app" / "src" / "main" / "cpp");
     rts::build::copyAndroidJava(plugins, proj / "app" / "src" / "main" / "java");
     placeContent(o, proj / "app" / "src" / "main" / "assets" / "content");
-    fs::path gen = out / "_gen";
-    fs::create_directories(gen);
-    fs::path icon = masterIcon(g, o, gen);
-    // A single high-res launcher icon; Android scales it for other densities.
-    fs::create_directories(proj / "app" / "src" / "main" / "res" / "mipmap-xxxhdpi");
-    fs::copy_file(icon, proj / "app" / "src" / "main" / "res" / "mipmap-xxxhdpi" / "ic_launcher.png", fs::copy_options::overwrite_existing);
+    step("Android: иконки и экран запуска");
+    rts::build::brandAndroid(branding(g, o), proj, info);
     if (!sdk.empty()) {
         std::string sdkPath = sdk.generic_string();
         writeText(proj / "local.properties", "sdk.dir=" + sdkPath + "\n");
@@ -849,8 +784,10 @@ fs::path findEmcmake() {
 
 void buildWeb(const Game& g, Options& o) {
     fs::path emcmake = findEmcmake();
-    if (emcmake.empty()) { info("Emscripten не найден (emsdk). Установите: https://emscripten.org/docs/getting_started — пропускаю"); return; }
     fs::path out = o.out / "web", bdir = o.out / "_build" / "web";
+    step("Web: иконки, PWA manifest, заставка");
+    rts::build::brandWeb(branding(g, o), out, info);
+    if (emcmake.empty()) { info("Emscripten не найден (emsdk). Установите: https://emscripten.org/docs/getting_started — пропускаю сборку"); return; }
     step("Web: конфигурация (Emscripten)");
     std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
     rts::build::PluginSet plugins = pluginsFor(o, "web");
@@ -864,6 +801,7 @@ void buildWeb(const Game& g, Options& o) {
     }
     std::string html = readText(out / "index.html");
     writeText(out / "index.html", replaceAll(html, "<title>RTSEngine</title>", "<title>" + g.name + "</title>"));
+    rts::build::brandWeb(branding(g, o), out, info);   // favicon / manifest links + splash colours into the fresh index.html
     rts::build::installWebPlugins(plugins, out);
     info("Готово: " + out.string() + "  (проверка: python3 -m http.server -d " + quote(out) + ")");
     reportSize(o, "web", out);
@@ -873,8 +811,10 @@ void buildWindows(const Game& g, Options& o) {
     fs::path out = o.out / "windows";
     if (std::string(kHost) == "windows") {
         fs::path bdir = o.out / "_build" / "windows";
+        step("Windows: иконка");
+        rts::build::brandWindows(branding(g, o), bdir / "gen", info);
         step("Windows: конфигурация (Visual Studio)");
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, gameContent(o), {}) + packVar(o) + pluginsVar(o, "windows", bdir / "gen"));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + " -A x64" + cmakeVars(g, o, gameContent(o), bdir / "gen") + packVar(o) + pluginsVar(o, "windows", bdir / "gen"));
         step("Windows: сборка");
         mustRun("cmake --build " + quote(bdir) + " --target rts_client --config " + o.config);
         fs::path dir = bdir / o.config;
@@ -894,9 +834,11 @@ void buildWindows(const Game& g, Options& o) {
         writeText(tc, "set(CMAKE_SYSTEM_NAME Windows)\nset(CMAKE_SYSTEM_PROCESSOR x86_64)\nset(CMAKE_C_COMPILER " + cc + ")\nset(CMAKE_CXX_COMPILER " + cxx +
                       ")\nset(CMAKE_RC_COMPILER x86_64-w64-mingw32-windres)\nset(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)\n"
                       "set(CMAKE_EXE_LINKER_FLAGS_INIT \"-static -static-libgcc -static-libstdc++\")\n");
+        step("Windows: иконка");
+        rts::build::brandWindows(branding(g, o), bdir / "gen", info);
         step("Windows: кросс-компиляция (" + cxx + ")");
         std::string gen_ = findTool("ninja").empty() ? "" : " -G Ninja";
-        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, gameContent(o), {}) + packVar(o) + pluginsVar(o, "windows", bdir / "gen"));
+        mustRun("cmake -S " + quote(o.engine) + " -B " + quote(bdir) + gen_ + " -DCMAKE_TOOLCHAIN_FILE=" + quote(tc) + cmakeVars(g, o, gameContent(o), bdir / "gen") + packVar(o) + pluginsVar(o, "windows", bdir / "gen"));
         mustRun("cmake --build " + quote(bdir) + " --target rts_client -j " + std::to_string(o.jobs));
         fs::remove_all(out / g.exe);
         fs::create_directories(out / g.exe);
@@ -912,11 +854,14 @@ void buildWindows(const Game& g, Options& o) {
     exportSources(o, src);
     rts::build::writePluginsCMake(pluginsFor(o, "windows"), src);
     placeContent(o, src / "content");
+    rts::build::brandWindows(branding(g, o), src / "gen", info);
+    std::string splashBg = rts::build::splashBackgroundHex(o.gameJson);
     std::string packArg = o.pack ? " -DRTS_CONTENT_PACK=%~dp0content\\content.rpak" : "";
     writeText(src / "build.bat",
               "@echo off\r\nrem Requires Visual Studio 2022 (Desktop C++) and CMake.\r\n"
               "cmake -S . -B build -A x64 -DRTS_CONTENT_DIR=%~dp0content -DRTS_GAME_NAME=\"" + g.name + "\" -DRTS_GAME_ID=" + g.id +
-              " -DRTS_GAME_EXECUTABLE=" + g.exe + packArg + " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF || exit /b 1\r\n"
+              " -DRTS_GAME_EXECUTABLE=" + g.exe + packArg + " -DRTS_GEN_DIR=%~dp0gen" +
+              (splashBg.empty() ? std::string() : " -DRTS_SPLASH_BACKGROUND=" + splashBg) + " -DRTS_BUILD_EDITOR=OFF -DRTS_BUILD_TOOLS=OFF -DRTS_BUILD_TESTS=OFF -DRTS_BUILD_HEADLESS=OFF || exit /b 1\r\n"
               "cmake --build build --target rts_client --config Release || exit /b 1\r\n"
               "echo Done: build\\Release\\" + g.exe + ".exe\r\n");
     info("Исходники: " + src.string() + " — на Windows запустите build.bat.");
@@ -934,6 +879,7 @@ void buildLinux(const Game& g, Options& o) {
     fs::create_directories(out / g.exe);
     fs::copy_file(bdir / g.exe, out / g.exe / g.exe, fs::copy_options::overwrite_existing);
     placeContent(o, out / g.exe / "content");
+    rts::build::brandLinux(branding(g, o), out / g.exe, info);   // share/icons/hicolor + share/applications/<exe>.desktop
     info("Готово: " + (out / g.exe / g.exe).string());
     reportSize(o, "linux", out / g.exe);
 }
