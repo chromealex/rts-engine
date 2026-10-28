@@ -2,11 +2,13 @@
 // objects placed on the sphere (oriented to the local up), selection rings, bars, fog of war, picking.
 // The flat path (RtsView.cpp / RtsTerrain.cpp) is untouched: planetMode() is false without a world block.
 //
-// Until the simulation provides bodies (agent-planet-sim), the flat sim map is laid onto face 2 of the
-// start body (flatToBody): objects with SceneObject::body < 0 are mapped there. Objects with body >= 0
-// are body-local already (pos, facing, target).
+// Match maps: bodies, orbits, corner heights and cell flags come from the simulation's Surface
+// (setSimWorld); objects carry their body and body-local position (sceneFromSphere), units in transit their
+// world position. Editor maps without a simulation read the map JSON (setWorld).
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include "../RtsModule.h"
 #include "RtsView.h"
 
@@ -21,9 +23,8 @@ uint32_t ringColor(const SceneObject& o) { return o.selected ? (o.owner == 0 ? r
 void RtsView::setWorld(const Json& map) {
     PlanetWorld w = loadPlanetWorld(map, &warnings_);
     planets_.setWorld(w);
-    demoBody_ = -1;
+    planetVision_.clear();
     if (!planets_.active()) return;
-    demoBody_ = w.start;
     planetCam_.reset(planets_.world(), w.start, planets_.surface(w.start), 0);
 }
 
@@ -54,23 +55,26 @@ void RtsView::updateWorld(const Json& map) {
     }
 }
 
-bool RtsView::flatToBody(float3 flat, int& body, float3& local) const {
-    const PlanetSurface* s = planets_.surface(demoBody_);
-    if (!s) return false;
-    body = demoBody_;
-    const float a = demoOff_[0] + flat.x * demoScale_, b = demoOff_[1] + flat.z * demoScale_;
-    local = s->surfacePoint(s->dirFromFace(2, a, b));
+void RtsView::setSimWorld(std::shared_ptr<const Surface> surf, const MapGrid& grid, const Json& map) {
+    PlanetWorld w = planetWorldFromSim(std::move(surf), grid.flags, loadPlanetWorld(map, &warnings_));
+    planets_.setWorld(w);
+    planetVision_.clear();
+    if (!planets_.active()) return;
+    planetCam_.reset(planets_.world(), w.start, planets_.surface(w.start), 0);
+}
+
+bool RtsView::simToBody(float3 sim, int& body, float3& local) {
+    if (!onSphereF(sim)) return false;
+    body = bodyAtF(sim);
+    local = sim - anchorF(body);
     return true;
 }
 
-bool RtsView::bodyToFlat(int body, float3 local, float3& flat) const {
+bool RtsView::facePoint(int body, int face, float x, float y, float3& local) const {
     const PlanetSurface* s = planets_.surface(body);
-    if (!s || body != demoBody_) return false;
-    int f; float a, b;
-    s->faceFromDir(normalize(local), f, a, b);
-    if (f != 2) return false;
-    flat = {(a - demoOff_[0]) / demoScale_, 0, (b - demoOff_[1]) / demoScale_};
-    return flat.x >= 0 && flat.z >= 0 && flat.x <= float(demoW_) && flat.z <= float(demoH_);
+    if (!s || face < 0 || face > 5) return false;
+    local = s->surfacePoint(s->dirFromFace(face, x, y));
+    return true;
 }
 
 float3 RtsView::bodyToView(int body, float3 local) const {
@@ -108,16 +112,16 @@ bool RtsView::pickPlanet(const RTSCamera& cam, float sx, float sy, float w, floa
 bool RtsView::placeObject(const SceneObject& o, int& body, float3& ground, float3& up, float3& east, float3& south, float& lift) const {
     float3 local;
     lift = 0;
-    if (o.body >= 0) { body = o.body; local = o.pos; }
-    else if (!flatToBody(o.pos, body, local)) return false;
+    if (o.body < 0) return false;
+    body = o.body; local = o.pos;
     const PlanetSurface* s = planets_.surface(body);
     if (!s) return false;
     up = normalize(local);
     ground = s->surfacePoint(up);
     const float sea = planets_.world().bodies[size_t(body)].seaLevel;
     if (sea > -1e8f && length(ground) < s->radius() + sea) ground = up * (s->radius() + sea);   // naval units float
-    lift = std::max(0.0f, length(local) - length(ground));   // orbit layer / flyers above the ground (sim positions)
-    if (o.body < 0) lift = 0;
+    lift = std::max(0.0f, length(local) - length(ground));   // orbit layer above the ground (sim positions)
+    if (lift < 0.6f) lift = 0;                                 // ground units: on the drawn surface
     // tangent frame: flat-map axes (x east = +a, z south = +b of the face grid) so flat facings keep working
     int f; float a, b;
     s->faceFromDir(up, f, a, b);
@@ -144,6 +148,7 @@ bool RtsView::planetPlacement(const SceneObject& o, mat4& m) const {
 float3 RtsView::objectViewPos(const SceneObject& o, float lift) const {
     if (!planets_.active()) return {o.pos.x, lift, o.pos.z};
     int body; float3 g, up, e, sth; float l;
+    if (o.body == SceneObject::kBodyTransit) return pframe_.toView(o.pos);
     if (!placeObject(o, body, g, up, e, sth, l)) return {o.pos.x, lift, o.pos.z};
     return bodyToView(body, g + up * (l + lift));
 }
@@ -161,21 +166,33 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
     planetSeconds_ = s.seconds;
     const float blend = std::max(planetCam_.planetBlend(), planetCam_.systemBlend());
     planetNoShadow_ = blend > 0.5f;
-    // fog of war: the flat vision (faded by RtsFog) laid onto the demo body; the rest of the planet
-    // counts as explored. Sim bodies will hand per-body vision directly.
-    if (vision && !vision->empty() && grid.w > 0 && planets_.surface(demoBody_)) {
-        fog_.update(*vision, grid.w, grid.h, time);
-        const PlanetSurface& sf = *planets_.surface(demoBody_);
-        const int N = sf.faceSize();
-        planetVision_.assign(size_t(6 * N * N), 128);
+    // fog of war per body: the viewer's vision of the stacked grid, faded / blurred by RtsFog over the whole
+    // grid (the blur may bleed a cell across face rows; seams look right within a cell), then cut per body
+    const PlanetWorld& Wd = planets_.world();
+    planetVision_.resize(Wd.bodies.size());
+    const bool fogOn = vision && !vision->empty() && Wd.sim && grid.w > 0 && vision->size() == size_t(grid.w * grid.h);
+    if (fogOn) fog_.update(*vision, grid.w, grid.h, time);
+    for (size_t bi = 0; bi < Wd.bodies.size(); ++bi) {
+        if (!Wd.bodies[bi].surface()) continue;
+        if (!fogOn) { planetVision_[bi].clear(); planets_.setVision(int(bi), nullptr, fog_.look()); continue; }
+        const int N = Wd.bodies[bi].faceSize;
         const std::vector<uint8_t>& fld = fog_.field();
-        for (int y = 0; y < N; ++y)
-            for (int x = 0; x < N; ++x) {
-                const int gx = int(std::floor((float(x) + 0.5f - demoOff_[0]) / demoScale_)), gy = int(std::floor((float(y) + 0.5f - demoOff_[1]) / demoScale_));
-                if (grid.inside(gx, gy) && fld.size() == size_t(grid.w * grid.h)) planetVision_[size_t((2 * N + y) * N + x)] = fld[size_t(grid.index(gx, gy))];
-            }
-        planets_.setVision(demoBody_, &planetVision_, fog_.look());
-    } else planets_.setVision(demoBody_, nullptr, fog_.look());
+        std::vector<uint8_t>& pv = planetVision_[bi];
+        pv.assign(size_t(6 * N * N), 0);
+        for (int f = 0; f < 6; ++f)
+            for (int y = 0; y < N; ++y)
+                for (int x = 0; x < N; ++x) {
+                    const size_t c = size_t(Wd.sim->gridCell(int(bi), f, x, y));
+                    pv[(size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x)] = c < fld.size() ? fld[c] : 0;
+                }
+        planets_.setVision(int(bi), &pv, fog_.look());
+        if (std::getenv("RTS_PLANET_DEBUG")) {
+            int vis = 0, raw = 0;
+            for (uint8_t v : pv) vis += v > 200;
+            for (int f = 0; f < 6; ++f) for (int y = 0; y < N; ++y) for (int x = 0; x < N; ++x) raw += (*vision)[size_t(Wd.sim->gridCell(int(bi), f, x, y))] == 2;
+            std::fprintf(stderr, "[planet] body %zu fog visible %d raw %d of %d (grid %dx%d)\n", bi, vis, raw, 6 * N * N, grid.w, grid.h);
+        }
+    }
     planets_.draw(r, pframe_, s.seconds, planetCam_.body(), blend);
     handleEvents(s);
     const float3 eye = r.camera().eye();
@@ -212,76 +229,177 @@ void RtsView::drawPlanets(Renderer3D& r, const RtsScene& s, double time, const s
             prev = p;
         }
     };
+    auto tangentFrame = [&](int body, float3 up, float3& east, float3& south) {
+        const PlanetSurface* sf = planets_.surface(body);
+        int f; float a, b;
+        sf->faceFromDir(up, f, a, b);
+        float3 da = sf->dirFromFace(f, std::min(a + 0.25f, float(sf->faceSize())), b) - sf->dirFromFace(f, std::max(a - 0.25f, 0.0f), b);
+        east = normalize(da - up * dot(da, up));
+        south = cross(east, up);
+    };
     for (size_t i = 0; i < s.objects.size(); ++i) {
         const SceneObject& o = s.objects[i];
-        int body; float3 g, up, east, south; float lift;
-        if (!placeObject(o, body, g, up, east, south, lift)) continue;
-        const mat4 place = frameAt(body, g + up * lift, up, east, south);
+        const uint64_t key = o.entity.valid() ? o.entity.packed() : (1ull << 63) | uint64_t(i);
+        int body = -1; float3 g, up, east, south; float lift = 0;
+        mat4 place;
+        if (o.body == SceneObject::kBodyTransit) { // between bodies: world position, nose along the travel direction
+            const float3 U = pframe_.dirToView({0, 1, 0});
+            float3 F = pframe_.dirToView(o.facing);
+            F = F - U * dot(F, U);
+            if (dot(F, F) < 1e-6f) F = pframe_.dirToView({1, 0, 0});
+            const float3 E = normalize(F), S = cross(E, U), P = pframe_.toView(o.pos);
+            place.at(0, 0) = E.x; place.at(1, 0) = E.y; place.at(2, 0) = E.z;
+            place.at(0, 1) = U.x; place.at(1, 1) = U.y; place.at(2, 1) = U.z;
+            place.at(0, 2) = S.x; place.at(1, 2) = S.y; place.at(2, 2) = S.z;
+            place.at(0, 3) = P.x; place.at(1, 3) = P.y; place.at(2, 3) = P.z;
+        } else {
+            if (!placeObject(o, body, g, up, east, south, lift)) continue;
+            place = frameAt(body, g + up * lift, up, east, south);
+        }
         const float3 pv = place.transformPoint({0, 0, 0});
         if (o.isProjectile) {
-            if (o.visible) r.drawMesh(projectile_, mat4::translate(place.transformPoint({0, 0.6f, 0})), {1, 0.95f, 0.8f, 1}, kDrawUnlit);
+            if (o.visible) r.drawMesh(projectile_, mat4::translate(place.transformPoint({0, 0.3f, 0})), {1, 0.95f, 0.8f, 1}, kDrawUnlit);
             continue;
         }
         if (o.type >= looks_.size()) continue;
-        const uint64_t key = o.entity.valid() ? o.entity.packed() : (1ull << 63) | uint64_t(i);
-        // the object in its tangent frame: facing / target as flat-map style vectors
+        // the object in its tangent frame (flat-map style vectors: x east, y up, z south), so the flat
+        // animation code (speed, yaw, aim) works unchanged; the frame turns slowly with the position
         SceneObject lo = o;
-        if (o.body >= 0) {
+        if (body >= 0) {
+            lo.pos = {dot(g, east), dot(g, up), dot(g, south)};
             lo.facing = {dot(o.facing, east), 0, dot(o.facing, south)};
             const float3 t = o.target - o.pos;
-            lo.target = {dot(t, east), dot(t, up), dot(t, south)};
-            lo.pos = {0, 0, 0};
+            lo.target = lo.pos + float3{dot(t, east), dot(t, up), dot(t, south)};
+            planetLast_[key] = {body, g, lift};
+        } else { // transit: the frame above has east = travel direction
+            lo.pos = o.pos; lo.facing = {1, 0, 0}; lo.hasTarget = false;
         }
-        lo.pos = g;   // body-local: speed from the 3D displacement
-        if (o.body >= 0) { const float3 t = lo.target; lo.target = lo.pos + t; }
-        else if (o.hasTarget) { int tb; float3 tl; if (flatToBody(o.target, tb, tl)) { const float3 d = tl - g; lo.target = g + float3{dot(d, east), dot(d, up), dot(d, south)}; } }
         EntityAnim& st = stateFor(key, lo);
         st.last = lo;
         if (!o.visible) continue;
         const TypeLook& L = looks_[o.type];
         animate(st, lo, dt, nullptr, &pv);
         drawObject(r, st, lo, 0, 1.0f, nullptr, &place);
-        if (L.air && !planetNoShadow_) ring(place, 0.3f, rgba(0, 0, 0, 90), 0.03f);
         if (o.selected || o.hovered) ring(place, selectionRadius(o.type), ringColor(o), 0.05f);
+        if (lift > 0 && !planetNoShadow_) ring(frameAt(body, g, up, east, south), 0.35f, rgba(0, 0, 0, 110), 0.04f);   // orbit units: mark below
         const UnitType& t = rules_->types[o.type];
         float top = t.structure ? 1.6f * L.scale * std::max(1.0f, std::max(t.footprintW, t.footprintH) * 0.6f) : 1.2f * L.scale;
         if (L.air) top += L.flyHeight;
         bars_[i] = place.transformPoint({0, top, 0});
-        barOk_[i] = !occluded(body, bars_[i]) && blend < 0.6f;
+        barOk_[i] = (body < 0 || !occluded(body, bars_[i])) && blend < 0.6f;
     }
-    // corpses: last known placement (body-local in st.last), fading out
+    // corpses: last known placement, fading out
     for (auto it = anims_.begin(); it != anims_.end();) {
         EntityAnim& st = it->second;
         if (st.seen == frame_ && !st.dead) { ++it; continue; }
-        if (!st.dead || !st.initialized) { it = st.seen + 2 < frame_ ? anims_.erase(it) : std::next(it); continue; }
+        if (!st.dead || !st.initialized) {
+            if (st.seen + 2 < frame_) { planetLast_.erase(it->first); it = anims_.erase(it); } else ++it;
+            continue;
+        }
         st.deathAge += dt;
-        if (st.type >= looks_.size() || st.deathAge > looks_[st.type].corpse) { it = anims_.erase(it); continue; }
+        if (st.type >= looks_.size() || st.deathAge > looks_[st.type].corpse) { planetLast_.erase(it->first); it = anims_.erase(it); continue; }
         const TypeLook& L = looks_[st.type];
-        if (st.seen != frame_ && st.last.visible && demoBody_ >= 0) {
+        auto pl = planetLast_.find(it->first);
+        if (st.seen != frame_ && st.last.visible && pl != planetLast_.end() && planets_.surface(pl->second.body)) {
             SceneObject o = st.last;
             o.selected = o.hovered = false;
-            const PlanetSurface* sf = planets_.surface(demoBody_);
-            if (sf) {
-                const float3 up = normalize(o.pos);
-                int f; float a, b;
-                sf->faceFromDir(up, f, a, b);
-                float3 da = sf->dirFromFace(f, std::min(a + 0.25f, float(sf->faceSize())), b) - sf->dirFromFace(f, std::max(a - 0.25f, 0.0f), b);
-                const float3 east = normalize(da - up * dot(da, up)), south = cross(east, up);
-                const mat4 place = frameAt(demoBody_, o.pos, up, east, south);
-                const float3 pv = place.transformPoint({0, 0, 0});
-                animate(st, o, dt, nullptr, &pv);
-                drawObject(r, st, o, 0, L.dissolveDeath ? 1.0f : std::clamp((L.corpse - st.deathAge) / 0.6f, 0.0f, 1.0f), nullptr, &place);
-            }
+            const float3 up = normalize(pl->second.ground);
+            float3 east, south;
+            tangentFrame(pl->second.body, up, east, south);
+            const mat4 place = frameAt(pl->second.body, pl->second.ground + up * pl->second.lift, up, east, south);
+            const float3 pv = place.transformPoint({0, 0, 0});
+            animate(st, o, dt, nullptr, &pv);
+            drawObject(r, st, o, 0, L.dissolveDeath ? 1.0f : std::clamp((L.corpse - st.deathAge) / 0.6f, 0.0f, 1.0f), nullptr, &place);
         }
         ++it;
     }
-    for (auto& mk : s.moveMarkers) {
+    for (auto& mk : s.moveMarkers) { // sim-space points (client picking)
         int body; float3 l;
-        if (!flatToBody(mk, body, l)) continue;
-        SceneObject o; o.pos = mk;
-        int b2; float3 g, up, e, so; float lift;
-        if (placeObject(o, b2, g, up, e, so, lift)) ring(frameAt(b2, g, up, e, so), 0.35f, rgba(120, 255, 120, 200), 0.06f);
+        if (!simToBody(mk, body, l) || !planets_.surface(body)) continue;
+        const float3 up = normalize(l);
+        float3 east, south;
+        tangentFrame(body, up, east, south);
+        ring(frameAt(body, planets_.surface(body)->surfacePoint(up), up, east, south), 0.35f, rgba(120, 255, 120, 200), 0.06f);
     }
+}
+
+// ------------------------------------------------------------------ scene from the simulation
+
+void sceneFromSphere(Simulation& sim, RtsModule& m, const Surface& S, RtsScene& out, float alpha, uint8_t viewer) {
+    World& w = sim.world();
+    const Rules& R = m.rules();
+    GameState& gs = m.state(sim);
+    auto toF = [](const Vec3& v) { return float3{float(v.x.toDouble()), float(v.y.toDouble()), float(v.z.toDouble())}; };
+    // body-local float position of a sim position; prev/cur on different bodies (landed): take cur
+    auto local = [&](Vec3 prev, Vec3 cur, int& body) {
+        body = S.bodyAt(cur);
+        const float3 c = toF(cur - Surface::anchor(body));
+        if (S.bodyAt(prev) != body) return c;
+        return lerp(toF(prev - Surface::anchor(body)), c, alpha);
+    };
+    auto visibleAt = [&](Vec3 p) -> uint8_t {
+        const int c = S.cellAt(p);
+        return c >= 0 && size_t(c) < gs.vision[viewer].size() ? gs.vision[viewer][size_t(c)] : 0;
+    };
+    const uint32_t tick = sim.tick();
+    w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
+        SceneObject so;
+        so.entity = e; so.type = u.type; so.owner = o.player;
+        const UnitType& ut = R.types[u.type];
+        if (auto* tx = w.tryGet<Transit>(e)) { // between bodies: world position (interpolated like worldPosition)
+            const float span = float(std::max<uint32_t>(1, tx->arrive - tx->depart));
+            const float k = std::clamp((float(tick > tx->depart ? tick - tx->depart : 0) + alpha) / span, 0.0f, 1.0f);
+            const float3 a = toF(tx->fromWorld), b = toF(tx->toWorld);
+            so.body = SceneObject::kBodyTransit;
+            so.pos = lerp(a, b, k);
+            so.facing = normalize(b - a);
+            so.moving = true; so.action = kActMove;
+            so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
+            so.visible = viewer == 0 || o.player == viewer || sim.allied(o.player, viewer);
+            out.objects.push_back(so);
+            return;
+        }
+        if ((u.flags & kUnitInHand) || !Surface::onSphere(t.pos)) return;
+        int body;
+        so.pos = local(t.prevPos, t.pos, body);
+        so.body = int16_t(body);
+        so.facing = toF(u.facing);
+        so.hp = ut.maxHp.raw > 0 ? float((u.hp / ut.maxHp).toDouble()) : 1.0f;
+        if (auto* c = w.tryGet<Construction>(e)) so.build = float(c->progress.toDouble());
+        if (auto* g = w.tryGet<Garrison>(e)) so.garrison = g->count;
+        if (auto* c = w.tryGet<Cargo>(e)) { so.carry = float(c->amount.toDouble()); so.carryRes = c->res; }
+        if (auto* od = w.tryGet<Orders>(e); od && !od->queue.empty()) so.order = uint8_t(od->queue.front().type) + 1;
+        if (auto* mb = w.tryGet<Mobile>(e)) so.moving = mb->moving;
+        if (auto* pr = w.tryGet<Production>(e)) so.producing = !pr->queue.empty();
+        if (auto* cb = w.tryGet<Combat>(e); cb && cb->target.valid() && w.alive(cb->target)) {
+            if (auto* tt = w.tryGet<Transform>(cb->target); tt && S.bodyAt(tt->pos) == body) {
+                int tb;
+                so.hasTarget = true; so.target = local(tt->prevPos, tt->pos, tb);
+            }
+        }
+        if (so.moving) so.action = kActMove;
+        else if (so.hasTarget) so.action = kActAttack;
+        else if (so.order) {
+            OrderType ot = OrderType(so.order - 1);
+            if (ot == OrderType::Gather || ot == OrderType::Build || ot == OrderType::Repair) so.action = kActWork;
+        }
+        if (viewer != 0 && o.player != viewer && !sim.allied(o.player, viewer)) {
+            const uint8_t v = visibleAt(t.pos);
+            so.visible = ut.structure && o.player == 0 ? v >= 1 : v == 2;
+        }
+        out.objects.push_back(so);
+    });
+    w.each<Projectile, Transform>([&](Entity e, Projectile& pr, Transform& t) {
+        if (!Surface::onSphere(t.pos)) return;
+        SceneObject so;
+        so.entity = e; so.isProjectile = true; so.source = pr.source;
+        if (auto* su = w.tryGet<Unit>(pr.source)) so.shooterType = su->type;
+        int body;
+        so.pos = local(t.prevPos, t.pos, body);
+        so.body = int16_t(body);
+        if (viewer != 0) so.visible = visibleAt(t.pos) == 2;
+        out.objects.push_back(so);
+    });
 }
 
 } // namespace rts::game

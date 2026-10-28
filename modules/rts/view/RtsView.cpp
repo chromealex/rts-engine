@@ -198,6 +198,7 @@ void sceneFromSim(Simulation& sim, RtsScene& out, float alpha, uint8_t viewer) {
     out.lanes = R.lanes.enabled ? &gs.lanes : nullptr;
     out.laneSignature = gs.laneSignature;
     out.seconds = double(sim.tick()) / double(std::max(sim.tickRate(), 1u));
+    if (const Surface* surf = gs.surface.get()) { sceneFromSphere(sim, *m, *surf, out, alpha, viewer); return; }   // RtsPlanetView.cpp
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& t) {
         SceneObject so;
         so.entity = e; so.type = u.type; so.owner = o.player;
