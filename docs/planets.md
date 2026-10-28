@@ -2,7 +2,7 @@
 
 Written by MAIN as stage 0 for the agents `agent-planet-sim`, `agent-planet-render`, `agent-terrain-gen`.
 Everything here is additive: a map without `world` / `generate` loads, plays and looks exactly as before
-(checksums of every game in `games/` must not change).
+(checksums of every game in `templates/` must not change).
 
 ## 1. Bodies
 
@@ -74,7 +74,7 @@ Face order and basis (cubemap convention). A face point is `n + u * s' + v * t'`
   surface / shell (`moveSphere`), slope speed from corner heights; separation in the tangent plane.
 - **HPA\* on planets** (`RtsHpaSphere.cpp`, the counterpart of `RtsHpa.cpp`: same 10/14 costs, entrance rule, A\*
   refinement). Bodies with >= `rules movement.planetHpaCells` cells (default 65,536 = the flat 256x256 threshold, i.e.
-  faceSize >= 105) route trips longer than 2 clusters through it; smaller bodies (games/planets) keep plain A\*.
+  faceSize >= 105) route trips longer than 2 clusters through it; smaller bodies (templates/planets) keep plain A\*.
   `RTS_PLANET_HPA=1|0` / headless `--planet-hpa on|off` force it (tests, benchmarks; all peers must agree).
   - Clusters: 16x16 tiles of each face; the last row / column is partial when faceSize is not a multiple of 16.
     A cluster is a rect of grid rows, so cluster costs are a Dijkstra on the neighbour table inside the rect.

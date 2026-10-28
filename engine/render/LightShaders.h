@@ -49,11 +49,11 @@ namespace rts::render::shaders {
     "        a *= a;\n" \
     "        vec3 L = d * inversesqrt(max(d2, 1e-6));\n" \
     "        if (l_spot[i].w > -1.5) { float sp = smoothstep(l_spot[i].w, l_col[i].w, dot(-L, l_spot[i].xyz)); a *= sp * sp; }\n" \
-    "        float ndl = max(dot(n, L), 0.0) * 0.85 + 0.15;\n" \
+    "        float ndl = (max(dot(n, L), 0.0) - 0.5) * 0.6;   /* detail around the map light */\n" \
     "        float sp = pow(max(dot(n, normalize(L + V)), 0.0), 40.0) * specK;\n" \
     "        c += l_col[i].rgb * (a * (ndl + sp));\n" \
     "    }\n" \
-    "    return c;\n" \
+    "    return max(c, vec3(0.0));\n" \
     "}\n" \
     "/* PBR materials: diffuse and specular apart, so metals reflect light (F0 tints dd/ds outside). */\n" \
     "void dynLight(vec3 wpos, vec3 n, vec3 V, float rough, out vec3 dd, out vec3 ds) {\n" \
@@ -84,9 +84,10 @@ namespace rts::render::shaders {
     "        vec3 L = d * inversesqrt(max(d2, 1e-6));\n" \
     "        if (l_spot[i].w > -1.5) { float sp = smoothstep(l_spot[i].w, l_col[i].w, dot(-L, l_spot[i].xyz)); a *= sp * sp; }\n" \
     "        float ndl = max(dot(n, L), 0.0);\n" \
-    "        dd += l_col[i].rgb * (a * (ndl * 0.85 + 0.15));\n" \
-    "        ds += l_col[i].rgb * (a * (ndl * pow(max(dot(n, normalize(L + V)), 0.0), shin) * (shin + 8.0) * 0.04 + gloss * 0.3));\n" \
+    "        dd += l_col[i].rgb * (a * (ndl - 0.5) * 0.6);\n" \
+    "        ds += l_col[i].rgb * (a * (ndl * pow(max(dot(n, normalize(L + V)), 0.0), shin) * (shin + 8.0) * 0.04));\n" \
     "    }\n" \
+    "    dd = max(dd, vec3(0.0));\n" \
     "}\n"
 
 #define RTS_GLSL_LIGHTS RTS_GLSL_LIGHTS_AT("U2", "tex1")
@@ -125,11 +126,11 @@ namespace rts::render::shaders {
     "        a *= a;\n" \
     "        float3 L = d * rsqrt(max(d2, 1e-6));\n" \
     "        if (l.spot[i].w > -1.5) { float sp = smoothstep(l.spot[i].w, l.col[i].w, dot(-L, l.spot[i].xyz)); a *= sp * sp; }\n" \
-    "        float ndl = max(dot(n, L), 0.0) * 0.85 + 0.15;\n" \
+    "        float ndl = (max(dot(n, L), 0.0) - 0.5) * 0.6;   /* detail around the map light */\n" \
     "        float sp = pow(max(dot(n, normalize(L + V)), 0.0), 40.0) * specK;\n" \
     "        c += l.col[i].rgb * (a * (ndl + sp));\n" \
     "    }\n" \
-    "    return c;\n" \
+    "    return max(c, float3(0.0));\n" \
     "}\n" \
     "static void dynLight(constant LightU& l, texture2d<float> lm, sampler ls, float3 wpos, float3 n, float3 V, float rough, thread float3& dd, thread float3& ds) {\n" \
     "    dd = float3(0.0); ds = float3(0.0);\n" \
@@ -159,9 +160,10 @@ namespace rts::render::shaders {
     "        float3 L = d * rsqrt(max(d2, 1e-6));\n" \
     "        if (l.spot[i].w > -1.5) { float sp = smoothstep(l.spot[i].w, l.col[i].w, dot(-L, l.spot[i].xyz)); a *= sp * sp; }\n" \
     "        float ndl = max(dot(n, L), 0.0);\n" \
-    "        dd += l.col[i].rgb * (a * (ndl * 0.85 + 0.15));\n" \
-    "        ds += l.col[i].rgb * (a * (ndl * pow(max(dot(n, normalize(L + V)), 0.0), shin) * (shin + 8.0) * 0.04 + gloss * 0.3));\n" \
+    "        dd += l.col[i].rgb * (a * (ndl - 0.5) * 0.6);\n" \
+    "        ds += l.col[i].rgb * (a * (ndl * pow(max(dot(n, normalize(L + V)), 0.0), shin) * (shin + 8.0) * 0.04));\n" \
     "    }\n" \
+    "    dd = max(dd, float3(0.0));\n" \
     "}\n"
 
 // Planar water reflection (lit shader only; REFL = reflection texture rendered mirrored and flipped

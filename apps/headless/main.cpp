@@ -1,5 +1,5 @@
 // Headless runner: bot-vs-bot matches, replay recording and verification for any game project.
-//   rts_headless --project games/skirmish [--map maps/valley.json] --seed 7 --record m.rpl
+//   rts_headless --project templates/skirmish [--map maps/valley.json] --seed 7 --record m.rpl
 //   rts_headless --replay m.rpl
 #include <chrono>
 #include <cstdio>
@@ -43,7 +43,7 @@ static Json loadMap(const std::string& mapPath, const std::string& projectDir) {
 }
 
 struct Args {
-    std::string project = "games/skirmish", map, replay, record;
+    std::string project = "templates/skirmish", map, replay, record;
     std::string generate, symmetry = "auto", genOut, genParams;   // --generate PRESET: a generated map (template = the map)
     int players = 0;
     uint64_t seed = 1;

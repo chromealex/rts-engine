@@ -3,7 +3,8 @@
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <!-- Network play (engine/net). A normal permission: granted at install, no prompt. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <application
+    <!-- native plugins (rtsbuild) -->
+@PLUGIN_MANIFEST_ROOT@    <application
         android:label="@APP_NAME@"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
@@ -13,6 +14,7 @@
         <activity
             android:name="com.rtsengine.platform.RtsActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:screenOrientation="@ORIENTATION@"
             android:windowSoftInputMode="adjustNothing|stateHidden"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|density"
@@ -22,6 +24,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
-    </application>
+@PLUGIN_MANIFEST_ACTIVITY@        </activity>
+        <!-- native plugins (rtsbuild) -->
+@PLUGIN_MANIFEST_APPLICATION@    </application>
 </manifest>
