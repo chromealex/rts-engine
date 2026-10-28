@@ -43,8 +43,23 @@ void RtsModule::mechLogisticsSetup(Simulation& sim, const Json& map) {
 }
 
 bool RtsModule::applyMechLogisticsCommand(Simulation& sim, const Command& cmd) {
-    if (cmd.type != kCmdRotate) return false;
     World& w = sim.world();
+    if (cmd.type == kCmdLock) {   // doors with a lock (Dungeon Keeper, Stronghold): a locked gate is a wall for everyone
+        MapGrid& g = state(sim).grid;
+        for (Entity e : cmd.units) {
+            if (!w.alive(e) || w.get<Owner>(e).player != cmd.player || !rules_.types[w.get<Unit>(e).type].mech.gate) continue;
+            auto* bl = w.tryGet<BridgeLaid>(e);
+            auto* f = w.tryGet<Footprint>(e);
+            if (!bl || !f) continue;   // still being built
+            const bool lock = cmd.param == 1 || (cmd.param == 0 && bl->laid);
+            if (lock == !bl->laid) continue;
+            g.block(f->x, f->y, f->w, f->h, lock ? +1 : -1);
+            for (int y = f->y; y < f->y + f->h; ++y) for (int x = f->x; x < f->x + f->w; ++x) if (g.inside(x, y)) g.cellChanged(x, y);
+            bl->laid = !lock;
+        }
+        return true;
+    }
+    if (cmd.type != kCmdRotate) return false;
     for (Entity e : cmd.units) {
         if (!w.alive(e) || !w.has<Belt>(e) || w.get<Owner>(e).player != cmd.player) continue;
         Belt& b = w.get<Belt>(e);
