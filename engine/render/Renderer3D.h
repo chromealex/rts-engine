@@ -80,7 +80,13 @@ enum class ShadowQuality { Off, Low, Medium, High };
 // Medium = GGX + metallic-roughness, normal and emissive maps; High = + occlusion maps.
 enum class MaterialQuality { Low, Medium, High };
 
+struct NodePose;
+
+// Baked skinning sample (Animator::baseSample()): clip A blends to clip B by `mix`; clip -1 = bind pose.
+struct BakedSample { int clipA = -1, clipB = -1; float timeA = 0, timeB = 0, mix = 1; bool loopA = true, loopB = true; };
+
 // One model instance. Node matrices come from an animated pose (Animation.h) or the bind pose.
+// Rigid parts and baked-skinned meshes of identical instances are drawn instanced (32 per draw).
 struct ModelDraw {
     const Model* model = nullptr;
     mat4 world;                                    // model space -> world
@@ -91,6 +97,10 @@ struct ModelDraw {
     float flash = 0;                               // additive highlight (hit feedback)
     int variant = -1;                              // KHR_materials_variants index
     uint32_t flags = 0;                            // DrawFlags (no cast / no receive shadow)
+    const std::vector<NodePose>* pose = nullptr;   // morph weights (node weights when null)
+    const BakedSample* baked = nullptr;            // skin from Model::baked instead of nodeWorld
+    float dissolve = 0;                            // 0..1: burn away (spawn, death, construction)
+    float4 outline{0, 0, 0, 0};                    // rgb (linear) + width in world units; a = 0: none
 };
 
 enum DrawFlags : uint32_t {
@@ -136,6 +146,7 @@ public:
     const std::string& modelError() const { return modelError_; }   // last model shader failure
 
     const mat4& viewProj() const { return viewProj_; }
+    const float3& cameraPos() const { return camPos_; }
     Lighting lighting;
     LightSystem lights;   // dynamic point lights: add between beginScene() and render()
     uint32_t drawCalls() const { return drawCalls_; }
@@ -145,14 +156,19 @@ private:
     struct ModelItem {
         const Model* model; const Primitive* prim; const Material* mat;
         mat4 world; float4 tint; float3 team; float flash; uint32_t flags;
-        int32_t joints;     // offset into jointData_ (floats), -1 when not skinned
+        int32_t joints;     // offset into jointData_ (floats), -1 when not palette-skinned
+        bool baked;         // skinned from the baked texture (rows in anim)
+        float4 anim;        // baked row A, row B, mix
+        float dissolve;
+        float4 outline;
+        int32_t morph;      // offset into morphData_ (8 weights), -1 = none
         bool inView, inShadow; float depth;
     };
     void initModels();
     void shutdownModels();
-    gfx::PipelineHandle modelPipeline(const ModelItem& it, bool shadow);
-    void drawModelItem(const ModelItem& it, bool shadow, const ModelItem*& lastMat);
-    void renderModels(int phase);   // 0 shadow, 1 opaque, 2 blended
+    gfx::PipelineHandle modelPipeline(const ModelItem& it, int phase, bool instanced);
+    void drawModelBatch(const uint32_t* items, uint32_t count, int phase);
+    void renderModels(int phase);   // 0 shadow, 1 opaque, 2 blended, 3 outlines
     void computeShadowMatrix(const RTSCamera& cam, float aspect);
     void uploadFrameUniforms(bool forShadow);
 
@@ -177,7 +193,8 @@ private:
     // models
     MaterialQuality matQuality_ = MaterialQuality::High;
     std::vector<ModelItem> modelItems_;
-    std::vector<float> jointData_;
+    std::vector<float> jointData_, morphData_, instData_;
+    const ModelItem* lastItem_ = nullptr;   // state already bound (material, model textures, palette)
     std::vector<mat4> palette_;
     std::vector<uint32_t> order_;
     struct ShaderEntry { gfx::ShaderHandle shader; bool failed = false; };

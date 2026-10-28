@@ -164,6 +164,22 @@
    ]
   },
   {
+   "type": "blademaster",
+   "owner": 1,
+   "pos": [
+    15,
+    27
+   ]
+  },
+  {
+   "type": "blademaster",
+   "owner": 2,
+   "pos": [
+    49,
+    21
+   ]
+  },
+  {
    "type": "burrow",
    "owner": 1,
    "pos": [

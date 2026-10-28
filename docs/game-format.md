@@ -184,8 +184,9 @@ More type blocks (dungeon management and territory, see the section below):
   {"id": "devotion", "aura": true, "radius": 7, "effects": [{"type": "buff", "stat": "armor", "add": 2, "affects": "allies"}]}
 ]
 ```
-`target`: none | self | unit | point. `affects`: enemies | allies | all. Autocast abilities are also
-what the AI uses.
+`target`: none | self | unit | point (and structure | group | player, see "Abilities and effects").
+`affects`: enemies | allies | all. Autocast abilities are also what the AI uses. Delivery (projectiles,
+areas, chains, channels), statuses, costs, charges, cast times and level tables: "Abilities and effects".
 
 ## techs
 
@@ -554,8 +555,227 @@ overlaid.
    "effects": [{"type": "damage", "amount": 60, "radius": 1.5}, {"type": "stun", "duration": 2, "radius": 1.5}]}
 ]
 ```
-Not tied to a unit. Effects are the ability effects (`damage`, `heal`, `stun`, `buff`, `spawn`; not `blink`).
+Not tied to a unit. Effects are the ability effects (any effect except `blink`; see "Abilities and effects").
 Charges rearm one at a time after `rearmTime`, paying `rearmCost`. The AI fires them at enemy concentrations.
+
+## Abilities and effects
+
+Everything a skill does is a list of **effects** (a *payload*). Effects can carry their own payload
+(`"effects": [...]`): a projectile delivers it on impact, an area applies it when it triggers, a chain
+applies it on every jump, a status ticks it, a weapon applies it on hit. Skills are compositions of
+these primitives; nothing is coded per skill. All keys below are optional; a game that uses none of
+them runs exactly as before (bit-identical replays).
+
+### Abilities (unit) and player abilities
+
+```json
+{"id": "barrage", "name": "Ракетный залп", "target": "point", "range": 10, "cooldown": 8, "energy": 40,
+ "cost": {"gold": 25}, "initialCooldown": 3, "castTime": 0.5, "backswing": 0.3, "charges": 2,
+ "requires": ["rocketry"], "level": 1, "autocast": true, "smart": "densestEnemy",
+ "delivery": {"type": "projectile", "speed": 10, "arc": true, "arcHeight": 3, "scatter": 1.2},
+ "effects": [{"type": "damage", "amount": [20, 30], "radius": 1.5, "falloff": 0.5}],
+ "levels": [{"cooldown": 7, "effects": [{"amount": [30, 40]}]}, {"cooldown": 6, "effects": [{"amount": [40, 55]}]}]}
+```
+
+| key | meaning |
+|---|---|
+| `target` | `none`, `self`, `unit`, `point`, `structure` (a structure, e.g. a garrison), `group` (units sent together, on a lane), `player` |
+| `cost` | resources (besides `energy`); player abilities use `cost` only |
+| `cooldown`, `initialCooldown` | seconds; the `cooldownRate` stat speeds cooldowns up |
+| `charges` | unit abilities: N charges, one regenerates per `cooldown` (player abilities: `{"max", "rearmCost", "rearmTime"}`) |
+| `castTime`, `backswing` | windup before the effect (event `kEvCastStart`; stun / silence / a new order cancel it) and the time the caster stays busy after; player abilities: `castTime` = activation delay |
+| `requires` | types / techs that must exist (abilities granted by a tech tree) |
+| `level` | hero level needed; `levels`: a table for levels 2, 3, ... — each entry overrides keys of the ability (effects merge by index). Unit abilities use the hero level, player abilities the loadout level |
+| `smart` | target rule for autocast / auto skills / the AI: `auto`, `lowestHpAlly`, `densestEnemy`, `strongestEnemyStructure`, `weakestOwnStructure`, `ownStructureUnderAttack`, `largestEnemyGroup`, `self`, `enemyPlayer`, `debuffedOwn` |
+| `delivery` | how the effects get there: `instant` (default), `projectile`, `area` (delayed / persistent), `chain`, `channel`, `line`, `cone` (see below) |
+| `levels`, `aura`, `radius` | as before (`aura`: passive buff around the owner) |
+
+Player abilities also take `passive: true` + `status` (always-on player status, e.g. income
+bonuses), `autoEvery` (seconds: cast by itself on its smart target — map / timer skills), and
+maps give each player a **loadout**: `"players": [{"loadout": ["freeze", {"id": "nuke", "level": 3}]}]`
+(without a loadout every player ability is available; `rules.loadoutSlots` caps the count).
+Triggers can cast them: `{"type": "castAbility", "ability": "storm", "at": [20, 8], "free": true}`.
+
+### Delivery
+
+| `delivery.type` | keys | |
+|---|---|---|
+| `projectile` | `speed`, `homing`, `arc` + `arcHeight` (ballistic), `collide` (hits the first enemy on its way), `scatter` | the payload applies at impact (the hit unit is the target); reuses the `Projectile` entity (`effList` / `effIndex` tell the view which ability) |
+| `area` | `delay`, `lifetime`, `interval`, `trigger` (`once`, `periodic`, `contact` + `maxTriggers`), `motion` (`static`, `toward`, `lane`, `wander`, `follow`) + `speed`, `sight` (reveal), `teleportTo` [dx, dz] (portal), `deathSpawn` (soul trap) | an `Area` entity (Transform + Area) — artillery markers, ground fields, mines, moving hazards, portals |
+| `chain` | `jumps`, `jumpRadius`, `jumpFalloff` | jumps to the nearest unhit target that passes the filter; amounts scale by `jumpFalloff` per jump |
+| `channel` | `duration`, `interval` | repeats while the caster stays still; stun / silence / moving cancel it |
+| `line`, `cone` | `length`, `width` / `angle` | shapes the effects that have no shape of their own |
+
+The same keys work inside effects of type `projectile`, `area` and `chain`, which is how skills nest
+(a projectile that leaves a burning area, an area that drops projectiles every second, ...).
+
+### Effects
+
+Common keys: `amount` (number or `[min, max]` rolled with the sim RNG), `percent`, `radius`, `duration`,
+`chance`, `damageType`, `falloff` (splash: damage at the edge = 1 - falloff), and the **target filter**:
+
+| filter key | meaning |
+|---|---|
+| `affects` | `enemies` (default for harmful), `allies` (default for helpful), `own`, `self`, `all`, `any` (+ neutral) |
+| `shape` | `target`, `circle` (default with a `radius`), `line`, `cone`, `ring` (+ `ring` width), `map`, `group` |
+| `layers` | `["ground", "air", "naval"]` |
+| `kind` | `unit`, `structure`, `any`; `garrisons: true` (only garrison structures); `inTransit: true` (only units walking to a structure) |
+| `tags`, `ofType`, `level` | unit tags, one type, structure level range `[min, max]` (types have `"level": n`) |
+| `sort`, `maxTargets`, `ownFirst` | `nearest`, `farthest`, `lowestHp`, `highestHp`, `levelLow`, `levelHigh`, `garrisonLow`, `garrisonHigh`, `random`; take the first N |
+| `area` | only inside a named map area |
+
+| `type` | keys | what it does |
+|---|---|---|
+| `damage`, `heal`, `stun`, `buff`, `spawn`, `blink` | as before; `spawn` also `limit` (alive per caster), `owner` (`caster`, `hostile`, `neutral`) | |
+| `status` | `status` (id or inline object), `duration` | applies a status (below) |
+| `dispel` | `dispel` (status tags, empty = all), `from` (`enemies` = cleanse, `allies` = purge, `any`) | removes statuses (and reverts temporary captures / transforms) |
+| `knockback` | `amount` (negative = pull), `fromCaster` | pushes units away from the point (lane walkers are thrown back on their lane) |
+| `teleport` | `mode` (`targets` / `caster`) | moves units to the point (lane walkers continue from the nearest lane point) |
+| `resource` | `resource`, `amount` (+ give / − take), `percent` (of the stock), `transfer` | gain, drain, steal (players chosen by the filter / the target's owner) |
+| `energyBurn` | `amount`, `percent` (damage per energy burned) | |
+| `reveal` | `radius`, `duration` | vision for the caster's side |
+| `kill` | `percent` | kills (a share of) the targets |
+| `area`, `projectile`, `chain`, `cast` | delivery keys + `effects` | nest payloads (`cast` just applies its effects, e.g. with a `chance`) |
+| `garrisonKill`, `garrisonPanic` | `amount`, `percent` | units in the garrison die / flee |
+| `garrisonAdd` | `amount`, `percent`, `ofLost` | reinforcements, resurrection (a share of the units lost) |
+| `garrisonConvert` | `percent` | defectors walk to the caster's nearest structure |
+| `capture` | `duration`, `keepChance` | takes the structure; with a duration it reverts unless recaptured |
+| `swap` | | swaps owners and garrisons with the caster's nearest structure (or the nearest enemy one when cast on an own structure) |
+| `transform` | `to`, `duration`, `keepChance` | becomes another type for a while (cast tower) |
+| `level` | `delta` (+ up / − down the `upgrades` chain), `duration` | |
+| `equalize` | | averages the garrisons of the target owner's structures |
+| `link`, `redirect` | `duration` | linked structures share units; production goes to the caster's nearest other structure |
+| `sendBack` | `mode` (`home`, `reverse`, `throwBack` + `amount` cells) | groups in transit go back / are thrown back |
+| `clone` | `percent`, `fake` | copies of units in transit (illusions die on any hit and do nothing on arrival) |
+| `formation` | | a group closes rows onto its main lane |
+| `convert` | `percent` | units change sides (hypnosis, betrayal) |
+| `playerStatus` | `status`, `duration` | a status on players (silence, freeze regen, wind, alerts) |
+| `equalizeResource` | `resource` | averages a resource between the chosen players |
+| `sacrifice` | `percent`, `gain` | kills own units / garrison for resources per unit |
+| `stealSkill` | `duration`, `transfer` | takes a random skill the enemy has and you don't |
+| `cooldown` | `amount` | seconds added to (or taken from) the players' skill cooldowns |
+
+### Statuses
+
+```json
+"statuses": {
+  "poison": {"name": "Яд", "tags": ["debuff", "magic"], "tick": {"damage": 4, "interval": 1}, "stacking": "stack", "maxStacks": 5},
+  "frost": {"tags": ["debuff", "magic"], "mods": [{"stat": "speed", "mul": 0.6}, {"stat": "attackSpeed", "mul": 0.8}]},
+  "aegis": {"tags": ["buff"], "shield": 120, "view": {"color": [0.4, 0.7, 1]}}
+}
+```
+
+| key | meaning |
+|---|---|
+| `tags` | status tags for `dispel` (`buff`, `debuff`, `magic`, any word) |
+| `flags` | `stun`, `silence`, `disarm`, `root`, `invulnerable`, `invisible`, `lock` (no sending / production), `blind`, `hidden` (garrison counts hidden), `flying` (off the lane, straight to the goal), `fake`, `ignoreDefense`, `spreads` (sent units carry it into the structure they enter — plague), `freezeRegen`, `alert`, `revealed` |
+| `mods` | stat modifiers per stack (`stat`, `add`, `mul`) — on players they apply to all their objects (wind, global bonuses) |
+| `tick` | `damage` / `heal` per stack, `interval`, `effects` (a payload around the holder: kill aura, burning) |
+| `shield` | absorbs damage (or assaulting units on a garrison); the status ends when it breaks |
+| `stacking`, `maxStacks` | `refresh` (default), `stack`, `independent` |
+| `onExpire`, `onCaptured`, `onHit` | payloads: when it runs out (two-stage skills), when the structure is captured (revenge), on every weapon hit of the holder (enchanted weapons) |
+| `incomeMult` | player statuses: `{"mana": 2}` multiplies income + regen |
+| `garrisonPerSecond` | structure: units per second (negative: plague) |
+
+Types can carry permanent statuses (`"statuses": ["thorns"]`). Weapons take `"onHit": {"chance": 0.3,
+"effects": [...]}` (or a plain effect list) and `"chargeTime"` (charging shot: must stay on one target).
+New stats: `energyRegen`, `defense` (garrison defense multiplier), `garrisonCap`, `cooldownRate`,
+`upgradeCost`, `lifesteal`, `damageTaken`, `scale` (view). Resources take `"regen"` (per second for every
+player: mana, morale).
+
+For the view: `Statuses` (per object: `list` of `StatusInst` with `def` = index into `Rules::statuses`,
+`stacks`, `until`, `shield`), player statuses in `PlayerEconomy::statuses`, `Area` entities, ability
+`Projectile`s (`effList`), `GroupTag` (group id of units sent together). Events: `kEvStatusStart` /
+`kEvStatusEnd`, `kEvAreaStart` / `kEvAreaTrigger` / `kEvAreaEnd`, `kEvProjectileLaunch`, `kEvImpact`,
+`kEvChainJump`, `kEvCastStart`, `kEvChannelStart` / `kEvChannelEnd`, `kEvAlert`, `kEvGarrisonChanged`.
+
+The AI casts every skill through the same smart targets (heals on the most wounded ally, area damage on the
+densest enemy group, structure skills on the strongest enemy / the own structure under attack, group
+skills on the largest group in transit, dispels on debuffed own objects), keeps 20% of a capped resource in
+reserve, and leaves `autoEvery` skills to fire by themselves.
+
+### Recipes
+
+| skill | data |
+|---|---|
+| Rocket barrage | `"delivery": {"type": "projectile", "arc": true, "scatter": 1.5}` + `damage` with `radius` + `falloff`; `charges: 3` |
+| Frost arrow | weapon `"onHit": {"effects": [{"type": "status", "status": "frost", "duration": 3}]}` (frost: `mods` speed × 0.6) |
+| Heal over time | `{"type": "status", "status": {"tick": {"heal": 10, "interval": 1}, "tags": ["buff"]}, "duration": 5, "affects": "allies"}` |
+| Bloodlust | `{"type": "status", "status": {"tags": ["buff", "magic"], "mods": [{"stat": "attackSpeed", "mul": 1.4}, {"stat": "speed", "mul": 1.25}, {"stat": "scale", "mul": 1.2}]}, "duration": 20, "affects": "allies"}` |
+| Chain lightning | `"delivery": {"type": "chain", "jumps": 4, "jumpRadius": 5, "jumpFalloff": 0.75}` + `damage` |
+| Shield | `status` with `"shield": 150` on an ally |
+| Knockback stomp | `"target": "none"`, `[{"type": "knockback", "amount": 3, "radius": 3}, {"type": "stun", "duration": 1, "radius": 3}]` |
+| Poison | status with `tick.damage`, `"stacking": "stack"` — from an ability or a weapon `onHit` |
+| Artillery strike | `"delivery": {"type": "area", "delay": 2.5, "radius": 3}` (marker shows during the delay) |
+| Summon wolves | `{"type": "spawn", "unit": "wolf", "count": 2, "duration": 60, "limit": 4}` |
+
+#### Bunker Wars skills as primitives
+
+Garrison structures, groups and lanes come from `garrison`, `kCmdSend` and `lanes`. `structure` / `group` /
+`player` are player-ability targets.
+
+| skill | data |
+|---|---|
+| Hypnosis | group: `convert` `percent` 0.5 (`shape: group`) |
+| Defector | structure: `garrisonConvert` `percent` 0.3 |
+| Plague | structure: status `{"flags": ["spreads"], "garrisonPerSecond": -1}` |
+| Freeze | group: status `stun` (`shape: group`) |
+| FreezeWave | group: `area` `motion: lane`, `trigger: periodic`, effects: status `stun` in a radius |
+| Shield | own structure: status `shield` N (absorbs N assaulting units) |
+| Invulnerability | own structure: status `invulnerable` |
+| Teleport | group: `teleport` (`shape: group`) to the clicked point |
+| ShortWay | point: `area` `trigger: contact`, `teleportTo` [dx, dz], `affects: own`, `lifetime` |
+| Barrier | point: `spawn` a static unit type with `blocksLanes` and hp (a non-structure, so lanes don't route around it) |
+| Mines | point: `area` `trigger: contact`, `maxTriggers` N, effects `kill` / `damage` |
+| Tornado / SandStorm | `area` `motion: lane` (along a group's lane) or `wander` / `toward`, `trigger: periodic`, effects `kill` in a radius |
+| BlizzardRain | `area` `trigger: periodic`, effects: `projectile` with `scatter` and `damage` |
+| ChainLightning | `chain` with `kind: structure` + `garrisonKill` (over structures) or `damage` (over units) |
+| SkeletonArmy | point: `area` with `deathSpawn` (units dying inside rise for the caster) |
+| Rage | group: status `mods` damage / speed / `scale` up |
+| Reverse / GoHome | group: `sendBack` `mode: reverse` / `home` |
+| ThrowBack | group: `sendBack` `mode: throwBack`, `amount` cells |
+| Panic | structure: `garrisonPanic` `percent` |
+| Sabotage | structure: status `lock` + `disarm` (no sending, no production, towers silent) |
+| Swap | structure: `swap` |
+| Possession | structure: `capture` with `duration` (reverts unless recaptured) |
+| CastTower / CastBuilding | structure: `transform` `to` + `duration`, `keepChance` |
+| Downgrade / Upgrade | structure: `level` `delta` −1 / +1, `duration` |
+| IncreaseProduction | own structure: status `mods` `productionSpeed` × 2 (and/or `garrisonCap`) |
+| RedirectProduction | own structure: `redirect` `duration` |
+| Landing | structure: `garrisonAdd` `amount` |
+| Resurrection | own structure: `garrisonAdd` `percent` + `ofLost` |
+| Spy | point: `reveal`; FogOfWar: own structures status `hidden` / `invisible` |
+| Silence | player: `playerStatus` with `silence` |
+| StealSkill | player: `stealSkill` `duration` |
+| BreakAllMagic | none: `dispel` `shape: map`, `affects: any` (statuses on objects and players) |
+| MoraleThief | player: `resource` `morale` `amount` −N, `transfer: true` |
+| Sacrifice | own structure: `sacrifice` `percent`, `gain` |
+| CloseRows | own group: `formation` |
+| FlyingWave / Landing by air | own group: status `flying` |
+| Worm | `spawn` with `owner: hostile` of a creature whose weapon `onHit` does `garrisonKill` |
+| KillAura | own group: status with `tick.effects` `damage`/`kill` in a radius |
+| BFG9000 | point: `projectile` (`collide`) delivering `garrisonKill` / `kill` in a large `radius` with `falloff` |
+| Bomb | structure: `garrisonKill` `percent` |
+| Average units | own structure: `equalize`; average morale: `equalizeResource` |
+| Link | own structure: `link` `duration` |
+| FastConvert | own structures: status `mods` `upgradeCost` × 0.5 |
+| Defense aura | `area` `motion: follow` around a structure, `trigger: periodic`, status `mods` `defense` |
+| IgnoreDefense / Suppress | group status `ignoreDefense`; structure status `mods` `defense` × 0.5 |
+| Disable / blind towers | structure status `disarm` / `blind` |
+| Two-stage slow | status slow with `onExpire`: a weaker slow status |
+| Lift and drop | status `stun` (+ `scale` for the view) with `onExpire`: `damage` / `kill` |
+| Illusion / fake units | group: `clone` `fake: true`; Clone: `clone` |
+| Betrayal | group: `convert` (they keep walking into their former side) |
+| Wind | player (all): `playerStatus` with `mods` `speed` |
+| Alerts | self: `playerStatus` with `alert` (event `kEvAlert` on enemy sends) |
+| Freeze regen / cooldown multiplier | `playerStatus` with `freezeRegen` / `mods` `cooldownRate` |
+| Enhance weapon / charging shot | tower status `mods` damage / attackSpeed / range, or `onHit`; weapon `chargeTime` |
+| Random N structures | `shape: map`, `kind: structure`, `sort: random`, `maxTargets: N` |
+| Auto / map skills | `autoEvery`, or a trigger action `castAbility` |
+| Passive skills | `passive: true` + `status` (in the loadout), or `requires` a tech |
+
+Still needs code: **flying towers moving between points** (garrisons are fixed structures; a mobile
+garrison would need garrisons on units).
 
 ## Commands (for tools and network code)
 
@@ -564,7 +784,8 @@ Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player i
 room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
 optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
-`kCmdConnectRoad` (units = own structures).
+`kCmdConnectRoad` (units = own structures). `kCmdPlayerAbility` with a `structure` / `group` / `player`
+ability takes the clicked object in `target` (or the nearest one to `point`).
 
 ## Triggers
 
@@ -806,7 +1027,7 @@ units/structures standing on slopes too steep for them. Sculpting: `terrain_scul
 
 | id | like | recipe |
 |---|---|---|
-| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, creep camps (`neutral.leash`, `bounty`), siege demolisher |
+| `frostcrown` | Warcraft III | gold mines + pines, burrows (`supply`), `upkeep` tiers, altar hero with `hero` levels, aura and `whirl`, chain lightning (`chain` delivery, `levels`), rejuvenation (HoT status, `charges`, `smart`), bloodlust; hunters with frost-arrow `onHit`, demolisher artillery strike (delayed `area`), creep camps (`neutral.leash`, `bounty`), siege demolisher |
 | `starfall` | StarCraft | factions guild (`buildMode: warp`) / swarm (`morph`, larva `charges`, `creep`, `terrain: creep`) / legion (walk), geysers + `structure.on`, plateaus with `levels` + ramps, `heights.missUphill` |
 | `ironfront` | Red Alert | `mcv` `deploysTo` yard, sidebar `produces` structures, ore `fields` + `fieldSpawner` mines, ore `convertsTo` credits, `power` capacity + `deficitDisables`, `buildRadius`, trigger: free harvester per refinery |
 | `ambersands` | Dune II | structures `terrain: rock`, spice blooms on sand, capped credits + silo `storage`, wind traps, sandworm `neutral.wander` + `move.layer: sand` |
@@ -821,6 +1042,7 @@ units/structures standing on slopes too steep for them. Sculpting: `terrain_scul
 | `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
 | `hearthhaul` | Knights and Merchants | `storage: buildings`, storehouse, recipe chains (woodcutter → sawmill, farm → mill → bakery, armoury), serf `carrier`s, `roadNetwork`, delivered construction materials, `trainFrom: recruit`, inn `needs` with `starve` |
 | `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |
+| `spellbunkers` | Bunker Wars / Mushroom Wars 2 skills | sporelanes + mana/morale `regen`, named `statuses`, 26 player skills (structure / group / player targets, areas moving along lanes, chains over structures), per-player `loadout` of 16, an `autoEvery` map skill and a `passive` |
 
 ## 2D games
 

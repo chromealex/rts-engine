@@ -82,6 +82,9 @@ add_library(rts_game STATIC
     modules/rts/RtsSettlers.cpp
     modules/rts/RtsLanes.cpp
     modules/rts/RtsAvoidance.cpp
+    modules/rts/RtsEffectsData.cpp
+    modules/rts/RtsEffects.cpp
+    modules/rts/RtsSkills.cpp
     modules/rts/RtsAI.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 
@@ -172,6 +175,10 @@ add_library(rts_net_server STATIC
     engine/net/server/ServerMatch.cpp
     engine/net/server/Matchmaker.cpp)
 target_link_libraries(rts_net_server PUBLIC rts_net)
+# Game data on the network side: match loading like the game (tile maps) and the server's verdict
+# (re-simulating a match nobody settled). Server, bot client and net tests share it.
+add_library(rts_net_game STATIC apps/server/GameData.cpp)
+target_link_libraries(rts_net_game PUBLIC rts_net_server rts_game)
 
 # ---------------------------------------------------------------------------
 # Audio (presentation only): software mixer, sound banks from data, procedural synth, music
@@ -236,7 +243,23 @@ add_library(rts_models STATIC
     engine/render/Model.cpp
     engine/render/ModelGltf.cpp
     engine/render/ModelObj.cpp
-    engine/render/Animation.cpp)
+    engine/render/Animation.cpp
+    engine/render/TextureCodec.cpp)
+# ufbx (MIT / public domain): FBX parser, compiled as its own C library without warnings.
+# RTS_FBX=OFF keeps it out of size-sensitive builds (FBX files then fail with a readable error).
+option(RTS_FBX "FBX import in the runtime (ufbx, ~0.5 MB of code)" ON)
+if(RTS_FBX)
+    add_library(rts_ufbx STATIC third_party/ufbx/ufbx.c)
+    if(NOT MSVC)
+        target_compile_options(rts_ufbx PRIVATE -w)
+    endif()
+    target_sources(rts_models PRIVATE engine/render/ModelFbx.cpp)
+    target_link_libraries(rts_models PUBLIC rts_ufbx)
+else()
+    target_compile_definitions(rts_models PRIVATE RTS_NO_FBX=1)
+endif()
+# KTX2 zstd supercompression: the decoder comes with rts_runtime (rts_zstd_dec) or, in host tools,
+# with rts_pack_writer (full zstd); linking rts_zstd_dec here would pull both into tests and tools.
 target_link_libraries(rts_models PUBLIC rts_engine)
 
 set(RTS_RUNTIME_SRC
@@ -279,7 +302,8 @@ elseif(RTS_PLATFORM STREQUAL "android")
     target_include_directories(native_app_glue PUBLIC ${GLUE})
     target_link_libraries(rts_runtime PUBLIC native_app_glue android EGL GLESv3 log)
 elseif(RTS_PLATFORM STREQUAL "web")
-    target_link_options(rts_runtime PUBLIC -sUSE_WEBGL2=1 -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1)
+    # -lidbfs.js: userDataDir() is persisted in IndexedDB (engine/platform/web)
+    target_link_options(rts_runtime PUBLIC -sUSE_WEBGL2=1 -sMAX_WEBGL_VERSION=2 -sMIN_WEBGL_VERSION=2 -sALLOW_MEMORY_GROWTH=1 -lidbfs.js)
 elseif(RTS_PLATFORM STREQUAL "windows")
     target_link_libraries(rts_runtime PUBLIC opengl32 user32 gdi32 shell32)
 else()
@@ -288,6 +312,7 @@ endif()
 
 add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/RtsTerrain.cpp
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
+    modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 
@@ -464,15 +489,15 @@ endif()
 
 if(RTS_BUILD_SERVER)
     add_executable(rts_server apps/server/main.cpp)
-    target_link_libraries(rts_server PRIVATE rts_net_server)
+    target_link_libraries(rts_server PRIVATE rts_net_game)
     add_executable(rts_netbot apps/netbot/main.cpp)
-    target_link_libraries(rts_netbot PRIVATE rts_net rts_game rts_i18n)
+    target_link_libraries(rts_netbot PRIVATE rts_net_game rts_i18n)
 endif()
 
 if(RTS_BUILD_TESTS)
     enable_testing()
     add_executable(rts_net_tests tests/net_tests.cpp)
-    target_link_libraries(rts_net_tests PRIVATE rts_net_server rts_game rts_i18n)
+    target_link_libraries(rts_net_tests PRIVATE rts_net_game rts_i18n)
     target_compile_definitions(rts_net_tests PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME rts_net_tests COMMAND rts_net_tests)
     add_executable(rts_tests tests/tests.cpp)

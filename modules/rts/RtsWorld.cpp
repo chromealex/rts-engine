@@ -79,6 +79,19 @@ void RtsModule::sysVision(Simulation& sim) {
                 see(o.player, i);
             }
     });
+    if (rules_.advancedEffects)  // reveal areas (spy, scouting flares)
+        w.each<Area, Owner, Transform>([&](Entity, Area& a, Owner& o, Transform& tr) {
+            if (o.player == 0 || o.player >= np || a.effList < 0) return;
+            const EffectDef& e = rules_.payloads[size_t(a.effList)][size_t(a.effIndex)];
+            Fixed sight = e.delivery.sight.raw > 0 ? e.delivery.sight : e.kind == EffectKind::Reveal ? a.radius : Fixed{};
+            if (sight.raw <= 0 || sim.tick() < a.fireAt) return;
+            int r = int(sight.floorInt());
+            int cx = int(tr.pos.x.floorInt()), cy = int(tr.pos.z.floorInt());
+            for (int y = std::max(0, cy - r); y <= std::min(H - 1, cy + r); ++y)
+                for (int x = std::max(0, cx - r); x <= std::min(W - 1, cx + r); ++x)
+                    if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
+                        see(o.player, size_t(y * W + x)); // tracked in visibleCells, so it fades back to explored
+        });
 }
 
 // ================================================================= creep

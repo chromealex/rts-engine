@@ -1,9 +1,12 @@
 #include "PlatformCommon.h"
 
+#include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <thread>
 
 #include "engine/core/Hash.h"
+#include "engine/data/Json.h"
 #include <cstdint>
 #include <cstdlib>
 #if defined(__APPLE__)
@@ -83,12 +86,35 @@ void stopTextInput() {
     detail::showSoftKeyboard(false, S.textArea);
 }
 bool textInputActive() { return state().textInput; }
+Insets safeAreaInsets() { return state().safe; }
+void setFullscreen(bool on) { detail::applyFullscreen(on); }
+bool isFullscreen() {
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+    return true;
+#else
+    return state().fullscreen;
+#endif
+}
+#if !defined(__EMSCRIPTEN__)
+void syncUserData() {} // files are written straight to disk
+#endif
 float softKeyboardHeight() { return state().keyboardH; }
 
 namespace detail {
 #if !defined(__ANDROID__) && !defined(__EMSCRIPTEN__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
 void showSoftKeyboard(bool, const TextInputArea&) {} // desktop: the physical keyboard is always there
 #endif
+
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+void applyFullscreen(bool) {} // apps are always fullscreen
+#endif
+
+void setSafeArea(const Insets& in) {
+    auto& S = state();
+    if (in.left == S.safe.left && in.top == S.safe.top && in.right == S.safe.right && in.bottom == S.safe.bottom) return;
+    S.safe = in;
+    Event e; e.type = EventType::Resized; dispatch(e);
+}
 
 void setKeyboardHeight(float h) {
     auto& S = state();
@@ -139,9 +165,49 @@ bool mountSource(std::unique_ptr<pack::Source> src, const std::string& path) {
         return false;
     }
     p->setName(path);
-    std::fprintf(stderr, "[pack] mounted %s (%zu files)\n", path.c_str(), p->size());
+    std::fprintf(stderr, "[pack] mounted %s (%zu files%s)\n", path.c_str(), p->size(),
+                 p->chunks().empty() ? "" : (", " + std::to_string(p->chunks().size()) + " downloadable chunks").c_str());
+    pack::Pack& ref = *p;
     state().packs.mount(std::move(p));
+    if (!ref.chunks().empty()) {
+        auto& S = state();
+        S.chunks.setCacheDir(S.userDir + "/content-cache");
+        S.chunks.addPack(ref);
+    }
     return true;
+}
+
+// Sources: $RTS_CONTENT_SOURCES first (testing, self-hosted mirrors), then game.json
+// `packaging.sources`, unless the game set its own with setContentSources().
+void initSources() {
+    auto& S = state();
+    if (S.sourcesSet) return;
+    std::vector<std::string> urls;
+    if (const char* env = std::getenv("RTS_CONTENT_SOURCES")) {
+        std::string e = env;
+        for (size_t a = 0; a <= e.size();) {
+            size_t b = e.find(';', a);
+            if (b == std::string::npos) b = e.size();
+            if (b > a) urls.push_back(e.substr(a, b - a));
+            a = b + 1;
+        }
+    }
+    std::string text;
+    bool autoDownload = true;
+    if (S.packs.read("game.json", text)) {
+        try {
+            Json game = Json::parse(text);
+            const Json& p = game["packaging"];
+            for (auto& u : p["sources"].items()) urls.push_back(u.str());
+            autoDownload = p.getBool("autoDownload", true);
+            S.contentWait = double(p.getInt("waitSeconds", 30));
+        } catch (const std::exception& ex) {
+            std::fprintf(stderr, "[pack] game.json: %s\n", ex.what());
+        }
+    }
+    S.chunks.setSources(std::move(urls));
+    // Default: fetch the rest of the content in the background right after start.
+    if (autoDownload) S.chunks.requestAll();
 }
 } // namespace
 
@@ -155,8 +221,34 @@ void ensurePacks(const PackOpener& open) {
     S.packs.clear();
     S.packsRoot = S.contentRoot;
     S.packsInit = true;
+    S.chunks.clear();
     std::string path = S.contentRoot + "/content.rpak";
     if (auto src = open(path)) mountSource(std::move(src), path); // no pack = normal dev setup
+    initSources();
+}
+
+// A file in a chunk that isn't here yet: queue its download. Natively the caller then waits for
+// it (up to packaging.waitSeconds) so code that loads files synchronously keeps working; the web
+// can't block, so there it returns at once and the file is available on a later call.
+void requestChunkFor(const std::string& rel) {
+    pack::Pack* p = nullptr;
+    const pack::Entry* e = nullptr;
+    if (state().packs.state(rel, &p, &e) != pack::PackSet::State::NotDownloaded) return;
+    auto& C = state().chunks;
+    C.request(*p, e->chunk);
+#if !defined(__EMSCRIPTEN__)
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(int64_t(state().contentWait * 1000));
+    for (;;) {
+        C.poll();
+        auto st = C.status(*p, e->chunk);
+        if (st == pack::ChunkManager::Status::Ready || st == pack::ChunkManager::Status::Failed || st == pack::ChunkManager::Status::NotDownloaded) break;
+        if (std::chrono::steady_clock::now() > until) {
+            std::fprintf(stderr, "[pack] %s: still downloading after %.0f s\n", rel.c_str(), state().contentWait);
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+#endif
 }
 } // namespace detail
 
@@ -173,11 +265,50 @@ bool mountPack(const std::string& path) {
 
 bool readContentFile(const std::string& rel, std::string& out) {
     detail::ensurePacks(openStdPack);
-    if (!state().packs.empty() && state().packs.read(rel, out)) return true;
+    if (!state().packs.empty()) {
+        if (state().packs.read(rel, out)) return true;
+        detail::requestChunkFor(rel);
+        if (state().packs.read(rel, out)) return true;
+    }
     if (detail::readFileStd(state().contentRoot + "/" + rel, out)) return true;
     return detail::readFileStd(rel, out); // absolute path or relative to CWD (tools, editor)
 }
 #endif
+
+ContentState contentState(const std::string& rel) {
+    auto st = state().packs.state(rel);
+    if (st == pack::PackSet::State::Ready) return ContentState::Ready;
+    if (st == pack::PackSet::State::NotDownloaded) return ContentState::NotDownloaded;
+    std::string tmp;
+    return detail::readFileStd(state().contentRoot + "/" + rel, tmp) ? ContentState::Ready : ContentState::Missing;
+}
+
+void requestContent(const std::vector<std::string>& paths) {
+    for (auto& p : paths) detail::requestChunkFor(p);
+    pollContent();
+}
+
+void requestAllContent() {
+    state().chunks.requestAll();
+    pollContent();
+}
+
+void pollContent() { state().chunks.poll(); }
+
+ContentProgress contentProgress() {
+    pollContent();
+    auto pr = state().chunks.progress();
+    ContentProgress c;
+    c.chunks = pr.chunks; c.ready = pr.ready; c.active = pr.active; c.failed = pr.failed;
+    c.bytesTotal = pr.bytesTotal; c.bytesReady = pr.bytesReady; c.busy = pr.busy;
+    for (auto& v : state().chunks.chunks()) if (!v.error.empty() && v.status == pack::ChunkManager::Status::Failed) c.error = v.error;
+    return c;
+}
+
+void setContentSources(const std::vector<std::string>& urls) {
+    state().sourcesSet = true;
+    state().chunks.setSources(urls);
+}
 
 uint64_t contentPacksHash() {
     auto& P = state().packs;
@@ -187,7 +318,7 @@ uint64_t contentPacksHash() {
     return h.value();
 }
 
-#if !defined(__APPLE__) && !defined(_WIN32)
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(__ANDROID__) && !defined(__EMSCRIPTEN__)
 std::string clipboardText() { return state().clipboard; }
 void setClipboardText(const std::string& s) { state().clipboard = s; }
 #endif

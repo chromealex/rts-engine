@@ -180,6 +180,8 @@ const char* kInstructions =
     "Balancing: balance_stats (numbers side by side: DPS per armor, value per cost) -> balance_duel / balance_matrix "
     "(arena fights at equal cost: who counters whom) -> rules_set to adjust -> balance_batch (many bot matches: win rate per "
     "slot and faction, match length, what never gets built; 'mirror' separates map side from faction). "
+    "Phones: device_list {filter} (iPhone, iPad, Pixel, Galaxy, Redmi, desktops: sizes, safe areas, cut-outs) -> "
+    "device_set {device, orientation, safeArea: true} -> view_screenshot {window: game}. "
     "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
     "Everything you do shows up live in the user's editor window and can be undone there. "
     "You can only change game projects, never the engine.";

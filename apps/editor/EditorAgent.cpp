@@ -2,6 +2,8 @@
 // editor-only tools (screenshots, camera, play-test, device simulator, windows), and launches the
 // game client on a simulated device.
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include "Devices.h"
@@ -183,26 +185,47 @@ void Editor::registerGuiOps() {
         r.set("players", ps);
         return r;
     });
-    add("device_list", "Device presets of the Game window simulator.", "{}", [](const Json&) {
+    add("device_list", "Device presets of the Game window simulator: id, name, group, size in points, scale, safe-area insets "
+        "(portrait and landscape), cut-out, touch. Optional 'filter' matches name/id/group.",
+        R"({"properties": {"filter": {"type": "string"}}})", [](const Json& p) {
+        auto lower = [](std::string v) { for (auto& c : v) c = char(std::tolower((unsigned char)c)); return v; };
+        const std::string f = lower(p.getStr("filter"));
+        static const char* cutNames[] = {"none", "notch", "island", "punch-center", "punch-left", "waterdrop"};
+        auto insets = [](const Insets4& i) {
+            Json j = Json::object();
+            j.set("left", Json::number(double(i.left), 0)); j.set("top", Json::number(double(i.top), 0));
+            j.set("right", Json::number(double(i.right), 0)); j.set("bottom", Json::number(double(i.bottom), 0));
+            return j;
+        };
         Json arr = Json::array();
         for (auto& d : kDevices) {
+            if (!f.empty() && lower(d.name).find(f) == std::string::npos && lower(d.id).find(f) == std::string::npos && lower(d.group).find(f) == std::string::npos) continue;
             Json j = Json::object();
-            j.set("id", Json::string(d.id)); j.set("name", Json::string(d.name));
+            j.set("id", Json::string(d.id)); j.set("name", Json::string(d.name)); j.set("group", Json::string(d.group));
             j.set("points", Json::string(std::to_string(d.w) + "x" + std::to_string(d.h)));
+            j.set("pixels", Json::string(std::to_string(int(std::lround(d.w * d.scale))) + "x" + std::to_string(int(std::lround(d.h * d.scale)))));
+            j.set("scale", Json::number(double(d.scale), 3));
+            if (d.w > 0) { j.set("safePortrait", insets(d.portrait)); j.set("safeLandscape", insets(d.landscape)); }
+            j.set("cutout", Json::string(cutNames[int(d.cutout)]));
             j.set("touch", Json::fromBool(d.touch));
+            j.set("gpuTier", Json::number(int64_t(d.gpuTier)));
             arr.push(j);
         }
         Json r = Json::object();
         r.set("devices", arr);
         return r;
     });
-    add("device_set", "Frame the Game window as a device (phone simulator) or 'none'.",
-        R"({"properties": {"device": {"type": "string"}, "orientation": {"type": "string", "enum": ["portrait", "landscape"]}}, "required": ["device"]})", [this, okSummary](const Json& p) {
-            if (!findDevice(p.getStr("device"))) throw std::runtime_error("unknown device (see device_list)");
-            gameDevice = p.getStr("device");
+    add("device_set", "Frame the Game window as a device (phone simulator) or 'none'; 'safeArea' shows the safe area overlay.",
+        R"({"properties": {"device": {"type": "string"}, "orientation": {"type": "string", "enum": ["portrait", "landscape"]},
+            "safeArea": {"type": "boolean"}}})", [this, okSummary](const Json& p) {
+            if (p.has("device")) {
+                if (!findDevice(p.getStr("device"))) throw std::runtime_error("unknown device (see device_list)");
+                gameDevice = p.getStr("device");
+            }
             if (p.has("orientation")) gameLandscape = p.getStr("orientation") != "portrait";
+            if (p.has("safeArea")) gameSafeArea = p.getBool("safeArea", false);
             if (auto* w = window("game")) w->open = true;
-            return okSummary("Устройство: " + gameDevice);
+            return okSummary("Устройство: " + gameDevice + (gameSafeArea ? ", safe area видна" : ""));
         });
     add("editor_windows", "List editor windows (id, title, open).", "{}", [this](const Json&) {
         Json arr = Json::array();

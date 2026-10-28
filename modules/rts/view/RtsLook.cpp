@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
+#include <functional>
 
 namespace rts::game {
 
@@ -105,23 +107,86 @@ void RtsView::buildLook(gfx::Device& dev, const UnitType& t, TypeLook& L) {
         configureChoice(dev, t, v, ch, true);
         L.models.push_back(std::move(ch));
     }
-    for (auto& ch : L.models) {
+    auto procedural = [&](ModelChoice& ch) {
         if (!v.has("procedural")) defaultProcedural(t, L, ch);
         else {
             parseProcedural(t, v["procedural"], ch);
             if (v.getBool("proceduralDefaults")) defaultProcedural(t, L, ch);
         }
-        for (auto& p : ch.procs) {
-            p.resolve(ch.model);
-            if (!p.nodeName.empty() && p.node < 0) warn(t, "procedural: node '" + p.nodeName + "' not found in " + ch.model->path);
-        }
-        ch.needsPose = false;
-        for (bool h : ch.hasClip) ch.needsPose |= h;
-        for (auto& p : ch.procs) ch.needsPose |= p.node >= 0;
+    };
+    for (auto& ch : L.models) {
+        procedural(ch);
+        configureExtras(dev, t, v, ch);
+        finishChoice(t, ch);
     }
+    // ---- LOD: farther models share the clips (by name) and nodes (by name) of models[0]
+    if (!L.shape) {
+        for (const auto& lj : v["lod"].items()) {
+            ModelChoice lc;
+            if (!loadChoice(dev, t, v, lj.getStr("model"), lc)) continue;
+            lc.lodDistance = num(lj["distance"], 30);
+            const Model& base = *L.models[0].model;
+            for (const auto& c0 : base.clips) lc.clipMap.push_back(lc.model->findClip(c0.name));
+            for (const auto& n : lc.model->nodes) lc.nodeMap.push_back(base.findNode(n.name));
+            for (int k = 0; k < kAnimCount; ++k) { lc.clips[k] = L.models[0].clips[k]; lc.hasClip[k] = L.models[0].hasClip[k]; }
+            procedural(lc);
+            configureExtras(dev, t, v, lc);
+            lc.attach.clear(); lc.fx.clear(); lc.legs.clear(); lc.additive.clear(); // far away: no sockets, effects, IK
+            finishChoice(t, lc);
+            L.lods.push_back(std::move(lc));
+        }
+        std::sort(L.lods.begin(), L.lods.end(), [](const ModelChoice& x, const ModelChoice& y) { return x.lodDistance < y.lodDistance; });
+    }
+    // ---- stages: construction progress or damage swap the model / material variant
+    bool buildStages = false;
+    for (const auto& sj : v["stages"].items()) {
+        Stage st;
+        st.build = sj.has("build") ? num(sj["build"], 0) : -1;
+        st.hp = sj.has("hp") ? num(sj["hp"], 1) : -1;
+        if (st.build < 0 && st.hp < 0) { warn(t, "stages: each stage needs \"build\" or \"hp\""); continue; }
+        if (sj.has("model")) {
+            if (!loadChoice(dev, t, v, sj.getStr("model"), st.choice)) continue;
+            procedural(st.choice);
+        } else {
+            st.choice = L.models[0];
+        }
+        if (sj.has("variant")) {
+            st.choice.variant = st.choice.model->findVariant(sj.getStr("variant"));
+            if (st.choice.variant < 0) warn(t, "stages: variant '" + sj.getStr("variant") + "' not found in " + st.choice.model->path);
+        }
+        if (sj.has("model")) { // another model: node-specific parts of the type's view do not apply to it
+            auto& pr = st.choice.procs;
+            pr.erase(std::remove_if(pr.begin(), pr.end(), [&](const ProcAnim& pa) { return !pa.nodeName.empty() && st.choice.model->findNode(pa.nodeName) < 0; }), pr.end());
+        } else {
+            configureExtras(dev, t, v, st.choice);
+        }
+        configureExtras(dev, t, sj, st.choice);
+        finishChoice(t, st.choice);
+        buildStages |= st.build >= 0;
+        L.stages.push_back(std::move(st));
+    }
+    const std::string cons = v.getStr("construction", buildStages ? "stages" : "grow");
+    L.construction = cons == "dissolve" ? Construction::Dissolve : cons == "stages" ? Construction::Stages : Construction::Grow;
+    if (cons != "grow" && cons != "dissolve" && cons != "stages") warn(t, "construction must be grow, dissolve or stages");
+    const bool dis = v.getBool("dissolve", false);
+    L.dissolveSpawn = v.getBool("dissolveSpawn", dis);
+    L.dissolveDeath = v.getBool("dissolveDeath", dis);
 }
 
-bool RtsView::loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, const std::string& path, ModelChoice& out) {
+static uint32_t parseWhen(const Json& when, const std::function<void(const std::string&)>& bad) {
+    std::vector<std::string> states;
+    if (when.isString()) states.push_back(when.str());
+    for (const auto& w : when.items()) states.push_back(w.str());
+    uint32_t bits = 0;
+    for (const auto& st : states) {
+        uint32_t b = stateBit(st);
+        if (!b) bad(st);
+        bits |= b;
+    }
+    return bits;
+}
+
+Model* RtsView::loadModelCached(gfx::Device& dev, const UnitType& t, const std::string& path) {
     auto it = models_.find(path);
     if (it == models_.end()) {
         std::unique_ptr<Model> m;
@@ -131,13 +196,111 @@ bool RtsView::loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, 
             for (auto& s : w) warn(t, s);
             uploadModel(dev, *m);
         } catch (const std::exception& e) {
-            warn(t, std::string(e.what()) + " (using the built-in shape)");
+            warn(t, e.what());
             m.reset();
         }
         it = models_.emplace(path, std::move(m)).first;
     }
-    if (!it->second) return false;
-    out.model = it->second.get();
+    return it->second.get();
+}
+
+void RtsView::configureExtras(gfx::Device& dev, const UnitType& t, const Json& v, ModelChoice& c) {
+    const Model& m = *c.model;
+    auto bad = [&](const char* what) { return [&, what](const std::string& st) { warn(t, std::string(what) + ": unknown state '" + st + "'"); }; };
+    auto node = [&](const Json& j, const char* what) {
+        if (!j.isString()) return -1;
+        int n = m.findNode(j.str());
+        if (n < 0) warn(t, std::string(what) + ": node '" + j.str() + "' not found in " + m.path);
+        return n;
+    };
+    if (v.has("attach")) c.attach.clear();
+    for (const auto& aj : v["attach"].items()) { // sockets: weapons, shields, carried cargo, banners
+        Attachment at;
+        at.model = loadModelCached(dev, t, aj.getStr("model"));
+        if (!at.model) continue;
+        at.materials = at.model->materials;
+        for (auto& mt : at.materials) if (lower(mt.name).find("team") != std::string::npos && mt.team == TeamMode::None) mt.team = TeamMode::Tint;
+        at.node = node(aj["node"], "attach");
+        const float3 r = vec3(aj["rotate"], {0, 0, 0}) * kDeg;
+        const float sc = num(aj["scale"], 1);
+        at.local = mat4::translate(vec3(aj["offset"], {0, 0, 0})) * mat4::rotateY(r.y) * mat4::rotateX(r.x) * mat4::rotateZ(r.z) * mat4::scale({sc, sc, sc});
+        at.when = parseWhen(aj["when"], bad("attach"));
+        if (aj.has("carry")) {
+            std::string res = aj.getStr("carry");
+            at.carry = res == "any" || res.empty() ? -1 : -3;
+            for (size_t i = 0; i < rules_->resources.size(); ++i) if (rules_->resources[i].id == res) at.carry = int(i);
+            if (at.carry == -3) { warn(t, "attach: unknown resource '" + res + "'"); at.carry = -1; }
+        }
+        c.attach.push_back(std::move(at));
+    }
+    if (v.has("muzzle")) {
+        const Json& mz = v["muzzle"];
+        c.muzzle = node(mz.isObject() ? mz["node"] : mz, "muzzle");
+        c.muzzleOffset = vec3(mz["offset"], {0, 0, 0});
+    }
+    if (v.has("fx")) c.fx.clear();
+    for (const auto& fj : v["fx"].items()) { // effect anchors for particles
+        Fx f;
+        f.effect = fj.getStr("effect");
+        if (f.effect.empty()) { warn(t, "fx: missing \"effect\""); continue; }
+        f.node = node(fj["node"], "fx");
+        f.offset = vec3(fj["offset"], {0, 0, 0});
+        f.when = parseWhen(fj["when"], bad("fx"));
+        f.hpBelow = num(fj["hpBelow"], 2);
+        f.intensity = num(fj["intensity"], 1);
+        c.fx.push_back(f);
+    }
+    if (v.has("additive")) c.additive.clear();
+    for (const auto& aj : v["additive"].items()) { // additive clips layered on any action
+        AdditiveSpec a;
+        a.clip = m.findClip(aj.getStr("clip"));
+        if (a.clip < 0) { warn(t, "additive: clip '" + aj.getStr("clip") + "' not found in " + m.path); continue; }
+        a.when = parseWhen(aj["when"], bad("additive"));
+        a.weight = num(aj["weight"], 1);
+        c.additive.push_back(a);
+    }
+    if (v.has("footIK")) c.legs.clear();
+    for (const auto& lj : v["footIK"].items()) { // two-bone legs planted on the terrain
+        LegIK l{node(lj["hip"], "footIK"), node(lj["knee"], "footIK"), node(lj["foot"], "footIK")};
+        if (l.hip >= 0 && l.knee >= 0 && l.foot >= 0) c.legs.push_back(l);
+    }
+}
+
+void RtsView::finishChoice(const UnitType& t, ModelChoice& c) {
+    for (auto& p : c.procs) {
+        p.resolve(c.model);
+        if (!p.nodeName.empty() && p.node < 0) warn(t, "procedural: node '" + p.nodeName + "' not found in " + c.model->path);
+    }
+    bool skinned = false;
+    for (const auto& n : c.model->nodes) skinned |= n.skin >= 0 && n.mesh >= 0;
+    bool anyClip = false, nodeProcs = false, overlays = false;
+    for (bool h : c.hasClip) anyClip |= h;
+    for (auto& p : c.procs) nodeProcs |= p.node >= 0;
+    for (int k = 0; k < kAnimCount; ++k) overlays |= c.hasClip[k] && c.clips[k].layer > 0 && c.clips[k].mask >= 0;
+    // Baked skinning draws crowds instanced; per-object bone edits (masked overlays, node
+    // modifiers, additive clips, IK) need the CPU palette path.
+    const std::string mode = t.view.getStr("skinning", "auto");
+    if (mode != "auto" && mode != "baked" && mode != "palette") warn(t, "skinning must be auto, baked or palette");
+    const bool palette = mode == "palette" || (mode == "auto" && (overlays || nodeProcs || !c.additive.empty() || !c.legs.empty()));
+    c.baked = skinned && !palette && dev_ && bakeAnimations(*dev_, *c.model);
+    if (c.baked) for (auto& cs : c.clips) { if (cs.layer > 0) { cs.layer = 0; cs.mask = -1; } } // one-shots on the base layer
+    c.needsPose = (!c.baked && (anyClip || nodeProcs)) || !c.attach.empty() || c.muzzle >= 0 || !c.legs.empty();
+    for (auto& f : c.fx) c.needsPose |= f.node >= 0;
+}
+
+std::vector<std::string> RtsView::modelFiles() const {
+    std::vector<std::string> out;
+    for (const auto& [path, m] : models_) if (path.rfind("shape:", 0) != 0) out.push_back(path);
+    return out;
+}
+
+bool RtsView::loadChoice(gfx::Device& dev, const UnitType& t, const Json& view, const std::string& path, ModelChoice& out) {
+    const bool known = models_.count(path) > 0;
+    out.model = loadModelCached(dev, t, path);
+    if (!out.model) {
+        if (!known) warn(t, path + ": using the built-in shape");
+        return false;
+    }
     out.materials = out.model->materials;
     configureChoice(dev, t, view, out, false);
     return true;
@@ -258,6 +421,19 @@ void RtsView::configureChoice(gfx::Device& dev, const UnitType& t, const Json& v
             const Json& ly = a["layer"];
             if (ly.isString()) cs.layer = ly.str() == "base" ? 0 : ly.str() == "hit" ? 2 : 1;
             else if (ly.isNumber()) cs.layer = std::clamp(int(num(ly, 0)), 0, Animator::kLayers - 1);
+            for (const auto& [at, name] : a["events"].members()) { // "events": {"0.35": "hit", "0.1": "step"}
+                char* end = nullptr;
+                const float tm = std::strtof(at.c_str(), &end);
+                if (end == at.c_str()) { warn(t, "animations." + std::string(animName(k)) + ": event time '" + at + "' is not a number"); continue; }
+                cs.events.push_back({tm, name.str()});
+            }
+            for (const auto& bp : a["blend"].items()) { // blend space: [{"clip": "Walk", "speed": 1.5}, {"clip": "Run", "speed": 4}]
+                const int ci = m.findClip(bp.getStr("clip"));
+                if (ci < 0) { warn(t, "animations." + std::string(animName(k)) + ": blend clip '" + bp.getStr("clip") + "' not found in " + m.path); continue; }
+                cs.blend.push_back({ci, num(bp["speed"], 1)});
+            }
+            std::sort(cs.blend.begin(), cs.blend.end(), [](auto& x, auto& y) { return x.speed < y.speed; });
+            if (!cs.blend.empty() && names.empty()) cs.clips.push_back(cs.blend[0].clip);
         }
         for (const auto& n : names) {
             int ci = m.findClip(n);
@@ -296,6 +472,8 @@ void preset(ProcAnim& p, const std::string& type, bool& special, std::string& er
     else if (type == "lean") { p.channel = ProcAnim::Rotate; p.axis = {1, 0, 0}; p.special = ProcAnim::Lean; p.amp = 0.12f; p.limit = 15 * kDeg; p.when = kProcMoving; }
     else if (type == "aim") { p.channel = ProcAnim::Rotate; p.axis = {0, 1, 0}; p.special = ProcAnim::Aim; p.limit = 180 * kDeg; p.turnSpeed = 180 * kDeg; }
     else if (type == "aimPitch") { p.channel = ProcAnim::Rotate; p.axis = {0, 0, 1}; p.special = ProcAnim::AimPitch; p.limit = 30 * kDeg; p.turnSpeed = 90 * kDeg; }
+    else if (type == "look") { p.channel = ProcAnim::Rotate; p.axis = {0, 1, 0}; p.special = ProcAnim::Aim; p.limit = 70 * kDeg; p.turnSpeed = 240 * kDeg; }
+    else if (type == "align") { p.channel = ProcAnim::Rotate; p.special = ProcAnim::Align; p.amp = 1; p.turnSpeed = 8; }
     else if (type == "fall") { p.channel = ProcAnim::Rotate; p.axis = {1, 0, 0}; p.special = ProcAnim::Fall; p.amp = 90 * kDeg; p.on = kProcEvDeath; p.decay = 0.6f; }
     else if (type == "sink") { p.channel = ProcAnim::Translate; p.axis = {0, -1, 0}; p.special = ProcAnim::Fall; p.amp = 0.8f; p.on = kProcEvDeath; p.decay = 2.5f; }
     else if (type == "custom" || type.empty()) special = false;
@@ -310,7 +488,7 @@ void RtsView::parseProcedural(const UnitType& t, const Json& list, ModelChoice& 
         bool isPreset = false;
         std::string err;
         preset(p, j.getStr("type", "custom"), isPreset, err);
-        if (!err.empty()) { warn(t, err + " (bob, hover, sway, spin, wheel, pulse, recoil, lunge, shake, flap, pop, squash, lean, aim, aimPitch, fall, sink, custom)"); continue; }
+        if (!err.empty()) { warn(t, err + " (bob, hover, sway, spin, wheel, pulse, recoil, lunge, shake, flap, pop, squash, lean, aim, aimPitch, look, align, fall, sink, custom)"); continue; }
         p.nodeName = j.getStr("node");
         if (j.has("channel")) {
             std::string ch = j.getStr("channel");

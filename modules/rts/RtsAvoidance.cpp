@@ -131,7 +131,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         const UnitType& t = rules_.types[u.type];
         Agent a{e, tr.pos.xz(), m.vel.xz(), {}, {}, t.radius, Fixed{}, t.layer, w.get<Owner>(e).player, false, false};
         auto* b = w.tryGet<Buffs>(e);
-        const bool stunned = b && b->stunUntil > tick;
+        const bool stunned = (b && b->stunUntil > tick) || (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStRoot)));
         if (m.moving && !stunned) {
             if (m.goalRadius.raw > 0 && dist2D(tr.pos, m.goal) <= m.goalRadius) { m.moving = false; m.path.clear(); }
             Fixed speed = stat(sim, e, Stat::Speed);

@@ -31,6 +31,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
+    if (rules_.advancedEffects) sim.addSystem("effects", [this](Simulation& s) { sysEffects(s); });
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
     sim.addSystem("movement", [this](Simulation& s) { sysMovement(s); });
     sim.addSystem("weapons", [this](Simulation& s) { sysWeapons(s); });
@@ -293,6 +294,7 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
         if (std::find(gs.wavePlayers.begin(), gs.wavePlayers.end(), wd.player) == gs.wavePlayers.end()) gs.wavePlayers.push_back(wd.player);
     }
     setupDungeon(sim, map);
+    if (rules_.advancedEffects) setupSkills(sim, map);
     if (rules_.buildingStorage) {
         // starting goods are put into the storehouses (map entities may also set "inventory": {res: n})
         for (size_t p = 1; p < gs.players.size(); ++p)
@@ -377,6 +379,18 @@ Entity RtsModule::spawn(Simulation& sim, uint16_t type, uint8_t owner, Vec3 pos,
     if (t.recipe.enabled) w.add<Workshop>(e);
     if (t.carrierCapacity.raw > 0) w.add<Carrier>(e);
     w.add<Buffs>(e);
+    w.add<Statuses>(e);
+    if (rules_.advancedEffects) {
+        if (auto* as = w.tryGet<AbilityState>(e)) {
+            for (size_t i = 0; i < t.abilities.size() && i < 8; ++i) {
+                as->readyAt[i] = sim.tick() + uint32_t((t.abilities[i].initialCooldown * int64_t(sim.tickRate())).toInt());
+                as->charges[i] = uint8_t(std::clamp(t.abilities[i].chargesMax, 0, 255));
+            }
+            as->init = true;
+        }
+        EffectCtx ctx; ctx.owner = owner; ctx.caster = e; ctx.sourceType = type;
+        for (int16_t st : t.statuses) addStatus(sim, e, st, Fixed{}, ctx);
+    }
     if (owner < gs.players.size() && !gs.players[owner].typeCountAll.empty()) gs.players[owner].typeCountAll[type]++;
     if ((owner == kHostileNeutral || t.wanders) && t.speed.raw > 0) w.add<Guard>(e, Guard{pos, t.leash, false, 0});
     sim.emit({kEvSpawned, owner, e, kNullEntity, type, pos});
@@ -514,6 +528,9 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
         case Stat::GatherRate: base = kOne; break;
         case Stat::AttackSpeed: base = kOne; break;
         case Stat::ProductionSpeed: base = kOne; break;
+        case Stat::EnergyRegen: case Stat::Defense: case Stat::CooldownRate: case Stat::UpgradeCost: case Stat::DamageTaken: case Stat::Scale: base = kOne; break;
+        case Stat::GarrisonCap: base = Fixed::fromInt(t.garrisonMax); break;
+        case Stat::Lifesteal: base = Fixed{}; break;
         default: break;
     }
     uint8_t owner = w.get<Owner>(e).player;
@@ -525,6 +542,16 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
     if (auto* h = w.tryGet<Hero>(e)) for (auto& pl : t.perLevel) if (pl.stat == s) { add += pl.add * (h->level - 1); }
     if (auto* b = w.tryGet<Buffs>(e)) {
         for (auto& bf : b->list) if (bf.stat == s && bf.until > sim.tick()) { add += bf.add; mul *= bf.mul; }
+    }
+    if (rules_.advancedEffects) {
+        if (auto* st = w.tryGet<Statuses>(e))
+            for (auto& in : st->list)
+                for (auto& m : rules_.statuses[in.def].mods)
+                    if (m.stat == s) { add += m.add * in.stacks; for (int k = 0; k < in.stacks; ++k) mul *= m.mul; }
+        if (auto* gs = w.resource<GameState>(); owner < gs->players.size())
+            for (auto& in : gs->players[owner].statuses)
+                for (auto& m : rules_.statuses[in.def].mods)
+                    if (m.stat == s) { add += m.add * in.stacks; for (int k = 0; k < in.stacks; ++k) mul *= m.mul; }
     }
     // Damage/Range/GatherRate/AttackSpeed "add" are fractional bonuses on top of 1 / absolute range
     return (base + add) * mul;
@@ -964,7 +991,9 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             bool busy = false;
             for (auto& it : prod.queue) if (it.upgrade) busy = true;
             if (busy || int(prod.queue.size()) >= rules_.maxQueue) break;
-            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, rules_.types[ut].cost, {})) break;
+            std::vector<Amount> ucost = rules_.types[ut].cost;
+            if (rules_.advancedEffects) { Fixed mult = stat(sim, e, Stat::UpgradeCost); for (auto& c : ucost) c.value = c.value * mult; }
+            if (rules_.costModel == CostModel::Upfront && !pay(sim, cmd.player, ucost, {})) break;
             prod.queue.push_back({int32_t(ut), Fixed{}, Fixed{}, true});
             break;
         }
@@ -1066,12 +1095,19 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         case kCmdSend: {
             auto* g = w.tryGet<Garrison>(e);
             if (!g || !w.alive(cmd.target) || cmd.target == e || !w.has<Garrison>(cmd.target) || t.spawnUnit == kNoType) break;
+            if (rules_.advancedEffects && (statusFlags(sim, e) & kStLock)) break;   // locked: can't send
             int64_t pct = std::clamp<int64_t>(cmd.param, 1, 100);
             int n = int(int64_t(g->count) * pct / 100);
             if (n <= 0 && g->count > 0) n = 1;
             g->count -= n;
             g->pendingOut += n;
             g->pendingTarget = cmd.target;
+            if (rules_.advancedEffects) {
+                g->pendingGroup = gs.nextGroupId++;
+                uint8_t to = w.get<Owner>(cmd.target).player;
+                if (to < gs.players.size() && to != cmd.player && (gs.players[to].statusFlags & kStAlert))
+                    sim.emit({kEvAlert, to, e, cmd.target, n, w.get<Transform>(cmd.target).pos});
+            }
             break;
         }
         default: break;
@@ -1168,6 +1204,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     for (auto& [k, v] : gs.trig.vars) { h.str(k); h.fx(v); }
     if (rules_.dungeon) hashDungeon(sim, h);
     if (rules_.settlers) hashSettlers(sim, h);
+    if (rules_.advancedEffects) hashEffects(sim, h);
     if (rules_.lanes.enabled) {
         h.u32(gs.laneSignature); h.u32(uint32_t(gs.lanes.size()));
         for (auto& l : gs.lanes) { h.u32(uint32_t(l.points.size())); if (!l.points.empty()) h.v3(l.points[l.points.size() / 2]); }
