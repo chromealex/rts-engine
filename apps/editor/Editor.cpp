@@ -377,6 +377,11 @@ void Editor::syncGrid() {
         }
     }
     view_.setTerrainMaterial(d.extra["terrainMaterial"], d.w, d.h);
+    if (!d.detail.empty() && d.detailScale > 0) {   // visual detail layer (TerrainOps sculpt / import)
+        game::terrain::DetailSurface ds;
+        game::terrain::detailFromInt16(d.w, d.h, d.detailScale, d.detail, ds);
+        view_.setTerrainDetail(&ds, d.detailSplat.empty() ? nullptr : &d.detailSplat);
+    } else view_.setTerrainDetail(nullptr, nullptr);
     view_.buildTerrain(*dev_, grid_);
     gridRevision_ = doc().revision;
 }

@@ -8,13 +8,17 @@ local CLOCK = rts.wave_clock_ticks()
 
 std.period.waves = (#WAVES > 0 or CLOCK >= 0) and 1 or 0   -- not called at all without waves
 
+local FLOW = rts.wave_flow()       -- hordes share flow fields (movement.flowField.waves)
+
 local function march(spawned)
+  local param = 4
+  if FLOW then param = #spawned < 400 and #spawned or 400 end   -- flow goal area sized for the whole wave
   for _, n in ipairs(spawned) do
     if rts.has_orders(n) then
       local owner = rts.owner(n)
       local px, py, pz = rts.pos(n)
       local gx, _, gz = rts.wave_objective(owner, px, py, pz)
-      if gx then rts.order(n, rts.ORDER_ATTACK_MOVE, gx, gz, 4) end
+      if gx then rts.order(n, rts.ORDER_ATTACK_MOVE, gx, gz, param, nil, false, FLOW) end
     end
   end
 end

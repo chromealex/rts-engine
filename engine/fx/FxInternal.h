@@ -102,6 +102,15 @@ inline void basisFrom(float3 n, float3& t, float3& b) {
     t = render::normalize(render::cross(ref, n));
     b = render::cross(n, t);
 }
+// v given with +Y as up, turned by the shortest rotation that takes +Y onto `up` (curved worlds)
+inline float3 upRotate(float3 up, float3 v) {
+    const float c = up.y;
+    if (c > 0.99999f) return v;
+    if (c < -0.99999f) return {v.x, -v.y, -v.z};
+    const float3 k = render::normalize(float3{up.z, 0, -up.x});   // axis = Y x up
+    const float sn = std::sqrt(std::max(0.0f, 1 - c * c));
+    return v * c + render::cross(k, v) * sn + k * (render::dot(k, v) * (1 - c));
+}
 
 // 3x3 rotation (columns), Euler degrees applied Z, then X, then Y (R = Ry * Rx * Rz, Unity's order).
 struct Mat3 {
@@ -272,6 +281,10 @@ struct ParticleSystem::Impl {
     std::vector<SubSpawn> pending;
     std::unordered_map<uint32_t, FxHandle> children;   // particle uid -> its birth sub-effect
     std::function<float(float, float)> ground;
+    std::function<float3(float3)> upFn;        // curved worlds (setUpFunction)
+    std::function<float(float3)> altFn;        // curved worlds (setAltitudeFunction)
+    bool haveSpace = false;                    // setViewSpace
+    mat4 space;
     float3 wind{0, 0, 0};
     float3 lightDir = render::normalize(float3{0.55f, 1.0f, 0.35f});
     uint32_t nextUid = 0;

@@ -122,6 +122,7 @@ int planetSculpt(MapDoc& doc, const std::string& id, Sculpt op, float3 dir, floa
             case Sculpt::Set: v += (strength * 16.0f - v) * w; break;
             case Sculpt::Flatten: v += (target - v) * w * std::clamp(strength, 0.0f, 1.0f); break;
             case Sculpt::Smooth: v += (smooth[h] - v) * w * std::clamp(strength, 0.0f, 1.0f); break;
+            default: break;   // erode / stamp: detail resolution only (TerrainDetailOps.cpp)
         }
         out[k] = int16_t(std::clamp(std::lround(v), -32768l, 32767l));
     }

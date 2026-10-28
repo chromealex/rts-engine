@@ -251,6 +251,7 @@ void GameClient::startMatch(size_t idx) {
         if (mod().surface(*sim_)) view_.setSimWorld(mod().state(*sim_).surface, mod().state(*sim_).grid, vm);
         else view_.setWorld(vm);
         view_.setTerrainMaterial(vm["terrainMaterial"], mod().state(*sim_).grid.w, mod().state(*sim_).grid.h);
+        view_.setTerrainDetail(vm);
     }
     view_.buildTerrain(*dev_, mod().state(*sim_).grid);
     if (const char* ff = std::getenv("RTS_FAST_FORWARD")) { // testing (screenshots): bots play N game seconds first
@@ -284,6 +285,11 @@ void GameClient::fitCamera() {
     float aspect = platform::windowHeight() > 0 ? platform::windowWidth() / platform::windowHeight() : 1.6f;
     cam_.distance = small ? std::max(g.w / aspect, float(g.h)) * 1.05f + 4 : 24.0f;
     applyCameraSetup(cameraSetupFrom(manifest_), cam_, float(platform::framebufferHeight())); // game.json "camera" (2D games)
+    if (const char* e = std::getenv("RTS_CAM")) { // testing (close-up screenshots): "x,z,distance[,pitchDeg[,yawDeg]]"
+        float v[5] = {c.x, c.z, cam_.distance, cam_.pitch * 57.2958f, cam_.yaw * 57.2958f};
+        int n = std::sscanf(e, "%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4]);
+        if (n >= 2) { cam_.target = {v[0], 0, v[1]}; cam_.distance = v[2]; cam_.pitch = v[3] / 57.2958f; cam_.yaw = v[4] / 57.2958f; cam_.minDistance = std::min(cam_.minDistance, v[2]); }
+    }
 }
 
 // ------------------------------------------------------------------ picking / selection
@@ -770,11 +776,10 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             view_.setOverlayContext(oc);
         }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
-        if (!planet()) { // particles are placed in flat map coordinates: not on planets yet
-            fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
-                       screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
-            fx_.addLights(r3d_.lights);   // particle lights ("light" module)
-        }
+        fx_.setPlanetView(planet() ? &view_ : nullptr);   // planets: effects in the camera body's space
+        fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
+                   screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
+        fx_.addLights(r3d_.lights);   // particle lights ("light" module)
         runViewScripts(screen_ == Screen::Playing ? float(dt) : 0.0f);
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost of the building to place (its footprint is the "placement" overlay)
             bool ok;
@@ -786,7 +791,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         }
         drawToolPreview();
         r3d_.render(pass, &postFx_);
-        if (!planet()) fx_.render(r3d_.lighting);
+        fx_.render(r3d_.lighting);
         r3d_.resolvePostFx();   // post effects (if any) under the HUD
         view_.drawOverlays(cam_, scene_, platform::windowWidth(), platform::windowHeight());
     } else {
