@@ -3,12 +3,11 @@
   "@language": "English",
 
   // how to play (UI: "How to play" screen)
-  "howto.like": "Northgard: the map is split into regions that your clan claims one by one.",
+  "howto.like": "Northgard: regions, births and the clan's happiness.",
   "howto.goal": "Destroy every enemy building.",
-  "howto.tip": "Do not claim everything: empty regions only raise the price of the next ones.",
-  "howto.step1": "You can only build in your own regions. Press Claim at the top, then click a neighbouring region to take it for food.",
-  "howto.step2": "Every region costs more than the last — take the ones with deer (food) and birches (wood).",
-  "howto.step3": "Thralls hunt and chop wood; a camp next to resources shortens their trips. The longhouse trains thralls.",
-  "howto.step4": "Houses raise supply. The training camp trains warriors and axe throwers, watchtowers guard the border.",
-  "howto.step5": "Once strong, march on enemy regions and their longhouse."
+  "howto.tip": "Scout a region and clear its wolves and draugr first — only then can you colonise it.",
+  "howto.step1": "A region is colonised for food, each one dearer; you build only in your own regions.",
+  "howto.step2": "Villagers are born at the town hall while there is housing. Everyone eats food, the warband also costs krowns.",
+  "howto.step3": "Buildings produce on their own: woodcutters and hunters take wood and food around them.",
+  "howto.step4": "Warriors, axe throwers and shieldbearers are trained from villagers at their camps. Low happiness slows the work."
 }

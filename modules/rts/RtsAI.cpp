@@ -1,6 +1,8 @@
 #include "RtsAI.h"
 #include <algorithm>
 #include <vector>
+#include <cstdio>
+#include <cstdlib>
 
 namespace rts::game {
 
@@ -9,7 +11,7 @@ Fixed dist(Vec3 a, Vec3 b) { return Surface::onSphere(a) ? (a - b).length() : (a
 bool isCombat(const UnitType& t) { return !t.structure && (!t.weapons.empty() || !t.abilities.empty()) && !t.worker; }
 // Units the player controls by hand (possessed, picked up) or that are leaving are not the AI's.
 bool controllable(World& w, Entity e, const Unit& u) {
-    if (u.flags & (kUnitInHand | kUnitPossessed)) return false;
+    if (u.flags & (kUnitOffMap | kUnitPossessed)) return false;
     auto* n = w.tryGet<Needs>(e);
     return !n || !n->leaving;
 }
@@ -43,11 +45,13 @@ void RtsAI::update(Simulation& sim) {
         if (sim.world().has<Garrison>(e) && t.spawnUnit != kNoType) hasGarrisons = true;
         else hasOther = true;
     });
+    if (m->rules().originals) originals(sim, *m);
     if (hasGarrisons) garrisonPlay(sim, *m);
     if (hasOther) {
         special(sim, *m);
         if (!m->rules().diggables.empty() || !m->rules().rooms.empty()) dungeon(sim, *m);
         if (m->rules().settlers) settlers(sim, *m);
+        if (m->rules().mech.any) mech(sim, *m);
         economy(sim, *m);
         military(sim, *m);
     }
@@ -239,7 +243,7 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             if (!offensive || a.target != TargetKind::Point || !m.canUsePlayerAbility(sim, player_, int(ai))) continue;
             std::vector<std::pair<Vec3, int>> foes, mine;
             w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
-                if (u.hp.raw <= 0 || R.types[u.type].invulnerable || (u.flags & kUnitInHand)) return;
+                if (u.hp.raw <= 0 || R.types[u.type].invulnerable || (u.flags & kUnitOffMap)) return;
                 int value = R.types[u.type].structure ? 3 : 1;
                 if (o.player == player_ || (o.player != 0 && o.player != kHostileNeutral && sim.allied(o.player, player_))) mine.push_back({tr.pos, value});
                 else if (m.hostile(sim, player_, o.player) && o.player != kHostileNeutral) foes.push_back({tr.pos, value});
@@ -266,6 +270,11 @@ void RtsAI::special(Simulation& sim, RtsModule& m) {
             for (uint16_t k : R.types[u.type].researches) {
                 if (int(eco.researched[k]) >= R.techs[k].levels || eco.researching[k] || !m.requirementsMet(sim, player_, R.techs[k].requires_) ||
                     !m.canAfford(sim, player_, m.techCost(sim, player_, k))) continue;
+                if (R.techs[k].requiresAnyCount > 0) {
+                    int have = 0;
+                    for (uint16_t ty : R.techs[k].requiresAny) if (eco.typeCount[ty] > 0) ++have;
+                    if (have < R.techs[k].requiresAnyCount) continue;
+                }
                 Command c; c.type = kCmdResearch; c.units = {e}; c.param = k; send(sim, c);
                 lastTechTick_ = sim.tick();
                 break;

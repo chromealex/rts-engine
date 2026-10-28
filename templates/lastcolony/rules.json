@@ -1,31 +1,50 @@
-// "Last Colony" — They Are Billions-like: build a colony inside the command centre's radius, gather wood
-// and stone, and survive growing waves of the infected until the timer runs out.
+// "Last Colony" — They Are Billions: survive the waves of the infected for 20 minutes. There are no gatherer units:
+// the colony is run by buildings. Tents and houses give workers and pay taxes (gold) but eat food; hunter cottages and
+// farms give food; sawmills and quarries take wood, stone and iron from the trees and rocks around them; mills and
+// the power plant give energy. Workers, food and energy are capacities: a shortage switches industry off and slows
+// production. You may build only near the command centre and the tesla towers (the energy grid). A colonist or soldier
+// killed by the infected rises as one of them, an overrun tent or house releases three. Numbers are approximate
+// (They Are Billions does not publish its tables).
+// Not yet here (engine plan): noise that draws the infected, dormant infected villages on the map, gates, research.
 {
-  "victory": {"mode": "survive", "seconds": 720},
-  "buildRadius": 7,
-  "supplyCap": 80,
+  "victory": {"mode": "survive", "seconds": 1200},
+  "buildRadius": 5,
+  "supplyCap": 400,
   "resources": {
-    "wood": {"name": "Дерево", "start": 300}, "stone": {"name": "Камень", "start": 150}, "gold": {"name": "Золото", "start": 300}
+    "gold": {"name": "Золото", "start": 500},
+    "wood": {"name": "Дерево", "start": 50},
+    "stone": {"name": "Камень", "start": 0},
+    "iron": {"name": "Железо", "start": 0},
+    "workers": {"name": "Рабочие", "kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["industry"]},
+    "food": {"name": "Еда", "kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["home"]},
+    "energy": {"name": "Энергия", "kind": "capacity", "deficitProduction": 0.5, "deficitDisables": ["industry"]}
   },
   "types": {
-    "command_center": {"name": "Командный центр", "structure": {"footprint": [4, 4]}, "health": {"max": 4000, "armor": 5}, "sight": 10, "key": true,
-                       "produces": ["colonist"], "dropoff": ["wood", "stone"], "supply": 8, "income": {"gold": 2},
-                       "weapons": [{"range": 6, "damage": 12, "cooldown": 1, "projectileSpeed": 16}], "view": {"shape": "hall"}},
-    "colonist": {"name": "Колонист", "health": {"max": 60}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 6, "cost": {"gold": 30, "time": 8, "supply": 1},
-                 "gather": {"wood": {"carry": 10, "time": 2.5}, "stone": {"carry": 8, "time": 3}}, "builds": ["tent", "barracks", "ballista", "wall", "market"]},
-    "tent": {"name": "Палатка", "structure": {"footprint": [2, 2]}, "health": {"max": 300}, "cost": {"wood": 40, "time": 10}, "supply": 6, "income": {"gold": 1}, "view": {"shape": "house"}},
-    "market": {"name": "Рынок", "structure": {"footprint": [2, 2]}, "health": {"max": 400}, "cost": {"wood": 80, "stone": 30, "time": 15}, "income": {"gold": 3}, "view": {"shape": "mill"}},
-    "barracks": {"name": "Казарма", "structure": {"footprint": [3, 3]}, "health": {"max": 1000, "armor": 2}, "cost": {"wood": 120, "stone": 40, "time": 20}, "produces": ["ranger", "soldier"], "view": {"shape": "barracks"}},
-    "ballista": {"name": "Баллиста", "structure": {"footprint": [2, 2]}, "health": {"max": 800, "armor": 3}, "sight": 10, "requires": ["barracks"],
-                 "weapons": [{"range": 8, "damage": 40, "cooldown": 1.5, "projectileSpeed": 20, "splash": 0.6}], "cost": {"wood": 80, "stone": 80, "time": 20}, "view": {"shape": "tower"}},
-    "wall": {"name": "Стена", "structure": {"footprint": [1, 1]}, "health": {"max": 600, "armor": 5}, "cost": {"stone": 10, "time": 4}, "view": {"shape": "wall"}},
-    "ranger": {"name": "Рейнджер", "health": {"max": 80}, "move": {"speed": 3, "radius": 0.3}, "sight": 9, "weapons": [{"range": 6, "damage": 10, "cooldown": 0.8, "projectileSpeed": 20}],
-               "cost": {"gold": 40, "wood": 10, "time": 10, "supply": 1}, "view": {"shape": "ranged"}},
-    "soldier": {"name": "Солдат", "health": {"max": 200, "armor": 2}, "move": {"speed": 2.4, "radius": 0.4}, "sight": 8, "weapons": [{"range": 4, "damage": 16, "cooldown": 1, "projectileSpeed": 20}],
-                "cost": {"gold": 70, "wood": 20, "stone": 10, "time": 14, "supply": 2}, "view": {"shape": "soldier"}},
-    "walker": {"name": "Заражённый", "health": {"max": 60}, "move": {"speed": 1.8, "radius": 0.3}, "sight": 10, "weapons": [{"range": 0.5, "damage": 8, "cooldown": 1.2}], "view": {"shape": "zombie"}},
-    "runner": {"name": "Бегун", "health": {"max": 40}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 12, "weapons": [{"range": 0.5, "damage": 6, "cooldown": 0.8}], "view": {"shape": "zombie", "scale": 0.8}},
+    "command_center": {"name": "Командный центр", "tags": ["building"], "structure": {"footprint": [4, 4], "extendsBase": true}, "health": {"max": 4000, "armor": 5}, "cost": {"time": 1}, "provides": {"workers": 8, "food": 8, "energy": 30}, "key": true, "sight": 12, "income": {"gold": 2, "wood": 0.5, "stone": 0.3}, "produces": ["tent", "cottage", "hunter_cottage", "farm", "sawmill", "quarry", "mill", "power_plant", "tesla_tower", "soldiers_center", "engineering_center", "wood_wall", "stone_wall", "ballista", "executor", "ranger"], "weapons": [{"range": 6, "damage": 12, "cooldown": 1, "projectileSpeed": 16}], "view": {"shape": "hall"}},
+    "tent": {"name": "Палатка", "tags": ["building", "home"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 300, "armor": 1}, "cost": {"gold": 150, "time": 8}, "provides": {"workers": 4}, "consumes": {"food": 4}, "income": {"gold": 1.2}, "infect": {"by": ["infected"], "spawn": "walker", "count": 3}, "view": {"shape": "house"}},
+    "cottage": {"name": "Дом", "tags": ["building", "home"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 500, "armor": 1}, "cost": {"gold": 500, "wood": 40, "stone": 10, "time": 15}, "provides": {"workers": 8}, "consumes": {"food": 6, "energy": 1}, "requires": ["tent"], "income": {"gold": 2.5}, "infect": {"by": ["infected"], "spawn": "walker", "count": 3}, "view": {"shape": "house", "scale": 1.1}},
+    "hunter_cottage": {"name": "Охотничий домик", "tags": ["building"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 300, "armor": 1}, "cost": {"gold": 100, "wood": 10, "time": 10}, "provides": {"food": 8}, "consumes": {"workers": 2}, "view": {"shape": "camp"}},
+    "farm": {"name": "Ферма", "tags": ["building"], "structure": {"footprint": [3, 3], "extendsBase": false}, "health": {"max": 400, "armor": 1}, "cost": {"gold": 400, "wood": 20, "time": 15}, "provides": {"food": 16}, "consumes": {"workers": 4, "energy": 2}, "requires": ["sawmill"], "view": {"shape": "farm"}},
+    "sawmill": {"name": "Лесопилка", "tags": ["building", "industry"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 500, "armor": 1}, "cost": {"gold": 250, "time": 12}, "consumes": {"workers": 3, "energy": 2}, "recipe": {"out": {"wood": 1}, "time": 2, "from": "wood", "radius": 6}, "view": {"shape": "camp"}},
+    "quarry": {"name": "Каменоломня", "tags": ["building", "industry"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 600, "armor": 1}, "cost": {"gold": 400, "wood": 20, "time": 15}, "consumes": {"workers": 4, "energy": 4}, "recipe": {"out": {"stone": 1, "iron": 0.25}, "time": 3, "from": "stone", "radius": 6}, "view": {"shape": "camp"}},
+    "mill": {"name": "Ветряная мельница", "tags": ["building"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 400, "armor": 1}, "cost": {"gold": 200, "wood": 30, "time": 12}, "provides": {"energy": 20}, "consumes": {"workers": 2}, "view": {"shape": "mill"}},
+    "power_plant": {"name": "Электростанция", "tags": ["building"], "structure": {"footprint": [3, 3], "extendsBase": false}, "health": {"max": 1500, "armor": 1}, "cost": {"gold": 1200, "wood": 60, "stone": 40, "time": 25}, "provides": {"energy": 60}, "consumes": {"workers": 4}, "requires": ["engineering_center"], "view": {"shape": "plant"}},
+    "tesla_tower": {"name": "Тесла-башня", "tags": ["building"], "structure": {"footprint": [1, 1], "extendsBase": true}, "health": {"max": 200, "armor": 1}, "cost": {"gold": 40, "wood": 10, "time": 4}, "consumes": {"energy": 1}, "view": {"shape": "tower", "scale": 0.6}},
+    "soldiers_center": {"name": "Центр солдат", "tags": ["building"], "structure": {"footprint": [3, 3], "extendsBase": false}, "health": {"max": 1000, "armor": 2}, "cost": {"gold": 400, "wood": 30, "time": 20}, "consumes": {"workers": 2, "energy": 4}, "produces": ["ranger", "soldier", "sniper"], "view": {"shape": "barracks"}},
+    "engineering_center": {"name": "Инженерный центр", "tags": ["building"], "structure": {"footprint": [3, 3], "extendsBase": false}, "health": {"max": 1000, "armor": 2}, "cost": {"gold": 800, "wood": 60, "stone": 40, "time": 25}, "consumes": {"workers": 4, "energy": 6}, "requires": ["soldiers_center"], "produces": ["lucifer"], "view": {"shape": "workshop"}},
+    "wood_wall": {"name": "Деревянная стена", "tags": ["building"], "structure": {"footprint": [1, 1], "extendsBase": false}, "health": {"max": 300, "armor": 3}, "cost": {"wood": 3, "time": 2}, "countsForVictory": false, "view": {"shape": "wall"}},
+    "stone_wall": {"name": "Каменная стена", "tags": ["building"], "structure": {"footprint": [1, 1], "extendsBase": false}, "health": {"max": 800, "armor": 6}, "cost": {"stone": 6, "time": 3}, "requires": ["quarry"], "countsForVictory": false, "view": {"shape": "wall"}},
+    "ballista": {"name": "Баллиста", "tags": ["building"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 800, "armor": 3}, "cost": {"gold": 300, "wood": 40, "stone": 20, "time": 15}, "consumes": {"workers": 2}, "requires": ["soldiers_center"], "sight": 10, "weapons": [{"range": 8, "damage": 40, "cooldown": 1.5, "projectileSpeed": 20, "splash": 0.6}], "view": {"shape": "tower"}},
+    "executor": {"name": "Палач", "tags": ["building"], "structure": {"footprint": [2, 2], "extendsBase": false}, "health": {"max": 1200, "armor": 4}, "cost": {"gold": 1200, "wood": 60, "stone": 60, "iron": 40, "time": 25}, "consumes": {"workers": 2, "energy": 10}, "requires": ["engineering_center"], "sight": 12, "weapons": [{"range": 10, "damage": 60, "cooldown": 0.6, "projectileSpeed": 30}], "view": {"shape": "tower", "scale": 1.2}},
+    "ranger": {"name": "Рейнджер", "tags": ["colonist"], "health": {"max": 60, "armor": 0}, "move": {"speed": 3.2, "radius": 0.3}, "sight": 9, "weapons": [{"range": 6, "damage": 10, "cooldown": 0.8, "projectileSpeed": 20}], "cost": {"gold": 120, "wood": 20, "time": 10}, "consumes": {"workers": 1, "food": 1}, "infect": {"by": ["infected"], "spawn": "walker", "count": 1}},
+    "soldier": {"name": "Солдат", "tags": ["colonist"], "health": {"max": 260, "armor": 2}, "move": {"speed": 2.4, "radius": 0.3}, "sight": 8, "weapons": [{"range": 5, "damage": 12, "cooldown": 0.6, "projectileSpeed": 20}], "cost": {"gold": 200, "iron": 10, "time": 14}, "consumes": {"workers": 1, "food": 1}, "infect": {"by": ["infected"], "spawn": "walker", "count": 1}},
+    "sniper": {"name": "Снайпер", "tags": ["colonist"], "health": {"max": 100, "armor": 0}, "move": {"speed": 2.6, "radius": 0.3}, "sight": 12, "weapons": [{"range": 9, "damage": 90, "cooldown": 3, "projectileSpeed": 30}], "cost": {"gold": 400, "wood": 40, "iron": 20, "time": 20}, "consumes": {"workers": 1, "food": 1}, "infect": {"by": ["infected"], "spawn": "walker", "count": 1}},
+    "lucifer": {"name": "Люцифер", "tags": ["colonist"], "health": {"max": 300, "armor": 4}, "move": {"speed": 2.2, "radius": 0.3}, "sight": 7, "weapons": [{"range": 3, "damage": 20, "cooldown": 0.25, "splash": 1.0}], "cost": {"gold": 500, "iron": 30, "time": 25}, "consumes": {"workers": 2, "food": 1}, "infect": {"by": ["infected"], "spawn": "walker", "count": 1}},
+    "walker": {"name": "Заражённый", "tags": ["infected"], "health": {"max": 60}, "move": {"speed": 1.6, "radius": 0.3}, "sight": 10, "weapons": [{"range": 0.5, "damage": 8, "cooldown": 1.2}], "view": {"shape": "zombie"}},
+    "runner": {"name": "Бегун", "tags": ["infected"], "health": {"max": 40}, "move": {"speed": 3.6, "radius": 0.3}, "sight": 12, "weapons": [{"range": 0.5, "damage": 6, "cooldown": 0.8}], "view": {"shape": "zombie", "scale": 0.8}},
+    "harpy": {"name": "Гарпия", "tags": ["infected"], "health": {"max": 120}, "move": {"speed": 3.0, "radius": 0.3}, "sight": 12, "weapons": [{"range": 0.6, "damage": 15, "cooldown": 1}], "view": {"shape": "zombie", "scale": 0.9}},
+    "chubby": {"name": "Толстяк", "tags": ["infected"], "health": {"max": 600, "armor": 2}, "move": {"speed": 1.4, "radius": 0.5}, "sight": 10, "weapons": [{"range": 0.8, "damage": 40, "cooldown": 1.5}], "view": {"shape": "zombie", "scale": 1.4}},
     "tree": {"name": "Дерево", "structure": {"footprint": [1, 1]}, "invulnerable": true, "resourceNode": {"resource": "wood", "amount": 400}, "view": {"shape": "tree"}},
-    "stone_quarry": {"name": "Каменоломня", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "stone", "amount": 4000}, "view": {"shape": "rock"}}
+    "stone_quarry": {"name": "Скалы", "structure": {"footprint": [2, 2]}, "invulnerable": true, "resourceNode": {"resource": "stone", "amount": 4000}, "view": {"shape": "rock"}}
   }
 }

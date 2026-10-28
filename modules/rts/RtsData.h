@@ -18,6 +18,26 @@ namespace rts::game {
 constexpr uint16_t kNoType = UINT16_MAX;
 constexpr uint8_t kHostileNeutral = 255;   // owner of creeps/monsters: hostile to every player
 
+// ------------------------------------------------------------------ stats / modifiers
+enum class Stat : uint8_t {
+    MaxHp, Armor, Damage, Range, Speed, Sight, GatherRate, AttackSpeed, ProductionSpeed,
+    EnergyRegen,    // multiplier on energy regeneration
+    Defense,        // multiplier on garrison defense (units lost per assaulting unit)
+    GarrisonCap,    // added to / multiplies the garrison maximum
+    CooldownRate,   // multiplier on how fast ability cooldowns run (2 = twice as fast)
+    UpgradeCost,    // multiplier on upgrade cost and time
+    Lifesteal,      // share of dealt damage healed (added)
+    DamageTaken,    // multiplier on damage received
+    Scale,          // presentation only (rage makes units bigger)
+    Armor2,         // second armor class ("pierceArmor": Age of Empires melee / pierce armor)
+    Count };
+Stat parseStat(const std::string& s, bool* ok = nullptr);
+
+struct StatMod { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); };
+
+// What a modifier applies to: types with any of `tags`, or one `type`, or everything.
+struct ModTarget { uint64_t tags = 0; uint16_t type = kNoType; bool all = false; };
+
 // ------------------------------------------------------------------ resources
 enum class ResourceKind : uint8_t {
     Stock,     // gathered/earned and spent (gold, wood, ore, spice)
@@ -41,26 +61,11 @@ struct ResourceDef {
     int16_t convertTo = -1;   // credited as another resource when delivered (ore -> credits)
     Fixed regen{};            // per second for every player (mana, morale)
     Fixed convertRate = Fixed::fromInt(1);
+    // fidelity mechanics (RtsOriginals.cpp): gains on match events and player stat mods per whole unit held
+    Fixed gainKill{}, gainCapture{}, gainCaptured{}, gainUpgrade{}, gainLost{}, gainDefended{};
+    Fixed min{};              // floor (negative regen = decay)
+    std::vector<std::pair<uint64_t, StatMod>> perUnitMods; // tags (0 = all) -> mod * floor(stock) (morale suns)
 };
-
-// ------------------------------------------------------------------ stats / modifiers
-enum class Stat : uint8_t {
-    MaxHp, Armor, Damage, Range, Speed, Sight, GatherRate, AttackSpeed, ProductionSpeed,
-    EnergyRegen,    // multiplier on energy regeneration
-    Defense,        // multiplier on garrison defense (units lost per assaulting unit)
-    GarrisonCap,    // added to / multiplies the garrison maximum
-    CooldownRate,   // multiplier on how fast ability cooldowns run (2 = twice as fast)
-    UpgradeCost,    // multiplier on upgrade cost and time
-    Lifesteal,      // share of dealt damage healed (added)
-    DamageTaken,    // multiplier on damage received
-    Scale,          // presentation only (rage makes units bigger)
-    Count };
-Stat parseStat(const std::string& s, bool* ok = nullptr);
-
-struct StatMod { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); };
-
-// What a modifier applies to: types with any of `tags`, or one `type`, or everything.
-struct ModTarget { uint64_t tags = 0; uint16_t type = kNoType; bool all = false; };
 
 // ------------------------------------------------------------------ combat
 enum Layer : uint8_t { kLayerGround = 1, kLayerAir = 2, kLayerNaval = 4, kLayerSandOnly = 8,
@@ -81,6 +86,9 @@ struct WeaponDef {
     int16_t onHit = -1;                 // payload applied to the target on hit (poison, frost)
     Fixed onHitChance = Fixed::fromInt(1);
     Fixed chargeTime{};                 // >0: the weapon has to stay on one target this long before each shot
+    uint8_t armorClass = 0;             // 0: armor, 1: armor2 (pierce)
+    std::vector<std::pair<uint64_t, Fixed>> bonus; // extra damage vs targets with any of these tags (AoE / SC2 bonuses)
+    Fixed killsCrew{};                  // chance per hit to kill the crew of a crewed target (Z snipers)
 };
 
 // ------------------------------------------------------------------ abilities and effects
@@ -143,8 +151,13 @@ struct AttractDef {
     Fixed weight = Fixed::fromInt(1);
 };
 
+}   // namespace rts::game
+#include "RtsMechData.h"   // agent-mech data (needs StatMod, Amount, layers)
+namespace rts::game {
+
 // ------------------------------------------------------------------ type
 struct UnitType {
+    MechType mech;                             // agent-mech blocks (RtsMechData.h)
     std::string id, name;
     uint64_t tags = 0;
     bool structure = false;
@@ -262,6 +275,37 @@ struct UnitType {
     uint16_t trainFrom = kNoType;              // training consumes an idle own unit of this type (recruit)
     uint16_t autoTrainUnit = kNoType;          // continuous production into the field
     Fixed autoTrainInterval = Fixed::fromInt(5);
+    // ---- fidelity mechanics (RtsOriginals.cpp)
+    Fixed armor2{};                            // second armor class (pierce)
+    Fixed shieldMax{}, shieldRegen{}, shieldDelay = Fixed::fromInt(10), shieldArmor{}; // StarCraft shields
+    int maxGatherers = 0;                      // resource node: workers harvesting at once (WC3 mine 5, SC patch 1)
+    int16_t fieldId = -1;                      // provides a power field (pylon) of this id
+    Fixed fieldRadius{};
+    int16_t needsField = -1;                   // structure works / may be placed only inside an own field
+    int queueSlots = 1;                        // items produced in parallel (reactor)
+    uint16_t crew = kNoType;                   // vehicle / gun manned by this unit type (Z drivers)
+    bool crews = false;                        // this unit can man empty crewed vehicles
+    uint64_t infectBy = 0;                     // killed by a unit with any of these tags: becomes `infectSpawn`
+    uint16_t infectSpawn = kNoType;
+    int infectCount = 1;
+    int eats = 0;                              // neutral: submerges after this many kills (sandworm)
+    Fixed resurface = Fixed::fromInt(60);
+    int16_t onDeath = -1;                      // payload applied where it dies (commander explosion)
+    int upgradeGarrison = 0;                   // upgrading into this type costs garrison units (Mushroom Wars 2)
+    uint16_t captureAs = kNoType;              // turns into this type when captured (loses a level)
+    int garrisonKeep = 0;                      // units that always stay home when sending (State.io)
+    bool clash = false;                        // units in transit fight hostile units they meet
+    std::vector<std::pair<ModTarget, StatMod>> playerMods; // every completed one modifies the owner's types
+    int playerModsMax = 0;                     // count at most this many (0 = all)
+    std::vector<std::vector<int>> learnAt;     // per ability: hero levels for skill levels 1, 2, ... (WC3)
+    Fixed costGrowth{};                        // cost * (1 + growth * owned) (Dungeon Keeper imps)
+    uint64_t crushTags = 0;                    // moving over units with these tags kills them (Dune / C&C tanks)
+    uint32_t factionMask = 0;                  // "factions": only these factions may train / build it (0 = all)
+    bool autoTrainAdvance = true;              // autoTrain.advance: false = the new units stay home (Northgard births)
+    int requiresRegions = 0;                   // trainable only with this many own regions (Z factory tech levels)
+    bool ownsRegion = false;                   // its region (and the territory cells of it) follow its owner (State.io states)
+    int16_t deathFieldRes = -1;                // dying spreads a resource field (Dune spice bloom)
+    Fixed deathFieldRadius = Fixed::fromInt(3), deathFieldAmount = Fixed::fromInt(100);
     Json view;
 };
 
@@ -274,12 +318,39 @@ struct TechDef {
     Fixed time = Fixed::fromInt(30);
     std::vector<Requirement> requires_;
     std::vector<std::pair<ModTarget, StatMod>> effects;
+    int requiresAnyCount = 0;                  // "requiresAny": {"count": 2, "of": [...]}: that many different types of the list (AoE ages)
+    std::vector<uint16_t> requiresAny;
 };
 
 struct FactionStart { uint16_t type = 0; Fixed dx{}, dz{}; int count = 1; };
 struct FactionDef { std::string id, name; std::vector<FactionStart> start; };
 
-struct UpkeepTier { Fixed supply{}; Fixed gatherMult = Fixed::fromInt(1); };
+struct UpkeepTier {
+    Fixed supply{}; Fixed gatherMult = Fixed::fromInt(1);
+    uint32_t resMask = 0xFFFFFFFFu;            // resources affected (WC3: gold only)
+    Fixed incomeMult = Fixed::fromInt(1);      // multiplier on per-second income (CoH manpower upkeep)
+};
+
+// Damage model (rules "armor"): subtract (StarCraft, AoE) or percent (Warcraft III).
+struct ArmorRules {
+    bool percent = false;
+    Fixed perPoint = Fixed::fromRatio(6, 100); // percent: reduction = a*k / (1 + a*k); negative armor amplifies
+    Fixed minDamage{};                         // subtract: at least this much
+    Fixed minShare = Fixed::fromRatio(1, 5);   // subtract: at least this share of the raw damage
+};
+
+// Warcraft III heroes (rules "heroes").
+struct HeroRules {
+    bool skills = false;                       // abilities are learned with skill points (one per level + one at start)
+    int max = 0;                               // heroes per player (0 = no limit)
+    bool freeFirst = false;                    // the first hero costs no resources
+    std::vector<uint16_t> tiers;               // hero n needs a structure from tiers[n-1..]
+    bool revive = false;                       // training a dead hero again revives it with its level
+    Fixed reviveShare = Fixed::fromRatio(1, 2), revivePerLevel = Fixed::fromRatio(1, 10);
+    Fixed reviveTimeShare = Fixed::fromInt(1);
+    Fixed reviveMaxTime{};                     // 0: no cap (seconds)
+    std::vector<Amount> reviveMaxCost;
+};
 
 enum class VictoryMode : uint8_t { NoStructures, NoUnits, NoEntities, KeyUnits, Tickets, Survive, Score, Territory };
 
@@ -338,6 +409,9 @@ struct RegionRules {
     Fixed claimCostGrowth{};                  // +x * owned regions
     bool buildOnlyOwned = true;
     Fixed productionPerRegion{};              // production speed bonus per owned region beyond the first (Z)
+    bool requireExplored = false;             // a region must have been seen before it can be claimed (Northgard)
+    bool supplyLines = false;                 // income of points counts only in sectors linked to an own key structure (CoH)
+    bool clearFirst = false;                  // a region with hostile creatures in it can't be claimed (Northgard)
 };
 
 // Diggable terrain: map character -> hardness and what digging it yields (gold veins, gems).
@@ -362,6 +436,7 @@ struct TerritoryRules {
     bool startFromRegions = false;             // owned regions start as owned territory
     int startRadius = 0;                       // cells around starting structures / start points
     bool buildOnlyOwned = false;
+    std::vector<Amount> incomePerCell;         // per owned cell per second (Dungeon Keeper mana)
 };
 
 struct HandRules {
@@ -392,6 +467,7 @@ struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing 
 enum class CostModel : uint8_t { Upfront, Progressive };
 
 struct Rules {
+    MechRules mech;                           // agent-mech rules (RtsMechData.h)
     std::vector<ResourceDef> resources;
     std::vector<std::string> tagNames;
     std::vector<std::string> armorTypes, damageTypes;
@@ -437,6 +513,11 @@ struct Rules {
     bool settlers = false;                     // any settlers-economy mechanic present
     bool advancedEffects = false;              // statuses / delivery / skills beyond the original instant effects
     bool dungeon = false;                      // any dungeon / territory mechanic present (systems run)
+    ArmorRules armor;
+    HeroRules heroes;
+    bool originals = false;                    // any fidelity mechanic (RtsOriginals.cpp) present: its system runs, its state is hashed
+    std::vector<uint16_t> playerModTypes;      // types with playerMods (forges)
+    std::vector<uint16_t> perUnitResources;    // resources with perUnit mods (morale)
 
     int findRoom(const std::string& id) const;
     int findDiggable(char c) const;
@@ -450,6 +531,10 @@ struct Rules {
 };
 
 Rules loadRules(const Json& j);        // throws std::runtime_error with a readable message
+void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loadRules after types are parsed
+// Unit designs (UD): rules "designs": {"chassis": {...}, "parts": {...}} and types with "design": {"chassis", "parts"}
+// expand into plain type blocks. Returns a copy without "designs"; loadRules calls it when the block is present.
+Json expandDesigns(const Json& j);
 VictoryRules loadVictory(const Json& j, const VictoryRules& def);
 
 } // namespace rts::game

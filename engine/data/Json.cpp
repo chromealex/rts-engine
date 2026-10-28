@@ -137,11 +137,17 @@ Json Json::parseFile(const std::string& path) {
     catch (const JsonError& e) { throw JsonError(path + ": " + e.what()); }
 }
 
+thread_local JsonAccessLog* Json::accessLog_ = nullptr;
+void Json::noteKey(const std::string& key) const { if (type_ == Type::Object) accessLog_->keys.emplace_back(this, key); }
+void Json::noteIterated() const { if (type_ == Type::Object) accessLog_->iterated.push_back(this); }
+
 bool Json::has(const std::string& key) const {
+    if (accessLog_) noteKey(key);
     for (auto& [k, v] : object_) if (k == key) return true;
     return false;
 }
 const Json& Json::operator[](const std::string& key) const {
+    if (accessLog_) noteKey(key);
     for (auto& [k, v] : object_) if (k == key) return v;
     return kNullJson;
 }
