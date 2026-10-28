@@ -499,7 +499,7 @@ void ParticleSystem::Impl::stepParticle(size_t& i, float dt, bool& removed) {
     }
     p.pos += vt * dt;
     p.vtot = vt;
-    if (d.spin.curved()) p.rot += d.spin.at(t, prand(p.uid, 31)) * kDeg * dt;
+    if (d.spin.curved()) p.rot += d.spin.at(t, prand(p.uid, 31)) * kDeg * dt * ((p.flags & 32) ? -1.0f : 1.0f);
     else p.rot += p.spin * dt;
     if (modules) {
         if (d.spinBySpeed.enabled) p.rot += speedLut(er.spinSpeed, d.spinBySpeed.speed, render::length(vt) / p.scale) * kDeg * dt;

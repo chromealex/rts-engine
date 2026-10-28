@@ -269,3 +269,11 @@ def alpha_from_gray(img):
         r, g, b = img.rgba[i:i + 3]
         img.rgba[i + 3] = (r * 77 + g * 151 + b * 28) >> 8
     return img
+
+
+def crop(img, x, y, w, h):
+    """Sub-image (x, y from the top left), clamped to the image."""
+    x, y = max(0, min(img.w - 1, x)), max(0, min(img.h - 1, y))
+    w, h = max(1, min(img.w - x, w)), max(1, min(img.h - y, h))
+    rows = [bytes(img.rgba[((y + r) * img.w + x) * 4:((y + r) * img.w + x + w) * 4]) for r in range(h)]
+    return Image(w, h, b''.join(rows))
