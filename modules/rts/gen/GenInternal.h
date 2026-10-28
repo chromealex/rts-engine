@@ -99,6 +99,8 @@ Json materialRows(const Ctx& c);          // terrainMaterial rows (Null when no 
 Json heightsOut(const Ctx& c);            // levels model: fine visual heights per cell (Null when flat)
 
 // GenContent.cpp
+enum class Kind : uint8_t { Mine, Tree, Spot, Spawner, Creep, Wanderer, NeutralStruct, Other };
+Kind classify(const Ctx& c, int ti);      // what a game type is to the generator (mine, tree, spot, creep, ...)
 void chooseStarts(Ctx& c);
 void placeContent(Ctx& c);
 void validateFairness(Ctx& c);
