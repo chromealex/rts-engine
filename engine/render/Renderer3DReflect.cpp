@@ -1,4 +1,4 @@
-// Planar water reflection (lighting agent): on the High light tier, the opaque meshes, models and
+// Lighting passes (lighting agent). Planar water reflection: on the High light tier, the opaque meshes, models and
 // light glows are drawn once more, mirrored in the water plane, into a half-resolution target that
 // the lit shader blends over the water (LightShaders.h, waterReflect). Terrain (custom renderers)
 // and effects are skipped: a riverbed mirrored above the surface would cover everything, and the
@@ -62,6 +62,31 @@ void Renderer3D::renderReflection() {
     viewProj_ = savedVP;
     camPos_ = savedCam;
     lights.noteReflectionTime(std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count());
+}
+
+void Renderer3D::renderSpotShadow() {
+    if (!lights.prepareSpotShadow()) return;
+    // the sun shadow pipeline and casters, seen from the spot (perspective; the sun pass culling
+    // decides what may cast — good enough for the area around the camera)
+    const mat4 savedLVP = lightViewProj_;
+    lightViewProj_ = lights.spotShadowMatrix();
+    dev_->beginPass(lights.spotShadowPass());
+    dev_->setViewport({0, 0, lights.spotShadowSize(), lights.spotShadowSize()});
+    dev_->setPipeline(shadowPipe_);
+    uploadFrameUniforms(true);
+    for (const auto& it : items_) {
+        if (it.flags & (kDrawNoCastShadow | kDrawUnlit) || it.color.w < 0.99f) continue;
+        DrawUniformsR u{};
+        std::memcpy(u.model, it.model.m, sizeof u.model);
+        dev_->setUniforms(0, &u, sizeof u);
+        dev_->setVertexBuffer(it.mesh->vb);
+        dev_->setIndexBuffer(it.mesh->ib);
+        dev_->drawIndexed(it.mesh->indexCount);
+        ++drawCalls_;
+    }
+    renderModels(0);
+    dev_->endPass();
+    lightViewProj_ = savedLVP;
 }
 
 } // namespace rts::render
