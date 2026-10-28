@@ -143,8 +143,13 @@ struct AttractDef {
     Fixed weight = Fixed::fromInt(1);
 };
 
+}   // namespace rts::game
+#include "RtsMechData.h"   // agent-mech data (needs StatMod, Amount, layers)
+namespace rts::game {
+
 // ------------------------------------------------------------------ type
 struct UnitType {
+    MechType mech;                             // agent-mech blocks (RtsMechData.h)
     std::string id, name;
     uint64_t tags = 0;
     bool structure = false;
@@ -383,7 +388,8 @@ struct RoadNetworkRules {
 };
 
 // Local avoidance between moving units.
-struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2); };
+struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2);
+                       int planetHpaCells = 256 * 256; };   // planets: HPA* on bodies with >= this many cells (0 = all)
 
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
 struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing = Fixed::fromRatio(35, 100); };
@@ -391,6 +397,7 @@ struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing 
 enum class CostModel : uint8_t { Upfront, Progressive };
 
 struct Rules {
+    MechRules mech;                           // agent-mech rules (RtsMechData.h)
     std::vector<ResourceDef> resources;
     std::vector<std::string> tagNames;
     std::vector<std::string> armorTypes, damageTypes;
@@ -449,6 +456,7 @@ struct Rules {
 };
 
 Rules loadRules(const Json& j);        // throws std::runtime_error with a readable message
+void loadMechRules(Rules& r, const Json& j);   // RtsMechData.cpp, called by loadRules after types are parsed
 VictoryRules loadVictory(const Json& j, const VictoryRules& def);
 
 } // namespace rts::game

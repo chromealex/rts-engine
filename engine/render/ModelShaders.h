@@ -196,7 +196,7 @@ void main() {
         float m = 0.0, k = 1.0;
         if (teamMode == 2) { m = texture(tex6, v_uv).r; k = min(0.5 + luma(base.rgb) * 1.5, 1.0); }
         else if (teamMode == 3) { m = 1.0 - tb.a; base.a = m_base.a; }
-        else { m = 1.0 - v_col.a; base.a = m_base.a * tb.a; }
+        else { m = 1.0 - v_col.a; base.a = m_base.a * tb.a; k = min(0.5 + luma(base.rgb) * 1.5, 1.0); } // vertex RGB shades the team colour (voxel remap ramps)
         base.rgb = mix(base.rgb, v_team.rgb * k, clamp(m * m_misc.z, 0.0, 1.0));
     }
     base.rgb *= v_tint.rgb;
@@ -453,7 +453,7 @@ fragment float4 fs_main(VOut in [[stage_in]], bool frontFacing [[front_facing]],
         float tm = 0.0, k = 1.0;
         if (teamMode == 2) { tm = tex6.sample(s6, in.uv).r; k = min(0.5 + luma(base.rgb) * 1.5, 1.0); }
         else if (teamMode == 3) { tm = 1.0 - tb.a; base.a = m.base.a; }
-        else { tm = 1.0 - in.col.a; base.a = m.base.a * tb.a; }
+        else { tm = 1.0 - in.col.a; base.a = m.base.a * tb.a; k = min(0.5 + luma(base.rgb) * 1.5, 1.0); }
         base.rgb = mix(base.rgb, in.team.rgb * k, clamp(tm * m.misc.z, 0.0, 1.0));
     }
     base.rgb *= in.tint.rgb;

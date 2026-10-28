@@ -155,6 +155,7 @@ private:
     void fitPlanetCamera();
     bool planetCameraEvent(const platform::Event& e, bool uiWants);
     bool objectScreen(const SceneObject& o, float lift, float2& sp) const;   // flat maps: worldToScreen({x, lift, z})
+    static Vec3 simPoint(float3 g);   // planets: picked sim-space point -> command point (1/256 units)
     RtsModule& mod() { return *static_cast<RtsModule*>(&sim_->module()); }
     bool groundAt(float sx, float sy, float3& out) const;
     Entity pick(float sx, float sy) const;

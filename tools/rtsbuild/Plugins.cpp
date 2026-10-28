@@ -1,4 +1,5 @@
 #include "Plugins.h"
+#include "engine/pack/FileCopy.h"
 
 #include "engine/platform/PluginJson.h"
 #include "engine/platform/Plugins.h"
@@ -176,7 +177,7 @@ fs::path writePluginsCMake(const PluginSet& set, const fs::path& dir) {
             for (const fs::path& f : globFiles(l.dir, pat)) {
                 fs::path rel = fs::path("plugins") / l.name / fs::relative(f, l.dir);
                 fs::create_directories((dir / rel).parent_path());
-                fs::copy_file(f, dir / rel, fs::copy_options::overwrite_existing);
+                rts::pack::copyFileReplaceOrThrow(f, dir / rel);
                 sources.push_back("${CMAKE_CURRENT_LIST_DIR}/" + rel.generic_string());
             }
     }
@@ -255,7 +256,7 @@ void copyAndroidJava(const PluginSet& set, const fs::path& javaRoot) {
         for (auto it = fs::recursive_directory_iterator(from); it != fs::recursive_directory_iterator(); ++it) {
             const fs::path to = javaRoot / fs::relative(it->path(), from);
             if (it->is_directory()) fs::create_directories(to);
-            else fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing);
+            else rts::pack::copyFileReplaceOrThrow(it->path(), to);
         }
     }
 }
@@ -279,7 +280,7 @@ void installWebPlugins(const PluginSet& set, const fs::path& outDir) {
             for (const fs::path& f : globFiles(l.dir, pat)) {
                 fs::path rel = fs::path("plugins") / l.name / f.filename();
                 fs::create_directories((outDir / rel).parent_path());
-                fs::copy_file(f, outDir / rel, fs::copy_options::overwrite_existing);
+                rts::pack::copyFileReplaceOrThrow(f, outDir / rel);
                 tags += "<script src=\"" + rel.generic_string() + "\"></script>";
             }
         // the plugin's config, so JS can read it before init (e.g. to load an SDK early)

@@ -1,6 +1,6 @@
 # Game data format (RTSEngine)
 
-A game is a folder `games/<id>/`:
+A game is a folder `<project>/`:
 
 ```
 game.json        manifest: name, id, version, rules file, maps list, orientation, icon, input
@@ -821,6 +821,154 @@ Garrison structures, groups and lanes come from `garrison`, `kCmdSend` and `lane
 Still needs code: **flying towers moving between points** (garrisons are fixed structures; a mobile
 garrison would need garrisons on units).
 
+## Army control (agent-mech): stances, retreat, transports
+
+Optional blocks; a game without them plays exactly as before (stances and retreat commands work in any game).
+
+```json
+"stances": {"defendRadius": 6},                          // defensive stance: chase at most this far from where it stood
+"retreat": {"speed": 1.25, "damageTaken": 0.75},          // the Retreat command (Company of Heroes / Dawn of War II)
+"types": {
+  "hq":     {"retreatPoint": true, ...},                  // retreating units run to the nearest own one (else key / producer)
+  "archer": {"stance": "defensive", ...},                 // default stance of the type: aggressive | defensive | hold | passive
+  "apc":    {"transport": {"slots": 8, "accepts": ["infantry"], "layers": ["ground"], "unloadInterval": 0.5, "killOnDeath": 1}},
+  "bunker": {"transport": {"slots": 4, "fireFrom": 4, "heal": 2}},                 // passengers shoot from inside
+  "town_center": {"transport": {"slots": 15, "damagePerCargo": 0.2, "accepts": ["villager"]}},   // AoE: more arrows per garrisoned unit
+  "ifv":    {"transport": {"slots": 1, "weaponFromCargo": true}},                  // the passenger's weapon fires (RA2 IFV)
+  "tank":   {"cargoSize": 4, ...}                                                  // slots a passenger takes (default 1)
+}
+```
+
+- **Stances** (command `kCmdStance`, param 0 aggressive, 1 defensive, 2 hold, 3 passive): aggressive = default behaviour;
+  defensive = fights enemies within `stances.defendRadius` of its spot and walks back; hold = never moves on its own
+  (persistent `kCmdHold`); passive = never attacks on its own (explicit attack orders still work).
+- **Retreat** (`kCmdRetreat`, needs a `retreat` block): the units run to the nearest own `retreatPoint` (else a `key`
+  structure, else a producer) with `speed` x speed and `damageTaken` x damage, without fighting; any new order ends it.
+  The AI retreats fighters below 30% hp that see an enemy.
+- **Transports** (`transport` on units or structures): `kCmdLoad` (units = passengers, target = transport; a right click
+  on an own transport does the same), `kCmdUnload` (units = transports; param 1 + point: drive there first). Passengers
+  are off the map (`kUnitInCargo`): not targetable, not drawn, not pushing; they ride with the carrier. `accepts`
+  (type tags) and `layers` filter passengers, `fireFrom` passengers with weapons shoot from inside at the carrier's
+  position, `damagePerCargo` raises the carrier's own damage per passenger, `heal` hp/s inside. When the carrier
+  dies, `killOnDeath` of the passengers die with it (default 1 for units, 0 for structures) and the rest get out.
+  Events `kEvLoaded` / `kEvUnloaded` (a = passenger, b = transport). The AI mans shooting structures (`fireFrom`:
+  fighters; `damagePerCargo`: workers) when enemies are within 10 cells and lets workers out when it is safe.
+
+### Detection, toggles, veterancy, guard / follow, waypoints (agent-mech)
+
+```json
+"veterancy": {"xp": [100, 300, 700], "perLevel": [{"stat": "damage", "add": 0.1}, {"stat": "armor", "add": 1}], "healOnLevel": true, "fromCost": 1},
+"statuses": {"cloak": {"flags": ["invisible"]}, "burrowed": {"flags": ["invisible", "root", "disarm"]}},
+"types": {
+  "observer": {"detects": 9, ...},                                   // reveals invisible enemies within 9 cells (allies share it)
+  "ghost":    {"abilities": [{"id": "cloak", "target": "none", "toggle": {"status": "cloak", "drain": 1}}], ...},
+  "lurker":   {"abilities": [{"id": "burrow", "target": "none", "toggle": {"status": "burrowed"}}], ...},
+  "wall":     {"veterancy": false},                                   // or its own {"xp": [...], "perLevel": [...]}
+  "tank":     {"xp": 50, ...}                                         // xp its killer gets (default: its cost x fromCost)
+}
+```
+
+- **Detection**: invisible objects (status flag `invisible`) can be targeted by a side only when `revealed` or within
+  `detects` of one of its (or an ally's) detectors. `RtsModule::canSee(sim, e, viewer)` is the query for the view/UI.
+- **Toggle abilities**: casting switches the status on (until toggled off) and off; `drain` energy per second turns
+  it off when energy runs out. Cloak, burrow, submerge, siege mode (a status with mods / flags) are data.
+- **Veterancy** (ordinary units; heroes keep `hero`): the unit that dealt the last hit gets the victim's `xp`;
+  ranks apply `perLevel` per rank above 1 and heal on rank-up; event `kEvLevelUp` (value = rank).
+- **Guard / follow** (`kCmdGuard`, `kCmdFollow`, target = unit): follow within ~3 cells; guard also fights enemies
+  within 6 cells of the guarded unit.
+- **Rally waypoints**: `kCmdRally` with the queue flag (Shift) adds waypoints after the rally point; new units walk
+  them in order. A plain rally clears them. The order queue itself (`kCmdQueue` on any command) always existed.
+- **Wave routes**: map waves take `"route": ["gate", [30, 8]]` (area names or points), walked before the objective.
+
+### Combat and economy models (agent-mech)
+
+```json
+"armorModel": "percent",                                               // Warcraft III: armor a cuts a*0.06/(1+a*0.06); "factor" changes 0.06
+"armorModel": {"type": "subtract", "minFraction": 0.2, "min": 0},      // default (StarCraft): damage - armor, at least 20%
+"armorModel": {"type": "classes", "base": ["melee", "pierce"], "min": 1},   // Age of Empires II
+"upkeepResources": ["gold"],                                            // upkeep tiers cut only these (Warcraft III)
+"types": {
+  "spearman": {"weapons": [{"damage": 3, "attacks": {"melee": 3, "cavalry": 15}}], "armors": {"melee": 0, "pierce": 0, "infantry": 0}},
+  "knight":   {"armors": {"melee": 2, "pierce": 2, "cavalry": 0}},
+  "zealot":   {"shields": {"max": 50, "regen": 2, "delay": 10, "armor": 0}},   // StarCraft shields
+  "goldmine": {"resourceNode": {"resource": "gold", "amount": 12500, "maxWorkers": 5}}
+}
+```
+
+- **classes**: damage = max(`min`, sum over the weapon's `attacks` of max(0, attack - armor of that class)); `base`
+  classes always count (a missing armor is 0, armor upgrades raise them), other classes only against types that list
+  them in `armors` (bonus damage is added, not multiplied). A weapon without `attacks` attacks the first base class
+  with its `damage`. The damage table is not used in this model.
+- **shields** take damage first (minus shield `armor`, at least 0.5), hp and armor only see what is left; they
+  regenerate `regen`/s after `delay` seconds without hits.
+- **maxWorkers**: further workers wait next to the node until a place is free.
+
+### Genre mechanics (agent-mech stage 2)
+
+```json
+"market": {"currency": "gold", "prices": {"wood": 100, "food": 100, "stone": 130}, "fee": 0.3, "step": 3, "lot": 100},
+"tribute": {"fee": 0.3}, "diplomacy": true,
+"items": {"potion": {"cost": {"gold": 50}, "use": {"heal": 200}, "charges": 1},
+          "boots":  {"cost": {"gold": 100}, "mods": [{"stat": "speed", "add": 1}], "charges": 0, "consumable": false}},
+"cycles": [{"id": "day", "length": 480, "phases": [{"id": "day", "until": 0.6}, {"id": "night", "until": 1, "status": "night"}]},
+           {"id": "season", "length": 1200, "phases": [{"id": "summer", "until": 0.75}, {"id": "winter", "until": 1, "status": "winter"}]}],
+"hazards": [{"field": "tiberium", "damage": 6, "tags": ["infantry"]}, {"area": "lava", "status": "burning"}],
+"deck": {"hand": 4, "deployNear": 8, "ownHalf": true},
+"types": {
+  "wall":     {"wall": true, ...},                       // built in a line (kCmdBuildLine)
+  "gate":     {"gate": "own" | "allies", ...},           // the owner walks through; enemies are stopped and attack it
+  "bridge":   {"bridge": true, ...},                     // walkable ground over water while it stands (map-placed)
+  "nydus":    {"transport": {"slots": 20}, "tunnel": "nydus"},   // load at one, unload at any tunnel of the network
+  "hovercraft": {"move": {"layer": "amphibious", ...}},  // ground and water
+  "harrier":  {"weapons": [{"ammo": 2, ...}]},           // empty: flies to the nearest own dock and rearms
+  "airfield": {"dock": {"slots": 4, "rearmTime": 1}},
+  "templar":  {"mergeInto": {"with": "templar", "result": "archon"}},   "archon": {"splitInto": {"type": "templar", "count": 2}},
+  "market":   {"market": true}, "cart": {"trader": {"rate": 0.5}},     // currency per cell between the two markets per round trip
+  "hero":     {"inventory": {"slots": 6}}, "shop": {"shop": {"sells": ["potion", "boots"], "radius": 4}},
+  "kobold":   {"drops": [{"item": "potion", "chance": 0.3}]}
+}
+```
+Map players may have `"deck": ["card ids..."]` (default: every player ability). Commands: `kCmdFormation` (param 0 line, 1 box,
+2 wedge, 3 loose, -1 break; a formation ordered to a point keeps its shape and the pace of its slowest member),
+`kCmdBuildLine`, `kCmdMerge`, `kCmdSplit`, `kCmdTrade` (sell / buy one lot; prices move by `step` and are shared by all),
+`kCmdTradeRoute`, `kCmdTribute`, `kCmdDiplomacy` (alliances need both sides; war moves the player to a new team),
+`kCmdBuyItem` / `kCmdUseItem` / `kCmdDropItem` / `kCmdPickItem`. Cycles apply their phase `status` to every player and set
+trigger variable `cycle.<id>` = phase index (event `kEvCyclePhase`). Jumps over cliffs, jetpacks and blinks are abilities
+with the `blink` effect; teleport networks are `area` effects with `teleportTo`. The AI sells surplus / buys shortages,
+sends idle carts to the farthest market, buys and drinks potions with heroes and merges idle pairs.
+
+## Save states (agent-mech)
+
+`Simulation::serialize()` returns the whole dynamic state as bytes (versioned, little-endian, identical on every
+platform: `engine/core/Archive.h`); `deserialize(bytes)` loads it into a simulation set up from the same rules, map and
+seed and checks the state checksum stored in the file. Saved: tick, RNG, players and teams, pending and executed
+commands (replays continue), the entity allocator, every component pool in dense order and the dynamic part of
+`GameState` (per-cell layers run-length encoded). Not saved: rules, triggers, the planet surface (from setup) and derived
+caches (clearance, HPA*, rebuilt on demand). The computer players keep their own memory, so bots resume from the loaded
+state with fresh plans. Module side: `RtsModule::serializeState` (`modules/rts/RtsSave.cpp`); a component type missing from
+its list makes saving fail. `rts_headless --save F --save-at S` / `--load F`; MCP `match_run` with `saveCheck` (seconds).
+A skirmish match at 90 s is ~150 KB.
+
+## Campaigns (agent-mech)
+
+`campaign.json` in the game folder chains missions; see `modules/rts/RtsCampaign.h`:
+
+```json
+{"start": "m1", "missions": [
+  {"id": "m1", "name": "Raid", "map": "maps/m1.json", "briefing": "campaign.m1.briefing", "next": "m2",
+   "carry": {"resources": ["gold"], "tags": ["hero"], "types": ["knight"], "max": 12}},
+  {"id": "m2", "name": "Siege", "map": "maps/m2.json"}]}
+```
+
+Trigger actions for missions: `{"type": "objective", "id": "raze", "text": "...", "op": "add" | "done" | "fail", "primary": true}`,
+`{"type": "dialog", "speaker": "Captain", "portrait": "ui/captain.png", "voice": "vo/c1.ogg", "text": "...", "duration": 4}`,
+`{"type": "camera", "at": [x, z] | "area": "a", "zoom": 1, "duration": 2, "lock": false}`,
+`{"type": "endMission", "result": "victory" | "defeat", "next": "m2"}`. State in `GameState::mech` (`objectives`,
+`dialogs`, `nextMission`, `missionResult`, saved with the match); events `kEvObjective`, `kEvDialog`, `kEvCamera`,
+`kEvMissionEnd` for the HUD (objective list, dialog box, camera moves). Between missions `collectCarry` (survivors with
+hp, rank, hero level; resources) -> `applyCarry` (into the next map, players[0] = campaign player) -> `restoreCarry`
+after setup. MCP: `campaign_get`, `campaign_set` (validated), `campaign_run` (bots, mission chain, outcomes, carry).
+
 ## Commands (for tools and network code)
 
 Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player is defeated, event value 1),
@@ -828,7 +976,8 @@ Besides the unit commands (`RtsModule.h`): `kCmdSurrender` (the issuing player i
 room `extra` = room index or -1 erase), `kCmdPickUp` (units), `kCmdDrop` (point; units or `param` = count),
 `kCmdSlap` (units), `kCmdPossess` (units[0]; empty = release), `kCmdDirect` (point = direction, `param` bit 0 = fire,
 optional target), `kCmdPlayerAbility` (`param` = index, point), `kCmdBuildRoad` (rect, `extra` 1 = remove),
-`kCmdConnectRoad` (units = own structures), `kCmdTransit` (planets: orbit units, `param` = target body). `kCmdPlayerAbility` with a `structure` / `group` / `player`
+`kCmdConnectRoad` (units = own structures), `kCmdTransit` (planets: orbit units, `param` = target body), `kCmdStance` (param = stance),
+`kCmdRetreat`, `kCmdLoad` (target = transport), `kCmdUnload` (param 1 = drive to point first), `kCmdGuard` / `kCmdFollow` (target = unit). `kCmdPlayerAbility` with a `structure` / `group` / `player`
 ability takes the clicked object in `target` (or the nearest one to `point`).
 
 ## Triggers
@@ -863,6 +1012,14 @@ matching the filter to `at` / `area`), `setTickets` (`amount`).
 
 Action `player`: `"triggering"` (default: the player of the event), `"all"`, `"enemies"`, `"allies"`,
 `"creeps"`, `"neutral"`, or a slot number. `"target": "triggeringUnit"` acts on the event's unit.
+
+### Testing data through MCP
+
+`scenario_run` runs a scripted check on a copy of the open map: named `spawn`s, timed `commands` (keys of
+`play_command`), optional `bots`, `checks` (pass/fail) and `watch` / `events` / trigger logs. Every fired trigger
+is also a simulation event `kEvTriggerFired` (value = trigger index: rules triggers first, then map triggers;
+player = triggering slot) — presentation/tools only, not hashed. `rules_lint` lists keys the loader never reads;
+`rules_schema` with `part: "keys"` lists every key the loader reads per block, taken from the loader itself.
 
 ## Texture atlases (game.json `atlas`, optional)
 
@@ -962,7 +1119,7 @@ an original image: `lib.loadImage(path, img)` or `atlas::ImageSource` (the UI us
 sourceBytes, atlasBytes, storedBytes, bytesSaved, gpuBytesBefore, gpuBytesAfter,
 textureBindsBefore, textureBindsAfter, groups[] {group, textures, unique, pages,
 occupancyPercent}, excluded[] {path, reason}}. Preview: `assetpipe atlas --profile web -o <dir>
-games/<id> engine/assets=engine` writes the pages as PNG plus the manifest and the report.
+<project> engine/assets=engine` writes the pages as PNG plus the manifest and the report.
 
 ## Icons and splash (game.json `icons`, `splash`, optional)
 
@@ -1055,7 +1212,7 @@ image with transparency (it is flattened on `background`).
   in `platform/web/shell.html` with the `.data` download progress until the wasm starts; macOS and
   Windows: the window background colour.
 - Split builds always keep the splash images in the base pack.
-- Sample: `games/skirmish` (art generated by `games/_tools/brandart.py`, CC0).
+- Sample: `templates/skirmish` (art generated by `templates/_tools/brandart.py`, CC0).
 
 ## Recipes (mechanics of known games)
 
@@ -1121,7 +1278,7 @@ game without `layers`), Medium = splat textures + cliff texture, High = + normal
 **Performance**: the terrain is cut into 32x32-cell chunks, frustum-culled; the editor rebuilds only chunks whose cells
 changed; during a match nothing is rebuilt: resource fields, creep and (heightfield maps) fog of war are read by the
 shader from small per-cell textures. `RTS_TERRAIN_STATS=1` prints chunks / triangles / frame time. Sample:
-`games/frostcrown` (generated CC0 textures, `tools/terrain/make_textures.py`).
+`templates/frostcrown` (generated CC0 textures, `tools/terrain/make_textures.py`).
 
 **Editor / MCP** (heightfield maps, `apps/editor/core/TerrainOps.cpp`, window **Рельеф**):
 `terrain_sculpt {op: raise|lower|smooth|flatten|noise|set, x, y | points, radius, strength, seed}` (the first sculpt
@@ -1153,8 +1310,8 @@ Everything is integer / fixed point and deterministic.
 - **Checksums**: corners and the model are part of the state hash only for heightfield games.
 - **Big maps** (256x256 cells and more): long paths use hierarchical pathfinding (16x16 clusters with border
   entrances, refined with A*), built at match start and rebuilt only around structures that block cells.
-  `rts_headless --project DIR --bench-paths N` times path queries; `python3 games/_tools/mapgen.py --big 1024
-  <scratch>/maps/big.json` writes a 1024x1024 test map (keep it out of `games/`).
+  `rts_headless --project DIR --bench-paths N` times path queries; `python3 templates/_tools/mapgen.py --big 1024
+  <scratch>/maps/big.json` writes a 1024x1024 test map (keep it out of `templates/`).
 
 MCP: `map_info.heightfield` (`corners`, `min`, `max`, `storage`, `model`), `map_heightfield {"enabled"}` adds a flat
 heightfield or removes it, `map_validate` warns when the model is heightfield but the map has no corners and flags
@@ -1208,8 +1365,10 @@ Flat maps are untouched (same checksums).
   only by weapons whose `targets` list `"orbit"`), `move.transitSpeed` (world units/s for transfers; default 10 x speed).
 - Command `kCmdTransit` (units = orbit units, `param` = target body index): timed transfer computed from the body
   positions at departure, arrival on the facing side of the target's shell; events `kEvTransitStart` / `kEvTransitEnd`.
+- Rules `movement.planetHpaCells` (default 65536): bodies with at least that many cells (6 x faceSize²) use hierarchical
+  pathfinding for long trips (0 = every body).
 - Structures stand inside one face (a footprint crossing a seam is not buildable). Units on different bodies only meet
-  through the orbit layer. Sample: `games/planets`.
+  through the orbit layer. Sample: `templates/planets`.
 
 ## Map generation (`generate`)
 
@@ -1287,7 +1446,7 @@ Editor: window **Генерация** (preset, seed, players, symmetry, params; 
 `"seed": "match"`). MCP: `gen_presets`, `map_generate {preset, seed, players, symmetry, params, mode: bake | match | fixed,
 useTemplate, keepSize}`.
 
-## Sample games (data only, `games/<id>/`; maps from `games/_tools/mapgen.py`)
+## Sample games (data only, `<project>/`; maps from `templates/_tools/mapgen.py`)
 
 | id | like | recipe |
 |---|---|---|
@@ -1306,13 +1465,13 @@ useTemplate, keepSize}`.
 | `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
 | `hearthhaul` | Knights and Merchants | `storage: buildings`, storehouse, recipe chains (woodcutter → sawmill, farm → mill → bakery, armoury), serf `carrier`s, `roadNetwork`, delivered construction materials, `trainFrom: recruit`, inn `needs` with `starve` |
 | `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |
-| `planets` | Total Annihilation on planets | metaltide rules on a planet + moon (`world` block, `at` positions), `orbital_yard` → `gunship` (`move.layer: orbit`, `transitSpeed`), defender weapons with `targets: orbit`; map from `games/_tools/planetgen.py` |
+| `planets` | Total Annihilation on planets | metaltide rules on a planet + moon (`world` block, `at` positions), `orbital_yard` → `gunship` (`move.layer: orbit`, `transitSpeed`), defender weapons with `targets: orbit`; map from `templates/_tools/planetgen.py` |
 | `spellbunkers` | Bunker Wars / Mushroom Wars 2 skills | sporelanes + mana/morale `regen`, named `statuses`, 26 player skills (structure / group / player targets, areas moving along lanes, chains over structures), per-player `loadout` of 16, an `autoEvery` map skill and a `passive` |
 
 ## 2D games
 
 Still the 3D engine, seen through an orthographic camera; objects can be sprites and the ground a
-tile map. Two flavours, both pure data (samples: `games/tiles2d`, `games/km2d`; their placeholder
+tile map. Two flavours, both pure data (samples: `templates/tiles2d`, `templates/km2d`; their placeholder
 art is generated by `tools/art2d/make_samples.py`):
 
 - **Tile 2D** (Red Alert, Dune II, Warcraft II): `camera` straight down (`pitch: 90`), a map
@@ -1347,7 +1506,7 @@ The editor uses the projection and angle for its Scene and Game views.
 | key | meaning |
 |---|---|
 | `sheet` | image (PNG/JPEG/TGA), required. **Rows = facings** (row 0 faces east/+X, then clockwise on screen: SE, S, SW, W, ...), **columns = animation frames** |
-| `frame` | frame size in pixels (default: whole sheet width, square) |
+| `frame` | frame size in pixels (default: whole sheet width, square — give it for single images that are not square, otherwise the frame reaches past or stops short of the image) |
 | `facings` | 1, 4, 8, 16, 32... rows; `mirror: true` stores only north → east → south (`facings/2 + 1` rows) and flips them for the west side |
 | `actions` | column ranges `[start, count, fps]` or `{"start", "count", "fps", "loop"}`. `idle`, `move`, `attack`, `work` (gathering/building workers), `build` (structure under construction; non-looping = frame follows the progress), `die` (played where the object disappeared, then the last frame stays `corpseTime` s). Missing actions fall back to `idle` (`work` → `attack` → `idle`) |
 | `mode` | `billboard` (faces the camera; default), `upright` (vertical quad), `ground` (lies on the terrain; top-down games) |
@@ -1355,12 +1514,53 @@ The editor uses the projection and angle for its Scene and Game views.
 | `anchor` | pivot in the frame, 0..1 from the top-left (default `[0.5, 1]`, ground mode `[0.5, 0.5]`) |
 | `offset` | `[right, front]` cells from the object centre; default for standing structures: the front edge of the footprint, so a 3/4-view drawing stands on its footprint |
 | `team` | `"magenta"` (default): pixels in shades of magenta (r = b, g = 0) become the player's colour times their brightness; `"none"` |
-| `shadow` | soft blob under the sprite (`true`, `false` or `{size, alpha}`; default on for standing units) |
+| `shadow` | `"cast"` (real sun shadow, see below), `"blob"` (soft ellipse under the sprite), `"none"`; `true` = blob, `false` = none; the object form `{"mode", "size": [w, h], "alpha"}` is a blob unless `mode` says otherwise (`size`/`alpha` also shape the blob that replaces a cast shadow on low tiers). Default: the game's `sprites.shadow`; with the default `"blob"` only units get one (as before), ground sprites never cast |
+| `castHeight` | world height of the shadow caster (default: the drawn height). 3/4-view buildings whose drawing includes the roof seen from above cast a long shadow with the full height: give the real wall + roof height |
+| `shadowOffset` | `[right, front]` cells added to the sprite's `offset` for the caster (default: the caster stands where the sprite is drawn — for buildings the front edge of the footprint) |
+| `castDepth` | buildings cast like a box: a second caster this many cells behind the first (default: the footprint depth for structures, 0 for units) |
+| `lit` | override of the game's `sprites.lit` for this type |
 | `depthBias`, `lift` | pull towards the camera so hills don't cut the sprite; air units float `lift` cells (default 1.2) above their shadow |
 
 Sprites are batched (one draw call per sheet), alpha-tested, depth-tested against the 3D scene and
 painter-sorted; textures are read with `platform::readContentFile`. Types without `sprite` keep
 their 3D `view`, so a map can mix both.
+
+### Sprite shadows and lighting (`sprites` block)
+
+Game-wide defaults in `game.json` (wins) or `rules.json`:
+
+```json
+"sprites": { "shadow": "cast", "lit": true }
+```
+
+| key | meaning |
+|---|---|
+| `shadow` | default `shadow` of every sprite type: `"blob"` (default, the classic look), `"cast"`, `"none"` |
+| `lit` | sprites take the scene light (default `false`: painted colours, pixel-art purists): sun and sky colour, day/night and presets, point lights, cloud shadows and (Medium/High) the sun shadows of other objects falling on them. In full default daylight a lit sprite keeps its painted colours |
+
+**Cast shadows**: the sprite is drawn into the sun shadow map as an upright alpha-tested quad
+standing at its foot, facing the camera's yaw (turned towards the sun when the sun shines almost
+along it), current animation frame and facing; the shadow then falls on the terrain, 3D models
+and other lit sprites with the sun direction, softness and PCF tiers of the 3D games.
+
+| `RTS_SHADOWS` / shadow tier | sprites with `"shadow": "cast"` |
+|---|---|
+| Off | blobs only (the classic look, no shadow pass) |
+| Low | buildings cast, units keep blobs; sprites don't sample the shadow map |
+| Medium / High | everything casts (units keep a faint contact blob); lit sprites receive shadows |
+
+Where shadows fall is the sun's direction: `"lighting": {"sunDir": [x, y, z]}` (game.json or the
+map, towards the sun at noon; the day cycle swings around it). Flat drawings hide shadows that
+fall straight behind them, and a sun behind the scene leaves camera-facing cliff walls unlit, so
+sprite games usually want it from the side and a little in front (km2d: `[-1.0, 1.2, 0.45]`,
+shadows to the right). `"shadowSoftness"` (world units, default 0.22) is the penumbra radius;
+pixel-art games look cleaner with a tight one (km2d 0.07): kernels of a few shadow-map texels are
+filtered without the per-pixel noise rotation, so they stay smooth on every tier.
+
+**Blobs and ground sprites are projected**: a blob (and any `"mode": "ground"` sprite) is cut from
+the ground triangles under it — the exact triangles of the terrain mesh or the tile map — and drawn
+with a depth bias, so it bends over slopes and cliff edges and never z-fights or hovers. Sprite
+types get no extra contact-shadow decal from the lighting system (their blob does that job).
 
 ### Tilesets (`tilesets/<name>.json`)
 

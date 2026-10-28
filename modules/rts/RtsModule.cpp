@@ -2,6 +2,7 @@
 #include "RtsInternal.h"
 #include "gen/MapGen.h"
 #include <algorithm>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace rts::game {
@@ -25,6 +26,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     const Json& mapIn = generated_.isObject() ? generated_ : map;
     setupMap(sim, mapIn);
     loadTriggers(rules_, rulesJson, mapIn, triggers_);
+    mechSetup(sim, mapIn);   // agent-mech
     // Lua: the engine's standard library (rule-level mechanics, modules/rts/lua) + the game's scripts
     script_ = std::make_unique<ScriptEngine>(*this);
     script_->load(sim, rulesJson, mapIn);
@@ -41,6 +43,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("neutrals", [this](Simulation& s) { sysNeutrals(s); });
     if (rules_.dungeon) sim.addSystem("dungeon", [this](Simulation& s) { sysDungeon(s); }); // only for games that use it
     sim.addSystem("orders", [this](Simulation& s) { sysOrders(s); });
+    sim.addSystem("mech", [this](Simulation& s) { if (mechOn(s)) sysMech(s); });   // agent-mech
     sim.addSystem("abilities", [this](Simulation& s) { sysAbilities(s); });
     if (rules_.advancedEffects) sim.addSystem("effects", [this](Simulation& s) { sysEffects(s); });
     sim.addSystem("targeting", [this](Simulation& s) { sysTargeting(s); });
@@ -65,6 +68,13 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (g.bigMap())
         for (auto& t : rules_.types)
             if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpa(t.pathLayer);
+    // planets: HPA* on bodies above the cell threshold (RtsHpaSphere.cpp). RTS_PLANET_HPA=1 / 0 forces it on / off
+    // (testing and benchmarks only: every peer of a match must use the same setting)
+    g.sphereHpaMinCells = rules_.movement.planetHpaCells;
+    if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
+    if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
+        for (auto& t : rules_.types)
+            if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpaSphere(t.pathLayer);
 }
 
 void RtsModule::setupMap(Simulation& sim, const Json& map) {
@@ -322,6 +332,13 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
             wd.spawn.push_back({uint16_t(t), int(s.getInt("count", 1))});
         }
         wd.at = mapPos(sim, wj["at"]);
+        for (auto& rp : wj["route"].items()) {   // agent-mech: area names or [x, z]
+            if (rp.isString()) {
+                const Json& a = map["areas"][rp.str()];
+                if (!a.isArray()) throw std::runtime_error("map wave route: unknown area '" + rp.str() + "'");
+                wd.route.push_back({a[0].fx() + a[2].fx() / 2, Fixed{}, a[1].fx() + a[3].fx() / 2});
+            } else wd.route.push_back(mapPos(sim, rp));
+        }
         wd.spread = wj.getFx("spread", wd.spread);
         wd.every = uint32_t((wj.getFx("every") * int64_t(sim.tickRate())).toInt());
         wd.growth = wj.getFx("growth", Fixed::fromInt(1));
@@ -617,6 +634,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
                 for (auto& m : rules_.statuses[in.def].mods)
                     if (m.stat == s) { add += m.add * in.stacks; for (int k = 0; k < in.stacks; ++k) mul *= m.mul; }
     }
+    if (mechOn(sim)) mechStatMod(sim, e, s, add, mul);   // agent-mech states (retreat speed, cargo arrows, veterancy)
     // Damage/Range/GatherRate/AttackSpeed "add" are fractional bonuses on top of 1 / absolute range
     return (base + add) * mul;
 }
@@ -738,7 +756,7 @@ bool RtsModule::canPlace(Simulation& sim, uint8_t player, uint16_t type, Vec3 ce
     }
     bool clear = true;
     w.each<Unit, Transform, Mobile>([&](Entity e, Unit& u, Transform& tr, Mobile&) {
-        if (e == ignore || (u.flags & kUnitInHand) || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
+        if (e == ignore || (u.flags & kUnitOffMap) || !(rules_.types[u.type].layer & (kLayerGround | kLayerSandOnly))) return;
         int cx, cy; g.cellXY(tr.pos, cx, cy);
         if (cx >= x0 && cx < x0 + t.footprintW && cy >= y0 && cy < y0 + t.footprintH) {
             // own units step aside (they will be pushed); enemies block
@@ -885,6 +903,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
     const bool queue = cmd.flags & kCmdQueue;
+    if (cmd.type >= kCmdStance || mechOn(sim) || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue))) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
     if (cmd.type == kCmdBuildRoad || cmd.type == kCmdConnectRoad) { applySettlersCommand(sim, cmd); return; }
 
@@ -913,7 +932,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         auto* o = w.tryGet<Owner>(e);
         auto* u = w.tryGet<Unit>(e);
         if (!o || !u || o->player != cmd.player || u->hp.raw <= 0) continue;
-        if (u->flags & (kUnitInHand | kUnitPossessed)) continue; // off the map / directly controlled
+        if (u->flags & (kUnitOffMap | kUnitPossessed)) continue; // off the map / directly controlled
         if (auto* nd = w.tryGet<Needs>(e); nd && nd->leaving) continue;
         if ((u->flags & kUnitUnderConstruction) && cmd.type != kCmdCancelTrain) continue;
         if (std::find(sel.begin(), sel.end(), e) != sel.end()) continue;
@@ -1309,7 +1328,9 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
         if (auto* c = w.tryGet<Cargo>(e)) { h.i32(c->res); h.fx(c->amount); }
         if (auto* hr = w.tryGet<Hero>(e)) { h.i32(hr->level); h.fx(hr->xp); }
         if (auto* cp = w.tryGet<Capture>(e)) { h.fx(cp->progress); h.u32(cp->team); }
+        if (mechOn(sim)) hashMech(sim, h, e);
     });
+    if (mechOn(sim)) hashMechGlobal(sim, h);
     h.u32(uint32_t(w.count<Projectile>()));
     w.each<Projectile, Transform>([&](Entity e, Projectile&, Transform& t) { h.u64(e.packed()); h.v3(t.pos); });
 }

@@ -31,6 +31,8 @@ private:
     void special(Simulation& sim, RtsModule& m);   // deploy, sidebar placement, claims, auto-build, upgrades, research
     void dungeon(Simulation& sim, RtsModule& m);   // mark digs toward objectives, paint rooms
     void settlers(Simulation& sim, RtsModule& m);  // roads to buildings, production chains
+    void mech(Simulation& sim, RtsModule& m);      // agent-mech (RtsMechAI.cpp): retreat the wounded, man bunkers, ...
+    void mechEconomy(Simulation& sim, RtsModule& m);   // market, trade carts, hero items, merges
     bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
@@ -47,7 +49,8 @@ private:
     uint32_t lastSkillTick_ = 0;
     int savingFor_ = -1;          // player skill the bot saves resources for
     uint32_t savingUntil_ = 0;
-    uint32_t lastSettlersTick_ = 0;   // few workers left and one can be trained: don't spend on the army
+    uint32_t lastSettlersTick_ = 0;
+    uint32_t lastMechTick_ = 0;   // few workers left and one can be trained: don't spend on the army
 };
 
 } // namespace rts::game

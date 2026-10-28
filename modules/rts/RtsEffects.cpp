@@ -58,7 +58,7 @@ Fixed RtsModule::playerStat(Simulation& sim, uint8_t player, Stat s, Fixed base)
 bool RtsModule::filterOk(Simulation& sim, const TargetFilter& f, Entity e, uint8_t owner, Entity caster) const {
     World& w = sim.world();
     auto* u = w.tryGet<Unit>(e);
-    if (!u || u->hp.raw <= 0 || (u->flags & kUnitInHand)) return false;
+    if (!u || u->hp.raw <= 0 || (u->flags & kUnitOffMap)) return false;
     const UnitType& t = rules_.types[u->type];
     const uint8_t so = w.get<Owner>(e).player;
     const bool self = e == caster;
@@ -77,7 +77,7 @@ bool RtsModule::filterOk(Simulation& sim, const TargetFilter& f, Entity e, uint8
     if (t.level < f.minLevel || t.level > f.maxLevel) return false;
     if (enemy) {
         uint32_t fl = statusFlags(sim, e);
-        if ((fl & kStInvisible) && !(fl & kStRevealed)) return false;
+        if ((fl & kStInvisible) && !(fl & kStRevealed) && !(rules_.mech.detection && detected(sim, e, owner))) return false;
     }
     if (!f.area.empty()) {
         int a = triggers_.findArea(f.area);

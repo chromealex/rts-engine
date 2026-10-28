@@ -7,8 +7,8 @@ RHI with one dynamic vertex buffer per frame. The simulation never sees them; ef
 ## Data (per game)
 
 ```
-games/<id>/fx/fx.json        which effect plays for which event (bindings)
-games/<id>/fx/<name>.json    one effect = 1..16 emitters
+<project>/fx/fx.json        which effect plays for which event (bindings)
+<project>/fx/<name>.json    one effect = 1..16 emitters
 ```
 
 - Effect format: comment at the top of `engine/fx/FxEffect.h` (unknown fields are errors).
@@ -70,7 +70,7 @@ Core ops live in `apps/editor/core/FxOps.cpp` (also work in `rtsmcp` without an 
 
 ```
 python3 tools/importers/unity_vfx/import.py --source <file.prefab | folder | file.unitypackage> \
-    --game games/<id> [--name fire] [--prefab Explosion] [--scale 1] [--ignore-root-rotation] [--json] [--dry-run]
+    --game <project> [--name fire] [--prefab Explosion] [--scale 1] [--ignore-root-rotation] [--json] [--dry-run]
 ```
 
 Standard library only (TGA is decoded in Python; PSD / JPG / TIF / EXR need ImageMagick or ffmpeg, else a

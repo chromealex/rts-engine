@@ -298,7 +298,7 @@ const char* const kTrigCmp[] = {">=", ">", "<=", "<", "==", "!="};
 const char* const kTrigCond[] = {"count", "resource", "variable", "researched", "random", "time", "alive", "regions", "script"};
 const char* const kTrigAction[] = {"spawn", "give", "take", "setOwner", "kill", "remove", "damage", "heal", "buff", "message", "setVariable",
     "addVariable", "research", "enableType", "disableType", "victory", "defeat", "enableTrigger", "disableTrigger", "addScore",
-    "setRegionOwner", "attackMove", "move", "setTickets", "castAbility", "script"};
+    "setRegionOwner", "attackMove", "move", "setTickets", "castAbility", "objective", "dialog", "camera", "endMission", "script"};
 
 void pushTrigPlayer(lua_State* L, const TrigPlayer& p) {
     lua_createtable(L, 0, 2);
@@ -569,6 +569,27 @@ int rTrigAreaUpdate(lua_State* L, Vm& vm) {
     prev.swap(now);
     return 1;
 }
+// campaign actions (objective / dialog / camera / endMission): RtsModule::campaignAction (agent-mech)
+int rTrigCampaign(lua_State* L, Vm& vm) {
+    CTX;
+    const auto& a = m.triggers().defs[size_t(intArg(L, 1) - 1)].actions[size_t(intArg(L, 2) - 1)];
+    Entity unit = lua_isnoneornil(L, 4) ? kNullEntity : entArg(L, 4);
+    m.campaignAction(sim, a, resolvePlayers(sim, m, a.player, uint8_t(intArg(L, 3))), unit, {fxArg(L, 5), fxArg(L, 6), fxArg(L, 7)});
+    return 0;
+}
+int rWaveHasRoute(lua_State* L, Vm& vm) {
+    auto& waves = vm.module->state(*vm.sim).waves;
+    const size_t i = size_t(intArg(L, 1) - 1);
+    lua_pushboolean(L, i < waves.size() && !waves[i].route.empty());
+    return 1;
+}
+int rWaveRoute(lua_State* L, Vm& vm) {     // (unit, wave index): sends a wave unit along its route (agent-mech)
+    auto& waves = vm.module->state(*vm.sim).waves;
+    const size_t i = size_t(intArg(L, 2) - 1);
+    Entity e = entArg(L, 1);
+    if (i < waves.size() && vm.sim->world().alive(e)) vm.module->mechWaveRoute(*vm.sim, e, waves[i].route);
+    return 0;
+}
 int rAliveEntity(lua_State* L, Vm& vm) { lua_pushboolean(L, vm.sim->world().alive(entArg(L, 1))); return 1; }
 int rIsUnit(lua_State* L, Vm& vm) { Entity e = entArg(L, 1); lua_pushboolean(L, vm.sim->world().alive(e) && vm.sim->world().has<Unit>(e)); return 1; }
 int rTrigScriptCondition(lua_State* L, Vm& vm) {
@@ -813,7 +834,8 @@ void openStdApi(Vm& vm) {
         {"trig_player_matches", bind<rPlayerMatches>}, {"trig_count", bind<rTrigCount>}, {"trig_targets", bind<rTrigTargets>},
         {"trig_owner_targets", bind<rTrigOwnerTargets>}, {"trig_area_update", bind<rTrigAreaUpdate>},
         {"trig_script_condition", bind<rTrigScriptCondition>}, {"trig_script_action", bind<rTrigScriptAction>},
-        {"alive_entity", bind<rAliveEntity>}, {"is_unit", bind<rIsUnit>},
+        {"alive_entity", bind<rAliveEntity>}, {"trig_campaign", bind<rTrigCampaign>}, {"wave_has_route", bind<rWaveHasRoute>},
+        {"wave_route", bind<rWaveRoute>}, {"is_unit", bind<rIsUnit>},
         {"var", bind<rVar>}, {"add_var", bind<rAddVar>}, {"player_slots", bind<rPlayerSlots>}, {"stock", bind<rStock>},
         {"add_resource", bind<rAddResource>}, {"researched", bind<rResearched>}, {"research", bind<rResearch>},
         {"set_type_disabled", bind<rTypeDisabled>}, {"hp", bind<rHp>}, {"add_unit_flags", bind<rAddUnitFlags>}, {"stat", bind<rStat>},
@@ -838,7 +860,7 @@ void openStdApi(Vm& vm) {
         {"EV_WAVE", kEvWave}, {"EV_TRAIN_DONE", kEvTrainDone}, {"EV_PLAYER_DEFEATED", kEvPlayerDefeated}, {"EV_MESSAGE", kEvMessage},
         {"EV_PLAYER_ABILITY", kEvPlayerAbility}, {"EV_DIED", kEvDied}, {"EV_BUILD_DONE", kEvBuildDone}, {"EV_RESEARCHED", kEvResearched},
         {"EV_CAPTURED", kEvCaptured}, {"EV_REGION_CLAIMED", kEvRegionClaimed}, {"EV_ABILITY", kEvAbility}, {"EV_LEVEL_UP", kEvLevelUp},
-        {"UNIT_SILENT", kUnitSilent}, {"EV_NOT_ENOUGH", kEvNotEnough}, {"EV_SOLD", kEvSold}, {"STAT_MAX_HP", int(Stat::MaxHp)}, {"HOSTILE_NEUTRAL", kHostileNeutral},
+        {"UNIT_SILENT", kUnitSilent}, {"EV_NOT_ENOUGH", kEvNotEnough}, {"EV_TRIGGER_FIRED", kEvTriggerFired}, {"EV_SOLD", kEvSold}, {"STAT_MAX_HP", int(Stat::MaxHp)}, {"HOSTILE_NEUTRAL", kHostileNeutral},
         {"ORDER_MOVE", int(OrderType::Move)}, {"ORDER_ATTACK_MOVE", int(OrderType::AttackMove)}, {"ORDER_ATTACK", int(OrderType::Attack)}};
     for (auto& [k, v] : ids) { lua_pushinteger(vm.L, v); lua_setfield(vm.L, -2, k); }
     lua_setglobal(vm.L, "rts");

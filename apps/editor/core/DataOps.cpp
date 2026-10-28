@@ -155,7 +155,7 @@ void registerDataOps(Workspace& ws) {
         [&ws](const Json& p) {
             if (ws.project.dir.empty()) throw std::runtime_error("no game is open (open_game)");
             const std::string target = p.getStr("target");
-            const fs::path out = fs::path(ws.project.dir).parent_path() / "dist" / "_estimate";
+            const fs::path out = fs::path(ws.project.dir) / "Builds" / "_estimate";
             std::string cmd = "\"" + ws.buildTool + "\" --project \"" + ws.project.dir + "\" --engine \"" + ws.engineDir + "\" --target " + target +
                               " --estimate --out \"" + out.string() + "\" 2>&1";
 #if defined(_WIN32)
@@ -201,7 +201,7 @@ void registerDataOps(Workspace& ws) {
             Json r = Json::parse(R"J({
   "documents": {"menu.rml": "main menu, settings, map list", "lobby.rml": "network lobby", "hud.rml": "in-game HUD, pause, game over",
                 "keyboard.rml": "on-screen keyboard (phones)", "theme.rcss": "shared engine styles", "skin.rcss": "per-game skin (colours, fonts, frames): the usual file to override"},
-  "override": "games/<id>/ui/<file> replaces engine/ui/<file>; a document may link its own .rcss. Fonts: fonts/*.ttf of the game, @font-face via font-family in rcss.",
+  "override": "templates/<id>/ui/<file> replaces engine/ui/<file>; a document may link its own .rcss. Fonts: fonts/*.ttf of the game, @font-face via font-family in rcss.",
   "dataModel": "game",
   "variables": {
     "screen": "menu | lobby | playing | paused | over", "gameName": "string", "error": "string", "platformInfo": "string",

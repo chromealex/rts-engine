@@ -13,7 +13,7 @@ or stored in sim state, and the client localizes its own display copy of `Rules`
 | `modules/rts/RtsLocalize.{h,cpp}` | key scheme for RTS data, `localizeRules()`, `collectSourceStrings()` |
 | `tools/i18n` | `rts_i18n check` (tables and `.rml` documents) / `rts_i18n extract` |
 | `engine/assets/lang/<tag>.json` | engine/client strings (`en` is the base) |
-| `games/<id>/lang/<tag>.json` | a game's strings; may also override engine keys |
+| `<project>/lang/<tag>.json` | a game's strings; may also override engine keys |
 
 ## Table format
 
@@ -68,8 +68,8 @@ under derived keys: `game.name`, `map.<stem>.title|name|player.<n>`, `resource.<
 `tech.<id>`, `faction.<id>`, `ability.<id>`. A name written as `"@my.key"` uses that key instead.
 
 ```sh
-rts_i18n extract --project games/skirmish --lang de --write   # creates/updates lang/de.json, // TODO marks new keys
-rts_i18n check   --project games/skirmish                     # errors: bad placeholders/plurals; warnings: untranslated
+rts_i18n extract --project templates/skirmish --lang de --write   # creates/updates lang/de.json, // TODO marks new keys
+rts_i18n check   --project templates/skirmish                     # errors: bad placeholders/plurals; warnings: untranslated
 ```
 
 ## Testing
