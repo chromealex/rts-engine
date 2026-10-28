@@ -70,7 +70,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     Fixed raw = dmgType == kDamagePure ? dmg : dmg * rules_.damageMult(dmgType, t.armorType);
     Fixed armor = stat(sim, target, Stat::Armor);
     Fixed fin = rules_.mech.any ? mechArmorDamage(sim, target, raw, dmgType) : fxMax(raw - armor, raw / 5);   // agent-mech armor models
-    if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target);   // agent-mech (retreat)
+    if (mechOn(sim)) fin = fin * mechDamageTaken(sim, target, source);   // agent-mech (retreat, cover, armor arcs)
     if (rules_.advancedEffects) {
         uint32_t fl = statusFlags(sim, target);
         if (fl & kStInvulnerable) return;
@@ -90,7 +90,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
     }
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
-    if (rules_.mech.veterancy && w.alive(source)) mechOnHit(sim, target, source);   // agent-mech
+    if ((rules_.mech.veterancy || rules_.mech.infection) && w.alive(source)) mechOnHit(sim, target, source);   // agent-mech: last hitter
     sim.emit({kEvHit, sourceOwner, target, source, fin.raw, w.get<Transform>(target).pos});
     // creeps fight back as a camp
     if (auto* g = w.tryGet<Guard>(target); g && w.alive(source) && w.has<Unit>(source)) {
@@ -154,7 +154,7 @@ void RtsModule::sysWeapons(Simulation& sim) {
                 if (sim.tick() - c.chargeStart < uint32_t((wd.chargeTime * int64_t(sim.tickRate())).toInt())) continue;
                 c.chargeStart = sim.tick();
             }
-            if (rules_.mech.ammo && !mechUseAmmo(sim, e, i)) continue;   // agent-mech: out of ammo
+            if (mechOn(sim) && !mechOnFire(sim, e, i, c.target)) continue;   // agent-mech: turret aim, ammo, suppression, crews
             c.cooldown[i] = wd.cooldown;
             sim.emit({kEvAttack, o.player, e, c.target, int64_t(i), tr.pos});
             // shooting uphill can miss (StarCraft); the roll uses the shared deterministic RNG

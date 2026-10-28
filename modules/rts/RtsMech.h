@@ -32,6 +32,14 @@ struct Trader { Entity home = kNullEntity, dest = kNullEntity; bool loaded = fal
 struct ItemBag { std::vector<int16_t> items, charges; };                        // per slot (-1 empty)
 struct GroundItem { Vec3 pos{}; uint16_t item = 0; int charges = 0; };
 
+// ---- stage 3
+struct Suppression { Fixed value{}; };                    // 0..100: suppressed / pinned thresholds in rules
+struct Turret { Vec3 dir[4] = {}; bool init = false; };   // per weapon aim direction (turnRate)
+struct Abandoned { uint8_t formerOwner = 0; };            // crew killed: neutral until infantry re-crews it
+struct GrowState { Fixed timer{}; };
+struct Bounty { Vec3 pos{}; Entity target = kNullEntity; uint8_t player = 0; int16_t res = -1; Fixed reward{}; };
+struct RoundUnit { uint8_t owner = 0; uint16_t type = 0; Vec3 pos{}; };
+
 // Global mech state (inside GameState; hashed when used).
 struct MechState {
     std::vector<Fixed> prices;                     // market price per resource (in the currency), shared
@@ -47,6 +55,13 @@ struct MechState {
     std::vector<Dialog> dialogs;                   // every dialog line shown so far (kEvDialog value = index)
     std::string nextMission;                       // endMission "next"
     int8_t missionResult = 0;                      // 1 victory, -1 defeat (endMission), 0 running
+    // stage 3
+    std::vector<uint8_t> cover;                    // per cell cover level (map "cover", craters)
+    std::vector<Bounty> bounties;
+    uint8_t roundPhase = 0;                        // 0 prepare, 1 fight, 2 over
+    int roundIndex = 0;
+    uint32_t phaseEnd = 0;
+    std::vector<RoundUnit> roundSnapshot;
     std::vector<std::pair<uint32_t, Fixed>> groupSpeed;   // derived each tick (not hashed)
 };
 

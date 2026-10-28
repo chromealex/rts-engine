@@ -645,3 +645,136 @@ TEST(mech_campaign) {
     CHECK(hero.valid() && sim2->world().has<game::Veteran>(hero) && sim2->world().get<game::Veteran>(hero).level == 2);
     CHECK(stockOf(*sim2, 1, "gold") == Fixed::fromInt(200));   // map start 100 + carried 100
 }
+
+// ---------------------------------------------------------------- C, P: cover, suppression, arcs, turrets, crews, infection, ruins, crush
+TEST(mech_tactics) {
+    std::string rules = std::string(R"({"resources": {"gold": {}}, )") + kVic + R"(,
+      "cover": {"levels": {"1": 0.75, "2": 0.5}, "tags": ["infantry"]},
+      "suppression": {"decay": 5, "suppressed": 30, "pinned": 80, "tags": ["infantry"]},
+      "types": {
+        "rifle": {"tags": ["infantry"], "move": {"speed": 2}, "sight": 8, "health": {"max": 1000}},
+        "mg": {"move": {"speed": 0}, "sight": 10, "health": {"max": 500}, "weapons": [{"range": 8, "damage": 1, "cooldown": 0.2, "suppress": 10}]},
+        "tank": {"move": {"speed": 2}, "health": {"max": 1000}, "armorArcs": {"side": 0.75, "rear": 0.5}, "crew": {"accepts": ["infantry"]},
+                 "weapons": [{"range": 6, "damage": 20, "cooldown": 1, "turret": {"turnRate": 90}}], "sight": 8},
+        "sniper": {"tags": ["infantry"], "move": {"speed": 2}, "sight": 10, "health": {"max": 50}, "weapons": [{"range": 9, "damage": 1, "cooldown": 2, "killsCrew": 1}]},
+        "sandbags": {"structure": {"footprint": [1, 1]}, "givesCover": 2, "health": {"max": 500}},
+        "house": {"structure": {"footprint": [2, 2]}, "health": {"max": 100}, "ruins": "rubble", "infectable": {"spawns": "zombie", "count": 2}},
+        "rubble": {"structure": {"footprint": [2, 2]}, "invulnerable": true},
+        "zombie": {"move": {"speed": 2}, "sight": 8, "health": {"max": 60}, "weapons": [{"range": 1, "damage": 30, "cooldown": 1, "infect": "zombie"}]},
+        "peasant": {"move": {"speed": 1}, "health": {"max": 20}},
+        "apc": {"move": {"speed": 3}, "health": {"max": 300}, "crush": {"damage": 500, "tags": ["infantry"]}}
+      }})";
+    std::string map = flatMap(40, 20, R"(,"cover":{"rows":["","","","","","1111"]},"entities":[
+        {"type":"rifle","owner":1,"pos":[2,5]},{"type":"rifle","owner":1,"pos":[30,3]},{"type":"sandbags","owner":1,"pos":[31,3]},{"type":"mg","owner":2,"pos":[8,5]},
+        {"type":"tank","owner":1,"pos":[20,15]},{"type":"sniper","owner":2,"pos":[27,15]}])");
+    auto sim = makeSimJson(rules, map);
+    World& w = sim->world();
+    Entity rifle = unitNear(*sim, 2, 5), covered = unitNear(*sim, 30, 3), tank = unitNear(*sim, 20, 15), mg = unitNear(*sim, 8, 5);
+    run(*sim, 0.2);
+    // cover: level 1 on the map cell (0.75), level 2 next to sandbags (0.5)
+    CHECK(mod(*sim).mechDamageTaken(*sim, rifle, kNullEntity) == Fixed::fromRatio(3, 4));
+    CHECK(mod(*sim).mechDamageTaken(*sim, covered, kNullEntity) == Fixed::fromRatio(1, 2));
+    // armor arcs by facing: tank faces +x; a hit from behind does half
+    w.get<game::Unit>(tank).facing = {Fixed::fromInt(1), Fixed{}, Fixed{}};
+    CHECK(mod(*sim).mechDamageTaken(*sim, tank, mg).raw > 0);
+    Entity behind = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("peasant")), 2, at(15, 15));
+    CHECK(mod(*sim).mechDamageTaken(*sim, tank, behind) == Fixed::fromRatio(1, 2));
+    // the machine gun pins the rifleman: he can't move
+    run(*sim, 2);
+    CHECK(w.has<game::Suppression>(rifle) && w.get<game::Suppression>(rifle).value >= Fixed::fromInt(80));
+    CHECK(mod(*sim).stat(*sim, rifle, game::Stat::Speed).raw == 0);
+    // the sniper kills the tank crew: it turns neutral; a rifleman re-crews it
+    run(*sim, 3);
+    CHECK(w.get<Owner>(tank).player == 0 && w.has<game::Abandoned>(tank));
+    sim->submit(mechCmd(2, game::kCmdMove, {unitNear(*sim, 27, 15)}, kNullEntity, at(39, 19)));   // the sniper leaves
+    sim->submit(mechCmd(1, game::kCmdSmart, {covered}, tank));
+    run(*sim, 12);
+    CHECK(w.get<Owner>(tank).player == 1 && !w.has<game::Abandoned>(tank));
+    // an APC runs over infantry
+    Entity apc = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("apc")), 2, at(25, 9));
+    Entity victim = mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("rifle")), 1, at(30, 9));
+    sim->submit(mechCmd(2, game::kCmdMove, {apc}, kNullEntity, at(35, 9)));
+    run(*sim, 4);
+    CHECK(!w.alive(victim) || hpOf(*sim, victim) < Fixed::fromInt(1000));
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+    // zombies: the peasant they kill rises as a zombie; the house they wreck spawns two and leaves rubble
+    std::string zmap = flatMap(40, 10, R"(,"entities":[{"type":"house","owner":1,"pos":[36,2]},{"type":"zombie","owner":2,"pos":[20,5]},{"type":"peasant","owner":1,"pos":[3,5]}])");
+    auto zs = makeSimJson(rules, zmap);
+    World& zw = zs->world();
+    Entity peasant = unitNear(*zs, 3, 5), zombie = unitNear(*zs, 20, 5), house = findType(*zs, "house", 1);
+    zs->submit(mechCmd(2, game::kCmdAttack, {zombie}, peasant));
+    run(*zs, 12);
+    CHECK(!zw.alive(peasant) && countType(*zs, "zombie", 2) == 2);
+    std::vector<Entity> horde;
+    zw.each<game::Unit, Owner>([&](Entity e, game::Unit&, Owner& o) { if (o.player == 2) horde.push_back(e); });
+    zs->submit(mechCmd(2, game::kCmdAttack, horde, house));
+    run(*zs, 20);
+    CHECK(!zw.alive(house) && countType(*zs, "rubble", 0) == 1 && countType(*zs, "zombie", 2) == 4);
+    CHECK(mechRoundTrip(*zs, rules, zmap, 30));
+}
+
+// ---------------------------------------------------------------- PO, IC, power, rounds, MW2 upgrades
+TEST(mech_society) {
+    std::string rules = std::string(R"({"resources": {"gold": {"start": 1000}, "food": {"start": 500}, "lives": {"start": 3}}, )") + kVic + R"(,
+      "types": {
+        "villager": {"tags": ["worker"], "move": {"speed": 3}, "health": {"max": 30}, "cost": {"supply": 1}},
+        "house": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "supply": 10, "grows": {"unit": "villager", "interval": 2, "cost": {"food": 20}}},
+        "mill": {"structure": {"footprint": [2, 2]}, "health": {"max": 300}, "income": {"gold": 10}, "staff": {"count": 2, "accepts": ["worker"]}},
+        "pylon": {"structure": {"footprint": [1, 1]}, "health": {"max": 200}, "powerField": 6},
+        "gateway": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "needsPower": true, "income": {"gold": 1}},
+        "hero": {"move": {"speed": 3}, "sight": 6, "health": {"max": 400}, "autonomous": true, "weapons": [{"range": 1, "damage": 40, "cooldown": 1}]},
+        "rat": {"move": {"speed": 1}, "health": {"max": 40}},
+        "village": {"structure": {"footprint": [2, 2]}, "health": {"max": 400}, "garrison": {"max": 50, "unit": "villager", "interval": 100}, "upgrades": ["tower"]},
+        "tower": {"structure": {"footprint": [2, 2]}, "health": {"max": 600}, "garrison": {"max": 50, "unit": "villager", "interval": 100}, "upgradeGarrison": 10}
+      }})";
+    std::string map = flatMap(60, 20, R"(,"entities":[
+        {"type":"house","owner":1,"pos":[4,4]},{"type":"mill","owner":1,"pos":[10,4]},{"type":"villager","owner":1,"pos":[12,7]},{"type":"villager","owner":1,"pos":[13,7]},
+        {"type":"pylon","owner":1,"pos":[20,4]},{"type":"gateway","owner":1,"pos":[23,4]},{"type":"gateway","owner":1,"pos":[40,4]},
+        {"type":"hero","owner":1,"pos":[4,14]},{"type":"rat","owner":2,"pos":[30,15]},
+        {"type":"village","owner":1,"pos":[50,10],"garrison":15}])");
+    auto sim = makeSimJson(rules, map);
+    World& w = sim->world();
+    run(*sim, 0.2);
+    // power field: the far gateway is off; building outside the field is refused
+    Entity g1 = unitNear(*sim, 23, 4), g2 = unitNear(*sim, 40, 4);
+    CHECK(!mod(*sim).mechSwitchedOff(*sim, g1) && mod(*sim).mechSwitchedOff(*sim, g2));
+    CHECK(!mod(*sim).canPlace(*sim, 1, uint16_t(mod(*sim).rules().findType("gateway")), at(45, 15)));
+    // staff: the mill makes nothing until villagers work inside it
+    Entity mill = unitNear(*sim, 10, 4);
+    Fixed g0 = stockOf(*sim, 1, "gold");
+    run(*sim, 1);
+    CHECK(stockOf(*sim, 1, "gold") - g0 < Fixed::fromInt(3));   // only the powered gateway
+    sim->submit(mechCmd(1, game::kCmdLoad, {unitNear(*sim, 12, 7), unitNear(*sim, 13, 7)}, mill));
+    run(*sim, 3);
+    CHECK(mod(*sim).staffFraction(*sim, mill) == Fixed::fromInt(1));
+    // growth: the house turns food into villagers
+    CHECK(countType(*sim, "villager", 1) >= 3 && stockOf(*sim, 1, "food") < Fixed::fromInt(500));
+    // bounty on the rat: the autonomous hero goes for it, the reward is paid
+    sim->submit(mechCmd(1, game::kCmdBounty, {}, unitNear(*sim, 30, 15), {}, mod(*sim).rules().findResource("gold") | (100 << 8)));
+    run(*sim, 15);
+    CHECK(countType(*sim, "rat", 2) == 0 && mod(*sim).state(*sim).mech.bounties.empty());
+    // Mushroom Wars 2: upgrading the village into a tower takes 10 units from the garrison
+    Entity village = findType(*sim, "village", 1);
+    sim->submit(mechCmd(1, game::kCmdUpgrade, {village}, kNullEntity, {}, mod(*sim).rules().findType("tower")));
+    run(*sim, 0.5);
+    CHECK(w.get<game::Garrison>(village).count <= 5);
+    CHECK(mechRoundTrip(*sim, rules, map, 60));
+}
+
+TEST(mech_rounds) {
+    std::string rules = std::string(R"({"resources": {"lives": {"start": 3}, "gold": {}}, "victory": {"mode": "score", "seconds": 10000, "keyLoses": false},
+      "rounds": {"prepare": 2, "fight": 10, "rounds": 2, "lives": "lives", "damagePerUnit": 1, "income": {"gold": 5}},
+      "types": {"hq": {"structure": {"footprint": [2, 2]}, "health": {"max": 1000}},
+                "knight": {"move": {"speed": 3}, "sight": 30, "health": {"max": 100}, "weapons": [{"range": 1, "damage": 25, "cooldown": 1}]}}})");
+    std::string map = flatMap(40, 10, R"(,"entities":[{"type":"hq","owner":1,"pos":[2,2]},{"type":"hq","owner":2,"pos":[37,2]},
+        {"type":"knight","owner":1,"pos":[8,5]},{"type":"knight","owner":1,"pos":[8,6]},{"type":"knight","owner":2,"pos":[30,5]}])");
+    auto sim = makeSimJson(rules, map);
+    run(*sim, 1.5);
+    CHECK(countType(*sim, "knight", 1) == 2 && dist2DTest(posOf(*sim, unitNear(*sim, 8, 5)), at(8, 5)) < Fixed::fromRatio(1, 2));   // still preparing
+    run(*sim, 12);   // round 1: 2 vs 1, one or two survivors hurt player 2, then the armies reset
+    CHECK(stockOf(*sim, 2, "lives") < Fixed::fromInt(3) && stockOf(*sim, 1, "lives") == Fixed::fromInt(3));
+    CHECK(countType(*sim, "knight", 1) == 2 && countType(*sim, "knight", 2) == 1);   // reset
+    CHECK(stockOf(*sim, 1, "gold") == Fixed::fromInt(5));
+    run(*sim, 14);
+    CHECK(mod(*sim).state(*sim).mech.roundPhase == 2 && sim->result() == 1);
+}
