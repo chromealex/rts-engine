@@ -5,12 +5,15 @@
 #include <cstring>
 #include <limits>
 #include <type_traits>
+#include "FxNoise.h"
 #include "ParticleShaders.h"
 
 namespace rts::fx {
 
 using render::mat4;
 using render::RTSCamera;
+
+using namespace detail;
 
 namespace {
 
@@ -19,7 +22,6 @@ constexpr float kDeg = kPi / 180.0f;
 constexpr int kLut = 32;                     // colour / size curve samples
 constexpr uint32_t kQuadsPerDraw = 16384;    // 16-bit indices: 65536 vertices
 constexpr int kMaxInstances = 2048;
-constexpr int kAtlasCell = 64, kAtlasCells = 4;
 
 const std::vector<std::string> kBuiltins = {"soft", "spark", "ring", "smoke"};
 
@@ -42,46 +44,9 @@ struct Rng {
     int roundCount(float x) { int n = int(x); return n + (unit() < x - float(n) ? 1 : 0); }
 };
 
-float hash2(int x, int y) {
-    uint32_t h = uint32_t(x) * 374761393u + uint32_t(y) * 668265263u;
-    h = (h ^ (h >> 13)) * 1274126177u;
-    return float((h ^ (h >> 16)) & 0xffff) / 65535.0f;
-}
-float valueNoise(float x, float y) {
-    int xi = int(std::floor(x)), yi = int(std::floor(y));
-    float fx = x - float(xi), fy = y - float(yi);
-    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
-    float a = hash2(xi, yi), b = hash2(xi + 1, yi), c = hash2(xi, yi + 1), d = hash2(xi + 1, yi + 1);
-    return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
-}
-
-// 256x64 RGBA: soft | spark | ring | smoke. White RGB, shape in alpha (tinted by the particle colour).
-std::vector<uint8_t> makeBuiltinAtlas() {
-    const int W = kAtlasCell * kAtlasCells, H = kAtlasCell;
-    std::vector<uint8_t> px(size_t(W) * H * 4, 0);
-    for (int cell = 0; cell < kAtlasCells; ++cell)
-        for (int y = 0; y < H; ++y)
-            for (int x = 0; x < kAtlasCell; ++x) {
-                float u = (float(x) + 0.5f) / kAtlasCell * 2 - 1, v = (float(y) + 0.5f) / kAtlasCell * 2 - 1;
-                float r = std::sqrt(u * u + v * v);
-                float a = 0, l = 1;
-                if (cell == 0) { float t = std::clamp(1 - r, 0.0f, 1.0f); a = t * t * (3 - 2 * t); }
-                else if (cell == 1) a = std::exp(-r * r * 14) + 0.3f * std::exp(-r * r * 4);
-                else if (cell == 2) { float d = (r - 0.72f) / 0.13f; a = std::exp(-d * d); }
-                else {
-                    float n = 0, amp = 0.5f, f = 3;
-                    for (int o = 0; o < 4; ++o, amp *= 0.5f, f *= 2.1f) n += amp * valueNoise(u * f + 11.3f, v * f + 7.1f);
-                    float t = std::clamp(1 - r, 0.0f, 1.0f);
-                    a = t * t * (3 - 2 * t) * std::clamp(0.35f + n * 1.1f, 0.0f, 1.0f);
-                    l = 0.78f + 0.22f * n;
-                }
-                if (r >= 0.98f) a = 0;   // empty border: no bleeding into the neighbour cell
-                uint8_t* p = &px[(size_t(y) * W + size_t(cell * kAtlasCell + x)) * 4];
-                p[0] = p[1] = p[2] = uint8_t(std::clamp(l, 0.0f, 1.0f) * 255 + 0.5f);
-                p[3] = uint8_t(std::clamp(a, 0.0f, 1.0f) * 255 + 0.5f);
-            }
-    return px;
-}
+constexpr int kTrailPts = 9;              // stored ribbon points per particle (high tier draws all, medium every other)
+constexpr int kMaxSubDepth = 3;           // sub-emitters of sub-emitters of ...: recursion stops here
+constexpr size_t kMaxPendingSubs = 256;   // sub-effects started per frame at most
 
 inline float4 operator+(float4 a, float4 b) { return {a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w}; }
 inline float4 operator-(float4 a, float4 b) { return {a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w}; }
@@ -105,6 +70,12 @@ void sampleCurve(std::array<T, N>& lut, const std::vector<std::pair<float, T>>& 
     }
 }
 
+
+template <class T>
+T speedLut(const std::array<T, kLut>& lut, FxRange range, float speed) {
+    float f = range.max > range.min ? std::clamp((speed - range.min) / (range.max - range.min), 0.0f, 1.0f) : 0.0f;
+    return lut[size_t(std::min(kLut - 1, int(f * float(kLut - 1) + 0.5f)))];
+}
 
 void basisFrom(float3 n, float3& t, float3& b) {
     float3 ref = std::fabs(n.y) < 0.99f ? float3{0, 1, 0} : float3{1, 0, 0};
@@ -154,6 +125,13 @@ struct ParticleSystem::Impl {
         std::array<float, kLut> size;
         int frames = 1;
         float du = 1, dv = 1;          // one flipbook cell in UV
+        // optional modules (FxEffect.h); `modules` false keeps the original per-particle path
+        bool modules = false;
+        std::array<float4, kLut> startLut, colorSpeed, trailColor;
+        std::array<float, kLut> sizeSpeed, trailWidth;
+        FxTexture trailTex;
+        uint16_t trailBatch = 0;
+        std::array<int, 4> subIds{-2, -2, -2, -2};   // -2: not looked up yet, -1: missing
     };
     struct EffectRT {
         std::string name;
@@ -174,6 +152,9 @@ struct ParticleSystem::Impl {
         float time = 0;
         std::array<float, kMaxEmitters> accum{};
         std::array<bool, kMaxEmitters> burstDone{};
+        std::array<uint16_t, kMaxEmitters> alive{};   // live particles per emitter ("maxParticles")
+        float3 delta{0, 0, 0};                         // moved this frame ("space": "local")
+        uint8_t depth = 0;                             // sub-emitter nesting
     };
     struct Particle {
         float3 pos, vel;
@@ -182,12 +163,27 @@ struct ParticleSystem::Impl {
         float4 tint;
         uint16_t effect, emitter, batch;
         uint32_t owner;                // handle id (kill)
+        float3 addVel{0, 0, 0};        // "velocity" in world space
+        float aspect = 1;
+        uint32_t uid = 0;
+        int32_t trail = -1;            // index into trails
+        uint8_t frame0 = 0;
+        uint8_t depth = 0;             // sub-emitter nesting of its effect (outlives the instance)
+        bool child = false;            // has a birth sub-effect following it
     };
-    struct Rec { uint32_t idx; float w, size; uint16_t batch; };
+    struct Trail {
+        std::array<float3, kTrailPts> p;
+        std::array<float, kTrailPts> t;
+        int head = 0, count = 0;
+        const float3& at(int j) const { return p[size_t((head - j + kTrailPts) % kTrailPts)]; }   // 0 = newest
+        float time(int j) const { return t[size_t((head - j + kTrailPts) % kTrailPts)]; }
+    };
+    struct SubSpawn { uint16_t effect, emitter; uint8_t sub, depth; float3 pos, dir; float scale; float4 tint; uint32_t uid; };
+    struct Rec { uint32_t idx; float w, size; uint16_t batch; int16_t seg = -1; };   // seg >= 0: trail segment
 
     gfx::Device* dev = nullptr;
     gfx::ShaderHandle shader;
-    gfx::PipelineHandle pipe[2];
+    gfx::PipelineHandle pipe[3];
     gfx::BufferHandle vb, ib;
     gfx::TextureHandle atlas;
     TextureLoader loader;
@@ -204,6 +200,67 @@ struct ParticleSystem::Impl {
     Rng rng;
     QualityLimits limits = limitsFor(FxQuality::Medium);
     FxQuality quality = FxQuality::Medium;
+    std::vector<Trail> trails;
+    std::vector<int32_t> freeTrails;
+    std::vector<SubSpawn> pending;
+    std::unordered_map<uint32_t, FxHandle> children;   // particle uid -> its birth sub-effect
+    std::function<float(float, float)> ground;
+    uint32_t nextUid = 0;
+    float clock = 0;
+
+    Instance* inst(uint32_t id) {
+        if (!id) return nullptr;
+        size_t slot = (id & 0xffff) - 1;
+        if (slot >= instances.size()) return nullptr;
+        auto& in = instances[slot];
+        return in.used && in.gen == uint16_t(id >> 16) ? &in : nullptr;
+    }
+    // Trail points used for drawing (indices into Trail, newest first): every `step`-th plus the oldest.
+    // Returns their count = number of ribbon segments (the head particle is the first point).
+    static int trailIndices(const Trail& tr, int step, int* out) {
+        int n = 0;
+        for (int j = 0; j < tr.count; j += step) out[n++] = j;
+        if (n > 0 && out[n - 1] != tr.count - 1) out[n++] = tr.count - 1;
+        return std::min(n, kTrailPts);
+    }
+    // Frees what a particle holds outside the pool (trail, attached sub-effect); no events.
+    void release(Particle& p) {
+        if (p.trail >= 0) { freeTrails.push_back(p.trail); p.trail = -1; }
+        if (p.child) {
+            auto it = children.find(p.uid);
+            if (it != children.end()) { if (auto* c = inst(it->second.id)) c->stopped = true; children.erase(it); }
+            p.child = false;
+        }
+    }
+    float4 colorNow(const Particle& p) const {
+        const auto& er = effects[p.effect].em[p.emitter];
+        float t = std::min(p.age * p.invLife, 1.0f);
+        int li = std::min(kLut - 1, int(t * float(kLut - 1) + 0.5f));
+        return mul(er.color[size_t(li)], p.tint);
+    }
+    void queueSub(const Particle& p, FxSubEvent on, float3 at) {
+        const int depthOf = p.depth;
+        const EmitterDef& d = effects[p.effect].def.emitters[p.emitter];
+        for (size_t k = 0; k < d.subEmitters.size(); ++k) {
+            const FxSubEmitter& se = d.subEmitters[k];
+            if (se.on != on || pending.size() >= kMaxPendingSubs || depthOf + 1 > kMaxSubDepth) continue;
+            if (se.chance < 1 && rng.unit() >= se.chance) continue;
+            const float3 dir{0, 1, 0};   // like Unity: a sub-emitter keeps its own orientation, not the particle's velocity
+            float4 tint = p.tint;
+            if (se.inheritColor) { float4 c = colorNow(p); tint = {c.x, c.y, c.z, p.tint.w}; }
+            pending.push_back({p.effect, p.emitter, uint8_t(k), uint8_t(depthOf + 1), at, dir, p.scale, tint, on == FxSubEvent::Birth ? p.uid : 0u});
+        }
+    }
+    // Removes particle i (swap with the last): death events, counters, trail.
+    void die(size_t i, bool events) {
+        Particle& p = particles[i];
+        Instance* in = inst(p.owner);
+        if (in && in->alive[p.emitter] > 0) --in->alive[p.emitter];
+        if (events && effects[p.effect].em[p.emitter].modules) queueSub(p, FxSubEvent::Death, p.pos);
+        release(p);
+        p = particles.back();
+        particles.pop_back();
+    }
 
     // view
     bool haveView = false;
@@ -267,38 +324,97 @@ struct ParticleSystem::Impl {
             r.frames = d.frameCols * d.frameRows;
             r.du = (r.tex.u1 - r.tex.u0) / float(d.frameCols);
             r.dv = (r.tex.v1 - r.tex.v0) / float(d.frameRows);
+            const EmitterDef base;
+            r.modules = d.localSpace || d.maxParticles > 0 || d.speedLimit > 0 || d.noise.strength > 0 || d.collision.enabled ||
+                        !d.subEmitters.empty() || d.trail.enabled || d.light.enabled ||
+                        d.velocity.x != 0 || d.velocity.y != 0 || d.velocity.z != 0;
+            auto lutC = [](std::array<float4, kLut>& lut, const std::vector<FxColorKey>& keys) {
+                std::vector<std::pair<float, float4>> k;
+                for (auto& x : keys) k.push_back({x.t, x.rgba});
+                sampleCurve(lut, k, float4{1, 1, 1, 1});
+            };
+            auto lutS = [](std::array<float, kLut>& lut, const std::vector<FxSizeKey>& keys) {
+                std::vector<std::pair<float, float>> k;
+                for (auto& x : keys) k.push_back({x.t, x.k});
+                sampleCurve(lut, k, 1.0f);
+            };
+            lutC(r.startLut, d.startColor);
+            lutC(r.colorSpeed, d.colorBySpeed);
+            lutS(r.sizeSpeed, d.sizeBySpeed);
+            if (d.trail.enabled) {
+                lutC(r.trailColor, d.trail.color);
+                lutS(r.trailWidth, d.trail.width);
+                r.trailTex = texture(d.trail.texture, errors, "fx/" + e.name + ".json: emitters[" + std::to_string(i) + "].trail");
+                r.trailBatch = batchFor(r.trailTex, d.trail.blend);
+            }
             e.em.push_back(r);
             if (!d.loop) e.emitEnd = std::max(e.emitEnd, d.endTime());
             float g = render::length(d.gravity);
             float travel = d.drag > 0 ? d.speed.max / d.drag : d.speed.max * d.life.max;
-            e.extent = std::max(e.extent, d.radius + std::min(travel, d.speed.max * d.life.max) + 0.5f * g * d.life.max * d.life.max +
+            e.extent = std::max(e.extent, render::length(d.offset) + std::max(d.radius, render::length(d.box) * 0.5f) + std::min(travel, d.speed.max * d.life.max) + 0.5f * g * d.life.max * d.life.max +
                                           d.size.max * std::max(1.0f, maxK));
         }
     }
 
-    bool emit(const Instance& in, uint32_t owner, int effect, int emitter, float3 at, int& dropped) {
+    bool emit(Instance& in, uint32_t owner, int effect, int emitter, float3 at, int& dropped) {
         if (int(particles.size()) >= limits.maxParticles) { ++dropped; return false; }
         const EmitterDef& d = effects[size_t(effect)].def.emitters[size_t(emitter)];
+        const EmitterRT& er = effects[size_t(effect)].em[size_t(emitter)];
+        if (d.maxParticles > 0 && in.alive[size_t(emitter)] >= d.maxParticles) return false;
         const float s = in.scale;
         float3 t, b;
         basisFrom(in.dir, t, b);
         auto toWorld = [&](float3 v) { return t * v.x + in.dir * v.y + b * v.z; };
+        // angle around the axis: full circle keeps the exact original math (old effects unchanged)
+        auto around = [&] { return d.arc >= 360 ? rng.unit() * 2 * kPi : rng.unit() * d.arc * kDeg; };
         // spawn position
-        float3 off{0, 0, 0};
+        float3 off{0, 0, 0}, rim{0, 0, 0};
+        float rimFrac = -1;
         if (d.shape == FxShape::Sphere) {
-            float z = rng.unit() * 2 - 1, a = rng.unit() * 2 * kPi, rr = std::sqrt(std::max(0.0f, 1 - z * z));
-            off = float3{rr * std::cos(a), z, rr * std::sin(a)} * (d.radius * std::cbrt(rng.unit()));
-        } else if (d.shape == FxShape::Disc || d.shape == FxShape::Ring) {
-            float a = rng.unit() * 2 * kPi, rr = d.radius * (d.shape == FxShape::Disc ? std::sqrt(rng.unit()) : 1.0f);
-            off = toWorld({rr * std::cos(a), 0, rr * std::sin(a)});
+            float z = rng.unit() * 2 - 1, a = around(), rr = std::sqrt(std::max(0.0f, 1 - z * z));
+            float u = rng.unit();
+            float k = d.thickness >= 1 ? std::cbrt(u) : std::cbrt((1 - u) * std::pow(1 - d.thickness, 3.0f) + u);
+            off = float3{rr * std::cos(a), z, rr * std::sin(a)} * (d.radius * k);
+        } else if (d.shape == FxShape::Hemisphere) {
+            float z = rng.unit(), a = around(), rr = std::sqrt(std::max(0.0f, 1 - z * z));
+            float u = rng.unit();
+            float k = d.thickness >= 1 ? std::cbrt(u) : std::cbrt((1 - u) * std::pow(1 - d.thickness, 3.0f) + u);
+            off = toWorld(float3{rr * std::cos(a), z, rr * std::sin(a)} * (d.radius * k));
+        } else if (d.shape == FxShape::Disc || d.shape == FxShape::Ring || d.shape == FxShape::Cone) {
+            float a = around(), rr;
+            if (d.shape == FxShape::Ring) rr = d.radius;
+            else if (d.thickness >= 1) rr = d.radius * std::sqrt(rng.unit());
+            else { float u = rng.unit(), in0 = (1 - d.thickness) * (1 - d.thickness); rr = d.radius * std::sqrt(in0 + (1 - in0) * u); }
+            if (d.shape == FxShape::Cone) {   // the cone's base is perpendicular to its own axis (disc/ring: to the play direction)
+                float3 ca = render::normalize(toWorld(d.direction)), ct, cb;
+                basisFrom(ca, ct, cb);
+                rim = ct * std::cos(a) + cb * std::sin(a);
+                off = rim * rr;
+                if (d.radius > 0) rimFrac = rr / d.radius;
+            } else off = toWorld({rr * std::cos(a), 0, rr * std::sin(a)});
+        } else if (d.shape == FxShape::Box) {
+            float x = rng.unit() - 0.5f, y = rng.unit() - 0.5f, z = rng.unit() - 0.5f;
+            off = toWorld({x * d.box.x, y * d.box.y, z * d.box.z});
+        } else if (d.shape == FxShape::Line) {
+            off = toWorld({(rng.unit() * 2 - 1) * d.radius, 0, 0});
         }
+        const float3 local = off;   // shape point (radial directions start from the shape centre)
+        if (d.offset.x != 0 || d.offset.y != 0 || d.offset.z != 0) off += toWorld(d.offset);
         // direction: cone around the (instance-relative) axis
         float3 axis = render::normalize(toWorld(d.direction));
-        float3 at2, ab;
-        basisFrom(axis, at2, ab);
-        float ct = 1 - rng.unit() * (1 - std::cos(d.spread * kDeg));
-        float st = std::sqrt(std::max(0.0f, 1 - ct * ct)), ph = rng.unit() * 2 * kPi;
-        float3 dir = axis * ct + at2 * (st * std::cos(ph)) + ab * (st * std::sin(ph));
+        float3 dir;
+        if (rimFrac >= 0) {   // Unity-style cone: the direction opens with the distance from the centre
+            float ang = d.spread * kDeg * rimFrac;
+            dir = render::normalize(axis * std::cos(ang) + rim * std::sin(ang));
+        } else {
+            float3 at2, ab;
+            basisFrom(axis, at2, ab);
+            float ct = 1 - rng.unit() * (1 - std::cos(d.spread * kDeg));
+            float st = std::sqrt(std::max(0.0f, 1 - ct * ct)), ph = rng.unit() * 2 * kPi;
+            dir = axis * ct + at2 * (st * std::cos(ph)) + ab * (st * std::sin(ph));
+        }
+        if (d.radial != 0 && render::length(local) > 1e-5f)   // outward from (or into) the shape centre
+            dir = render::normalize(render::lerp(dir, render::normalize(local) * (d.radial > 0 ? 1.0f : -1.0f), std::fabs(d.radial)));
         Particle p;
         p.pos = at + off * s;
         p.vel = dir * (rng.range(d.speed) * s);
@@ -311,8 +427,31 @@ struct ParticleSystem::Impl {
         p.tint = in.tint;
         p.effect = uint16_t(effect);
         p.emitter = uint16_t(emitter);
-        p.batch = effects[size_t(effect)].em[size_t(emitter)].batch;
+        p.batch = er.batch;
         p.owner = owner;
+        // optional modules: no RNG draws unless used (old effects keep their exact random sequence)
+        if (!d.startColor.empty()) {
+            float4 c = d.startColor.size() == 1 ? d.startColor[0].rgba : er.startLut[size_t(std::min(kLut - 1, int(rng.unit() * float(kLut - 1) + 0.5f)))];
+            p.tint = mul(p.tint, c);
+        }
+        if (d.aspect.min != 1 || d.aspect.max != 1) p.aspect = rng.range(d.aspect);
+        if (d.startFrame.max > 0) p.frame0 = uint8_t(std::min(255.0f, rng.range(d.startFrame)));
+        if (d.velocity.x != 0 || d.velocity.y != 0 || d.velocity.z != 0) p.addVel = toWorld(d.velocity) * s;
+        p.uid = ++nextUid == 0 ? ++nextUid : nextUid;
+        p.depth = in.depth;
+        if (d.trail.enabled && quality >= d.trail.minQuality) {
+            if (freeTrails.empty()) { freeTrails.push_back(int32_t(trails.size())); trails.emplace_back(); }
+            p.trail = freeTrails.back();
+            freeTrails.pop_back();
+            Trail& tr = trails[size_t(p.trail)];
+            tr.count = 1; tr.head = 0; tr.p[0] = p.pos; tr.t[0] = clock;
+        }
+        ++in.alive[size_t(emitter)];
+        if (er.modules && !d.subEmitters.empty()) {
+            const size_t before = pending.size();
+            queueSub(p, FxSubEvent::Birth, p.pos);
+            p.child = pending.size() > before;
+        }
         particles.push_back(p);
         return true;
     }
@@ -335,7 +474,7 @@ bool ParticleSystem::init(gfx::Device* dev) {
     sd.textureSlots = 1; sd.uniformSlots = 1; sd.label = "particles";
     I.shader = dev->createShader(sd);
     if (!I.shader.valid()) { error_ = "particles: shader: " + dev->lastError(); I.dev = nullptr; return false; }
-    for (int i = 0; i < 2; ++i) {
+    for (int i = 0; i < 3; ++i) {
         gfx::PipelineDesc pd;
         pd.shader = I.shader;
         pd.attrs[0] = {0, gfx::VertexFormat::Float3, 0};
@@ -345,10 +484,10 @@ bool ParticleSystem::init(gfx::Device* dev) {
         pd.stride = sizeof(Vertex);
         pd.indexType = gfx::IndexType::UInt16;
         pd.cull = gfx::CullMode::None;
-        pd.blend = i == 0 ? gfx::BlendMode::Alpha : gfx::BlendMode::Additive;
+        pd.blend = i == 0 ? gfx::BlendMode::Alpha : i == 1 ? gfx::BlendMode::Additive : gfx::BlendMode::Premultiplied;
         pd.depthTest = true;
         pd.depthWrite = false;
-        pd.label = i == 0 ? "particles-alpha" : "particles-add";
+        pd.label = i == 0 ? "particles-alpha" : i == 1 ? "particles-add" : "particles-premul";
         I.pipe[i] = dev->createPipeline(pd);
         if (!I.pipe[i].valid()) { error_ = "particles: pipeline: " + dev->lastError(); I.dev = nullptr; return false; }
     }
@@ -383,8 +522,10 @@ void ParticleSystem::shutdown() {
         if (I.atlas.valid()) I.dev->destroyTexture(I.atlas);
     }
     TextureLoader keep = std::move(I.loader);
+    auto ground = std::move(I.ground);
     impl_ = std::make_unique<Impl>();
     impl_->loader = std::move(keep);
+    impl_->ground = std::move(ground);
     impl_->quality = quality_;
     impl_->limits = limitsFor(quality_);
 }
@@ -394,9 +535,11 @@ void ParticleSystem::setQuality(FxQuality q) {
     auto& I = *impl_;
     I.quality = q;
     I.limits = limitsFor(q);
-    if (int(I.particles.size()) > I.limits.maxParticles) I.particles.resize(size_t(I.limits.maxParticles));
+    while (int(I.particles.size()) > I.limits.maxParticles) I.die(I.particles.size() - 1, false);
     if (q == FxQuality::Off) clear();
 }
+
+void ParticleSystem::setGroundHeight(std::function<float(float, float)> fn) { impl_->ground = std::move(fn); }
 
 void ParticleSystem::setTextureLoader(TextureLoader l) {
     impl_->loader = std::move(l);
@@ -410,7 +553,7 @@ int ParticleSystem::define(const std::string& name, const EffectDef& def) {
     auto it = I.byName.find(name);
     if (it != I.byName.end()) {
         id = it->second;
-        I.particles.erase(std::remove_if(I.particles.begin(), I.particles.end(), [&](auto& p) { return p.effect == uint16_t(id); }), I.particles.end());
+        for (size_t i = I.particles.size(); i-- > 0;) if (I.particles[i].effect == uint16_t(id)) I.die(i, false);
         for (size_t i = 0; i < I.instances.size(); ++i)
             if (I.instances[i].used && I.instances[i].effect == id) { I.instances[i].used = false; I.freeInstances.push_back(int(i)); }
     } else {
@@ -522,9 +665,9 @@ void ParticleSystem::stop(FxHandle h) { if (auto* in = findInstance(*impl_, h)) 
 void ParticleSystem::kill(FxHandle h) {
     auto& I = *impl_;
     if (auto* in = findInstance(I, h)) {
+        for (size_t i = I.particles.size(); i-- > 0;) if (I.particles[i].owner == h.id) I.die(i, false);
         in->used = false;
         I.freeInstances.push_back(int((h.id & 0xffff) - 1));
-        I.particles.erase(std::remove_if(I.particles.begin(), I.particles.end(), [&](auto& p) { return p.owner == h.id; }), I.particles.end());
     }
 }
 bool ParticleSystem::playing(FxHandle h) const { return findInstance(*impl_, h) != nullptr; }
@@ -532,6 +675,10 @@ bool ParticleSystem::playing(FxHandle h) const { return findInstance(*impl_, h) 
 void ParticleSystem::clear() {
     auto& I = *impl_;
     I.particles.clear();
+    I.trails.clear();
+    I.freeTrails.clear();
+    I.children.clear();
+    I.pending.clear();
     I.freeInstances.clear();
     for (size_t i = 0; i < I.instances.size(); ++i) { I.instances[i].used = false; I.freeInstances.push_back(int(i)); }
 }
@@ -571,6 +718,21 @@ void ParticleSystem::update(float dt) {
                     int n = d.burst > 0 ? std::max(1, I.rng.roundCount(float(d.burst) * spawn)) : 0;
                     for (int i = 0; i < n; ++i) I.emit(in, owner, in.effect, int(k), in.pos, stats_.dropped);
                 }
+                for (auto& b : d.bursts) {   // timed bursts in [t0, t1); a looping emitter repeats them every duration
+                    const float period = d.loop && d.duration > 0 ? d.duration : 0;
+                    for (int c = 0; c < b.cycles; ++c) {
+                        const float tb = b.time + float(c) * b.interval;
+                        if (period <= 0 && (tb < t0 || tb >= t1)) continue;
+                        float k0 = period > 0 ? std::max(0.0f, std::ceil((t0 - tb) / period)) : 0;
+                        for (float tk = tb + k0 * period; tk < t1; tk += period) {
+                            if (tk >= t0) {
+                                int n = I.rng.roundCount(I.rng.range(b.count) * spawn);
+                                for (int i = 0; i < n; ++i) I.emit(in, owner, in.effect, int(k), in.pos, stats_.dropped);
+                            }
+                            if (period <= 0) break;
+                        }
+                    }
+                }
                 const bool active = d.loop || t0 < d.duration;
                 if (!active) continue;
                 float count = 0;
@@ -589,20 +751,81 @@ void ParticleSystem::update(float dt) {
             }
         }
         in.time += dt;
+        in.delta = in.pos - in.prev;
         in.prev = in.pos;
         if (in.stopped || (!e.looping && in.time >= e.emitEnd)) { in.used = false; I.freeInstances.push_back(int(slot)); }
     }
     // particles
+    I.clock += dt;
     for (size_t i = 0; i < I.particles.size();) {
         auto& p = I.particles[i];
         p.age += dt;
-        if (p.age * p.invLife >= 1.0f) { p = I.particles.back(); I.particles.pop_back(); continue; }
+        if (p.age * p.invLife >= 1.0f) { I.die(i, true); continue; }
         const EmitterDef& d = I.effects[p.effect].def.emitters[p.emitter];
+        const bool modules = I.effects[p.effect].em[p.emitter].modules;
         p.vel += d.gravity * (dt * p.scale);
         if (d.drag > 0) p.vel = p.vel * (1.0f / (1.0f + d.drag * dt));
+        if (modules) {
+            if (d.speedLimit > 0) {
+                float sp = render::length(p.vel), lim = d.speedLimit * p.scale;
+                if (sp > lim) p.vel = p.vel * (lim / sp);
+            }
+            if (d.localSpace) if (auto* in = I.inst(p.owner)) p.pos += in->delta;
+            p.pos += p.addVel * dt;
+            if (d.noise.strength > 0) {
+                float f = d.noise.frequency / p.scale;
+                p.pos += noise3(p.pos * f + float3{0, I.clock * d.noise.scroll, 0}) * (d.noise.strength * p.scale * dt);
+            }
+        }
         p.pos += p.vel * dt;
         p.rot += p.spin * dt;
+        if (modules) {
+            if (d.collision.enabled) {
+                float plane = (I.ground ? I.ground(p.pos.x, p.pos.z) : 0.0f) + d.collision.height * p.scale;
+                if (p.pos.y < plane && p.vel.y < 0) {
+                    p.pos.y = plane;
+                    p.vel.y = -p.vel.y * d.collision.bounce;
+                    p.vel.x *= 1 - d.collision.dampen; p.vel.z *= 1 - d.collision.dampen;
+                    p.age += d.collision.lifeLoss / p.invLife;
+                    I.queueSub(p, FxSubEvent::Collision, p.pos);
+                    if (render::length(p.vel) < d.collision.minKillSpeed * p.scale || p.age * p.invLife >= 1.0f) { I.die(i, true); continue; }
+                }
+            }
+            if (p.trail >= 0) {
+                auto& tr = I.trails[size_t(p.trail)];
+                const float step = d.trail.time / float(kTrailPts - 1);
+                if (I.clock - tr.time(0) >= step) {
+                    tr.head = (tr.head + 1) % kTrailPts;
+                    tr.p[size_t(tr.head)] = p.pos; tr.t[size_t(tr.head)] = I.clock;
+                    tr.count = std::min(tr.count + 1, kTrailPts);
+                }
+                while (tr.count > 1 && I.clock - tr.time(tr.count - 1) > d.trail.time) --tr.count;
+            }
+            if (p.child) {
+                auto it = I.children.find(p.uid);
+                if (it == I.children.end()) p.child = false;
+                else if (auto* c = I.inst(it->second.id)) c->pos = p.pos;
+                else { I.children.erase(it); p.child = false; }
+            }
+        }
         ++i;
+    }
+    // sub-emitters queued this frame (birth / death / collision): played as effects of their own
+    if (!I.pending.empty()) {
+        auto subs = std::move(I.pending);
+        I.pending.clear();
+        for (auto& sp : subs) {
+            int id = I.effects[sp.effect].em[sp.emitter].subIds[sp.sub];
+            if (id == -2) {
+                const std::string name = I.effects[sp.effect].def.emitters[sp.emitter].subEmitters[sp.sub].effect;
+                id = effect(name);   // may grow the effect list: no references kept across this call
+                I.effects[sp.effect].em[sp.emitter].subIds[sp.sub] = id;
+            }
+            if (id < 0) continue;
+            FxHandle h = play(id, sp.pos, sp.dir, sp.scale, sp.tint);
+            if (auto* in = I.inst(h.id)) in->depth = sp.depth;
+            if (sp.uid && h.valid()) I.children[sp.uid] = h;
+        }
     }
     stats_.particles = int(I.particles.size());
     int live = 0;
@@ -619,6 +842,8 @@ void ParticleSystem::render(const FxFog& fog) {
     // 1) visible particles -> records (clip-space culling, on-screen size cap, fill estimate)
     I.recs.clear();
     const float capK = I.limits.maxScreenSize * 2.0f / I.p11;      // size cap per unit of clip w
+    const int trailStep = quality_ >= FxQuality::High ? 1 : 2;   // medium: half the ribbon points
+    stats_.trailQuads = 0;
     for (uint32_t i = 0; i < I.particles.size(); ++i) {
         const auto& p = I.particles[i];
         const auto& er = I.effects[p.effect].em[p.emitter];
@@ -627,13 +852,21 @@ void ParticleSystem::render(const FxFog& fog) {
         int li = std::min(kLut - 1, int(t * float(kLut - 1) + 0.5f));
         float4 c = I.viewProj * float4{p.pos.x, p.pos.y, p.pos.z, 1};
         if (c.w <= 0.05f) continue;
+        if (p.trail >= 0 && quality_ >= d.trail.minQuality) {   // ribbon segments, independent of the head's visibility
+            int idx[kTrailPts];
+            const int segs = Impl::trailIndices(I.trails[size_t(p.trail)], trailStep, idx);
+            for (int k = 0; k < segs; ++k) { I.recs.push_back({i, c.w, 0, er.trailBatch, int16_t(k)}); ++stats_.trailQuads; }
+        }
         float size = std::min(p.size * er.size[size_t(li)], capK * c.w);
+        if (!d.sizeBySpeed.empty()) size *= speedLut(er.sizeSpeed, d.sizeSpeed, render::length(p.vel) / p.scale);
         if (size <= 0) continue;
-        float ext = size * I.p11 * (1.0f + d.stretch * render::length(p.vel));
+        float ext = size * I.p11 * (std::max(1.0f, p.aspect) + d.stretch * render::length(p.vel));
         if (c.x - ext > c.w || c.x + ext < -c.w || c.y - ext > c.w || c.y + ext < -c.w) continue;
-        if (mul(er.color[size_t(li)], p.tint).w <= 0.004f) continue;
+        float4 col = mul(er.color[size_t(li)], p.tint);
+        if (!d.colorBySpeed.empty()) col = mul(col, speedLut(er.colorSpeed, d.colorSpeed, render::length(p.vel) / p.scale));
+        if (col.w <= 0.004f || d.hidden) continue;
         float fh = size * I.p11 / c.w * 0.5f;                        // fraction of screen height
-        stats_.fill += fh * fh / I.aspect;
+        stats_.fill += fh * fh * p.aspect / I.aspect;
         I.recs.push_back({i, c.w, size, p.batch});
     }
     if (I.recs.empty()) return;
@@ -650,14 +883,56 @@ void ParticleSystem::render(const FxFog& fog) {
     // 3) expand quads on the CPU
     I.verts.resize(I.recs.size() * 4);
     Vertex* v = I.verts.data();
+    auto packFor = [](FxBlend b, float4 c) {   // premultiplied textures want a premultiplied tint
+        return packColor(b == FxBlend::Premultiplied ? float4{c.x * c.w, c.y * c.w, c.z * c.w, c.w} : c);
+    };
     for (auto& r : I.recs) {
         const auto& p = I.particles[r.idx];
         const auto& er = I.effects[p.effect].em[p.emitter];
         const EmitterDef& d = I.effects[p.effect].def.emitters[p.emitter];
         float t = std::min(p.age * p.invLife, 1.0f);
         int li = std::min(kLut - 1, int(t * float(kLut - 1) + 0.5f));
-        const uint32_t col = packColor(mul(er.color[size_t(li)], p.tint));
-        const float h = r.size * 0.5f;
+        if (r.seg >= 0) {   // one ribbon segment: from point k to k+1 (point 0 = the particle itself)
+            const auto& tr = I.trails[size_t(p.trail)];
+            int idx[kTrailPts];
+            const int segs = Impl::trailIndices(tr, trailStep, idx);
+            const int k = std::min<int>(r.seg, segs - 1);
+            auto point = [&](int q) { return q <= 0 ? p.pos : tr.at(idx[std::min(q - 1, segs - 1)]); };
+            auto age = [&](int q) { return q <= 0 ? 0.0f : std::clamp((I.clock - tr.time(idx[std::min(q - 1, segs - 1)])) / d.trail.time, 0.0f, 1.0f); };
+            float headSize = p.size * er.size[size_t(li)];
+            float4 base = d.trail.inheritColor ? mul(er.color[size_t(li)], p.tint) : p.tint;
+            const FxTrail& td = d.trail;
+            auto corner = [&](int q, float3& left, float3& right, uint32_t& col, float& u) {
+                float3 a = point(q), prev = point(q - 1), next = point(q + 1);
+                float3 dir = q == 0 ? a - next : prev - next;
+                float3 side = render::cross(dir, I.eye - a);
+                float sl = render::length(side);
+                side = sl > 1e-5f ? side * (1.0f / sl) : I.right;
+                float f = age(q);
+                int fi = std::min(kLut - 1, int(f * float(kLut - 1) + 0.5f));
+                float w = er.trailWidth[size_t(fi)] * (td.sizeAffectsWidth ? headSize : p.scale) * 0.5f;
+                left = a - side * w; right = a + side * w;
+                col = packFor(td.blend, mul(er.trailColor[size_t(fi)], base));
+                u = f;
+            };
+            float3 l0, r0, l1, r1;
+            uint32_t c0, c1;
+            float f0, f1;
+            corner(k, l0, r0, c0, f0);
+            corner(k + 1, l1, r1, c1, f1);
+            const FxTexture& tx = er.trailTex;
+            float ua = tx.u0 + (tx.u1 - tx.u0) * f0, ub = tx.u0 + (tx.u1 - tx.u0) * f1;
+            v[0] = {l0, {ua, tx.v1}, c0};
+            v[1] = {l1, {ub, tx.v1}, c1};
+            v[2] = {r1, {ub, tx.v0}, c1};
+            v[3] = {r0, {ua, tx.v0}, c0};
+            v += 4;
+            continue;
+        }
+        float4 colf = mul(er.color[size_t(li)], p.tint);
+        if (!d.colorBySpeed.empty()) colf = mul(colf, speedLut(er.colorSpeed, d.colorSpeed, render::length(p.vel) / p.scale));
+        const uint32_t col = packFor(d.blend, colf);
+        const float h = r.size * 0.5f, hl = h * p.aspect;   // half width, half length
         float3 ax, ay;
         if (d.align == FxAlign::Velocity && render::length(p.vel) > 1e-3f) {
             float sp = render::length(p.vel);
@@ -666,20 +941,27 @@ void ParticleSystem::render(const FxFog& fog) {
             float sl = render::length(side);
             side = sl > 1e-4f ? side * (1.0f / sl) : I.right;
             ax = side * h;
-            ay = axis * (h + d.stretch * sp * 0.5f);
+            ay = axis * (hl + d.stretch * sp * 0.5f);
         } else if (d.align == FxAlign::Ground) {
             float cs = std::cos(p.rot), sn = std::sin(p.rot);
             ax = float3{cs, 0, sn} * h;
-            ay = float3{-sn, 0, cs} * h;
+            ay = float3{-sn, 0, cs} * hl;
+        } else if (d.align == FxAlign::Upright) {
+            float3 rx = render::length(float3{I.right.x, 0, I.right.z}) > 1e-4f ? render::normalize(float3{I.right.x, 0, I.right.z}) : float3{1, 0, 0};
+            ax = rx * h;
+            ay = float3{0, 1, 0} * hl;
         } else {
             float cs = std::cos(p.rot), sn = std::sin(p.rot);
             ax = (I.right * cs + I.up * sn) * h;
-            ay = (I.up * cs - I.right * sn) * h;
+            ay = (I.up * cs - I.right * sn) * hl;
         }
         float3 pos = d.align == FxAlign::Ground ? p.pos + float3{0, 0.03f, 0} : p.pos;
         float u0 = er.tex.u0, v0 = er.tex.v0, u1 = er.tex.u1, v1 = er.tex.v1;
         if (er.frames > 1) {
-            int f = d.fps > 0 ? int(p.age * d.fps) % er.frames : std::min(er.frames - 1, int(t * float(er.frames)));
+            int f = d.fps > 0 ? int(p.age * d.fps) % er.frames
+                  : d.cycles == 1 ? std::min(er.frames - 1, int(t * float(er.frames)))
+                                  : int(t * float(er.frames) * d.cycles) % er.frames;
+            if (p.frame0) f = (f + p.frame0) % er.frames;
             int cx = f % d.frameCols, cy = f / d.frameCols;
             u0 = er.tex.u0 + er.du * float(cx); u1 = u0 + er.du;
             v0 = er.tex.v0 + er.dv * float(cy); v1 = v0 + er.dv;
@@ -707,9 +989,9 @@ void ParticleSystem::render(const FxFog& fog) {
         size_t j = i;
         while (j < I.recs.size() && I.recs[j].batch == b) ++j;
         const auto& batch = I.batches[b];
-        const int pi = batch.blend == FxBlend::Additive ? 1 : 0;
+        const int pi = batch.blend == FxBlend::Additive ? 1 : batch.blend == FxBlend::Premultiplied ? 2 : 0;
         if (pi != lastPipe) { I.dev->setPipeline(I.pipe[pi]); lastPipe = pi; }
-        u.params[0] = float(pi); u.params[1] = u.params[2] = u.params[3] = 0;
+        u.params[0] = pi == 1 ? 1.0f : 0.0f; u.params[1] = pi == 2 ? 1.0f : 0.0f; u.params[2] = u.params[3] = 0;
         I.dev->setUniforms(0, &u, sizeof u);
         I.dev->setTexture(0, batch.tex.valid() ? batch.tex : I.atlas);
         for (size_t q = i; q < j; q += kQuadsPerDraw) {
@@ -721,6 +1003,38 @@ void ParticleSystem::render(const FxFog& fog) {
         i = j;
     }
     stats_.drawn = int(I.recs.size());
+}
+
+void ParticleSystem::collectLights(std::vector<FxPointLight>& out, int maxLights) const {
+    const auto& I = *impl_;
+    if (quality_ == FxQuality::Off) return;
+    if (quality_ == FxQuality::Low) maxLights = std::min(maxLights, 8);
+    struct Count { uint32_t owner; uint16_t emitter; int n; };
+    std::vector<Count> counts;
+    int added = 0;
+    for (const auto& p : I.particles) {
+        if (added >= maxLights) break;
+        const EmitterDef& d = I.effects[p.effect].def.emitters[p.emitter];
+        if (!d.light.enabled) continue;
+        const FxLight& l = d.light;
+        if (l.ratio < 1 && float((p.uid * 2654435761u) >> 8) * (1.0f / 16777216.0f) >= l.ratio) continue;   // stable choice per particle
+        auto it = std::find_if(counts.begin(), counts.end(), [&](const Count& c) { return c.owner == p.owner && c.emitter == p.emitter; });
+        if (it == counts.end()) { counts.push_back({p.owner, p.emitter, 0}); it = counts.end() - 1; }
+        if (it->n >= l.max) continue;
+        ++it->n;
+        const auto& er = I.effects[p.effect].em[p.emitter];
+        float t = std::min(p.age * p.invLife, 1.0f);
+        int li = std::min(kLut - 1, int(t * float(kLut - 1) + 0.5f));
+        float4 pc = mul(er.color[size_t(li)], p.tint);
+        FxPointLight fl;
+        fl.pos = p.pos;
+        fl.color = l.useParticleColor ? float3{l.color.x * pc.x, l.color.y * pc.y, l.color.z * pc.z} : float3{l.color.x, l.color.y, l.color.z};
+        fl.radius = l.radius * p.scale * (l.sizeAffectsRadius ? p.size * er.size[size_t(li)] / p.scale : 1.0f);
+        fl.intensity = l.intensity * (l.alphaAffectsIntensity ? pc.w : 1.0f);
+        if (fl.intensity <= 0.01f || fl.radius <= 0.01f) continue;
+        out.push_back(fl);
+        ++added;
+    }
 }
 
 } // namespace rts::fx
