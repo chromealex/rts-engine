@@ -6,6 +6,7 @@
 // (core/TerrainOps.cpp).
 #include "../Editor.h"
 #include "../EditorUtil.h"
+#include "../core/PlanetOps.h"
 #include "../core/TerrainOps.h"
 
 namespace rts::editor {
@@ -22,6 +23,7 @@ public:
         Workspace& ws = ed.ws();
         if (ws.project.dir.empty()) { ImGui::TextDisabled("Откройте игру."); return; }
         MapData& d = ws.map.data;
+        if (ed.planetMap()) ImGui::TextWrapped("Карта с планетами: кисти работают на теле под курсором в «Сцене» (3D-кисть, переходит через рёбра граней).");
         const bool hf = !d.corners.empty();
         if (!hf) ImGui::TextWrapped("У карты нет карты высот углов. Первый мазок кисти создаст её из текущего рельефа (уровни, пандусы, высоты).");
         else ImGui::TextDisabled("Карта высот: %d x %d углов%s", d.w + 1, d.h + 1, ws.project.rules.terrain.heightfield() ? " (геймплей)" : " (только вид)");
@@ -82,6 +84,7 @@ public:
         Viewport& vp = *ed.sceneViewport;
         if (!io.MouseDown[0]) { painting_ = false; return; }
         if (!painting_ && !(io.MouseClicked[0] && vp.hovered)) return;
+        if (ed.planetMap()) { planetStroke(ed, vp, io); return; }
         float x, z;
         if (!ed.groundAt(vp, ed.sceneCam, io.MousePos.x, io.MousePos.y, x, z)) return;
         if (pick_) { target_ = ed.view().heightAt(ed.editGrid(), x, z); pick_ = false; return; }
@@ -101,6 +104,28 @@ public:
     }
 
 private:
+    // planets: the same brushes as 3D dabs on the body under the cursor (PlanetOps, crosses face seams)
+    void planetStroke(Editor& ed, Viewport& vp, ImGuiIO& io) {
+        int body; render::float3 local;
+        if (!ed.planetAt(vp, io.MousePos.x, io.MousePos.y, body, local)) return;
+        const render::float3 dir = normalize(local);
+        const game::PlanetSurface* s = ed.view().planets().surface(body);
+        if (pick_) { target_ = s ? s->heightAt(dir) : 0; pick_ = false; return; }
+        const double now = ed.time();
+        const float cellAngle = s ? 1.5708f / float(s->faceSize()) : 0.05f;
+        if (painting_ && std::acos(std::clamp(dot(dir, lastDir_), -1.0f, 1.0f)) < radius_ * 0.25f * cellAngle && now - lastT_ < 0.033) return;
+        if (!painting_) ed.doc().beginEdit();
+        painting_ = true;
+        lastDir_ = dir; lastT_ = now;
+        const bool inv = io.KeyShift;
+        const std::string id = ed.planetBodyId(body);
+        if (mode_ == 6) { planetMaterial(ed.doc(), id, dir, radius_, inv ? -1 : layer_); return; }
+        Sculpt op = mode_ == 0 ? (inv ? Sculpt::Lower : Sculpt::Raise) : mode_ == 1 ? (inv ? Sculpt::Raise : Sculpt::Lower)
+                  : mode_ == 2 ? Sculpt::Smooth : mode_ == 3 ? Sculpt::Flatten : mode_ == 4 ? Sculpt::Noise : Sculpt::Set;
+        const float st = mode_ <= 1 || mode_ == 4 ? strength_ * 0.25f : mode_ == 5 ? target_ : blend_ * 0.5f;
+        planetSculpt(ed.doc(), id, op, dir, radius_, st, seed_);
+    }
+
     void setActive(Editor& ed, bool on) {
         owner_ = on;
         ed.tool = on ? Tool::Count : Tool::Select;
@@ -113,6 +138,7 @@ private:
     std::string file_ = "maps/heightmap.png";
     bool owner_ = false, painting_ = false, pick_ = false;
     float lastX_ = -1e9f, lastZ_ = -1e9f;
+    render::float3 lastDir_;
     double lastT_ = 0;
     uint32_t seed_ = 1;
 };

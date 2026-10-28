@@ -445,7 +445,12 @@ bool stageGame(const std::string& projectDir, const std::string& stagingDir, con
     const fs::path src = fs::absolute(projectDir), dst = stagingDir;
     fs::remove_all(dst, ec);
     fs::create_directories(dst, ec);
-    fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+    // per file: MinGW's recursive fs::copy fails into an existing folder
+    for (auto it = fs::recursive_directory_iterator(src, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const fs::path to = dst / fs::relative(it->path(), src);
+        if (it->is_directory()) fs::create_directories(to, ec);
+        else fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing, ec);
+    }
     if (ec) { if (error) *error = "audio: cannot copy " + src.string() + ": " + ec.message(); return false; }
 
     auto readFile = [&](const fs::path& p, std::string& out) {

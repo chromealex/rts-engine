@@ -17,6 +17,7 @@ using namespace rts;
 
 static std::unique_ptr<editor::Editor> g_editor;
 static int g_demoSelect = -1;
+static std::string g_demoWindow;
 static bool g_demoPlay = false;
 
 static std::string exeDir(const char* argv0) {
@@ -65,6 +66,7 @@ int rtsMain(int argc, char** argv) {
         else if (a == "--listen") opt.listenPort = std::atoi(argv[++i]);
         else if (a == "--map") opt.openMap = argv[++i];
         else if (a == "--engine") opt.engineDir = argv[++i];
+        else if (a == "--window") g_demoWindow = argv[++i];   // open + focus a window (automated screenshots)
         else if (a == "--select") g_demoSelect = std::atoi(argv[++i]); // used by automated screenshots
     }
     std::error_code ec;
@@ -73,6 +75,17 @@ int rtsMain(int argc, char** argv) {
     if (!opt.projectDir.empty() && (opt.projectDir.back() == '/' || opt.projectDir.back() == '\\')) opt.projectDir.pop_back();
     if (!opt.openMap.empty()) opt.openMap = fs::absolute(opt.openMap, ec).string();
     opt.buildTool = findBuildTool(exeDir(argv[0]));
+    opt.mcpTool = findNear(exeDir(argv[0]), {"rtsmcp", "rtsmcp.exe", "Release/rtsmcp.exe"});
+    {
+        std::error_code ec2;
+#if defined(__linux__)
+        fs::path self = fs::read_symlink("/proc/self/exe", ec2);
+        if (ec2) self = fs::absolute(argv[0], ec2);
+#else
+        fs::path self = fs::absolute(argv[0], ec2);
+#endif
+        opt.editorExe = self.lexically_normal().string();
+    }
     opt.gameExe = findNear(exeDir(argv[0]), {"RTSGame", "RTSGame.app/Contents/MacOS/RTSGame", "RTSGame.exe", "Release/RTSGame.exe"});
 
     g_editor = std::make_unique<editor::Editor>(opt);
@@ -85,7 +98,11 @@ int rtsMain(int argc, char** argv) {
         if (g_demoSelect >= 0) g_editor->selectEntity(g_demoSelect);
         if (g_demoPlay) g_editor->startPlay(0);
     };
-    cb.frame = [](gfx::Device& d, double dt) { g_editor->frame(d, dt); };
+    cb.frame = [](gfx::Device& d, double dt) {
+        static int frames = 0;
+        if (++frames == 5 && !g_demoWindow.empty()) g_editor->focusWindow(g_demoWindow);   // after the dock layout exists
+        g_editor->frame(d, dt);
+    };
     cb.event = [](const platform::Event& e) { g_editor->event(e); };
     cb.shutdown = [] { g_editor->shutdown(); };
     return platform::run(cfg, cb);
