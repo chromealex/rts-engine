@@ -5469,6 +5469,33 @@ TEST(script_embed_requires) {
     CHECK(game::scriptApiReference().has("actions"));
 }
 
+#include "modules/rts/view/RtsViewScript.h"
+TEST(script_view_scripts) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("viewScripts", Json::parse(R"(["scripts/view/v.lua"])"));
+    rules.set("$scriptSources", Json::parse(R"J({"scripts/view/v.lua":
+        "local n = 0.5\nview.on('unit_died', function(e) n = n + 1 end)\nview.on_frame(function(dt) n = n + dt * 2.0; if n > 0.5 then view.notice('spawned ' .. game.count{}) ; n = -100 end end)"})J"));
+    Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
+    Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim.setup(rules, map);
+    CHECK(mod(sim).scripts() == nullptr);                   // view scripts alone: no simulation VM
+    const uint64_t before = sim.checksum();
+    game::ViewScripts vs;
+    CHECK(vs.load(sim, rules, map, 1));
+    vs.attach(sim);
+    Simulation ref(SimConfig{}, std::make_unique<game::RtsModule>());
+    ref.setup(rules, map);
+    CHECK(before == ref.checksum());
+    int t = mod(sim).rules().findType("footman");
+    mod(sim).spawn(sim, uint16_t(t), 1, {Fixed::fromInt(10), Fixed{}, Fixed::fromInt(10)});
+    sim.step(); ref.step();
+    vs.update(sim, 0.016f);
+    auto req = vs.takeRequests();
+    CHECK(req.size() == 1 && req[0].kind == game::ViewRequest::Notice && req[0].text.rfind("spawned ", 0) == 0);
+    for (auto& e : vs.log()) if (e.error) std::printf("  view log: %s\n", e.text.c_str());
+    CHECK(vs.log().empty());
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

@@ -183,6 +183,8 @@ const char* kInstructions =
     "Phones: device_list {filter} (iPhone, iPad, Pixel, Galaxy, Redmi, desktops: sizes, safe areas, cut-outs) -> "
     "device_set {device, orientation, safeArea: true} -> view_screenshot {window: game}. "
     "To test a mechanic by playing: play_start, play_units, play_command (any player command, e.g. surrender, dig, ability), play_status. "
+    "Mechanics the data blocks can't express: Lua scripts - script_api (reference) -> script_write {path: scripts/x.lua, register: true} "
+    "-> script_check (compile + short bot match, errors with file:line); simulation scripts use integers and fx() numbers, no floats. "
     "Look of the game: own meshes / textures via asset_import, then the type's \"view\" block with rules_merge "
     "(model, materials overrides per material name, team colour, clips: docs/models.md; model_info lists nodes, clips, materials); "
     "lighting: lighting_set (sun, sky, day/night, presets), light_add / light_update (point lights on the map); "

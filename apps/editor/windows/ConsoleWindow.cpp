@@ -11,6 +11,12 @@ public:
     const char* dockArea() const override { return "bottom"; }
 
     void draw(Editor& ed) override {
+        // Lua script errors of the running play-test (file:line); the full script log: window "Скрипты"
+        if (auto* m = ed.simModule(); m && m->scripts() && m->scripts()->errorCount() > 0) {
+            for (auto& e : m->scripts()->log())
+                if (e.error) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1), "[script t=%u] %s", e.tick, e.text.c_str());
+            ImGui::Separator();
+        }
         std::string log = ed.ws().buildLog();
         if (ed.ws().building()) ImGui::TextColored(ImVec4(1, 0.8f, 0.3f, 1), "Идёт сборка…");
         else if (log.empty()) ImGui::TextDisabled(ICON_CONSOLE "  Сборка ещё не запускалась (меню «Сборка»)");

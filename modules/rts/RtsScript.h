@@ -70,7 +70,8 @@ std::vector<std::string> scriptFiles(const Json& rules, const Json& map, bool vi
 // Reads every script file (and the files they require()) with `read` into rules["$scriptSources"]
 // ({path: text}), so the simulation can load them without file access (headless, server, tests).
 // Without embedded sources the module has no scripts to run, so every loader that starts a
-// simulation calls this next to applyTilesToMap. Returns false with `err` when a file is missing.
+// simulation calls this next to applyTilesToMap. Returns false with `err` when a listed file is missing
+// (the others are embedded anyway).
 bool embedScripts(Json& rules, const Json& map, const ScriptReader& read, std::string* err);
 // Compile without running: "" when fine, else "name:line: message". sim = simulation rules (float literals).
 std::string checkScriptSyntax(const std::string& name, const std::string& text, bool sim = true);

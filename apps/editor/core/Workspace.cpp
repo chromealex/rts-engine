@@ -4,6 +4,7 @@
 #include "DataOps.h"
 #include "BalanceOps.h"
 #include "LightOps.h"
+#include "ScriptOps.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -163,7 +164,7 @@ bool Project::saveManifest(std::string* err) {
 
 // ================================================================= workspace
 
-Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); }
+Workspace::Workspace() { registerCoreOps(); registerTileOps(*this); registerTerrainOps(*this); registerDataOps(*this); registerBalanceOps(*this); registerLightOps(*this); registerScriptOps(*this); }
 Workspace::~Workspace() { if (buildThread_.joinable()) buildThread_.join(); }
 
 namespace {
@@ -1075,7 +1076,8 @@ void Workspace::registerCoreOps() {
             SimConfig cfg;
             cfg.seed = uint64_t(std::max(0, pi(p, "seed", 1)));
             Simulation sim(cfg, std::make_unique<game::RtsModule>());
-            sim.setup(project.rulesJson, map.toJson());
+            const Json mapJson = map.toJson();
+            sim.setup(project.simRules(mapJson), mapJson);
             auto& mod = *dynamic_cast<game::RtsModule*>(&sim.module());
             game::AIConfig ai;
             int diff = pi(p, "difficulty", 1);
