@@ -7067,6 +7067,481 @@ TEST(models_interchange_fuzz_never_crashes) {
     CHECK(a > 50 && b > 50 && c > 50 && d > 20 && e > 20 && f > 20);   // most truncations are reported
 }
 
+// ---- classic formats: Total Annihilation .3do / .gaf, C&C Generals .w3d, DDS (synthetic data) ----
+
+namespace classictest {
+using namespace rts::render;
+using modeltest::near;
+template <class T> void put(std::string& b, T v) { b.append(reinterpret_cast<const char*>(&v), sizeof v); }
+template <class T> void putAt(std::string& b, size_t at, T v) { std::memcpy(&b[at], &v, sizeof v); }
+
+// TA 3DO writer: pieces with vertices (native frame, units), primitives (colour, indices, texture).
+struct TaPrim { int color; std::vector<uint16_t> idx; std::string tex; };
+struct TaPiece { std::string name; float3 off; std::vector<float3> verts; std::vector<TaPrim> prims; std::vector<TaPiece> kids; int sel = -1; };
+inline uint32_t emit3do(std::string& out, const TaPiece& p) {
+    const uint32_t at = uint32_t(out.size());
+    out.append(52, '\0');
+    const uint32_t nameAt = uint32_t(out.size());
+    out += p.name; out += '\0';
+    const uint32_t vAt = uint32_t(out.size());
+    for (auto v : p.verts) { put<int32_t>(out, int32_t(v.x * 65536)); put<int32_t>(out, int32_t(v.y * 65536)); put<int32_t>(out, int32_t(v.z * 65536)); }
+    const uint32_t pAt = uint32_t(out.size());
+    out.append(32 * p.prims.size(), '\0');
+    for (size_t k = 0; k < p.prims.size(); ++k) {
+        const uint32_t iAt = uint32_t(out.size());
+        for (auto i : p.prims[k].idx) put<uint16_t>(out, i);
+        uint32_t tAt = 0;
+        if (!p.prims[k].tex.empty()) { tAt = uint32_t(out.size()); out += p.prims[k].tex; out += '\0'; }
+        const size_t pa = pAt + 32 * k;
+        putAt<int32_t>(out, pa, p.prims[k].color); putAt<int32_t>(out, pa + 4, int32_t(p.prims[k].idx.size()));
+        putAt<uint32_t>(out, pa + 12, iAt); putAt<uint32_t>(out, pa + 16, tAt);
+    }
+    uint32_t child = 0, prev = 0;
+    for (const auto& k : p.kids) {
+        const uint32_t c = emit3do(out, k);
+        if (!prev) child = c; else putAt<uint32_t>(out, prev + 44, c);
+        prev = c;
+    }
+    const int32_t hdr[13] = {1, int32_t(p.verts.size()), int32_t(p.prims.size()), p.sel, int32_t(p.off.x * 65536), int32_t(p.off.y * 65536),
+                             int32_t(p.off.z * 65536), int32_t(nameAt), 0, int32_t(vAt), int32_t(pAt), 0, int32_t(child)};
+    std::memcpy(&out[at], hdr, sizeof hdr);
+    return at;
+}
+// GAF with one entry; frames of w x h palette indices; compressed frames use TA's run-length lines.
+inline std::string gafFile(const std::string& name, const std::vector<std::vector<uint8_t>>& frames, int w, int h, bool compressed) {
+    std::string g;
+    put<uint32_t>(g, 0x00010100); put<uint32_t>(g, 1); put<uint32_t>(g, 0); put<uint32_t>(g, 16);
+    put<uint16_t>(g, uint16_t(frames.size())); put<uint16_t>(g, 1); put<uint32_t>(g, 0);
+    std::string n = name; n.resize(32, '\0'); g += n;
+    const size_t table = g.size();
+    g.append(8 * frames.size(), '\0');
+    for (size_t f = 0; f < frames.size(); ++f) {
+        const uint32_t fat = uint32_t(g.size());
+        g.append(24, '\0');
+        const uint32_t dat = uint32_t(g.size());
+        if (!compressed) g.append(reinterpret_cast<const char*>(frames[f].data()), frames[f].size());
+        else
+            for (int y = 0; y < h; ++y) {
+                std::string line;
+                for (int x = 0; x < w;) {
+                    const uint8_t v = frames[f][size_t(y * w + x)];
+                    int run = 1;
+                    while (x + run < w && frames[f][size_t(y * w + x + run)] == v && run < 32) ++run;
+                    if (v == 9) line += char(run << 1 | 1);
+                    else if (run > 1) { line += char((run - 1) << 2 | 2); line += char(v); }
+                    else { line += char(0); line += char(v); }
+                    x += run;
+                }
+                put<uint16_t>(g, uint16_t(line.size())); g += line;
+            }
+        putAt<uint16_t>(g, fat, uint16_t(w)); putAt<uint16_t>(g, fat + 2, uint16_t(h));
+        g[fat + 8] = 9; g[fat + 9] = compressed ? 1 : 0;
+        putAt<uint32_t>(g, fat + 16, dat);
+        putAt<uint32_t>(g, table + 8 * f, fat); putAt<uint32_t>(g, table + 8 * f + 4, 1);
+    }
+    return g;
+}
+inline std::string taPalette() {
+    std::string p;
+    for (int i = 0; i < 256; ++i) { p += char(i); p += char(255 - i); p += char(i / 2); p += '\0'; }
+    return p;
+}
+inline uint8_t lin(int c) { float s = c / 255.0f; float l = s <= 0.04045f ? s / 12.92f : std::pow((s + 0.055f) / 1.055f, 2.4f); return uint8_t(std::lround(l * 255)); }
+// Every triangle's winding agrees with its stored normal (front faces point outward).
+inline bool windingMatchesNormals(const Model& m) {
+    for (size_t i = 0; i + 2 < m.indices.size(); i += 3) {
+        const ModelVertex &a = m.vertices[m.indices[i]], &b = m.vertices[m.indices[i + 1]], &c = m.vertices[m.indices[i + 2]];
+        if (dot(cross(b.pos - a.pos, c.pos - a.pos), a.nrm) <= 0) return false;
+    }
+    return true;
+}
+// Feeds every prefix of `bytes` to `load`: each must throw (or load), never crash.
+template <class F> bool survivesTruncation(const std::string& bytes, F&& load) {
+    int threw = 0;
+    for (size_t n = 0; n < bytes.size(); n += 1 + n / 64) {
+        try { load(bytes.substr(0, n)); } catch (const std::runtime_error&) { ++threw; }
+    }
+    // random byte flips
+    uint32_t seed = 12345;
+    for (int k = 0; k < 300; ++k) {
+        std::string b = bytes;
+        for (int j = 0; j < 4; ++j) { seed = seed * 1664525u + 1013904223u; b[(seed >> 8) % b.size()] = char(seed >> 24); }
+        try { load(b); } catch (const std::runtime_error&) {}
+    }
+    return threw > 0;
+}
+
+inline std::string tank3do() {
+    TaPiece base{"base", {0, 0, 0}, {{-1, 0, -2}, {1, 0, -2}, {1, 0, 2}, {-1, 0, 2}, {0, 1, 0}, {-3, 0, -3}, {3, 0, -3}, {3, 0, 3}}, {}, {}, -1};
+    // top-down CCW seen from +Y in the native frame: textured quad facing up
+    base.prims.push_back({0, {0, 3, 2, 1}, "plate"});
+    base.prims.push_back({40, {0, 1, 4}, ""});           // coloured triangle (palette 40)
+    base.prims.push_back({40, {1, 0, 4}, ""});           // same vertex set: the last one wins
+    base.prims.push_back({7, {0, 1}, ""});               // a line: skipped
+    base.prims.push_back({3, {5, 6, 7}, ""});            // selection primitive: skipped
+    base.sel = 4;
+    TaPiece turret{"turret", {0.5f, 2, 1}, {{0, 0, 0}, {0, 1, 0}, {1, 0, 0}}, {{200, {0, 1, 2}, ""}}, {}, -1};
+    TaPiece flare{"flare", {0, 0, -3}, {}, {}, {}, -1};
+    turret.kids.push_back(flare);
+    base.kids.push_back(turret);
+    TaPiece sib{"door", {-2, 0, 0}, {}, {}, {}, -1};
+    base.kids.push_back(sib);
+    std::string out;
+    emit3do(out, base);
+    return out;
+}
+} // namespace classictest
+
+TEST(models_3do_pieces_palette_gaf) {
+    using namespace classictest;
+    std::vector<uint8_t> px(16, 50);
+    px[0] = 9; px[1] = 9;                                 // transparent run (compressed skip)
+    px[5] = 77;
+    const std::string gaf = gafFile("plate", {px}, 4, 4, true);
+    std::vector<std::string> warn;
+    auto m = loadModel("units/tank.3do", modeltest::mapReader({{"units/tank.3do", tank3do()}, {"units/textures/plate.gaf", gaf}, {"units/../palettes/PALETTE.PAL", taPalette()}}), &warn);
+    CHECK(warn.empty());
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    const int b = m->findNode("base"), t = m->findNode("turret"), f = m->findNode("flare"), d = m->findNode("door");
+    CHECK(b == 0 && t > 0 && f > 0 && d > 0);
+    CHECK(m->nodes[size_t(t)].parent == b && m->nodes[size_t(f)].parent == t && m->nodes[size_t(d)].parent == b);
+    CHECK(near(m->nodes[size_t(t)].t.x, 0.5f) && near(m->nodes[size_t(t)].t.y, 2) && near(m->nodes[size_t(t)].t.z, -1));   // z mirrored
+    CHECK(near(m->nodes[size_t(f)].t.z, 3) && m->nodes[size_t(f)].mesh < 0);
+    // base: textured quad (2 triangles) + one coloured triangle; selection primitive, duplicate, line skipped
+    const MeshDef& bm = m->meshes[size_t(m->nodes[size_t(b)].mesh)];
+    uint32_t tris = 0;
+    for (auto& p : bm.primitives) tris += p.indexCount / 3;
+    CHECK(tris == 3 && bm.primitives.size() == 2);
+    CHECK(windingMatchesNormals(*m));
+    const Primitive* texPrim = nullptr; const Primitive* colPrim = nullptr;
+    for (auto& p : bm.primitives) (m->materials[size_t(p.material)].baseTex >= 0 ? texPrim : colPrim) = &p;
+    CHECK(texPrim && colPrim);
+    if (texPrim && colPrim) {
+        // the textured quad faces +Y; colour 40 -> palette (40, 215, 20) as linear vertex colour
+        CHECK(near(m->vertices[m->indices[texPrim->firstIndex]].nrm.y, 1));
+        const uint32_t c = m->vertices[m->indices[colPrim->firstIndex]].color;
+        CHECK((c & 255) == lin(40) && ((c >> 8) & 255) == lin(215) && ((c >> 16) & 255) == lin(20));
+        const Image& img = m->images[size_t(m->materials[size_t(texPrim->material)].baseTex)];
+        CHECK(img.width == 4 && img.height == 4 && img.rgba[3] == 0 && img.rgba[1 * 4 + 3] == 0 && img.rgba[2 * 4 + 3] == 255);
+        CHECK(uint8_t(img.rgba[5 * 4]) == 77 && uint8_t(img.rgba[5 * 4 + 1]) == 255 - 77 && uint8_t(img.rgba[2 * 4]) == 50);
+        CHECK(m->materials[size_t(texPrim->material)].alpha == AlphaMode::Mask);
+    }
+    CHECK(m->clips.empty() && m->skins.empty());
+    // turret colour 200
+    const MeshDef& tm = m->meshes[size_t(m->nodes[size_t(t)].mesh)];
+    CHECK(tm.primitives.size() == 1 && tm.primitives[0].indexCount == 3);
+}
+
+TEST(models_3do_team_texture_and_fallbacks) {
+    using namespace classictest;
+    // 10 player frames: the logo pixels (index 1, 2) change, the border (index 0) does not -> team mask
+    std::vector<std::vector<uint8_t>> frames;
+    for (int p = 0; p < 10; ++p) { std::vector<uint8_t> f(4, 0); f[1] = uint8_t(100 + p); f[2] = uint8_t(100 + p); frames.push_back(f); }
+    std::vector<std::string> warn;
+    auto m = loadModel("u/tank.3do", modeltest::mapReader({{"u/tank.3do", tank3do()}, {"u/plate.gaf", gafFile("plate", frames, 2, 2, false)}, {"u/palette.pal", taPalette()}}), &warn);
+    CHECK(warn.empty());
+    int team = -1;
+    for (auto& mt : m->materials) if (mt.team == TeamMode::Mask) team = mt.teamTex;
+    CHECK(team >= 0);
+    if (team >= 0) {
+        const Image& mask = m->images[size_t(team)];
+        CHECK(mask.rgba[0] == 0 && uint8_t(mask.rgba[4]) == 255 && uint8_t(mask.rgba[8]) == 255 && mask.rgba[12] == 0);
+    }
+    // no palette, no texture: built-in palette + one aggregated warning each
+    warn.clear();
+    auto m2 = loadModel("u/tank.3do", modeltest::mapReader({{"u/tank.3do", tank3do()}}), &warn);
+    CHECK(warn.size() == 2 && m2->images.empty());
+    bool mentions = false;
+    for (auto& w : warn) mentions |= w.find("plate") != std::string::npos;
+    CHECK(mentions);
+    // converted PNG-free fallback: a .tga next to the model
+    std::string tga(18, '\0');
+    tga[2] = 2; tga[12] = 1; tga[14] = 1; tga[16] = 32; tga[17] = 8;
+    tga += std::string("\x10\x20\x30\xff", 4);
+    warn.clear();
+    auto m3 = loadModel("u/tank.3do", modeltest::mapReader({{"u/tank.3do", tank3do()}, {"u/textures/plate.tga", tga}, {"u/palette.pal", taPalette()}}), &warn);
+    CHECK(warn.empty() && m3->images.size() == 1 && m3->images[0].width == 1);
+}
+
+TEST(models_3do_malformed_input) {
+    using namespace classictest;
+    const std::string good = tank3do();
+    auto reader = modeltest::mapReader({{"u/palette.pal", taPalette()}});
+    CHECK(survivesTruncation(good, [&](const std::string& b) { load3do("u/tank.3do", b, reader, nullptr); }));
+    // the turret's sibling pointing at itself: cycle error, not an endless loop
+    std::string loop = good;
+    uint32_t turretAt = 0;
+    std::memcpy(&turretAt, &good[48], 4);
+    putAt<uint32_t>(loop, turretAt + 44, turretAt);
+    bool threw = false;
+    try { load3do("u/a.3do", loop, reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("cycle") != std::string::npos; }
+    CHECK(threw);
+    std::string bad = good;
+    putAt<uint32_t>(bad, 48, uint32_t(bad.size() + 100));
+    threw = false;
+    try { load3do("u/b.3do", bad, reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("u/b.3do") == 0; }
+    CHECK(threw);
+    threw = false;
+    try { load3do("u/c.3do", std::string("\x02\0\0\0", 4) + std::string(60, '\0'), reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("version") != std::string::npos; }
+    CHECK(threw);
+    // GAF damage: textures fall back to palette colours with a warning, never a crash
+    std::vector<uint8_t> px(16, 50);
+    const std::string gaf = gafFile("plate", {px}, 4, 4, true);
+    for (size_t n = 0; n < gaf.size(); n += 3) {
+        std::vector<std::string> w;
+        auto r = modeltest::mapReader({{"u/palette.pal", taPalette()}, {"u/plate.gaf", gaf.substr(0, n)}});
+        auto m = load3do("u/tank.3do", good, r, &w);
+        CHECK(!m->meshes.empty());
+    }
+}
+
+namespace classictest {
+// W3D writer helpers
+inline std::string ck(uint32_t id, const std::string& payload, bool container = false) {
+    std::string c;
+    put<uint32_t>(c, id); put<uint32_t>(c, uint32_t(payload.size()) | (container ? 0x80000000u : 0));
+    return c + payload;
+}
+inline std::string nm(const std::string& s, size_t n = 16) { std::string r = s; r.resize(n, '\0'); return r; }
+inline std::string f32s(std::initializer_list<float> v) { std::string s; for (float x : v) put<float>(s, x); return s; }
+inline std::string u32s(std::initializer_list<uint32_t> v) { std::string s; for (uint32_t x : v) put<uint32_t>(s, x); return s; }
+// one triangle mesh (+ optional influences / texture / house colour name)
+inline std::string w3dTri(const std::string& name, const std::vector<float3>& pos, const std::vector<uint16_t>& bones, const std::string& tex, uint32_t attrs = 0) {
+    std::string hdr = u32s({0x00040002, attrs | (bones.empty() ? 0u : 0x00020000u)}) + nm(name) + nm("TANK");
+    hdr += u32s({1, uint32_t(pos.size()), 1, 0, 0, 0, 0, 3, 1}) + std::string(40, '\0');
+    std::string c = ck(0x1F, hdr), v, n, uv, t;
+    for (auto p : pos) { v += f32s({p.x, p.y, p.z}); n += f32s({0, 0, 1}); uv += f32s({p.x, p.y}); }
+    c += ck(0x02, v) + ck(0x03, n);
+    t = u32s({0, 1, 2, 0}) + f32s({0, 0, 1, 0});
+    c += ck(0x20, t);
+    if (!bones.empty()) { std::string inf; for (auto b : bones) { put<uint16_t>(inf, b); inf.append(6, '\0'); } c += ck(0x0E, inf); }
+    std::string vm = u32s({0}) + std::string("\xff\xff\xff\0\xff\xff\xff\0", 8) + std::string(8, '\0') + f32s({1, 1, 0});
+    c += ck(0x2A, ck(0x2B, ck(0x2D, vm), true), true);
+    std::string sh(16, '\0'); sh[0] = 3; sh[1] = 1; sh[5] = 1; sh[7] = 1; sh[8] = tex.empty() ? 0 : 1;
+    c += ck(0x29, sh);
+    std::string pass = ck(0x39, u32s({0})) + ck(0x3A, u32s({0}));
+    if (!tex.empty()) {
+        c += ck(0x30, ck(0x31, ck(0x32, tex + '\0'), true), true);
+        pass += ck(0x48, ck(0x49, u32s({0})) + ck(0x4A, uv), true);
+    }
+    c += ck(0x38, pass, true);
+    return ck(0x00, c, true);
+}
+inline std::string w3dHierarchy() {
+    std::string hdr = u32s({0x00040001}) + nm("TANK_SKL") + u32s({2}) + f32s({0, 0, 0});
+    std::string piv = nm("ROOTTRANSFORM") + u32s({0xffffffffu}) + f32s({0, 0, 0, 0, 0, 0, 0, 0, 0, 1});
+    piv += nm("Turret") + u32s({0}) + f32s({1, 0, 2, 0, 0, 0, 0, 0, 0, 1});
+    return ck(0x100, ck(0x101, hdr) + ck(0x102, piv), true);
+}
+inline std::string w3dHlod() {
+    std::string lod = ck(0x703, u32s({3}) + f32s({1e30f}));
+    lod += ck(0x704, u32s({1}) + nm("TANK.GUN", 32));
+    lod += ck(0x704, u32s({0}) + nm("TANK.HOUSECOLOR01", 32));
+    lod += ck(0x704, u32s({0}) + nm("TANK.SKIN", 32));
+    std::string low = ck(0x703, u32s({1}) + f32s({0.2f})) + ck(0x704, u32s({0}) + nm("TANK.LOWLOD", 32));
+    return ck(0x700, ck(0x701, u32s({0x00010000, 2}) + nm("TANK") + nm("TANK_SKL")) + ck(0x702, low, true) + ck(0x702, lod, true), true);
+}
+// classic animation: Turret rotates about W3D Z (up) by 0 -> 90 degrees over 3 frames at 2 fps
+inline std::string w3dAnim() {
+    std::string hdr = u32s({0x00040001}) + nm("TANK_SKL.TURN") + nm("TANK_SKL") + u32s({3, 2});
+    std::string q;
+    for (int f = 0; f < 3; ++f) { const float a = 0.785398f * float(f) / 2; q += f32s({0, 0, std::sin(a), std::cos(a)}); }
+    std::string chq; put<uint16_t>(chq, 0); put<uint16_t>(chq, 2); put<uint16_t>(chq, 4); put<uint16_t>(chq, 6); put<uint16_t>(chq, 1); put<uint16_t>(chq, 0);
+    std::string chx; put<uint16_t>(chx, 1); put<uint16_t>(chx, 1); put<uint16_t>(chx, 1); put<uint16_t>(chx, 0); put<uint16_t>(chx, 1); put<uint16_t>(chx, 0);
+    return ck(0x200, ck(0x201, hdr) + ck(0x202, chq + q) + ck(0x202, chx + f32s({0.5f})), true);
+}
+inline std::string w3dModel(bool withHierarchy) {
+    std::string f = withHierarchy ? w3dHierarchy() : std::string();
+    f += w3dTri("GUN", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "gun.tga");
+    f += w3dTri("HOUSECOLOR01", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "");
+    f += w3dTri("LOWLOD", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "");
+    f += w3dTri("HIDDEN", {{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {}, "", 0x1000);
+    // skinned: vertex 2 lives in Turret space (0, 1, 1) -> model (1, 1, 3) in W3D = (1, 3, 1) in the engine
+    f += w3dTri("SKIN", {{0, 0, 0}, {1, 0, 0}, {0, 1, 1}}, {0, 0, 1}, "zhca_body.tga");
+    f += w3dHlod();
+    if (withHierarchy) f += w3dAnim();
+    return f;
+}
+inline std::string ddsHeader(int w, int h, const char* fourcc, uint32_t bits = 0, uint32_t r = 0, uint32_t g = 0, uint32_t b = 0, uint32_t a = 0, uint32_t mips = 1, uint32_t pfFlags = 0) {
+    std::string d = "DDS ";
+    put<uint32_t>(d, 124); put<uint32_t>(d, 0x1007 | (mips > 1 ? 0x20000u : 0)); put<uint32_t>(d, uint32_t(h)); put<uint32_t>(d, uint32_t(w));
+    put<uint32_t>(d, 0); put<uint32_t>(d, 0); put<uint32_t>(d, mips); d.append(44, '\0');
+    put<uint32_t>(d, 32);
+    if (fourcc) { put<uint32_t>(d, 0x4 | pfFlags); d.append(fourcc, 4); d.append(20, '\0'); }
+    else { put<uint32_t>(d, pfFlags ? pfFlags : 0x41); put<uint32_t>(d, 0); put<uint32_t>(d, bits); put<uint32_t>(d, r); put<uint32_t>(d, g); put<uint32_t>(d, b); put<uint32_t>(d, a); }
+    put<uint32_t>(d, 0x1000); d.append(16, '\0');
+    return d;
+}
+inline std::string dxt1Solid(uint16_t c565, int blocks) {
+    std::string s;
+    for (int i = 0; i < blocks; ++i) { put<uint16_t>(s, c565); put<uint16_t>(s, c565); put<uint32_t>(s, 0); }
+    return s;
+}
+} // namespace classictest
+
+TEST(models_w3d_hierarchy_hlod_skin_anim) {
+    using namespace classictest;
+    const std::string tga = std::string("\0\0\x02\0\0\0\0\0\0\0\0\0\x01\0\x01\0\x20\x08", 18) + std::string("\x10\x20\x30\x00", 4);
+    std::vector<std::string> warn;
+    auto m = loadModel("art/w3d/tank.w3d", modeltest::mapReader({{"art/w3d/tank.w3d", w3dModel(true)}, {"art/w3d/../Textures/gun.dds", ddsHeader(4, 4, "DXT1") + dxt1Solid(0xF800, 1)},
+                                                                  {"art/w3d/zhca_body.tga", tga}}), &warn);
+    for (auto& w : warn) std::printf("  warning: %s\n", w.c_str());
+    CHECK(warn.empty());
+    const int root = m->findNode("ROOTTRANSFORM"), turret = m->findNode("Turret");
+    CHECK(root == 0 && turret == 1 && m->nodes[1].parent == 0);
+    // W3D (1, 0, 2) Z-up / +X forward -> engine (0, 2, 1) Y-up / +Z forward
+    CHECK(near(m->nodes[1].t.x, 0) && near(m->nodes[1].t.y, 2) && near(m->nodes[1].t.z, 1));
+    // GUN on the Turret bone node itself, HOUSECOLOR01 on the root, LOWLOD / HIDDEN skipped
+    CHECK(m->nodes[1].mesh >= 0 && m->meshes[size_t(m->nodes[1].mesh)].name == "GUN");
+    CHECK(m->nodes[0].mesh >= 0 && m->meshes[size_t(m->nodes[0].mesh)].name == "HOUSECOLOR01");
+    CHECK(m->meshes.size() == 3);
+    for (auto& md : m->meshes) CHECK(md.name != "LOWLOD" && md.name != "HIDDEN");
+    const Material& gun = m->materials[size_t(m->meshes[size_t(m->nodes[1].mesh)].primitives[0].material)];
+    CHECK(gun.baseTex >= 0 && m->images[size_t(gun.baseTex)].width == 4 && m->images[size_t(gun.baseTex)].compressed);
+    CHECK(near(gun.baseColor.x, 1) && gun.team == TeamMode::None);
+    const Material& house = m->materials[size_t(m->meshes[size_t(m->nodes[0].mesh)].primitives[0].material)];
+    CHECK(house.team == TeamMode::Tint && near(house.baseColor.x, 1) && near(house.baseColor.y, 1));
+    // UV V flipped (D3D convention): vertex (1, 0) -> uv (1, 1)
+    const Primitive& gp = m->meshes[size_t(m->nodes[1].mesh)].primitives[0];
+    CHECK(near(m->vertices[gp.firstVertex + 1].uv.x, 1) && near(m->vertices[gp.firstVertex + 1].uv.y, 1));
+    CHECK(near(m->vertices[gp.firstVertex].pos.y, 0) && near(m->vertices[gp.firstVertex + 1].pos.z, 1));   // w3d +X -> engine +Z
+    CHECK(windingMatchesNormals(*m));
+    // skin: joints = pivots, vertex 2 moved from Turret space into model space
+    CHECK(m->skins.size() == 1 && m->skins[0].joints.size() == 2);
+    int skinNode = -1;
+    for (size_t i = 0; i < m->nodes.size(); ++i) if (m->nodes[i].skin == 0) skinNode = int(i);
+    CHECK(skinNode >= 0);
+    if (skinNode >= 0) {
+        const Primitive& sp = m->meshes[size_t(m->nodes[size_t(skinNode)].mesh)].primitives[0];
+        CHECK(sp.jointPalette.size() == 2);
+        const ModelVertex& v2 = m->vertices[sp.firstVertex + 2];
+        CHECK(near(v2.pos.x, 1) && near(v2.pos.y, 3) && near(v2.pos.z, 1));
+        CHECK(sp.jointPalette[v2.joints[0]] == 1 && v2.weights[0] == 255);
+        const mat4 jm = m->bindWorld[1] * m->skins[0].inverseBind[1];
+        CHECK(near(jm.at(0, 0), 1) && near(jm.at(1, 3), 0));   // bind pose: identity joint matrix
+        CHECK(m->materials[size_t(sp.material)].team == TeamMode::BaseAlpha);
+    }
+    // clip TURN: 3 frames at 2 fps = 1 s; Turret yaw about W3D Z = engine Y, translation +0.5 W3D X at frame 1
+    CHECK(m->clips.size() == 1 && m->findClip("TURN") == 0);
+    if (m->clips.size() == 1) {
+        CHECK(near(m->clips[0].duration, 1));
+        Pose pose;
+        bindPose(*m, pose);
+        sampleClip(m->clips[0], 1.0f, pose);
+        const quat e = quat::axisAngle({0, 1, 0}, 1.570796f);
+        CHECK(near(pose[1].r.y, e.y) && near(pose[1].r.w, e.w) && near(pose[1].r.x, 0));
+        CHECK(near(pose[1].t.z, 1));   // outside its frame range the X channel is 0
+        sampleClip(m->clips[0], 0.5f, pose);
+        CHECK(near(pose[1].t.z, 1.5f) && near(pose[1].t.y, 2));
+    }
+}
+
+TEST(models_w3d_external_hierarchy_and_anims) {
+    using namespace classictest;
+    // time-coded: Turret X 0 -> 1 between frames 0 and 4, then a binary (step) key to 3 at frame 6
+    std::string tc;
+    put<uint32_t>(tc, 3); put<uint16_t>(tc, 1); tc += char(1); tc += char(0);
+    tc += u32s({0}) + f32s({0}) + u32s({4}) + f32s({1}) + u32s({6u | 0x80000000u}) + f32s({3});
+    const std::string tcAnim = ck(0x280, ck(0x281, u32s({1}) + nm("TANK_SKL.RECOIL") + nm("TANK_SKL") + u32s({8}) + std::string("\x0a\0\0\0", 4)) + ck(0x282, tc), true);
+    // adaptive delta: Turret Y starts at 2, +1 * 0.25 per frame (filter index 8 = 1.0, scale 0.25)
+    std::string ad;
+    put<uint32_t>(ad, 5); put<uint16_t>(ad, 1); ad += char(1); ad += char(1); put<float>(ad, 0.25f);
+    put<float>(ad, 2.0f);
+    ad += char(8); ad += std::string(8, char(0x11));
+    const std::string adAnim = ck(0x280, ck(0x281, u32s({1}) + nm("WOBBLE") + nm("TANK_SKL") + u32s({5}) + std::string("\x0a\0\x01\0", 4)) + ck(0x282, ad), true);
+    const std::string other = ck(0x200, ck(0x201, u32s({0x00040001}) + nm("OTHER.WALK") + nm("OTHER_SKL") + u32s({2, 30})), true);
+    std::vector<std::string> warn;
+    auto m = loadModel("w/tank.w3d", modeltest::mapReader({{"w/tank.w3d", w3dModel(false)}, {"w/TANK_SKL.w3d", w3dHierarchy() + tcAnim},
+                                                            {"w/tank.anims.txt", "# clips\nwobble.w3d\n  missing.w3d \nother.w3d\n"},
+                                                            {"w/wobble.w3d", adAnim}, {"w/other.w3d", other}}), &warn);
+    CHECK(m->findNode("Turret") == 1 && m->skins.size() == 1);
+    CHECK(m->findClip("RECOIL") >= 0 && m->findClip("WOBBLE") >= 0 && m->clips.size() == 2);
+    int missing = 0, wrongHier = 0, tex = 0;
+    for (auto& w : warn) { missing += w.find("missing.w3d") != std::string::npos; wrongHier += w.find("OTHER_SKL") != std::string::npos; tex += w.find("not found") != std::string::npos; }
+    CHECK(missing == 1 && wrongHier == 1 && tex >= 2);   // + the two textures
+    Pose pose;
+    bindPose(*m, pose);
+    const int rc = m->findClip("RECOIL"), wb = m->findClip("WOBBLE");
+    if (rc >= 0 && wb >= 0) {
+        sampleClip(m->clips[size_t(rc)], 2 / 10.0f, pose);   // frame 2: halfway 0 -> 1
+        CHECK(near(pose[1].t.z, 1.5f));
+        sampleClip(m->clips[size_t(rc)], 5 / 10.0f, pose);   // frame 5: held at 1 (next key is a step)
+        CHECK(near(pose[1].t.z, 2.0f));
+        sampleClip(m->clips[size_t(rc)], 6 / 10.0f, pose);
+        CHECK(near(pose[1].t.z, 4.0f));
+        sampleClip(m->clips[size_t(wb)], 4 / 10.0f, pose);   // frame 4: 2 + 4 * 0.25 = 3 along W3D Y = engine X
+        CHECK(near(pose[1].t.x, 3.0f) && near(pose[1].t.y, 2));
+    }
+    // hierarchy missing entirely: meshes at the origin + warning
+    warn.clear();
+    auto m2 = loadModel("w/tank.w3d", modeltest::mapReader({{"w/tank.w3d", w3dModel(false)}}), &warn);
+    bool said = false;
+    for (auto& w : warn) said |= w.find("TANK_SKL") != std::string::npos;
+    CHECK(said && m2->skins.empty() && !m2->meshes.empty());
+}
+
+TEST(models_w3d_malformed_input) {
+    using namespace classictest;
+    const std::string good = w3dModel(true);
+    auto reader = modeltest::mapReader({});
+    CHECK(survivesTruncation(good, [&](const std::string& b) { loadW3d("x.w3d", b, reader, nullptr); }));
+    bool threw = false;
+    try { loadW3d("h.w3d", w3dHierarchy(), reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("no meshes") != std::string::npos; }
+    CHECK(threw);
+    // triangle index out of range
+    std::string bad = good;
+    const size_t tri = bad.find(u32s({0, 1, 2, 0}));
+    putAt<uint32_t>(bad, tri + 4, 99);
+    threw = false;
+    try { loadW3d("t.w3d", bad, reader, nullptr); } catch (const std::runtime_error& e) { threw = std::string(e.what()).find("out of range") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(models_dds_formats) {
+    using namespace classictest;
+    Image img;
+    // DXT1 8x8 with a full mip chain (4 + 1 + 1 + 1 blocks... 8x8: 4 blocks, 4x4: 1, 2x2: 1, 1x1: 1)
+    CHECK(decodeImage(ddsHeader(8, 8, "DXT1", 0, 0, 0, 0, 0, 4) + dxt1Solid(0x07E0, 7), img));
+    CHECK(img.width == 8 && img.height == 8 && img.rgba[0] == 0 && uint8_t(img.rgba[1]) == 255 && uint8_t(img.rgba[3]) == 255);
+    CHECK(img.compressed && img.compressed->format == BlockFormat::BC1 && img.compressed->levels.size() == 4 && img.compressed->vkFormat == 133);
+    // DXT1 three-colour block using index 3, no alpha flag -> opaque black, kept as CPU copy
+    std::string tb; put<uint16_t>(tb, 0x0000); put<uint16_t>(tb, 0xFFFF); put<uint32_t>(tb, 0xFFFFFFFFu);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT1") + tb, img) && img.rgba[0] == 0 && uint8_t(img.rgba[3]) == 255 && img.compressed->vkFormat == 131);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT1", 0, 0, 0, 0, 0, 1, 0x1) + tb, img) && img.rgba[3] == 0);
+    // DXT5: alpha endpoints 255 / 0, all indices 1 -> alpha 0; colour red
+    std::string b5 = std::string("\xff\x00", 2) + std::string("\x49\x92\x24\x49\x92\x24", 6);
+    put<uint16_t>(b5, 0xF800); put<uint16_t>(b5, 0xF800); put<uint32_t>(b5, 0);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT5") + b5, img) && uint8_t(img.rgba[0]) == 255 && img.rgba[3] == 0 && img.compressed && img.compressed->format == BlockFormat::BC3);
+    // DXT3: explicit 4-bit alpha 0x8 -> 136
+    std::string b3(8, char(0x88)); put<uint16_t>(b3, 0x001F); put<uint16_t>(b3, 0x001F); put<uint32_t>(b3, 0);
+    CHECK(decodeImage(ddsHeader(4, 4, "DXT3") + b3, img) && uint8_t(img.rgba[2]) == 255 && uint8_t(img.rgba[3]) == 136 && !img.compressed);
+    // ATI2 / BC5: red = green = 255 -> blue reconstructed ~0 ... x = y = 1 -> z = 0 -> 128
+    std::string b45 = std::string("\xff\xff", 2) + std::string(6, '\0');
+    CHECK(decodeImage(ddsHeader(4, 4, "ATI2") + b45 + b45, img) && uint8_t(img.rgba[0]) == 255 && uint8_t(img.rgba[1]) == 255 && near(float(uint8_t(img.rgba[2])), 128, 1.5f));
+    CHECK(decodeImage(ddsHeader(4, 4, "ATI1") + b45, img) && uint8_t(img.rgba[0]) == 255 && img.rgba[1] == 0);
+    // uncompressed A8R8G8B8 2x1
+    CHECK(decodeImage(ddsHeader(2, 1, nullptr, 32, 0xff0000, 0xff00, 0xff, 0xff000000u, 1, 0x41) + std::string("\x30\x20\x10\x80\x01\x02\x03\x04", 8), img));
+    CHECK(img.width == 2 && img.rgba[0] == 0x10 && img.rgba[1] == 0x20 && img.rgba[2] == 0x30 && uint8_t(img.rgba[3]) == 0x80 && img.rgba[4] == 3 && img.rgba[7] == 4);
+    // X8R8G8B8 (no alpha flag), R5G6B5, L8, A8L8 (D3DFMT code in the FourCC field)
+    CHECK(decodeImage(ddsHeader(1, 1, nullptr, 32, 0xff0000, 0xff00, 0xff, 0, 1, 0x40) + std::string("\x30\x20\x10\x00", 4), img) && uint8_t(img.rgba[3]) == 255 && img.rgba[0] == 0x10);
+    std::string p565; put<uint16_t>(p565, 0xF800);
+    CHECK(decodeImage(ddsHeader(1, 1, nullptr, 16, 0xf800, 0x7e0, 0x1f, 0, 1, 0x40) + p565, img) && uint8_t(img.rgba[0]) == 255 && img.rgba[1] == 0 && img.rgba[2] == 0);
+    CHECK(decodeImage(ddsHeader(1, 1, nullptr, 8, 0xff, 0, 0, 0, 1, 0x20000) + std::string("\x40", 1), img) && img.rgba[0] == 0x40 && img.rgba[2] == 0x40 && uint8_t(img.rgba[3]) == 255);
+    const char a8l8[4] = {51, 0, 0, 0};
+    CHECK(decodeImage(ddsHeader(1, 1, a8l8) + std::string("\x40\x80", 2), img) && img.rgba[1] == 0x40 && uint8_t(img.rgba[3]) == 0x80);
+    // DX10 header: BC7 is kept compressed, unknown DXGI formats are rejected
+    std::string dx10 = ddsHeader(4, 4, "DX10");
+    std::string bc7(16, '\0'); bc7[0] = 0x40;   // mode 6
+    CHECK(decodeImage(dx10 + u32s({98, 3, 0, 1, 0}) + bc7, img) && img.compressed && img.compressed->format == BlockFormat::BC7);
+    CHECK(!decodeImage(dx10 + u32s({2, 3, 0, 1, 0}) + std::string(256, '\0'), img));
+    // truncated / malformed: false, never a crash
+    const std::string full = ddsHeader(16, 16, "DXT5", 0, 0, 0, 0, 0, 5) + std::string(16 * 16 + 64 + 16 * 3, '\x5a');
+    int ok = 0;
+    for (size_t n = 0; n < full.size(); n += 7) { Image t; ok += decodeImage(full.substr(0, n), t); }
+    CHECK(ok > 0 && ok < 60);
+    CHECK(!decodeImage(ddsHeader(0, 4, "DXT1"), img) && !decodeImage(ddsHeader(100000, 4, "DXT1"), img));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;
