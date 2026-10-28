@@ -439,14 +439,30 @@ bool convert(const Json& bank, const FileReader& read, const Settings& st, Outpu
     return true;
 }
 
+namespace {
+// File by file instead of fs::copy(recursive): libstdc++ on Windows (MinGW) fails with "File
+// exists" when copying a directory into an existing one, which every staging does.
+bool copyTree(const fs::path& from, const fs::path& to, std::error_code& ec) {
+    fs::create_directories(to, ec);
+    if (ec) return false;
+    for (auto it = fs::recursive_directory_iterator(from, fs::directory_options::skip_permission_denied, ec);
+         !ec && it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        const fs::path out = to / it->path().lexically_relative(from);
+        if (it->is_directory(ec)) fs::create_directories(out, ec);
+        else if (it->is_regular_file(ec)) fs::copy_file(it->path(), out, fs::copy_options::overwrite_existing, ec);
+        if (ec) return false;
+    }
+    return !ec;
+}
+} // namespace
+
 bool stageGame(const std::string& projectDir, const std::string& stagingDir, const std::string& profile, Report& report, std::string* error) {
     report = Report{};
     std::error_code ec;
     const fs::path src = fs::absolute(projectDir), dst = stagingDir;
     fs::remove_all(dst, ec);
-    fs::create_directories(dst, ec);
-    fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
-    if (ec) { if (error) *error = "audio: cannot copy " + src.string() + ": " + ec.message(); return false; }
+    ec.clear();
+    if (!copyTree(src, dst, ec)) { if (error) *error = "audio: cannot copy " + src.string() + ": " + ec.message(); return false; }
 
     auto readFile = [&](const fs::path& p, std::string& out) {
         std::ifstream f(p, std::ios::binary);
