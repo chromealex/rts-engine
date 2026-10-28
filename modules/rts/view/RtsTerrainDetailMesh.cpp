@@ -21,7 +21,8 @@ using namespace render;
 namespace {
 constexpr int kChunk = 32;
 constexpr float kApronY = -0.05f;
-constexpr int kMaxTex = 4096;            // per side: GLES3 / WebGL2 safe on every target we ship
+// texture side cap: desktop 4096 (2 RGBA8 + mips ~170 MB at 1024^2 k=4), mobile 2048 (~45 MB; normals cover 1-2 samples per texel)
+int maxTexSide() { return platform::isTouchDevice() ? 2048 : 4096; }
 uint32_t hashI(int x, int y, uint32_t s) {
     uint32_t h = uint32_t(x) * 374761393u + uint32_t(y) * 668265263u + s * 2246822519u;
     h = (h ^ (h >> 13)) * 1274126177u;
@@ -184,7 +185,7 @@ bool TerrainRenderer::buildDetail(gfx::Device& dev, const MapGrid& g, bool flatD
 // (detail samples) is recomputed and uploaded.
 void TerrainRenderer::updateDetailTextures(gfx::Device& dev, int i0, int j0, int i1, int j1) {
     const int SW = detail_.sw(), SH = detail_.sh(), W = detail_.w, H = detail_.h, k = detail_.k;
-    const int TW = std::min(SW, kMaxTex), TH = std::min(SH, kMaxTex);
+    const int TW = std::min(SW, maxTexSide()), TH = std::min(SH, maxTexSide());
     if (TW != nrmW_ || TH != nrmH_ || !detailNrmTex_.valid()) {
         if (detailNrmTex_.valid()) dev.destroyTexture(detailNrmTex_);
         if (detailSplatTex_.valid()) dev.destroyTexture(detailSplatTex_);

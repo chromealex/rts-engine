@@ -58,3 +58,60 @@ Without a `terrain` block and without `corners` everything behaves and looks exa
 - Materials, tiers, editor ops and MCP tools: `docs/game-format.md` § Terrain materials.
 - Measured (VM, Mesa llvmpipe, 1280x800, whole 1024² map in view): LOD off 1.19M triangles / 374 ms,
   LOD on 41k / 112 ms; gameplay zoom 32k triangles / ~20 ms on 512² and 1024² alike; full build 1024² ~100 ms.
+
+## Detail surface (agent-terrain, sub-cell terrain)
+The gameplay grid stays one height per cell corner (or one level per cell); what is *drawn* can carry much more
+detail. The detail surface is a visual heightmap with `k` samples per cell, decoupled from the simulation.
+
+**Data**
+| Where | What |
+|---|---|
+| visual `terrain.style` (rules.json / game.json) | `"classic"` (default: cell-aligned plateaus, vertical walls - existing games unchanged, pixel-identical) or `"smooth"` (synthesised sub-cell detail) |
+| visual `terrain.detailLook` | `{scale 1..8 (default 4), bevel 0.35 (cliff half-width, cells), wobble 0.3 (outline warp, cells), roughness 0.04 (fine noise, world units), blendSharpness 0.5, macro 0.25, lodRange 24, rockColor [r,g,b]}` |
+| map `terrain.detail` | `{"scale": k, "file": "maps/<name>.detail.r16", "splat": "maps/<name>.detail.splat"}`: int16 LE, absolute height in 1/16 units, `(w*k+1) x (h*k+1)` row-major (sample `(i, j)` at world `(i/k, j/k)`); optional splat = RGBA8 weights of layers 0..3 per sample. Takes precedence over synthesis. Written by the editor (`terrain_detail`, sculpt, import) |
+
+**Synthesis** (`modules/rts/view/RtsTerrainDetail.*`, deterministic, presentation only):
+- levels maps: the classic per-cell surface looked up through a smooth domain warp (organic outlines), blurred with
+  three box passes (≈ Gaussian: bevelled cliffs, rounded plateau corners, ramps blended into both levels), then fine
+  noise scaled per cell kind (rock rough, sand / water calm);
+- heightfield maps: Catmull-Rom bicubic through the corners (passes through every corner, so the sim surface is kept
+  at the corners) + fine noise;
+- edits rebuild only the samples around changed chunks (`synthMargin`).
+
+**Rendering** (`RtsTerrainDetailMesh.cpp`, shader variant `TERRAIN_DETAIL`):
+- per 32x32-cell chunk, CDLOD levels with steps of 2^L samples, built lazily when first drawn and LRU-evicted over
+  `detailBudgetMB` (96); geomorph to the next level in the vertex shader; skirts + walls to the apron;
+- per-pixel normals from a detail normal texture (rg = n.xz, b = cavity, a = macro variation) - on every tier, so the
+  Low tier (vertex colours) gets small forms and lighting too; automatic rock on steep slopes (`rockColor`, or the
+  cliff texture triplanar on High);
+- splat weights at detail resolution (painted, or derived from cell kinds with warped soft borders); height-based
+  blending between layers, macro variation and a second rotated sample on High against visible tiling;
+- texture sides capped at 4096 (WebGL2 / GLES3 safe); quality: Low tier caps k at 2, samples capped at 4097² desktop
+  / 2049² mobile (`detailScaleFor`);
+- `RtsView::heightAt` samples the detail surface (same triangles as the mesh), so units, overlays and fog follow it;
+  water bodies sit at the detail shore and extend one cell under the bank (organic lake outlines).
+
+**Consistency with the simulation**: heightfield maps - the editor keeps corners = detail at the corners (sculpt and
+import), so the sim surface is the bilinear of the drawn one at cell scale. Levels maps - the sim is unchanged;
+`map_validate` warns where the visual surface on walkable cells differs from the simulated ground by more than 0.5
+(units would float or sink), with the count and the first cell.
+
+**Editor / MCP** (`apps/editor/core/TerrainDetailOps.cpp`, window **Рельеф** → "Детально"): `terrain_detail
+{action: info|create|remove, scale}`, `terrain_sculpt {op: raise|lower|smooth|flatten|noise|set|erode|stamp, x, y |
+points (world units, fractions ok), radius (world units), strength, hardness, detail, stamp: crater|mesa|dunes|rocks|
+<png>, angle}`, `terrain_paint_material {layer, x, y | points, radius, strength, hardness}`, `heightmap_export /
+heightmap_import {detail: true, detailScale}` (16-bit PNG at `(w*k+1) x (h*k+1)`), `terrain_heights` reads the drawn
+surface.
+
+**Performance** (VM, Mesa llvmpipe software GL, 1280x800, heightfield test maps from `mapgen.py --big`, k=4,
+gameplay camera): 256² - 135k triangles, 31 ms/frame (classic 8k / 19 ms), build 83 ms; 1024² - 135k triangles,
+32 ms (classic 9k / 17 ms), build 1.0 s (surface 0.3 s + 4096² normal/splat textures 0.7 s), 4 MB of LOD meshes in
+use; Low tier (k=2) 1024²: 35k triangles, 24 ms, build 0.29 s. Whole 1024² map in view: 896 chunks, 57k triangles.
+Texture memory k=4 on 1024²: 2 x 4096² RGBA8 (+mips) ≈ 170 MB on desktop; mobile caps the samples at 2049² (≈ 43 MB).
+
+**Planets (plan, not implemented)**: the detail surface is a per-face grid in the same format. A cube-sphere body has
+6 faces of N x N cells; a per-body `detail` block would carry 6 grids of `(N*k+1)^2` samples (`face`-major, the same
+seam duplication rule as the corners), synthesised by `synthCorners` per face with the neighbouring faces' corners as
+the bicubic border. The planet renderer (`RtsPlanetRender`) already draws per-face CDLOD patches; it would sample the
+face grid instead of the corners and use the same normal/splat textures per face. The editor brushes would reuse
+`detailDab` per face through `PlanetOps`' 3D dab (dir -> face, i, j).
