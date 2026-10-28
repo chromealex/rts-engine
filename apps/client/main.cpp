@@ -646,6 +646,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
         fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
                    screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);
+        fx_.addLights(r3d_.lights);   // particle lights ("light" module)
         if (mode_ == Mode::Place && placeType_ >= 0) { // ghost footprint of the building to place
             bool ok;
             Vec3 c = placeCentre(mouseX_, mouseY_, ok);
