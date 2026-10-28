@@ -252,6 +252,7 @@ private:
         const Json* cur = jsonPath(R, path);
         if (!cur) { ImGui::TextDisabled("Нет в правилах: %s", path.c_str()); return; }
         ImGui::SeparatorText((cur->getStr("name", ed.selection.key) + "  (" + path + ")").c_str());
+        if (isType && cur->has("move")) bodyFields(ed, path, (*cur)["move"]);
         if (isType && ImGui::BeginCombo("##addblock", "+ Добавить блок…")) {
             for (auto& b : kTypeBlocks) {
                 if (cur->has(b.key)) continue;
@@ -272,6 +273,35 @@ private:
             if (!r.has("error")) ed.reloadRules();
         }
         if (!message_.empty()) ImGui::TextWrapped("%s", message_.c_str());
+    }
+
+    // Body of a mobile unit: radius (separation, ranges edge-to-edge, path clearance) and mass
+    // (push priority, default 4·r²). Edited through rules_set like an agent would.
+    void bodyFields(Editor& ed, const std::string& path, const Json& move) {
+        float r = float(move.has("radius") ? move["radius"].toDouble() : 0.5);
+        bool explicitMass = move.has("mass");
+        float m = explicitMass ? float(move["mass"].toDouble()) : 4 * r * r;
+        auto set = [&](const char* key, double v) {
+            Json prm = Json::object();
+            prm.set("path", Json::string(path + ".move." + key));
+            prm.set("value", Json::number(v, 3));
+            Json res = ed.ws().call("rules_set", prm);
+            message_ = res.has("error") ? res.getStr("error") : "Сохранено в rules.json";
+            if (!res.has("error")) ed.reloadRules();
+        };
+        if (!bodyActive_) { radiusEdit_ = r; massEdit_ = m; } // follow the data unless being dragged
+        bool active = false;
+        ImGui::SetNextItemWidth(160);
+        ImGui::DragFloat("Радиус тела", &radiusEdit_, 0.01f, 0.05f, 8.0f, "%.2f");
+        active |= ImGui::IsItemActive();
+        if (ImGui::IsItemDeactivatedAfterEdit()) set("radius", radiusEdit_);
+        ui::help("move.radius: размер юнита — расталкивание (r1+r2), дальность атаки от края до края, проходы для больших.");
+        ImGui::SetNextItemWidth(160);
+        ImGui::DragFloat(explicitMass ? "Масса" : "Масса (авто 4·r²)", &massEdit_, 0.05f, 0.01f, 1000.0f, "%.2f");
+        active |= ImGui::IsItemActive();
+        if (ImGui::IsItemDeactivatedAfterEdit()) set("mass", massEdit_);
+        bodyActive_ = active;
+        ui::help("move.mass: кто кого толкает. Атакующие и стоящие на позиции почти не сдвигаются.");
     }
 
     void mapProps(Editor& ed) {
@@ -312,6 +342,8 @@ private:
     }
 
     std::string text_, textFor_, message_;
+    float radiusEdit_ = 0, massEdit_ = 0;
+    bool bodyActive_ = false;
     std::vector<Issue> issues_;
 };
 

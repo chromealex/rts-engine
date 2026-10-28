@@ -34,7 +34,7 @@ struct MTBuffer {
     size_t size = 0;
     uint64_t updatedFrame = UINT64_MAX;
 };
-struct MTTexture { id<MTLTexture> tex; id<MTLSamplerState> sampler; PixelFormat fmt = PixelFormat::RGBA8; };
+struct MTTexture { id<MTLTexture> tex; id<MTLSamplerState> sampler; PixelFormat fmt = PixelFormat::RGBA8; bool mips = false; };
 struct MTShader { id<MTLFunction> vs; id<MTLFunction> fs; };
 struct MTPipeline { id<MTLRenderPipelineState> state; id<MTLDepthStencilState> depth; PipelineDesc desc; };
 
@@ -44,6 +44,7 @@ MTLVertexFormat toMTL(VertexFormat f) {
         case VertexFormat::Float3: return MTLVertexFormatFloat3;
         case VertexFormat::Float4: return MTLVertexFormatFloat4;
         case VertexFormat::UByte4N: return MTLVertexFormatUChar4Normalized;
+        case VertexFormat::UByte4: return MTLVertexFormatUChar4;
     }
     return MTLVertexFormatFloat3;
 }
@@ -101,8 +102,9 @@ public:
                           : d.format == PixelFormat::Depth ? MTLPixelFormatDepth32Float
                           : d.renderTarget ? MTLPixelFormatBGRA8Unorm   // same format as the screen: pipelines are shared
                           : MTLPixelFormatRGBA8Unorm;
+        const bool mips = d.mipmaps && d.format != PixelFormat::Depth && !d.renderTarget;
         MTLTextureDescriptor* td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
-            width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:NO];
+            width:NSUInteger(d.width) height:NSUInteger(d.height) mipmapped:mips ? YES : NO];
         td.usage = MTLTextureUsageShaderRead | (d.renderTarget || d.format == PixelFormat::Depth ? MTLTextureUsageRenderTarget : 0);
         if (d.format == PixelFormat::Depth) td.storageMode = MTLStorageModePrivate;
         MTTexture t;
@@ -112,9 +114,12 @@ public:
             int bpp = d.format == PixelFormat::R8 ? 1 : 4;
             [t.tex replaceRegion:MTLRegionMake2D(0, 0, NSUInteger(d.width), NSUInteger(d.height)) mipmapLevel:0
                        withBytes:d.data bytesPerRow:NSUInteger(d.width * bpp)];
+            if (mips) generateMips(t.tex);
         }
+        t.mips = mips;
         MTLSamplerDescriptor* sd = [MTLSamplerDescriptor new];
         sd.minFilter = sd.magFilter = d.filter == Filter::Linear ? MTLSamplerMinMagFilterLinear : MTLSamplerMinMagFilterNearest;
+        if (mips) sd.mipFilter = d.filter == Filter::Linear ? MTLSamplerMipFilterLinear : MTLSamplerMipFilterNearest;
         sd.sAddressMode = sd.tAddressMode = d.repeat ? MTLSamplerAddressModeRepeat : MTLSamplerAddressModeClampToEdge;
         if (d.compare) sd.compareFunction = MTLCompareFunctionLessEqual;
         t.sampler = [device_ newSamplerStateWithDescriptor:sd];
@@ -125,6 +130,15 @@ public:
         if (!t) return;
         [t->tex replaceRegion:MTLRegionMake2D(NSUInteger(x), NSUInteger(y), NSUInteger(w), NSUInteger(hh)) mipmapLevel:0
                     withBytes:pixels bytesPerRow:NSUInteger(rowPitch)];
+        if (t->mips) generateMips(t->tex);
+    }
+    // Own command buffer: textures are usually created while loading, outside of a frame.
+    void generateMips(id<MTLTexture> tex) {
+        id<MTLCommandBuffer> cb = [queue_ commandBuffer];
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit generateMipmapsForTexture:tex];
+        [blit endEncoding];
+        [cb commit];
     }
     void destroyTexture(TextureHandle h) override { textures_.remove(h.id); }
 
@@ -156,7 +170,7 @@ public:
 
         MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
         pd.vertexFunction = s->vs;
-        pd.fragmentFunction = d.depthOnly ? nil : s->fs;
+        pd.fragmentFunction = s->fs; // depth-only shaders without fs_main get nil (no fragment stage)
         pd.vertexDescriptor = vd;
         pd.colorAttachments[0].pixelFormat = d.depthOnly ? MTLPixelFormatInvalid : layer_.pixelFormat;
         pd.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;

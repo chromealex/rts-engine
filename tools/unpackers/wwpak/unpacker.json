@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "name": "wwpak",
+  "title": "Westwood .PAK (Dune II, Lands of Lore, Kyrandia 1–2)",
+  "version": "1.0.0",
+  "extensions": [".pak"],
+  "magic": [],
+  "capabilities": ["probe", "list", "extract"],
+  "external": true,
+  "command": ["python3", "unpack.py"],
+  "command_windows": ["py", "-3", "unpack.py"]
+}

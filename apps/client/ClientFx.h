@@ -3,6 +3,7 @@
 #pragma once
 #include "engine/fx/ParticleSystem.h"
 #include "engine/render/Renderer3D.h"
+#include "engine/render/TextureCache.h"
 #include "modules/rts/fx/RtsFx.h"
 #include "modules/rts/view/RtsView.h"
 
@@ -27,6 +28,7 @@ public:
 private:
     fx::ParticleSystem ps_;
     game::RtsFx bridge_;
+    render::TextureCache textures_;   // sprite textures of effects: the same loader (and atlas) as sprites
     bool attached_ = false;
 };
 

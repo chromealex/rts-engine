@@ -37,10 +37,13 @@ struct ResourceDef {
     // Capacity deficit (used > provided)
     Fixed deficitProductionMult = Fixed::fromRatio(1, 2);
     uint64_t deficitDisableTags = 0; // objects with any of these tags stop working
+    bool global = false;      // with rules.storage == "buildings": stays a player-wide stock (coins), not a good
+    int16_t convertTo = -1;   // credited as another resource when delivered (ore -> credits)
+    Fixed convertRate = Fixed::fromInt(1);
 };
 
 // ------------------------------------------------------------------ stats / modifiers
-enum class Stat : uint8_t { MaxHp, Armor, Damage, Range, Speed, Sight, GatherRate, AttackSpeed, Count };
+enum class Stat : uint8_t { MaxHp, Armor, Damage, Range, Speed, Sight, GatherRate, AttackSpeed, ProductionSpeed, Count };
 Stat parseStat(const std::string& s, bool* ok = nullptr);
 
 struct StatMod { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); };
@@ -108,6 +111,48 @@ enum class TerrainReq : uint8_t { Any, Rock, Creep };
 
 struct Requirement { bool tech = false; uint16_t index = 0; };
 
+// ------------------------------------------------------------------ dungeon / territory blocks
+// Creature needs (Dungeon Keeper): hunger/sleep are satisfied in rooms, wages are paid from a stock.
+struct NeedDef {
+    bool enabled = false;
+    Fixed interval = Fixed::fromInt(60);   // seconds until the need becomes active
+    int16_t room = -1;                     // room type that satisfies it
+    uint16_t structure = kNoType;          // ...or an own structure of this type (inn)
+    Fixed starve{};                        // hp lost per second while the need is active
+    Fixed time = Fixed::fromInt(4);        // seconds spent in the room
+    std::vector<Amount> cost;              // paid when satisfied (food)
+};
+struct NeedsDef {
+    NeedDef hunger, sleep;
+    Fixed payInterval{};                   // >0: payday every N seconds
+    std::vector<Amount> pay;
+    std::vector<uint16_t> works;           // room types the creature works in when idle
+    Fixed workTime = Fixed::fromInt(10);
+    Fixed happyStart = Fixed::fromInt(1);
+    Fixed unmetRate = Fixed::fromRatio(1, 100);    // happiness lost per second per unmet need
+    Fixed recovery = Fixed::fromRatio(1, 200);     // gained per second when content
+    Fixed slapLoss = Fixed::fromRatio(1, 10);
+    Fixed unpaidLoss = Fixed::fromRatio(3, 10);
+    Fixed leaveBelow = Fixed::fromRatio(1, 5);
+    Fixed leaveAfter = Fixed::fromInt(30);
+};
+// Portal recruitment requirements: rooms of a minimum size and resources in stock.
+// Production chain step (Knights and Merchants / Settlers): inputs from the building's inventory,
+// outputs into it; raw producers have no inputs and may deplete a resource node/field nearby.
+struct RecipeDef {
+    bool enabled = false;
+    std::vector<Amount> in, out;
+    Fixed time = Fixed::fromInt(8);
+    int16_t fromRes = -1;                  // depletes nodes / field cells of this resource within radius
+    Fixed radius = Fixed::fromInt(8);
+    int buffer = 2;                        // inputs kept / outputs held, in cycles
+};
+struct AttractDef {
+    std::vector<std::pair<uint16_t, int>> rooms;   // room type, min cells (player total)
+    std::vector<Amount> resources;                 // min stock
+    Fixed weight = Fixed::fromInt(1);
+};
+
 // ------------------------------------------------------------------ type
 struct UnitType {
     std::string id, name;
@@ -120,7 +165,8 @@ struct UnitType {
     Fixed regen{};
     bool invulnerable = false;
     // body / movement
-    Fixed radius = Fixed::fromRatio(1, 2);
+    Fixed radius = Fixed::fromRatio(1, 2);     // body radius: collisions, pathing clearance, edge-to-edge ranges
+    Fixed mass = Fixed::fromInt(1);            // push resistance (default 4 * radius^2)
     uint8_t layer = kLayerGround;
     Fixed speed{};
     int footprintW = 0, footprintH = 0;
@@ -199,6 +245,24 @@ struct UnitType {
     int waveCount = 1;
     std::vector<uint16_t> upgrades;            // in-place upgrades (structure levels)
     Fixed score = Fixed::fromInt(1);           // points to the killer's team (score victory)
+    // dungeon / territory
+    Fixed digRate{};                           // >0: digs marked diggable cells (hardness per second)
+    Fixed claimerTime{};                       // >0: walks to frontier cells and claims them (seconds per cell)
+    Fixed claimRadius{}, claimRate{};          // area claim around the unit (cells per second)
+    bool claimedByTerritory = false;           // neutral structure joins whoever owns the territory next to it (portal)
+    bool hasNeeds = false;
+    NeedsDef needs;
+    bool attractable = false;
+    AttractDef attract;
+    Fixed portalInterval{};                    // >0: portal: recruits attracted creatures
+    std::vector<uint16_t> portalPool;          // empty: every attractable type
+    // settlers economy
+    Fixed storeCapacity{};                     // >0: storehouse (general goods buffer)
+    RecipeDef recipe;
+    Fixed carrierCapacity{};                   // >0: carrier hauling goods between buildings
+    uint16_t trainFrom = kNoType;              // training consumes an idle own unit of this type (recruit)
+    uint16_t autoTrainUnit = kNoType;          // continuous production into the field
+    Fixed autoTrainInterval = Fixed::fromInt(5);
     Json view;
 };
 
@@ -206,6 +270,8 @@ struct UnitType {
 struct TechDef {
     std::string id, name;
     std::vector<Amount> cost;
+    int levels = 1;                            // repeatable: each level re-applies the effects
+    Fixed costGrowth{};                        // cost * (1 + growth * levels already researched)
     Fixed time = Fixed::fromInt(30);
     std::vector<Requirement> requires_;
     std::vector<std::pair<ModTarget, StatMod>> effects;
@@ -216,7 +282,7 @@ struct FactionDef { std::string id, name; std::vector<FactionStart> start; };
 
 struct UpkeepTier { Fixed supply{}; Fixed gatherMult = Fixed::fromInt(1); };
 
-enum class VictoryMode : uint8_t { NoStructures, NoUnits, NoEntities, KeyUnits, Tickets, Survive, Score };
+enum class VictoryMode : uint8_t { NoStructures, NoUnits, NoEntities, KeyUnits, Tickets, Survive, Score, Territory };
 
 struct VictoryRules {
     VictoryMode mode = VictoryMode::NoStructures;
@@ -224,6 +290,7 @@ struct VictoryRules {
     Fixed ticketDrain = Fixed::fromInt(1);     // per second per point of difference
     Fixed surviveSeconds = Fixed::fromInt(600);  // survive / score: match length
     bool keyLoses = true;                        // score: losing all key structures ends the match at once
+    Fixed share = Fixed::fromRatio(9, 10);       // territory: share of claimable cells that wins
 };
 
 struct HeightRules {
@@ -239,6 +306,66 @@ struct RegionRules {
     Fixed claimCostGrowth{};                  // +x * owned regions
     bool buildOnlyOwned = true;
     Fixed productionPerRegion{};              // production speed bonus per owned region beyond the first (Z)
+};
+
+// Diggable terrain: map character -> hardness and what digging it yields (gold veins, gems).
+struct DiggableDef { char ch = 'D'; Fixed hardness = Fixed::fromInt(3); std::vector<Amount> yields; bool infinite = false; };
+
+// Painted rooms: effects scale with the number of cells the player owns of that room type.
+struct RoomDef {
+    std::string id, name;
+    std::vector<Amount> cost;                  // per cell
+    Fixed supply{};                            // per cell: creature capacity (lair)
+    std::vector<Amount> income, storage, provides; // per cell
+    std::vector<Amount> workYield;             // per working creature per second (library research)
+    std::vector<Amount> workCost;              // per working creature per second (training)
+    Fixed workXp{};                            // xp per second for working heroes/levelled creatures
+    Json view;
+};
+
+enum class ClaimBy : uint8_t { Both, Units, Workers };
+struct TerritoryRules {
+    bool enabled = false;
+    ClaimBy claimBy = ClaimBy::Both;
+    bool startFromRegions = false;             // owned regions start as owned territory
+    int startRadius = 0;                       // cells around starting structures / start points
+    bool buildOnlyOwned = false;
+};
+
+struct HandRules {
+    int max = 0;                               // 0: no hand
+    bool ownTerritoryOnly = true;              // pick up / drop only on own territory (when territory is enabled)
+    Fixed slapDamage = Fixed::fromInt(5);
+    Fixed slapDuration = Fixed::fromInt(10);
+    Fixed slapSpeed = Fixed::fromRatio(3, 2);  // speed / work multipliers while slapped
+    Fixed slapWork = Fixed::fromRatio(3, 2);
+};
+
+struct PossessionRules { bool enabled = false; std::vector<Amount> cost, drain; };
+
+struct RoadNetworkRules {
+    bool enabled = false;
+    std::vector<Amount> cost;                  // per road cell
+    Fixed speed = Fixed::fromRatio(3, 2);      // movement multiplier on road cells
+    bool required = true;                      // deliveries only between buildings on one road network
+};
+
+// Local avoidance between moving units.
+struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2); };
+
+// Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
+struct LaneRules { bool enabled = false; int left = 0, right = 0; Fixed spacing = Fixed::fromRatio(35, 100); };
+
+// Player-level abilities (not tied to a unit): nukes, air strikes, reinforcements.
+struct PlayerAbilityDef {
+    std::string id, name;
+    std::vector<Amount> cost;
+    Fixed cooldown{};
+    int chargesMax = 0;                        // 0: unlimited (cooldown only)
+    std::vector<Amount> rearmCost;
+    Fixed rearmTime = Fixed::fromInt(30);
+    TargetKind target = TargetKind::Point;
+    std::vector<EffectDef> effects;
 };
 
 enum class CostModel : uint8_t { Upfront, Progressive };
@@ -265,7 +392,21 @@ struct Rules {
     VictoryRules victory;
     HeightRules heights;
     RegionRules regions;
+    std::vector<DiggableDef> diggables;
+    std::vector<RoomDef> rooms;
+    TerritoryRules territory;
+    HandRules hand;
+    PossessionRules possession;
+    std::vector<PlayerAbilityDef> playerAbilities;
+    bool buildingStorage = false;              // "storage": "buildings": goods live in building inventories
+    RoadNetworkRules roadNetwork;
+    LaneRules lanes;
+    MovementRules movement;
+    bool settlers = false;                     // any settlers-economy mechanic present
+    bool dungeon = false;                      // any dungeon / territory mechanic present (systems run)
 
+    int findRoom(const std::string& id) const;
+    int findDiggable(char c) const;
     int findType(const std::string& id) const;
     int findResource(const std::string& id) const;
     int findTech(const std::string& id) const;

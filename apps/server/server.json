@@ -15,11 +15,12 @@
   "defaults": { "tickRate": 20, "inputDelay": 2, "rollbackWindow": 8, "lagToleranceMs": 300 },
   // Automatic matchmaking. A queue matches players who have a map with exactly `teams` teams of
   // `teamSize` slots and the same data hash. botFillSec > 0 fills missing players with bots.
+  // "title" is shown to players: "@key" from the lang tables (each client translates it) or plain text.
   "queues": [
-    { "id": "1v1", "title": "1 на 1", "teams": 2, "teamSize": 1, "ratingRange": 150, "ratingWidenPerSec": 10 },
-    { "id": "1v1-bots", "title": "1 на 1 (боты, если никого нет)", "teams": 2, "teamSize": 1, "botFillSec": 30 },
-    { "id": "2v2", "title": "2 на 2", "teams": 2, "teamSize": 2, "botFillSec": 90 },
-    { "id": "ffa4", "title": "Каждый сам за себя (4)", "teams": 4, "teamSize": 1, "botFillSec": 90 },
-    { "id": "1v1-weak", "title": "1 на 1 (слабые устройства)", "teams": 2, "teamSize": 1, "rollbackWindow": 0, "inputDelay": 4 }
+    { "id": "1v1", "title": "@net.queue.1v1", "teams": 2, "teamSize": 1, "ratingRange": 150, "ratingWidenPerSec": 10 },
+    { "id": "1v1-bots", "title": "@net.queue.1v1_bots", "teams": 2, "teamSize": 1, "botFillSec": 30 },
+    { "id": "2v2", "title": "@net.queue.2v2", "teams": 2, "teamSize": 2, "botFillSec": 90 },
+    { "id": "ffa4", "title": "@net.queue.ffa4", "teams": 4, "teamSize": 1, "botFillSec": 90 },
+    { "id": "1v1-weak", "title": "@net.queue.1v1_low_end", "teams": 2, "teamSize": 1, "rollbackWindow": 0, "inputDelay": 4 }
   ]
 }

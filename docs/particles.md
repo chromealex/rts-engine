@@ -15,9 +15,10 @@ games/<id>/fx/<name>.json    one effect = 1..8 emitters
 - Bindings format and lookup order: comment at the top of `modules/rts/fx/RtsFx.h`.
 - Cues: `attack hit miss died spawned ready buildPlaced buildDone gathered captured levelUp ability
   upgraded sold regionClaimed wave trail damaged`; `died.structure|air|unit` style keys pick by category.
-- Textures: `builtin:soft|spark|ring|smoke` need no files. Anything else is a sprite name passed to
-  `ParticleSystem::setTextureLoader` — connect the engine's sprite loader there (the atlas packer goes
-  through the same function). Particles from one texture (or one atlas) share a draw call.
+- Textures: `builtin:soft|spark|ring|smoke` need no files. Anything else is an image path in the game
+  folder ("sprites/smoke.png"), loaded by `render::TextureCache::resolve` — the same function as sprites
+  and tiles, so the atlas packer covers particles too. Particles from one texture (or one atlas page)
+  share a draw call; flipbook frames use the sprite's uv rect.
 
 Editor: window **Эффекты** (list, parameters, live preview with a quality switch and a fill-rate meter,
 JSON, bindings). MCP: `fx_list`, `fx_get`, `fx_set`. The play-test shows effects too.

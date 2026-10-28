@@ -9,6 +9,7 @@
 #include "../Editor.h"
 #include "../EditorUtil.h"
 #include "engine/fx/ParticleSystem.h"
+#include "engine/render/TextureCache.h"
 
 namespace rts::editor {
 
@@ -61,7 +62,7 @@ public:
     bool openByDefault() const override { return false; }
 
     ~FxWindow() override {
-        if (dev_) { vp_.release(*dev_); preview_.shutdown(); }
+        if (dev_) { vp_.release(*dev_); preview_.shutdown(); textures_.shutdown(); }
     }
 
     void update(Editor& ed, double) override {
@@ -79,6 +80,13 @@ public:
             dev_ = &ed.device();
             preview_.setQuality(fx::FxQuality::High);
             preview_.setFileReader([&ed](const std::string& path, std::string& out) { return readText(fs::path(ed.ws().project.dir) / path, out); });
+            textures_.init(*dev_);
+            preview_.setTextureLoader([this, &ed](const std::string& name, fx::FxTexture& out) {   // the sprites' loader
+                render::TextureRef r = textures_.resolve(name, false, ed.ws().project.dir + "/");
+                if (!r.valid()) return false;
+                out = {r.tex, r.u0, r.v0, r.u1, r.v1};
+                return true;
+            });
             if (!preview_.init(dev_)) ed.status = preview_.lastError();
         }
         if (listDirty_) refreshList(ed);
@@ -519,6 +527,7 @@ private:
 
     gfx::Device* dev_ = nullptr;
     fx::ParticleSystem preview_;
+    render::TextureCache textures_;
     Viewport vp_;
     render::RTSCamera cam_{{0, 0.8f, 0}, 9.0f, 0.45f, 0.7f};
     std::string project_, sel_, pendingSelect_, newName_, jsonText_, bindingsText_, bindingsError_;

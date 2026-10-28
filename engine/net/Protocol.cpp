@@ -1,4 +1,5 @@
 #include "Protocol.h"
+#include <algorithm>
 
 namespace rts::net {
 
@@ -42,6 +43,25 @@ bool read(ByteReader& r, RoomSettings& s) {
     return r.ok();
 }
 
+void write(ByteWriter& w, const NetText& t) {
+    w.str(t.key);
+    w.u8(uint8_t(std::min<size_t>(t.args.size(), 16)));
+    for (size_t i = 0; i < t.args.size() && i < 16; ++i) {
+        auto& a = t.args[i];
+        w.str(a.name); w.u8(a.isNum ? 1 : 0);
+        if (a.isNum) w.i64(a.n); else w.str(a.text);
+    }
+}
+bool read(ByteReader& r, NetText& t) {
+    t = NetText(r.str());
+    uint8_t n = r.u8();
+    for (uint8_t i = 0; i < n && i < 16 && r.ok(); ++i) {
+        std::string name = r.str();
+        if (r.u8()) t.num(std::move(name), r.i64()); else t.str(std::move(name), r.str());
+    }
+    return r.ok() && t.key.size() <= 128;
+}
+
 void writeCommands(ByteWriter& w, const std::vector<Command>& cmds) {
     w.u32(uint32_t(cmds.size()));
     for (auto& c : cmds) writeCommand(w, c);
@@ -71,8 +91,8 @@ bool decode(ByteReader& r, WelcomeMsg& m) {
         q.id = r.str(); q.title = r.str(); q.teams = r.u8(); q.teamSize = r.u8(); q.botFill = boolean(r); return r.ok(); });
 }
 
-Bytes encode(const ErrorMsg& m) { Writer w(Msg::Error); w.u16(uint16_t(m.code)); w.str(m.text); return w.buf; }
-bool decode(ByteReader& r, ErrorMsg& m) { m.code = ErrorCode(r.u16()); m.text = r.str(); return r.ok(); }
+Bytes encode(const ErrorMsg& m) { Writer w(Msg::Error); w.u16(uint16_t(m.code)); write(w, m.text); return w.buf; }
+bool decode(ByteReader& r, ErrorMsg& m) { m.code = ErrorCode(r.u16()); return read(r, m.text); }
 
 Bytes encode(const std::vector<RoomSummary>& rooms) {
     Writer w(Msg::RoomList);
@@ -169,12 +189,13 @@ bool decode(ByteReader& r, DesyncMsg& m) {
 }
 
 Bytes encode(const MatchEndMsg& m) {
-    Writer w(Msg::MatchEnd); w.u32(uint32_t(m.result)); w.str(m.reason); w.u32(uint32_t(m.ratingDelta.size()));
+    Writer w(Msg::MatchEnd); w.u32(uint32_t(m.result)); write(w, m.reason); w.u32(uint32_t(m.ratingDelta.size()));
     for (auto& [s, d] : m.ratingDelta) { w.u8(s); w.u32(uint32_t(d)); }
     return w.buf;
 }
 bool decode(ByteReader& r, MatchEndMsg& m) {
-    m.result = int32_t(r.u32()); m.reason = r.str();
+    m.result = int32_t(r.u32());
+    if (!read(r, m.reason)) return false;
     return readList(r, m.ratingDelta, [&](std::pair<uint8_t, int32_t>& p) { p.first = r.u8(); p.second = int32_t(r.u32()); return r.ok(); });
 }
 
