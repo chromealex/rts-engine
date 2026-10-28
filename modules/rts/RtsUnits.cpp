@@ -417,6 +417,15 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             return m == nullptr;
         }
         stopMoving(sim, e);
+        if (rules_.advancedEffects) {
+            const AbilityDef& al = abilityFor(sim, e, o.param);
+            if (al.castTime.raw > 0) {
+                // windup: interrupted by stun / silence (canCast) or a new order
+                if (o.state < 10) { o.state = 10; o.timer = al.castTime; sim.emit({kEvCastStart, w.get<Owner>(e).player, e, o.target, o.param, at}); return false; }
+                o.timer -= sim.dt();
+                if (o.timer.raw > 0) return false;
+            }
+        }
         castAbility(sim, e, o.param, o.target, at);
         return true;
     }
@@ -457,6 +466,7 @@ bool RtsModule::runOrder(Simulation& sim, Entity e, Order& o) {
             return false;
         }
         // arrived: reinforce, assault or capture
+        if (rules_.advancedEffects) { enterGarrison(sim, e, o.target); return true; }
         auto* g = w.tryGet<Garrison>(o.target);
         const uint8_t me = w.get<Owner>(e).player;
         Owner& to = w.get<Owner>(o.target);
@@ -508,6 +518,10 @@ void RtsModule::sysOrders(Simulation& sim) {
         if (!w.alive(e)) continue;
         auto* b = w.tryGet<Buffs>(e);
         if (b && b->stunUntil > sim.tick()) continue;
+        if (rules_.advancedEffects) {
+            if (isStunned(sim, e)) continue;
+            if (auto* as = w.tryGet<AbilityState>(e); as && as->busyUntil > sim.tick()) continue; // backswing
+        }
         auto& q0 = w.get<Orders>(e).queue;
         if (q0.empty()) continue;
         Order o = q0.front();
@@ -540,6 +554,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         if (!m.moving || (u.flags & (kUnitInHand | kUnitPossessed))) return;
         auto* b = w.tryGet<Buffs>(e);
         if (b && b->stunUntil > sim.tick()) return;
+        if (rules_.advancedEffects && (statusFlags(sim, e) & (kStStun | kStRoot))) return;
         const UnitType& t = rules_.types[u.type];
         if (m.goalRadius.raw > 0 && dist2D(tr.pos, m.goal) <= m.goalRadius) { m.moving = false; m.path.clear(); return; }
         Fixed step = stat(sim, e, Stat::Speed) * dt;

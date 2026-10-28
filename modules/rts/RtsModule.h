@@ -85,6 +85,19 @@ enum GameEvent : uint16_t {
     kEvDelivered,     // a = carrier, b = destination, value = resource
     kEvRoadBuilt,     // value = cell index (removed: player 0)
     kEvLanesChanged,  // lane geometry regenerated (GameState::lanes)
+    // abilities and effects (statuses: value = status index in Rules::statuses)
+    kEvStatusStart,   // a = holder (kNullEntity: player status, player = holder slot), b = source
+    kEvStatusEnd,     // a = holder; value = status
+    kEvAreaStart,     // a = area entity (Transform + Area), value = payload
+    kEvAreaTrigger,   // a = area, pos
+    kEvAreaEnd,       // a = area
+    kEvProjectileLaunch, // a = projectile, b = caster
+    kEvImpact,        // payload delivered: a = target (may be null), b = caster, value = payload, pos
+    kEvChainJump,     // a = from, b = to
+    kEvCastStart,     // windup started: a = caster, value = ability index
+    kEvChannelStart, kEvChannelEnd, // a = caster
+    kEvAlert,         // player = alerted player, a = first unit of the group, b = target structure
+    kEvGarrisonChanged, // a = structure, value = units delta (effects)
 };
 
 // ---------------------------------------------------------------- components
@@ -137,6 +150,8 @@ struct Combat {
     Entity target = kNullEntity;
     uint8_t acquireTimer = 0;
     bool autoTarget = false;
+    Entity chargeTarget = kNullEntity;   // charging shots: aiming at this target since chargeStart
+    uint32_t chargeStart = 0;
     // melee surround: the attack slot (ring around the target) this unit is heading for
     Entity slotTarget = kNullEntity;
     int8_t slot = -1;
@@ -168,6 +183,8 @@ struct Garrison {
     Fixed growth{};
     Fixed damageAcc{};
     int pendingOut = 0;
+    int lost = 0;                    // units lost to assaults and effects (resurrection)
+    uint32_t pendingGroup = 0;       // group id of the units being sent
     Entity pendingTarget = kNullEntity;
 };
 
@@ -177,6 +194,13 @@ struct Projectile {
     Fixed speed{}, damage{}, splash{};
     uint16_t damageType = 0;
     uint8_t owner = 0, layers = 0;
+    // ability projectiles: deliver a payload on impact (effect = Rules::payloads[effList][effIndex])
+    int16_t effList = -1, effIndex = -1, onHit = -1;
+    Fixed onHitChance{};
+    uint16_t sourceType = 0xFFFF;
+    Vec3 start{};
+    Fixed travel{}, total{};  // arc progress
+    Fixed scale = Fixed::fromInt(1);
 };
 
 struct Hero { int level = 1; Fixed xp{}; };
@@ -184,10 +208,42 @@ struct Squad { Fixed reinforceTimer{}; bool reinforcing = false; };
 
 struct Buff { Stat stat = Stat::Damage; Fixed add{}; Fixed mul = Fixed::fromInt(1); uint32_t until = 0; uint16_t sourceType = kNoType; };
 struct Buffs { std::vector<Buff> list; uint32_t stunUntil = 0; };
-struct AbilityState { uint32_t readyAt[8] = {}; };
+struct AbilityState { uint32_t readyAt[8] = {}; uint8_t charges[8] = {}; uint32_t chargeAt[8] = {}; bool init = false; uint32_t busyUntil = 0; };
+// A running status effect (unit, structure or player).
+struct StatusInst {
+    uint16_t def = 0;
+    uint8_t owner = 0;              // who applied it
+    Entity source = kNullEntity;
+    uint16_t sourceType = 0xFFFF;
+    uint32_t until = 0, nextTick = 0;
+    uint16_t stacks = 1;
+    Fixed shield{}, acc{};
+    Entity link = kNullEntity;      // Link / Redirect partner
+    uint16_t revertType = 0xFFFF;   // Transform / Level: type to go back to
+    uint8_t revertOwner = 0;        // Capture: owner to give it back to
+    bool revertsOwner = false;
+    uint8_t capturedBy = 0;
+};
+struct Statuses { std::vector<StatusInst> list; uint32_t flags = 0; };   // flags: union of active StatusFlags
+// Ground effect: delayed strike, persistent field, moving hazard, mine, portal, reveal, soul trap.
+struct Area {
+    Entity caster = kNullEntity;
+    uint16_t sourceType = 0xFFFF;
+    int16_t effList = -1, effIndex = -1;  // the Area effect in Rules::payloads
+    uint32_t fireAt = 0, nextAt = 0, endAt = 0;
+    Fixed radius{};
+    int triggers = 0;
+    std::vector<uint64_t> touched;        // contact areas: entities already hit
+    Vec3 dir{}, dest{};
+    int lane = -1; uint16_t lanePos = 0; bool laneReverse = false;
+    Entity follow = kNullEntity;
+    Fixed scale = Fixed::fromInt(1);
+};
+struct Channel { int16_t payload = -1; Entity target = kNullEntity; Vec3 point{}, startPos{}; uint32_t nextAt = 0, endAt = 0; int ability = 0; Fixed interval{}; };
+struct GroupTag { uint32_t id = 0; Entity from = kNullEntity, to = kNullEntity; };
 struct Capture { Fixed progress{}; uint8_t team = 0; };
 struct Guard { Vec3 home{}; Fixed leash{}; bool returning = false; uint32_t nextWander = 0; };
-struct Summon { uint32_t expire = 0; };
+struct Summon { uint32_t expire = 0; uint16_t summonerType = 0xFFFF; Entity summoner = kNullEntity; };
 
 enum NeedKind : int32_t { kNeedHunger = 0, kNeedSleep = 1, kNeedWork = 2 };
 struct Needs {
@@ -228,6 +284,8 @@ struct PlayerEconomy {
     int regions = 0;
     std::string faction;
     std::vector<uint8_t> typeDisabled;         // per type: switched off by triggers
+    std::vector<StatusInst> statuses;          // player statuses (silence, freeze regen, passives, wind)
+    uint32_t statusFlags = 0;
 };
 
 struct WaveDef {
@@ -243,7 +301,27 @@ struct WaveDef {
 };
 
 struct RoomZone { uint16_t type = 0; uint8_t owner = 0; std::vector<int32_t> cells; Vec3 center{}; };
-struct PlayerAbilityState { uint32_t readyAt = 0; int charges = 0; Fixed rearm{}; };
+struct PlayerAbilityState {
+    uint32_t readyAt = 0; int charges = 0; Fixed rearm{};
+    bool owned = true;                 // in the loadout (or stolen)
+    uint8_t level = 1;
+    uint32_t stolenUntil = 0;          // > 0: a stolen skill, lost at this tick
+    uint32_t pendingAt = 0;            // activation delay: fires at this tick
+    Vec3 pendingPoint{}; Entity pendingTarget = kNullEntity;
+    uint32_t nextAuto = 0;
+};
+
+// Who / where an effect payload is applied (see RtsEffects.cpp).
+struct EffectCtx {
+    Entity caster = kNullEntity;
+    uint8_t owner = 0;
+    uint16_t sourceType = 0xFFFF;
+    Entity target = kNullEntity;
+    Vec3 point{}, origin{};
+    Fixed scale = Fixed::fromInt(1);   // chain / splash falloff
+    int depth = 0;
+    uint32_t group = 0;
+};
 
 struct GameState {
     std::vector<PlayerEconomy> players;   // index = slot (0 = neutral)
@@ -280,6 +358,7 @@ struct GameState {
     std::vector<std::vector<Entity>> hand;   // per player: units picked up (order = pick order)
     std::vector<Entity> possessed;           // per player
     std::vector<std::vector<PlayerAbilityState>> playerAbilities; // [player][ability]
+    uint32_t nextGroupId = 1;                // ids of groups of units sent together
     // settlers economy
     std::vector<int32_t> roadComp;           // per cell: road network component (-1 none)
     bool roadsDirty = true;
@@ -349,6 +428,21 @@ public:
     int roomCellsOf(Simulation& sim, uint8_t player, int room) const;
     void applyEffects(Simulation& sim, Entity caster, uint8_t owner, uint16_t sourceType, const std::vector<EffectDef>& effects, Entity target, Vec3 point);
     void addHeroXp(Simulation& sim, Entity hero, Fixed xp, uint8_t player);
+    // ---- abilities and effects (RtsEffects.cpp, RtsSkills.cpp)
+    void applyPayload(Simulation& sim, int payload, const EffectCtx& ctx);
+    const AbilityDef& abilityFor(Simulation& sim, Entity e, int index) const;   // level variant of the unit's ability
+    const PlayerAbilityDef& playerAbilityFor(Simulation& sim, uint8_t player, int index) const;
+    uint32_t statusFlags(Simulation& sim, Entity e) const;                       // union of active status flags
+    bool isStunned(Simulation& sim, Entity e) const;
+    void addStatus(Simulation& sim, Entity target, int def, Fixed duration, const EffectCtx& ctx);
+    void addPlayerStatus(Simulation& sim, uint8_t player, int def, Fixed duration, const EffectCtx& ctx);
+    int dispel(Simulation& sim, Entity target, uint64_t tags, uint8_t from);    // removed count
+    bool castPlayerAbility(Simulation& sim, uint8_t player, int index, Vec3 point, Entity target);
+    Fixed playerStat(Simulation& sim, uint8_t player, Stat s, Fixed base) const; // player statuses
+    std::vector<Entity> groupMembers(Simulation& sim, uint32_t group) const;
+    // Where to aim a skill (autocast, auto skills, AI): fills point / target; false when there is nothing worth it.
+    bool smartTarget(Simulation& sim, uint8_t player, int payload, TargetKind kind, SmartRule rule, Vec3& point, Entity& target,
+                     Vec3 from = {}, Fixed range = {});
     // ---- settlers economy
     bool isGood(uint16_t res) const;       // stored in buildings (rules.storage == "buildings")
     bool roadConnected(Simulation& sim, Entity a, Entity b);
@@ -389,6 +483,22 @@ private:
     void recomputeRooms(Simulation& sim);
     void roomEconomy(Simulation& sim);
     void hashDungeon(Simulation& sim, Hasher& h);
+    void applyEffect(Simulation& sim, const EffectDef& e, int list, int index, EffectCtx ctx);
+    std::vector<Entity> effectTargets(Simulation& sim, const EffectDef& e, const EffectCtx& ctx);
+    std::vector<uint8_t> effectPlayers(Simulation& sim, const EffectDef& e, const EffectCtx& ctx);
+    bool filterOk(Simulation& sim, const TargetFilter& f, Entity e, uint8_t owner, Entity caster) const;
+    void effectGarrison(Simulation& sim, const EffectDef& e, EffectCtx& ctx, const std::vector<Entity>& targets);
+    void effectGroup(Simulation& sim, const EffectDef& e, EffectCtx& ctx, const std::vector<Entity>& targets);
+    void effectPlayer(Simulation& sim, const EffectDef& e, EffectCtx& ctx);
+    void sysEffects(Simulation& sim);     // statuses, areas, channels, player skills
+    void tickAreas(Simulation& sim);
+    void tickStatuses(Simulation& sim);
+    void tickPlayerSkills(Simulation& sim);
+    void impactProjectile(Simulation& sim, Entity p);
+    void setupSkills(Simulation& sim, const Json& map);
+    void hashEffects(Simulation& sim, Hasher& h);
+    void enterGarrison(Simulation& sim, Entity unit, Entity structure);   // assault / reinforce with statuses (advanced)
+    Fixed rollAmount(Simulation& sim, const EffectDef& e);
     void sysSettlers(Simulation& sim);    // RtsSettlers.cpp: workshops, carriers, storehouse stock, roads
     void applySettlersCommand(Simulation& sim, const Command& cmd);
     bool runHaul(Simulation& sim, Entity e, Order& o);

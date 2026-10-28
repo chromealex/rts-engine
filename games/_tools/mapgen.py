@@ -150,6 +150,7 @@ def frostcrown():
     m.ent("great_hall", 1, [10, 24])
     for i in range(5):
         m.ent("peon", 1, [14 + (i % 3) * 0.8, 21 + i])
+    m.ent("blademaster", 1, [15, 27])  # starting hero: shows the ability kit (chain lightning, rejuvenation)
     m.ent("burrow", 1, [10, 30])
     m.ent("gold_mine", 0, [10.5, 17.5])
     for y in range(30, 44):
@@ -385,8 +386,30 @@ def sporelanes():
     write("sporelanes", m, "spore_field")
 
 
+def spellbunkers():
+    blue = ["freeze", "shield", "plague", "defector", "panic", "bfg", "chain_lightning", "tornado", "mines", "rage",
+            "landing", "silence", "harvest", "break_magic", "revenge", "tide"]
+    red = ["freeze_wave", "invulnerability", "plague", "sabotage", "go_home", "bfg", "chain_lightning", "mines", "kill_aura",
+           "resurrection", "morale_thief", "possession", "sacrifice", "break_magic", "tide", "wisdom"]
+    m = Map("Rune Field", 56, 30, duel(a={"loadout": blue}, b={"loadout": red}))
+    m.border()
+    m.rect(26, 7, 2, 6, '#')
+    m.disc(16, 22, 1.5, '#')
+    m.rect(10, 4, 3, 1, '#')
+    m.ent("hive", 1, [5, 15], garrison=20)
+    m.ent("hut", 1, [8, 25], garrison=8)
+    m.ent("hut", 0, [14, 7], garrison=10)
+    m.ent("hut", 0, [19, 15], garrison=12)
+    m.ent("tower", 0, [12, 18], garrison=8)
+    m.ent("hut", 0, [22, 25], garrison=14)
+    m.ent("tower", 0, [28, 22], garrison=12, sym=False)
+    m.ent("hive", 0, [28, 4], garrison=18, sym=False)
+    write("spellbunkers", m, "rune_field")
+
+
 GAMES = {f.__name__: f for f in [frostcrown, starfall, ironfront, ambersands, metaltide, fourages, holdtheline,
-                                   lastcolony, clanlands, flagsectors, laneclash, underlord, borderrush, hearthhaul, sporelanes]}
+                                   lastcolony, clanlands, flagsectors, laneclash, underlord, borderrush, hearthhaul, sporelanes,
+                                   spellbunkers]}
 
 if __name__ == "__main__":
     for g in (sys.argv[1:] or GAMES):

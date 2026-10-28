@@ -122,6 +122,32 @@ bool RtsModule::runLaneWalk(Simulation& sim, Entity e, Order&) {
     Transform& tr = w.get<Transform>(e);
     Unit& u = w.get<Unit>(e);
     Fixed step = stat(sim, e, Stat::Speed) * sim.dt();
+    if (rules_.advancedEffects) {
+        // flying units leave the lane and go straight for the end of it
+        if (statusFlags(sim, e) & kStFlying) {
+            Vec3 goal = pts[lw->reverse ? 0 : pts.size() - 1];
+            Vec3 d = flat(goal - tr.pos);
+            Fixed len = d.length();
+            if (len.raw > 0) u.facing = d / len;
+            if (len <= step) { tr.pos = {goal.x, tr.pos.y, goal.z}; lw->pos = uint16_t(pts.size()); return true; }
+            tr.pos = tr.pos + d * (step / len);
+            return false;
+        }
+        // barriers on the lane stop hostile walkers; each walker that runs into one damages it and is spent
+        bool blocked = false;
+        const uint8_t me = w.get<Owner>(e).player;
+        gs.hash.query(tr.pos, Fixed::fromInt(2), [&](Entity b) {
+            if (blocked || !w.has<Unit>(b)) return;
+            const Unit& bu = w.get<Unit>(b);
+            if (!rules_.types[bu.type].blocksLanes || bu.hp.raw <= 0 || !hostile(sim, me, w.get<Owner>(b).player)) return;
+            if (dist2D(w.get<Transform>(b).pos, tr.pos) <= rules_.types[bu.type].radius + rules_.types[u.type].radius + Fixed::fromRatio(1, 5)) {
+                blocked = true;
+                dealDamage(sim, b, rules_.types[u.type].weapons.empty() ? kOne : rules_.types[u.type].weapons[0].damage, 0, e, me);
+                u.hp = Fixed{}; u.flags |= kUnitSilent;
+            }
+        });
+        if (blocked) return false;
+    }
     while (step.raw > 0 && lw->pos < pts.size()) {
         Vec3 wp = pts[lw->reverse ? pts.size() - 1 - lw->pos : lw->pos];
         Vec3 d = flat(wp - tr.pos);

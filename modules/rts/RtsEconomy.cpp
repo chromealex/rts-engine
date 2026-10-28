@@ -47,7 +47,7 @@ void RtsModule::sysEconomy(Simulation& sim) {
         const bool building = u.flags & kUnitUnderConstruction;
         if (!building && u.hp.raw > 0) {
             if (t.regen.raw > 0 && u.hp < t.maxHp) u.hp = fxMin(stat(sim, e, Stat::MaxHp), u.hp + t.regen * dt);
-            if (t.maxEnergy.raw > 0) u.energy = fxMin(t.maxEnergy, u.energy + t.energyRegen * dt);
+            if (t.maxEnergy.raw > 0) u.energy = fxMin(t.maxEnergy, u.energy + t.energyRegen * (rules_.advancedEffects ? stat(sim, e, Stat::EnergyRegen) : kOne) * dt);
         }
         if (o.player == 0 || o.player >= gs.players.size()) return;
         auto& p = gs.players[o.player];
@@ -83,6 +83,13 @@ void RtsModule::sysEconomy(Simulation& sim) {
                 continue;
             }
             if (isGood(uint16_t(r))) continue; // goods: income goes through the storehouses (syncStorehouses)
+            if (rules_.advancedEffects) {
+                // player regen (mana, morale) and income multipliers from player statuses (freeze regen, blessings)
+                Fixed regen = (p.statusFlags & kStFreezeRegen) ? Fixed{} : rd.regen;
+                Fixed mult = kOne;
+                for (auto& in : p.statuses) for (auto& a : rules_.statuses[in.def].incomeMult) if (a.res == r) mult = mult * a.value;
+                p.income[r] = (p.income[r] + regen) * mult;
+            }
             p.stock[r] = fxMax(Fixed{}, p.stock[r] + p.income[r] * dt);
             // a drained flow resource (TA energy stall) also slows everything down
             if (rd.kind == ResourceKind::Flow && p.stock[r].raw == 0 && p.income[r].raw < 0) {
@@ -179,6 +186,7 @@ void RtsModule::sysProduction(Simulation& sim) {
             const bool isTech = it.item < 0;
             if (!isTech && !it.upgrade && rules_.types[size_t(it.item)].structure && p.ready != kNoType) continue; // place first
             Fixed time = isTech ? rules_.techs[size_t(~it.item)].time : rules_.types[size_t(it.item)].buildTime;
+            if (it.upgrade && rules_.advancedEffects) time = time * stat(sim, e, Stat::UpgradeCost);
             const std::vector<Amount> cost = isTech ? techCost(sim, o.player, uint16_t(~it.item)) : rules_.types[size_t(it.item)].cost;
             Fixed step = dt * eco.productionMult * stat(sim, e, Stat::ProductionSpeed) / fxMax(time, Fixed::fromRatio(1, 10));
             if (rules_.costModel == CostModel::Progressive) {
@@ -320,12 +328,29 @@ void RtsModule::sysConstruction(Simulation& sim) {
 void RtsModule::sysGarrison(Simulation& sim) {
     World& w = sim.world();
     const Fixed dt = sim.dt();
-    struct Release { Entity from, target; uint16_t unit; uint8_t owner; Fixed radius; };
+    struct Release { Entity from, target; uint16_t unit; uint8_t owner; Fixed radius; uint32_t group = 0; };
     std::vector<Release> releases;
+    const bool adv = rules_.advancedEffects;
     w.each<Garrison, Unit, Owner>([&](Entity e, Garrison& g, Unit& u, Owner& o) {
         const UnitType& t = rules_.types[u.type];
         if (u.flags & kUnitUnderConstruction) return;
-        if (o.player != 0 && t.spawnInterval.raw > 0) {
+        if (adv && o.player != 0 && t.spawnInterval.raw > 0) {
+            // effects: lock stops production, production speed / cap stats, redirect sends the growth elsewhere
+            if (statusFlags(sim, e) & kStLock) return;
+            int cap = int(stat(sim, e, Stat::GarrisonCap).floorInt());
+            Garrison* into = &g;
+            if (auto* st = w.tryGet<Statuses>(e))
+                for (auto& in : st->list)
+                    if (in.def == uint16_t(rules_.stRedirect) && w.alive(in.link) && w.has<Garrison>(in.link)) into = &w.get<Garrison>(in.link);
+            if (into->count < cap || into != &g) {
+                g.growth += dt * stat(sim, e, Stat::ProductionSpeed) / t.spawnInterval;
+                while (g.growth >= kOne && (into != &g || into->count < cap)) { ++into->count; g.growth -= kOne; }
+                if (into == &g && g.count >= cap) g.growth = Fixed{};
+            } else if (g.count > cap) {
+                g.growth -= dt * t.garrisonDecay;
+                while (g.growth <= -kOne && g.count > cap) { --g.count; g.growth += kOne; }
+            } else g.growth = Fixed{};
+        } else if (o.player != 0 && t.spawnInterval.raw > 0) {
             if (g.count < t.garrisonMax) {
                 g.growth += dt / t.spawnInterval;
                 while (g.growth >= kOne && g.count < t.garrisonMax) { ++g.count; g.growth -= kOne; }
@@ -341,10 +366,24 @@ void RtsModule::sysGarrison(Simulation& sim) {
         for (int k = 0; k < 2 && g.pendingOut > 0; ++k) {
             if (!w.alive(g.pendingTarget) || t.spawnUnit == kNoType) { g.count += g.pendingOut; g.pendingOut = 0; break; }
             --g.pendingOut;
-            releases.push_back({e, g.pendingTarget, t.spawnUnit, o.player, t.radius});
+            releases.push_back({e, g.pendingTarget, t.spawnUnit, o.player, t.radius, g.pendingGroup});
         }
     });
     GameState& gs = state(sim);
+    auto tagGroup = [&](Entity n, const Release& r) {
+        if (!adv) return;
+        w.add<GroupTag>(n, GroupTag{r.group, r.from, r.target});
+        // contagious statuses (plague) travel with the units sent from an infected structure
+        if (auto* st = w.tryGet<Statuses>(r.from)) {
+            std::vector<StatusInst> carry;
+            for (auto& in : st->list) if (rules_.statuses[in.def].flags & kStSpreads) carry.push_back(in);
+            for (auto& in : carry) {
+                EffectCtx ctx; ctx.owner = in.owner; ctx.caster = in.source; ctx.sourceType = in.sourceType;
+                Fixed left = in.until == UINT32_MAX ? Fixed{} : Fixed::fromInt(int64_t(in.until - sim.tick())) / int64_t(sim.tickRate());
+                addStatus(sim, n, in.def, left, ctx);
+            }
+        }
+    };
     for (auto& r : releases) {
         Vec3 from = w.get<Transform>(r.from).pos, to = w.get<Transform>(r.target).pos;
         if (rules_.lanes.enabled) {
@@ -370,6 +409,7 @@ void RtsModule::sysGarrison(Simulation& sim) {
                 Entity n = spawn(sim, r.unit, r.owner, start);
                 if (!w.has<Orders>(n)) continue;
                 w.add<LaneWalker>(n, LaneWalker{lane, pos, reverse});
+                tagGroup(n, r);
                 Order ord;
                 ord.type = OrderType::Enter; ord.target = r.target; ord.point = flat(to); ord.state = 3; // 3 = lane walk
                 issue(sim, n, ord, false);
@@ -380,6 +420,7 @@ void RtsModule::sysGarrison(Simulation& sim) {
         Fixed len = d.length();
         Vec3 start = len.raw > 0 ? from + d * ((r.radius + Fixed::fromRatio(3, 10)) / len) : from;
         Entity n = spawn(sim, r.unit, r.owner, start);
+        tagGroup(n, r);
         auto* m = w.tryGet<Mobile>(n);
         if (!m) continue;
         int a = gs.roads.nodeOf(r.from), b = gs.roads.nodeOf(r.target);
