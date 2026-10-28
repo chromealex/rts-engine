@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', '..', 'tools', 'importers', 'u
 import images  # noqa: E402
 
 TEX = os.path.join(HERE, 'Assets', 'FX', 'Textures')
+MOD_TEX = os.path.join(HERE, 'Assets', 'Modules', 'Textures')
 
 
 def make(w, h, fn):
@@ -71,10 +72,28 @@ def ring(x, y):  # premultiplied alpha
     return (120 * a, 200 * a, 255 * a, 255 * a)
 
 
+def sheet(x, y):  # two sprites side by side (multiple sprite mode): a red star left, a green disc right
+    if x < 32:
+        u, v = x - 15.5, y - 15.5
+        a = math.atan2(v, u)
+        k = blob(u, v, 9 + 5 * abs(math.cos(a * 2.5)))
+        return (255, 80, 60, 255 * k)
+    k = blob(x - 47.5, y - 15.5, 14)
+    return (80, 255, 120, 255 * k)
+
+
+def dot(x, y):  # a single sprite (sprite mode single)
+    k = blob(x - 7.5, y - 7.5, 8)
+    return (255, 255, 255, 255 * k)
+
+
 if __name__ == '__main__':
     os.makedirs(TEX, exist_ok=True)
     images.write_png(os.path.join(TEX, 'fire_sheet.png'), make(128, 128, fire_sheet))
     images.write_tga(os.path.join(TEX, 'smoke.tga'), make(64, 64, smoke), rle=True)
     images.write_png(os.path.join(TEX, 'spark.png'), make(32, 32, spark))
     images.write_png(os.path.join(TEX, 'ring.png'), make(64, 64, ring))
-    print('textures written to', TEX)
+    os.makedirs(MOD_TEX, exist_ok=True)
+    images.write_png(os.path.join(MOD_TEX, 'sheet.png'), make(64, 32, sheet))
+    images.write_png(os.path.join(MOD_TEX, 'dot.png'), make(16, 16, dot))
+    print('textures written to', TEX, 'and', MOD_TEX)

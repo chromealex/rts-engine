@@ -241,6 +241,7 @@ bool ParticleSystem::Impl::emit(Instance& in, uint32_t owner, int effect, int em
     if (d.row == -2) p.row = uint8_t(std::min(d.frameRows - 1, int(rng.unit() * float(d.frameRows))));
     else if (d.row >= 0) p.row = uint8_t(std::min(d.row, d.frameRows - 1));
     if (er.meshIds.size() > 1) p.mesh = uint8_t(std::min(er.meshIds.size() - 1, size_t(rng.unit() * float(er.meshIds.size()))));
+    if (d.flipRotation > 0 && rng.unit() < d.flipRotation) { p.rot = -p.rot; p.spin = -p.spin; p.flags |= 32; }
     if (d.alignToDirection && d.meshes.empty()) {   // billboards: the quad's up axis along the start direction (screen space at draw time)
         p.flags |= 16;
     }
