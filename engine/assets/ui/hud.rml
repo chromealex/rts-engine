@@ -2,6 +2,7 @@
 <head>
     <title>hud</title>
     <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="skin.rcss"/>
 </head>
 <!-- Data model "game" (apps/client/ClientUi.cpp):
      top[] {text, sub, style, warn}, topActions[], clock, notices[], minimapStyle,

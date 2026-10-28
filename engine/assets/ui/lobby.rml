@@ -2,6 +2,7 @@
 <head>
     <title>lobby</title>
     <link type="text/rcss" href="theme.rcss"/>
+    <link type="text/rcss" href="skin.rcss"/>
 </head>
 <!-- Online lobby (apps/client/Lobby.cpp). Model "game":
      lobby: connect | connecting | browse | room; netStatus, netError, searching;

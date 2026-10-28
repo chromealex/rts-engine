@@ -678,11 +678,16 @@ int rtsMain(int argc, char** argv) {
     cb.frame = [](gfx::Device& d, double dt) { g_client->frame(d, dt); };
     cb.event = [](const Event& e) { g_client->event(e); };
     cb.shutdown = [] { g_client->shutdown(); };
-    // --map N [--spectate]: jump straight into a match (CI screenshots, quick testing)
+    // --map N [--spectate]: jump straight into a match (CI screenshots, quick testing); --lang tag; --size WxH
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--spectate") g_client->spectate();
         if (a == "--lang" && i + 1 < argc) g_client->forceLanguage(argv[++i]);
+        // --size WxH: window size on desktops (e.g. 540x960 to look at a portrait game)
+        if (a == "--size" && i + 1 < argc) {
+            int w = 0, h = 0;
+            if (std::sscanf(argv[++i], "%dx%d", &w, &h) == 2 && w > 0 && h > 0) { cfg.width = w; cfg.height = h; }
+        }
         if (a == "--map" && i + 1 < argc) {
             size_t idx = size_t(std::stoul(argv[++i]));
             auto oldInit = cb.init;
