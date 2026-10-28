@@ -110,6 +110,7 @@ the commit message; prefer adding a new file over editing a shared one.
 | In-game UI (RmlUi, HTML/CSS) | `engine/ui`, `apps/client`, `engine/assets/ui` | UI agent |
 | Resource packs `.rpak`, build size/compression, unpackers/importers of foreign game data | `engine/pack`, `tools/assetpipe`, `tools/unpackers`, `tools/importers`, `tools/rtsbuild` | packs agent |
 | Localization | `engine/i18n`, `engine/assets/lang`, `games/*/lang`, `tools/i18n`, `modules/rts/RtsLocalize.*` | i18n agent |
+| Dynamic lighting (point lights, light map, flashes, night) | `engine/render/Lights.*`, `engine/render/LightShaders.h`, `modules/rts/view/RtsLights.*` | lighting agent |
 | Other areas | as assigned by the user | the agent the user assigned |
 
 If your task is not in this table, the user's first message to you defines your area: write it

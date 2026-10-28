@@ -56,7 +56,7 @@
       "weapons": [ { "id": "boulder", "range": 8, "minRange": 2, "damage": 60, "splash": 1.2, "cooldown": 4,
                      "projectileSpeed": 9, "damageType": "siege" } ],
       "cost": { "gold": 200, "wood": 60, "time": 25, "supply": 3 },
-      "view": { "shape": "vehicle", "scale": 1.1 }
+      "view": { "shape": "vehicle", "scale": 1.1, "projectileLight": false, "hitLight": { "radius": 3.6, "intensity": 3.0 } }
     },
     "gryphon": {
       "name": "Gryphon",
@@ -67,7 +67,7 @@
                      "targets": ["ground", "air"] } ],
       "cost": { "gold": 260, "wood": 40, "time": 28, "supply": 4 },
       "requires": ["tower"],
-      "view": { "shape": "flyer", "scale": 1.1 }
+      "view": { "shape": "flyer", "scale": 1.1, "projectileLight": { "color": [0.55, 0.75, 1.0] }, "attackLight": { "color": [0.6, 0.8, 1.0] } }
     },
 
     "townhall": {
@@ -79,7 +79,7 @@
       "produces": ["peasant"],
       "dropoff": ["gold", "wood"],
       "supply": 10,
-      "view": { "shape": "hall" }
+      "view": { "shape": "hall", "light": { "color": [1.0, 0.6, 0.28], "radius": 6, "intensity": 1.6, "height": 1.4, "flicker": 0.18 } }
     },
     "farm": {
       "name": "Farm",
@@ -87,7 +87,7 @@
       "health": { "max": 400, "armor": 1, "armorType": "fortified" },
       "cost": { "gold": 80, "wood": 20, "time": 20 },
       "supply": 6,
-      "view": { "shape": "house" }
+      "view": { "shape": "house", "light": { "color": [1.0, 0.72, 0.4], "radius": 3.2, "intensity": 1.1, "height": 0.8 } }
     },
     "barracks": {
       "name": "Barracks",
@@ -95,7 +95,7 @@
       "health": { "max": 1000, "armor": 3, "armorType": "fortified" },
       "cost": { "gold": 160, "wood": 60, "time": 35 },
       "produces": ["footman", "archer"],
-      "view": { "shape": "barracks" }
+      "view": { "shape": "barracks", "light": { "color": [1.0, 0.6, 0.28], "radius": 4, "intensity": 1.3, "height": 1.0, "flicker": 0.18 } }
     },
     "workshop": {
       "name": "Workshop",
@@ -104,7 +104,7 @@
       "cost": { "gold": 150, "wood": 100, "time": 40 },
       "requires": ["barracks"],
       "produces": ["catapult", "gryphon"],
-      "view": { "shape": "workshop" }
+      "view": { "shape": "workshop", "light": { "color": [1.0, 0.45, 0.15], "radius": 4.5, "intensity": 2.0, "height": 0.7, "flicker": 0.3 } }
     },
     "tower": {
       "name": "Guard Tower",
@@ -114,7 +114,7 @@
       "weapons": [ { "id": "arrows", "range": 7, "damage": 18, "cooldown": 1.2, "projectileSpeed": 16,
                      "targets": ["ground", "air"], "damageType": "pierce" } ],
       "cost": { "gold": 110, "wood": 80, "time": 30 },
-      "view": { "shape": "tower" }
+      "view": { "shape": "tower", "light": { "color": [1.0, 0.6, 0.28], "radius": 4.5, "intensity": 1.5, "height": 2.4, "flicker": 0.18 } }
     },
 
     "goldmine": {
