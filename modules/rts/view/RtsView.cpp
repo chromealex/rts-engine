@@ -38,6 +38,15 @@ bool RtsView::init(gfx::Device& dev, const Rules& rules, FileReader reader) {
     if (!models_.count("shape:generic")) buildShapes(dev);
     looks_.clear();
     warnings_.clear();
+    {   // shared materials of the game (docs/models.md "Material library")
+        materialLib_ = Json::object();
+        std::string text;
+        if (read_("materials.json", text)) {
+            try { materialLib_ = Json::parse(text)["materials"]; }
+            catch (const std::exception& e) { warnings_.push_back(std::string("materials.json: ") + e.what()); }
+            if (!materialLib_.isObject()) materialLib_ = Json::object();
+        }
+    }
     for (auto& w : overlays_.set().warnings) warnings_.push_back(w);
     anims_.clear();
     for (auto& t : rules.types) {

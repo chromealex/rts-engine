@@ -109,8 +109,8 @@ Everything else that [assimp](https://github.com/assimp/assimp) imports — Blen
 the host into a glTF binary **sidecar** next to the source:
 
 ```
-templates/mygame/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
-templates/mygame/models/ship.lwo.glb   <- what the game loads
+<project>/models/ship.lwo       <- referenced by rules.json as "models/ship.lwo"
+<project>/models/ship.lwo.glb   <- what the game loads
 ```
 
 `render::loadModel` reads `<path>.glb` for any path whose format the runtime doesn't read, so
@@ -121,7 +121,7 @@ templates/mygame/models/ship.lwo.glb   <- what the game loads
 - **rtsbuild**: every build converts the game's convertible models that have no sidecar yet, ships
   only the `.glb` and leaves the sources out of the pack (`модель models/ship.lwo: converted to …`);
 - **by hand / agents**: `modelconv models/ship.lwo` (one file; `--json` for scripts and MCP),
-  `modelconv --project templates/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
+  `modelconv --project path/to/mygame` (every model of a game, skips up-to-date sidecars; `--force`).
 
 The converter triangulates, generates missing normals, keeps 4 bone weights per vertex, names
 unnamed clips (`Default`, `Clip1`, …), and rewrites texture paths from the authoring machine
@@ -191,6 +191,58 @@ the built-in shapes tint their team parts.
 Quality tiers (`MaterialQuality`, chosen per GPU like shadows, `RTS_MATERIALS=low|medium|high`):
 **low** — Blinn-Phong, material factors and base colour texture only (weak Android GPUs);
 **medium** — GGX, metallic-roughness, normal and emissive maps; **high** — plus occlusion maps.
+
+### Material library (`materials.json`)
+
+Materials shared by many types live in `materials.json` next to `rules.json`; a view refers to them
+by name wherever a material override goes, and can give a node its own material:
+
+```json
+// materials.json
+{ "materials": {
+    "steel_plates": { "color": [1, 1, 1], "metallic": 0.35, "roughness": 0.5, "uvScale": [2, 2],
+                      "texture": "textures/steel_plates.png", "normalMap": "textures/steel_plates_normal.png" },
+    "rusty_plates": { "base": "steel_plates", "color": [0.8, 0.5, 0.35], "roughness": 0.85 } } }
+
+// rules.json, a type's "view"
+"materials": { "Hull": "rusty_plates", "*": { "use": "steel_plates", "roughness": 0.3 } },
+"assign":    { "Turret": "steel_plates", "Wheel*": { "color": [0.1, 0.1, 0.1], "roughness": 0.9 } }
+```
+
+- A library entry has the keys of a material override (table above) plus `base` (inherit another
+  entry; chains up to 8) and `description`.
+- In `"materials"` a value is an override object, a library name, or `{"use": "name", ...}` (the
+  library material with some keys changed). The keys change the model's material; textures the
+  model has stay unless the reference sets them; `"replace": true` starts from a blank material.
+- `"assign"` maps node names or globs (case-insensitive `*`, `?`) to a material: the meshes of the
+  node **and everything under it** get a fresh material (`"Turret"` covers the barrel on it). Later
+  entries win. The fresh material multiplies the model's vertex colours (voxel colours show through
+  a texture); `"vertexColors": false` ignores them.
+- Normal maps work on any model: primitives without tangents get them when the model is uploaded;
+  voxel meshes get box-projected UVs (16 voxels per texture repeat).
+
+**Procedural textures.** `texture_generate` (MCP and the Materials window) writes tileable PNGs
+into the game folder: `solid`, `noise`, `stripes`, `checker`, `brick`, `tiles`, `panels` (riveted
+plates), `metal` (brushed), `wood`, `camo`, `gradient`, `dots`, `hex`, `scales`, each with colours,
+`scale`, `width`, `variation`, `seed`; `"output": "normal"` makes the matching normal map, `"mask"`
+a team mask (white where the second colour is). Same spec, same bytes.
+
+**Editor and agents.** **Окна → Материалы** lists the library, previews a material on a sphere or
+a box (live, with its textures), edits it, generates textures and applies a material to a type by
+material name or node. Agents use the same operations over MCP:
+
+| operation | what |
+|---|---|
+| `material_list {type?}` | the library, and per type: overrides, assignments, the model's material and node names |
+| `material_get {name}` | one entry and its `base` chain flattened |
+| `material_set {name, material, merge?}` | create / change a library entry (checked: unknown keys, ranges, missing base) |
+| `material_delete {name, force?}` | refuses while types or other entries use it |
+| `material_apply {type, material, target? \| node?, remove?}` | write `"materials"` / `"assign"` of the type's view |
+| `texture_generate {pattern, ...}`, `texture_patterns` | procedural textures |
+| `material_preview {material, shape?}` | (editor) show it in the Materials window, then `view_screenshot` |
+
+`templates/showcase` has a library material (`steel_plates`, made with these operations) on the
+catapult turret.
 
 ## Skeletal clips
 
