@@ -94,6 +94,7 @@ void Editor::init(gfx::Device& dev) {
     // registration order depends on the linker; tabs follow order()
     std::stable_sort(windows_.begin(), windows_.end(), [](auto& a, auto& b) { return a->order() < b->order(); });
     registerGuiOps();
+    registerPlayOps();
     if (!opt_.projectDir.empty()) {
         std::string err;
         if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
@@ -262,6 +263,7 @@ int Editor::pickRoad(const Viewport& vp, const RTSCamera& cam, float sx, float s
 void Editor::syncGrid() {
     const auto& d = doc().data;
     if (grid_.w != d.w || grid_.h != d.h) grid_.init(d.w, d.h);
+    grid_.corner = d.corners;
     for (int i = 0; i < d.w * d.h; ++i) {
         grid_.flags[size_t(i)] = game::cellFlagsFromChar(d.cells[size_t(i)]);
         grid_.height[size_t(i)] = d.heights[size_t(i)];

@@ -1918,6 +1918,256 @@ TEST(tiles2d_sample_games_deterministic) {
     }
 }
 
+// ------------------------------------------------------------------ texture atlases
+#include <cstring>
+#include <map>
+#include <set>
+
+#include "engine/atlas/AtlasFormat.h"
+#include "tools/atlas/AtlasBuild.h"
+
+namespace {
+// Opaque blob of `w x h` inside a transparent canvas at (ox, oy); `seed` varies the pixels.
+rts::atlas::Image atlasTestImage(int cw, int ch, int ox, int oy, int w, int h, uint32_t seed, bool opaqueCanvas = false) {
+    rts::atlas::Image img;
+    img.width = cw; img.height = ch;
+    img.rgba.assign(size_t(cw) * size_t(ch) * 4, 0);
+    uint32_t s = seed * 2654435761u + 1;
+    for (int y = 0; y < ch; ++y)
+        for (int x = 0; x < cw; ++x) {
+            bool in = x >= ox && y >= oy && x < ox + w && y < oy + h;
+            if (!in && !opaqueCanvas) continue;
+            s = s * 1664525u + 1013904223u;
+            uint8_t* p = img.px(x, y);
+            p[0] = uint8_t(s >> 24); p[1] = uint8_t(x * 7 + seed); p[2] = uint8_t(y * 5); p[3] = in && !opaqueCanvas ? uint8_t(128 + (s >> 25)) : 255;
+        }
+    return img;
+}
+rts::atlas::SourceImage atlasSrc(const std::string& path, const rts::atlas::Image& img) { return {path, rts::atlas::encodePng(img)}; }
+rts::atlas::AtlasConfig atlasCfg(const std::string& json, const std::string& profile = "linux") {
+    return rts::atlas::AtlasConfig::fromGame(rts::Json::parse(json), profile);
+}
+bool sameImage(const rts::atlas::Image& a, const rts::atlas::Image& b) { return a.width == b.width && a.height == b.height && a.rgba == b.rgba; }
+} // namespace
+
+TEST(atlas_maxrects_no_overlap_bounds_padding) {
+    using namespace rts::atlas;
+    for (int pass = 0; pass < 3; ++pass) {
+        PackSettings s;
+        s.maxPage = pass == 2 ? 256 : 1024;   // pass 2 forces several pages
+        s.padding = 2 + pass;
+        s.extrude = pass;
+        s.pow2 = pass != 1;
+        std::vector<PackItem> items;
+        uint32_t r = 12345 + uint32_t(pass);
+        for (int i = 0; i < 160; ++i) {
+            r = r * 1664525u + 1013904223u;
+            PackItem it;
+            it.w = 4 + int((r >> 8) % 60);
+            it.h = 4 + int((r >> 20) % 50);
+            it.allowRotate = pass == 1 && i % 3 == 0;
+            it.cluster = "c" + std::to_string(i / 16);
+            it.key = "k" + std::to_string(1000 + i);
+            items.push_back(it);
+        }
+        PackedPages pp = packRects(items, s);
+        CHECK(pp.ok);
+        if (!pp.ok) continue;
+        if (pass == 2) CHECK(pp.pages.size() > 1);
+        else CHECK(pp.pages.size() == 1);
+        bool inside = true, apart = true, sizesOk = true;
+        for (auto& pg : pp.pages) {
+            sizesOk &= pg.w <= s.maxPage && pg.h <= s.maxPage && pg.w % 4 == 0 && pg.h % 4 == 0;
+            if (s.pow2) sizesOk &= (pg.w & (pg.w - 1)) == 0 && (pg.h & (pg.h - 1)) == 0;
+        }
+        for (size_t i = 0; i < items.size(); ++i) {
+            const Placement& a = pp.placements[i];
+            int aw = a.rotated ? items[i].h : items[i].w, ah = a.rotated ? items[i].w : items[i].h;
+            const PackRect& pg = pp.pages[size_t(a.page)];
+            inside &= a.x - s.extrude >= 0 && a.y - s.extrude >= 0 && a.x + aw + s.extrude <= pg.w && a.y + ah + s.extrude <= pg.h;
+            if (!items[i].allowRotate) inside &= !a.rotated;
+            for (size_t j = i + 1; j < items.size(); ++j) {
+                const Placement& b = pp.placements[j];
+                if (b.page != a.page) continue;
+                int bw = b.rotated ? items[j].h : items[j].w, bh = b.rotated ? items[j].w : items[j].h;
+                // extruded rects must be separated by at least `padding` along x or y
+                int ax0 = a.x - s.extrude, ax1 = a.x + aw + s.extrude, ay0 = a.y - s.extrude, ay1 = a.y + ah + s.extrude;
+                int bx0 = b.x - s.extrude, bx1 = b.x + bw + s.extrude, by0 = b.y - s.extrude, by1 = b.y + bh + s.extrude;
+                bool sepX = ax1 + s.padding <= bx0 || bx1 + s.padding <= ax0, sepY = ay1 + s.padding <= by0 || by1 + s.padding <= ay0;
+                apart &= sepX || sepY;
+            }
+        }
+        CHECK(inside);
+        CHECK(apart);
+        CHECK(sizesOk);
+        if (pass == 2) { // clusters that fit on a page are never split
+            std::map<std::string, std::set<int>> pagesOf;
+            for (size_t i = 0; i < items.size(); ++i) pagesOf[items[i].cluster].insert(pp.placements[i].page);
+            bool whole = true;
+            for (auto& [c, ps] : pagesOf) whole &= ps.size() == 1;
+            CHECK(whole);
+        }
+    }
+    PackSettings s;
+    s.maxPage = 64;
+    CHECK(!packRects({PackItem{100, 10, false, "", "big"}}, s).ok); // too large -> readable error
+}
+
+TEST(atlas_build_is_deterministic) {
+    using namespace rts::atlas;
+    std::vector<SourceImage> in;
+    for (int i = 0; i < 40; ++i)
+        in.push_back(atlasSrc("units/u" + std::to_string(i % 5) + "/f" + std::to_string(i) + ".png", atlasTestImage(40, 40, i % 7, i % 5, 10 + i % 23, 12 + i % 17, uint32_t(i))));
+    for (int i = 0; i < 6; ++i) in.push_back(atlasSrc("ui/icon" + std::to_string(i) + ".png", atlasTestImage(24, 24, 2, 2, 20, 20, uint32_t(100 + i))));
+    AtlasConfig cfg = atlasCfg(R"({"atlas": {"maxPage": 256}})");
+    AtlasOutput a, b;
+    CHECK(buildAtlas(in, cfg, a));
+    std::vector<SourceImage> rev(in.rbegin(), in.rend()); // input order must not matter
+    CHECK(buildAtlas(rev, cfg, b));
+    CHECK(a.files.size() == b.files.size() && a.files.size() >= 3);
+    bool same = a.files.size() == b.files.size();
+    for (size_t i = 0; same && i < a.files.size(); ++i) same = a.files[i] == b.files[i];
+    CHECK(same);
+    CHECK(a.stats.atlased == 46 && a.stats.pages >= 2);
+    // the manifest survives a round trip
+    Manifest m;
+    CHECK(m.parse(a.manifest.serialize()));
+    CHECK(m.serialize() == a.manifest.serialize());
+    CHECK(m.regions().size() == 46);
+}
+
+TEST(atlas_dedupe_trim_rotation_extract) {
+    using namespace rts::atlas;
+    Image blob = atlasTestImage(30, 20, 0, 0, 30, 20, 7);
+    auto placed = [&](int cw, int ch, int ox, int oy) {
+        Image img;
+        img.width = cw; img.height = ch;
+        img.rgba.assign(size_t(cw) * size_t(ch) * 4, 0);
+        for (int y = 0; y < blob.height; ++y) for (int x = 0; x < blob.width; ++x) std::memcpy(img.px(ox + x, oy + y), blob.px(x, y), 4);
+        return img;
+    };
+    Image a = placed(64, 64, 5, 9), b = placed(48, 40, 13, 2), c = atlasTestImage(16, 50, 0, 0, 16, 50, 9, true);
+    std::vector<SourceImage> in = {atlasSrc("sprites/a.png", a), atlasSrc("sprites/b.png", b), atlasSrc("sprites/tall.png", c),
+                                   atlasSrc("sprites/empty.png", atlasTestImage(32, 32, 0, 0, 0, 0, 1))};
+    AtlasConfig cfg = atlasCfg(R"({"atlas": {"files": {"sprites/tall.png": {"rotate": true}}}})");
+    AtlasOutput out;
+    CHECK(buildAtlas(in, cfg, out));
+    const Region *ra = out.manifest.find("sprites/a.png"), *rb = out.manifest.find("sprites/b.png"), *re = out.manifest.find("sprites/empty.png");
+    CHECK(ra && rb && re);
+    if (!ra || !rb || !re) return;
+    CHECK(out.stats.duplicates == 1);
+    CHECK(ra->x == rb->x && ra->y == rb->y && ra->page == rb->page);        // one region for identical pixels
+    CHECK(ra->offsetX == 5 && ra->offsetY == 9 && ra->w == 30 && ra->h == 20); // trimmed, offsets kept
+    CHECK(rb->offsetX == 13 && rb->offsetY == 2 && rb->sourceW == 48 && rb->sourceH == 40);
+    CHECK(re->w == 1 && re->h == 1);
+    Image back;
+    const Image& page = out.pageImages[size_t(ra->page)];
+    CHECK(extractRegion(page, *ra, back) && sameImage(back, a));
+    CHECK(extractRegion(page, *rb, back) && sameImage(back, b));
+    const Region* rc = out.manifest.find("sprites/tall.png");
+    CHECK(rc && extractRegion(out.pageImages[size_t(rc->page)], *rc, back) && sameImage(back, c)); // with or without rotation
+    // extrusion: the texel left of the content repeats the content's first column
+    CHECK(std::memcmp(page.px(ra->x - 1, ra->y), page.px(ra->x, ra->y), 4) == 0);
+    // UVs follow the region
+    float uv[8];
+    regionUVs(*ra, page.width, page.height, uv);
+    CHECK(uv[0] == float(ra->x) / float(page.width) && uv[4] == float(ra->x + ra->w) / float(page.width));
+    // .rtex round trip, both filters
+    for (bool delta : {false, true}) {
+        Image d;
+        uint32_t flags = 0;
+        CHECK(decodeRtex(encodeRtex(page, true, false, delta), d, &flags) && sameImage(d, page) && ((flags & 4u) != 0) == delta);
+    }
+}
+
+TEST(atlas_grouping_rules) {
+    using namespace rts::atlas;
+    Image col = atlasTestImage(32, 32, 0, 0, 32, 32, 3, true);
+    std::vector<SourceImage> in = {
+        atlasSrc("units/knight/body.png", col), atlasSrc("units/knight/body_n.png", atlasTestImage(32, 32, 0, 0, 32, 32, 4, true)),
+        atlasSrc("tiles/water_repeat.png", col), atlasSrc("tiles/grass.png", atlasTestImage(16, 16, 0, 0, 16, 16, 5, true)),
+        atlasSrc("tiles/bush.png", atlasTestImage(16, 16, 2, 2, 8, 8, 6)), atlasSrc("models/rock.png", col),
+        atlasSrc("ui/logo.png", col), atlasSrc("ui/big.png", atlasTestImage(700, 20, 0, 0, 700, 20, 8, true)),
+        atlasSrc("textures/fx/spark.png", col), atlasSrc("ui/cursor.png", atlasTestImage(16, 16, 0, 0, 16, 16, 9)),
+        // second members: a group holding a single image is left standalone
+        atlasSrc("units/knight/legs.png", atlasTestImage(20, 20, 0, 0, 20, 20, 13, true)), atlasSrc("units/knight/legs_n.png", atlasTestImage(20, 20, 0, 0, 20, 20, 14, true)),
+        atlasSrc("tiles/grass2.png", atlasTestImage(16, 16, 0, 0, 16, 16, 15, true)), atlasSrc("tiles/bush2.png", atlasTestImage(16, 16, 1, 1, 9, 9, 16)),
+        atlasSrc("textures/fx/spark2.png", atlasTestImage(8, 8, 0, 0, 8, 8, 17)), atlasSrc("ui/cursor2.png", atlasTestImage(16, 16, 0, 0, 12, 12, 18)),
+        atlasSrc("effects/lonely.png", atlasTestImage(8, 8, 0, 0, 8, 8, 19))};
+    AtlasConfig cfg = atlasCfg(R"({"atlas": {"files": {"ui/logo.png": {"noAtlas": true}, "textures/fx/*": {"group": "fx2"}}}})", "web");
+    CHECK(cfg.pack.maxPage == 2048);
+    AtlasOutput out;
+    CHECK(buildAtlas(in, cfg, out));
+    auto pageOf = [&](const char* p) { const Region* r = out.manifest.find(p); return r ? r->page : -1; };
+    CHECK(pageOf("units/knight/body.png") >= 0 && pageOf("units/knight/body_n.png") >= 0);
+    CHECK(pageOf("units/knight/body.png") != pageOf("units/knight/body_n.png"));  // normal maps never mixed with colour
+    CHECK(pageOf("tiles/water_repeat.png") < 0);                                    // repeat wrap stays standalone
+    CHECK(pageOf("tiles/grass.png") >= 0 && pageOf("tiles/bush.png") >= 0 && pageOf("tiles/grass.png") != pageOf("tiles/bush.png")); // opaque vs alpha tiles
+    CHECK(pageOf("models/rock.png") < 0);                                           // 3D textures are not candidates
+    CHECK(pageOf("ui/logo.png") < 0 && pageOf("ui/big.png") < 0);                   // noAtlas, too large (> maxPage/4)
+    CHECK(pageOf("textures/fx/spark.png") >= 0 && out.manifest.pages()[size_t(pageOf("textures/fx/spark.png"))].group == "fx2");
+    CHECK(pageOf("effects/lonely.png") < 0);                                        // alone in its group
+    CHECK(pageOf("ui/cursor.png") >= 0);
+    const Region* g = out.manifest.find("tiles/grass.png");
+    CHECK(g && !out.manifest.pages()[size_t(g->page)].alpha);
+    CHECK(out.stats.excluded.size() == 4);
+    bool threw = false;
+    try { atlasCfg(R"({"atlas": {"files": {"x": {"grup": "a"}}}})"); } catch (const std::exception& e) { threw = std::string(e.what()).find("grup") != std::string::npos; }
+    CHECK(threw);
+}
+
+TEST(atlas_sprite_sheets_are_never_trimmed) {
+    using namespace rts;
+    pack::PackWriter w;
+    atlas::Image sheet = atlasTestImage(64, 32, 3, 2, 50, 28, 31), other = atlasTestImage(64, 32, 3, 2, 50, 28, 32);
+    CHECK(w.addData("rules.json", R"({"types": {"tank": {"sprite": {"sheet": "sprites/tank.png", "frame": [32, 32]}}}})"));
+    CHECK(w.addData("sprites/tank.png", atlas::encodePng(sheet)));
+    CHECK(w.addData("sprites/other.png", atlas::encodePng(other)));
+    atlas::AtlasStats st;
+    CHECK(atlas::applyAtlas(w, atlas::AtlasConfig::fromGame(Json::object(), "linux"), st));
+    std::string bytes;
+    CHECK(w.writeToString(bytes, pack::WriteOptions{}));
+    auto p = pack::Pack::open(pack::memorySource(bytes));
+    std::string text;
+    atlas::Manifest m;
+    CHECK(p && p->read(atlas::kManifestPath, text) && m.parse(text));
+    const atlas::Region *s = m.find("sprites/tank.png"), *o = m.find("sprites/other.png");
+    CHECK(s && s->w == 64 && s->h == 32 && s->offsetX == 0 && !s->rotated); // frame grid intact
+    CHECK(o && o->w == 50 && o->offsetX == 3);                             // standalone sprite trimmed
+}
+
+TEST(atlas_pack_integration_and_runtime_lookup) {
+    using namespace rts;
+    pack::PackWriter w;
+    atlas::Image sprite = atlasTestImage(40, 30, 6, 4, 20, 18, 11), tile = atlasTestImage(16, 16, 0, 0, 16, 16, 12, true);
+    CHECK(w.addData("game.json", R"({"name": "t", "atlas": {"maxPage": {"default": 512}}})"));
+    CHECK(w.addData("units/a/walk.png", atlas::encodePng(sprite)));
+    CHECK(w.addData("units/a/run.png", atlas::encodePng(atlasTestImage(12, 12, 0, 0, 12, 12, 13))));
+    CHECK(w.addData("tiles/t.png", atlas::encodePng(tile)));
+    CHECK(w.addData("tiles/t2.png", atlas::encodePng(atlasTestImage(16, 16, 0, 0, 16, 16, 14, true))));
+    CHECK(w.addData("models/m.png", atlas::encodePng(tile)));
+    atlas::AtlasStats st;
+    CHECK(atlas::applyAtlas(w, atlas::AtlasConfig::fromGame(Json::parse(R"({"atlas": {"maxPage": {"default": 512}}})"), "linux"), st));
+    CHECK(st.atlased == 4 && st.pages == 2);
+    std::string bytes, bytes2;
+    pack::WriteStats ws;
+    CHECK(w.writeToString(bytes, pack::WriteOptions{}, &ws));
+    CHECK(w.writeToString(bytes2, pack::WriteOptions{}));
+    CHECK(bytes == bytes2);
+    atlas::finishStats(st, ws);
+    CHECK(st.storedBytes > 0);
+    CHECK(st.toJson()["pages"].integer() == 2);
+    auto p = pack::Pack::open(pack::memorySource(bytes));
+    CHECK(p != nullptr);
+    if (!p) return;
+    CHECK(!p->contains("units/a/walk.png") && p->contains("models/m.png") && p->contains(atlas::kManifestPath));
+    atlas::ImageSource src([&](const std::string& path, std::string& out) { return p->read(path, out); }, atlas::decodeImageFile);
+    atlas::Image back;
+    CHECK(src.atlased("units/a/walk.png") && src.load("units/a/walk.png", back) && sameImage(back, sprite));
+    CHECK(src.load("tiles/t.png", back) && sameImage(back, tile));
+    CHECK(!src.load("models/m.png", back));
+}
+
 // ---------------- models (models agent): loaders, animation, procedural ----------------
 #include "engine/render/Animation.h"
 #include <cmath>
@@ -2209,6 +2459,81 @@ TEST(i18n_ui_documents_translated) {
         CHECK(!cyrillic);
     }
     CHECK(docs >= 3);   // menu, hud, lobby
+}
+
+#include "engine/atlas/TextureLibrary.h"
+
+namespace {
+// Records texture creation; everything else is a no-op.
+class FakeDevice final : public rts::gfx::Device {
+public:
+    std::vector<std::pair<int, int>> created;
+    int alive = 0;
+    rts::gfx::DeviceInfo info_;
+    std::string err_;
+    const rts::gfx::DeviceInfo& info() const override { return info_; }
+    rts::gfx::BufferHandle createBuffer(const rts::gfx::BufferDesc&) override { return {}; }
+    void updateBuffer(rts::gfx::BufferHandle, const void*, size_t, size_t) override {}
+    void destroyBuffer(rts::gfx::BufferHandle) override {}
+    rts::gfx::TextureHandle createTexture(const rts::gfx::TextureDesc& d) override { created.push_back({d.width, d.height}); ++alive; return {uint32_t(created.size())}; }
+    void updateTexture(rts::gfx::TextureHandle, int, int, int, int, const void*, int) override {}
+    void destroyTexture(rts::gfx::TextureHandle) override { --alive; }
+    rts::gfx::ShaderHandle createShader(const rts::gfx::ShaderDesc&) override { return {}; }
+    void destroyShader(rts::gfx::ShaderHandle) override {}
+    rts::gfx::PipelineHandle createPipeline(const rts::gfx::PipelineDesc&) override { return {}; }
+    void destroyPipeline(rts::gfx::PipelineHandle) override {}
+    const std::string& lastError() const override { return err_; }
+    void beginFrame(int, int) override {}
+    void endFrame() override {}
+    void beginPass(const rts::gfx::PassDesc&) override {}
+    void endPass() override {}
+    void setViewport(const rts::gfx::Rect&) override {}
+    void setScissor(const rts::gfx::Rect&) override {}
+    void setPipeline(rts::gfx::PipelineHandle) override {}
+    void setVertexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setIndexBuffer(rts::gfx::BufferHandle, size_t) override {}
+    void setTexture(int, rts::gfx::TextureHandle) override {}
+    void setUniforms(int, const void*, size_t) override {}
+    void draw(uint32_t, uint32_t) override {}
+    void drawIndexed(uint32_t, uint32_t, int32_t) override {}
+};
+} // namespace
+
+TEST(atlas_texture_library_is_transparent) {
+    using namespace rts;
+    pack::PackWriter w;
+    atlas::Image a = atlasTestImage(40, 40, 8, 6, 20, 24, 21), b = atlasTestImage(40, 40, 0, 0, 30, 30, 22), m = atlasTestImage(8, 4, 0, 0, 8, 4, 23, true);
+    CHECK(w.addData("units/x/a.png", atlas::encodePng(a)));
+    CHECK(w.addData("units/x/b.png", atlas::encodePng(b)));
+    CHECK(w.addData("models/m.png", atlas::encodePng(m)));
+    atlas::AtlasStats st;
+    CHECK(atlas::applyAtlas(w, atlas::AtlasConfig::fromGame(Json::object(), "web"), st));
+    std::string bytes;
+    CHECK(w.writeToString(bytes, pack::WriteOptions{}));
+    auto p = pack::Pack::open(pack::memorySource(bytes));
+    if (!p) { CHECK(false); return; }
+    FakeDevice dev;
+    {
+        atlas::TextureLibrary lib(dev, [&](const std::string& path, std::string& out) { return p->read(path, out); });
+        const atlas::TextureRef* ra = lib.get("units/x/a.png");
+        const atlas::TextureRef* rb = lib.get("units/x/b.png");
+        const atlas::TextureRef* rm = lib.get("models/m.png");
+        CHECK(ra && rb && rm && !lib.get("nope.png"));
+        if (!ra || !rb || !rm) return;
+        CHECK(ra->texture == rb->texture && ra->page >= 0);          // same page: no texture switch
+        CHECK(ra->offsetX == 8 && ra->offsetY == 6 && ra->w == 20 && ra->h == 24 && ra->sourceW == 40);
+        CHECK(rm->page == -1 && rm->w == 8 && rm->h == 4 && rm->opaque && rm->uv[4] == 1.0f);
+        CHECK(dev.created.size() == 2 && lib.residentPages() == 1);  // one page + one standalone texture
+        CHECK(lib.get("units/x/a.png") == ra);                      // cached
+        float u = 0, v = 0;
+        atlas::mapUV(*ra, float(ra->offsetX), float(ra->offsetY), u, v);
+        CHECK(u == ra->uv[0] && v == ra->uv[1]);
+        atlas::mapUV(*rm, 8.0f, 4.0f, u, v);
+        CHECK(u == 1.0f && v == 1.0f);
+        atlas::Image back;
+        CHECK(lib.loadImage("units/x/b.png", back) && sameImage(back, b));
+    }
+    CHECK(dev.alive == 0);
 }
 
 int main() {
