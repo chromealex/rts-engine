@@ -558,6 +558,9 @@ const atlas::TextureRef* t = lib.get("units/orc/grunt/walk_0.png");   // nullptr
 `atlas::mapUV(*t, px, py, u, v)` maps a point in original-image pixels to the texture (trim and
 rotation included) — e.g. frame corners of a sheet. For a renderer that already maps frames via a
 rect (`u0 + (u1 - u0) * lu`), the rect of an atlased sheet is `t->uv[0..1]` .. `t->uv[4..5]`.
+The 2D sprite/tile renderer's `render::TextureCache::resolve()` already understands atlases:
+an atlased image resolves to the page texture + its rect (sprite sheets are never trimmed, so
+frame uvs stay exact); a trimmed or rotated image is rebuilt as a standalone texture.
 Plain (non-atlased) images come back the same way (own texture, full UVs, no trim). CPU pixels of
 an original image: `lib.loadImage(path, img)` or `atlas::ImageSource` (the UI uses it, so RmlUi
 `<img src>` and decorators keep working with atlased files).
