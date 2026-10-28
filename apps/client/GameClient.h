@@ -20,6 +20,7 @@
 #include "engine/net/NetClient.h"
 #include "engine/platform/Platform.h"
 #include "engine/render/ImGuiLayer.h"
+#include "engine/render/QualityGovernor.h"
 #include "engine/render/Renderer3D.h"
 #include "engine/sim/Simulation.h"
 #include "engine/ui/UiLayer.h"
@@ -187,6 +188,7 @@ private:
     UiState ui_state_, bound_;
     std::vector<std::function<void()>> actions_, nextActions_;
     int shadowQuality_ = 0, boundShadowQuality_ = 0;
+    render::QualityGovernor quality_;   // adaptive shadow/light tiers by frame time (lighting agent)
     int volume_ = 100, boundVolume_ = 100, musicVolume_ = 100, boundMusicVolume_ = 100;  // percent, pause menu
     int matQuality_ = 2, boundMatQuality_ = 2; // pause menu: material tier (terrain splat / normal maps, models)
     int fxQuality_ = 0, boundFxQuality_ = 0;   // pause menu: particles off/low/medium/high

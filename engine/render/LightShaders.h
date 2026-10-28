@@ -30,7 +30,12 @@ namespace rts::render::shaders {
     "        vec2 e = min(uv, 1.0 - uv);\n" \
     "        float fade = clamp(min(e.x, e.y) * 16.0, 0.0, 1.0);\n" \
     "        if (l_info.z > 0.5) uv.y = 1.0 - uv.y;\n" \
-    "        c = texture(" TEX ", uv).rgb * (l_info.y * fade * (0.4 + 0.3 * max(n.y, 0.0)));\n" \
+    "        vec3 m = texture(" TEX ", uv).rgb * (l_info.y * fade);\n" \
+    "        c = m * (0.4 + 0.3 * max(n.y, 0.0));\n" \
+    "        if (specK > 0.6) { /* water: lights glitter on moving ripples (phase from the wind offset) */\n" \
+    "            float r = sin(wpos.x * 3.1 + l_cloud.x * 9.0) * sin(wpos.z * 2.7 - l_cloud.y * 7.0) + 0.6 * sin((wpos.x + wpos.z) * 4.7 - l_cloud.x * 13.0);\n" \
+    "            c += m * (specK * (0.25 + 0.35 * r * r));\n" \
+    "        }\n" \
     "    }\n" \
     "    int cnt = int(l_info.x);\n" \
     "    for (int i = 0; i < 8; ++i) {\n" \
@@ -67,7 +72,12 @@ namespace rts::render::shaders {
     "        float2 e = min(uv, 1.0 - uv);\n" \
     "        float fade = clamp(min(e.x, e.y) * 16.0, 0.0, 1.0);\n" \
     "        if (l.info.z > 0.5) uv.y = 1.0 - uv.y;\n" \
-    "        c = lm.sample(ls, uv).rgb * (l.info.y * fade * (0.4 + 0.3 * max(n.y, 0.0)));\n" \
+    "        float3 m = lm.sample(ls, uv).rgb * (l.info.y * fade);\n" \
+    "        c = m * (0.4 + 0.3 * max(n.y, 0.0));\n" \
+    "        if (specK > 0.6) {\n" \
+    "            float r = sin(wpos.x * 3.1 + l.cloud.x * 9.0) * sin(wpos.z * 2.7 - l.cloud.y * 7.0) + 0.6 * sin((wpos.x + wpos.z) * 4.7 - l.cloud.x * 13.0);\n" \
+    "            c += m * (specK * (0.25 + 0.35 * r * r));\n" \
+    "        }\n" \
     "    }\n" \
     "    int cnt = int(l.info.x);\n" \
     "    for (int i = 0; i < 8; ++i) {\n" \
