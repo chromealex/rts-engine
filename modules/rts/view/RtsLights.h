@@ -117,6 +117,8 @@ private:
     bool cycle_ = false;                 // a lighting block or a test override is present
     float startTime_ = 0.5f, dayLength_ = 0, nightLevel_ = 1, forcedNight_ = -1;
     float clouds_ = 0, cloudStrength_ = 0.45f, cloudScale_ = 1, windX_ = 1.2f, windZ_ = 0.5f, storm_ = 0;
+    bool sunDirSet_ = false;            // "sunDir": [x, y, z] towards the sun at noon (map > game)
+    render::float3 sunDir_;
     float lightning_ = 0;
     std::string preset_;
     bool waterRefl_ = true;

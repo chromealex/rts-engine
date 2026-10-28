@@ -19,6 +19,7 @@
 #include "../RtsData.h"
 #include "../RtsMap.h"
 #include "../RtsTiles.h"
+#include "RtsSpriteShadow.h"
 
 namespace rts::game {
 
@@ -41,19 +42,22 @@ struct SpriteLook {
     float depthBias = 0;                    // pull towards the camera so terrain does not cut the sprite
     float lift = 0;                         // air units: drawn above the ground, shadow stays
     float corpseTime = 4;                   // seconds the last die frame stays (then fades)
-    float shadowW = 0, shadowH = 0, shadowAlpha = 0.35f;
+    bool structure = false;
+    SpriteShadowSpec shadow;                // blob / cast shadow, lit (RtsSpriteShadow.h)
     Anim anims[kActCount];
 };
 
 class Rts2DView {
 public:
-    bool init(gfx::Device& dev, const Rules& rules, const std::string& contentBase);
+    // `defaults`: rules/game.json "sprites" block (shadow mode, lit)
+    bool init(gfx::Device& dev, const Rules& rules, const std::string& contentBase, const SpriteDefaults& defaults = {});
     void shutdown(gfx::Device& dev);
     bool hasSprite(uint16_t type) const { return type < looks_.size() && looks_[type].valid; }
     const SpriteLook& look(uint16_t type) const { return looks_[type]; }
 
     // ---- per frame (RtsView::draw)
-    void beginFrame(const render::RTSCamera& cam, double time);
+    // `grid`: ground for projected decals (blob shadows, ground-mode sprites); `r`: sun + shadow tier
+    void beginFrame(const render::RTSCamera& cam, double time, const render::Renderer3D& r, const MapGrid* grid, float levelHeight);
     void addObject(const SceneObject& o, float groundY);
     void endFrame(const MapGrid& grid);          // death animations of objects that disappeared
     // queues tiles + sprites into the renderer's main pass (`grid` must outlive the frame)
@@ -77,6 +81,10 @@ private:
     void emit(const SpriteLook& L, render::float3 ground, render::float3 facing, int act, double t0, uint32_t team, uint32_t tint, bool loopHold, float fade);
     void corners(const SpriteLook& L, render::float3 ground, render::float3 (&c)[4], float& sortKey) const;
     int facingIndex(const SpriteLook& L, render::float3 facing, bool& flip) const;
+    float groundAt(float x, float z) const;   // the ground decals are cut from (surface_)
+    // projected decal: the rect origin + [0,lenU] * aU + [0,lenV] * aV (XZ) cut from the ground
+    void decal(const render::TextureRef& tex, render::float4 uv, render::float3 origin, render::float3 aU, float lenU, render::float3 aV, float lenV,
+               uint32_t color, uint32_t team, int layer, float key, uint32_t flags);
 
     std::string base_;
     render::TextureCache textures_;
@@ -90,6 +98,12 @@ private:
     render::float3 camRight_, camUp_, camFwd_, groundRight_, groundFront_;
     double time_ = 0;
     uint32_t frame_ = 0;
+    SpriteDefaults defaults_;
+    render::ShadowQuality quality_ = render::ShadowQuality::Off;
+    render::float3 casterRight_;            // caster quad axis this frame (RtsSpriteShadow casterRight)
+    GroundSurface surface_;
+    std::vector<render::float3> surfTris_;
+    double cpuMs_ = 0;                      // RTS_SPRITE_STATS
     std::map<uint64_t, Seen> seen_;
     std::vector<Corpse> corpses_;
 
