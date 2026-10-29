@@ -605,6 +605,8 @@ std::string cmakeVars(const Game& g, const Options& o, const fs::path& content, 
     std::string s;
     s += " -DCMAKE_BUILD_TYPE=" + o.config;
     s += " -DRTS_CONTENT_DIR=" + quote(content);
+    // Each project selects its own native/ directory, including when reusing a CMake cache.
+    s += " -DRTS_NATIVE_DIR=";
     s += " -DRTS_GAME_NAME=" + quote(g.name);
     s += " -DRTS_GAME_ID=" + g.id;
     s += " -DRTS_GAME_VERSION=" + g.version;
