@@ -419,6 +419,7 @@ fs::path contentPack(Options& o) {
          (audio == "off" ? std::string() : " (звук: " + audio + ")"));
     rts::pack::PackWriter w;
     rts::pack::IgnoreRules rules;
+    rules.add("native/"); // compiled game modules are source code, not runtime data
     rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
     for (const char* d : {"Builds/", "Logs/", "logs/", "dist/", ".rtsengine/"}) rules.add(d);   // project outputs and editor state
     std::vector<std::string> notes;
@@ -627,6 +628,9 @@ void exportSources(const Options& o, const fs::path& dst) {
     for (const char* d : {"engine", "modules", "third_party", "platform"}) copyDir(o.engine / d, dst / d);
     copyDir(o.engine / "apps" / "client", dst / "apps" / "client");
     copyFile(o.engine / "CMakeLists.txt", dst / "CMakeLists.txt");
+    // Source exports must retain compiled modules even when runtime data is packed.
+    if (fs::exists(o.project / "native" / "CMakeLists.txt"))
+        copyDir(o.project / "native", dst / "native");
 }
 
 // Native plugins for a target: report what goes in and write plugins.cmake into `dir`.
