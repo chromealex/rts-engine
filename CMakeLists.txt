@@ -910,3 +910,8 @@ if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/ScriptOps.cpp)
 endif()
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsViewScript.cpp)
+
+# Project-local C++ module build selection (no graphics or game execution).
+if(RTS_BUILD_TESTS AND Python3_Interpreter_FOUND)
+    add_test(NAME native_project_build COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_project_build.py ${CMAKE_COMMAND})
+endif()
