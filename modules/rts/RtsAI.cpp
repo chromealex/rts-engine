@@ -373,7 +373,8 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         {
             bool allBusy = true;
             w.each<Production, Unit, Owner>([&](Entity, Production& p, Unit& u, Owner& o) {
-                if (o.player == player_ && R.types[u.type].structure && !R.types[u.type].produces.empty() && p.queue.empty() && !(u.flags & kUnitUnderConstruction)) allBusy = false;
+                if (o.player != player_ || (u.flags & kUnitUnderConstruction) || std::find(candidates.begin(), candidates.end(), u.type) == candidates.end()) return;
+                if (p.queue.empty()) allBusy = false;   // army producers only (the hall stops at its worker count)
             });
             if (allBusy && !candidates.empty()) {
                 // "floating": every resource the producer costs is at 3x its cost or near its storage cap
@@ -578,7 +579,13 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             if (t.structure && (t.dropoffMask & missingDrop) && t.produces.size() <= 1 && build(sim, m, uint16_t(ti))) return;
         }
     }
-    // 5) dropoffs near far resources are skipped for simplicity; storage when capped
+    // 4c) expansion: a gathered resource has no node left near any of our dropoffs -> a dropoff at the nearest
+    //     node elsewhere (a town hall at the next mine, a lumber camp at the next forest)
+    if (canBuildNow && building == 0 && sim.tick() >= expandTick_ && workers >= 4) {
+        expandTick_ = sim.tick() + 20 * sim.tickRate();
+        if (expand(sim, m, count)) return;
+    }
+    // 5) storage when capped
     for (size_t r = 0; r < R.resources.size(); ++r) {
         const ResourceDef& rd = R.resources[r];
         bool capped = rd.kind == ResourceKind::Flow || rd.capped;
@@ -901,6 +908,57 @@ void RtsAI::garrisonPlay(Simulation& sim, RtsModule& m) {
         Command c; c.type = kCmdSend; c.units = {e}; c.target = all[size_t(bestT)].e; c.param = pct;
         send(sim, c);
     }
+}
+
+bool RtsAI::expand(Simulation& sim, RtsModule& m, const std::vector<int>& count) {
+    World& w = sim.world();
+    const Rules& R = m.rules();
+    if (!hasHome_) return false;
+    uint32_t gathered = 0;
+    for (size_t ti = 0; ti < R.types.size(); ++ti)
+        if (count[ti] && R.types[ti].worker)
+            for (auto& g : R.types[ti].gathers) if (R.resources[g.res].kind != ResourceKind::Flow && !R.resources[g.res].field) gathered |= 1u << g.res;
+    if (!gathered) return false;
+    std::vector<std::pair<Vec3, uint32_t>> drops;
+    std::vector<Vec3> enemies;
+    w.each<Unit, Owner, Transform>([&](Entity, Unit& u, Owner& o, Transform& tr) {
+        const UnitType& t = R.types[u.type];
+        if (o.player == player_ && t.structure && t.dropoffMask) drops.push_back({tr.pos, t.dropoffMask});
+        else if (t.structure && o.player != player_ && o.player != 0 && m.hostile(sim, player_, o.player)) enemies.push_back(tr.pos);
+    });
+    for (int r = 0; r < int(R.resources.size()); ++r) {
+        if (!(gathered & (1u << r))) continue;
+        bool nearAny = false, farAny = false;
+        Vec3 best{};
+        Fixed bestD{};
+        w.each<ResourceStock, Unit, Owner, Transform>([&](Entity, ResourceStock& rs, Unit& nu, Owner& no, Transform& nt) {
+            if (rs.res != r || (!rs.infinite && rs.amount.raw <= 0) || (R.types[nu.type].ownerOnly && no.player != player_)) return;
+            for (auto& [dp, mask] : drops) if ((mask & (1u << r)) && dist(dp, nt.pos) < Fixed::fromInt(12)) { nearAny = true; return; }
+            for (Vec3 e : enemies) if (dist(e, nt.pos) < Fixed::fromInt(16)) return;   // not under their walls
+            const Fixed d = dist(nt.pos, home_);
+            if (!farAny || d < bestD) { farAny = true; bestD = d; best = nt.pos; }
+        });
+        if (nearAny || !farAny) continue;
+        // the cheapest structure that takes this resource and that our builders can make
+        int pick = -1;
+        int64_t pickCost = 0;
+        for (size_t ti = 0; ti < R.types.size(); ++ti) {
+            const UnitType& t = R.types[ti];
+            if (!t.structure || !(t.dropoffMask & (1u << r)) || t.placeOn != kNoType || !m.canTrain(sim, player_, uint16_t(ti))) continue;
+            bool buildable = false;
+            for (size_t bi = 0; bi < R.types.size(); ++bi)
+                if (count[bi] && std::find(R.types[bi].builds.begin(), R.types[bi].builds.end(), uint16_t(ti)) != R.types[bi].builds.end()) buildable = true;
+            if (!buildable) continue;
+            int64_t c = 0;
+            for (auto& a : t.cost) c += a.value.toInt();
+            if (pick < 0 || c < pickCost) { pick = int(ti); pickCost = c; }
+        }
+        if (pick < 0) continue;
+        Vec3 spot;
+        if (!findSpot(sim, m, uint16_t(pick), best, 7, spot, true)) continue;
+        if (build(sim, m, uint16_t(pick), 0, &spot)) return true;
+    }
+    return false;
 }
 
 } // namespace rts::game

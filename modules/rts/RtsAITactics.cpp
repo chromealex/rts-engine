@@ -180,6 +180,9 @@ void RtsAI::refreshBases(Simulation& sim, RtsModule& m) {
             if (watchCell_ < 0 || s > bs) { watchCell_ = c; bs = s; }
         }
     } else watchCell_ = mainRoute_[size_t(n * 2 / 5)];
+    AIDBG("t=%u p%d route n=%d alt=%zu relief=%d rally=%.1f,%.1f elev=%d choke=%d(%d) watch=%d elev=%d crest=%d homeElev=%d\n", now / sim.tickRate(), player_, n, altRoute_.size(), int(T.relief),
+          rally_.x.toDouble(), rally_.z.toDouble(), hasRally_ ? T.elev[size_t(g.cellOf(rally_))] : -1, chokeCell_, chokeCell_ >= 0 ? T.clear[size_t(chokeCell_)] : -1,
+          watchCell_, watchCell_ >= 0 ? T.elev[size_t(watchCell_)] : -1, watchCell_ >= 0 ? T.crest[size_t(watchCell_)] : -1, T.elev[size_t(mainRoute_[0])]);
 }
 
 // Build spot near `near`: valid placement with a one-cell gap, off the lanes between dropoffs and resources,

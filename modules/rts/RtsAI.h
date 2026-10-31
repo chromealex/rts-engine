@@ -56,6 +56,7 @@ private:
     int pickUnit(Simulation& sim, RtsModule& m, const std::vector<uint16_t>& opts);
     bool planetOps(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy);
     void refreshBases(Simulation& sim, RtsModule& m);
+    bool expand(Simulation& sim, RtsModule& m, const std::vector<int>& count);   // a dropoff at the next resource when the near ones are gone
     bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0, const Vec3* at = nullptr);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
@@ -80,7 +81,7 @@ private:
     bool configured_ = false;
     int retreatPct_ = 35, holdSec_ = 30, crowdFree_ = 5, crowdCost_ = 6;
     uint32_t rallyTick_ = 0, lastSiteTick_ = 0;
-    uint32_t allInTick_ = 0, spotRetryTick_ = 0;
+    uint32_t allInTick_ = 0, spotRetryTick_ = 0, expandTick_ = 0;
     bool raided_ = false;            // enemies came to our base at least once
     std::shared_ptr<const AITerrain> terr_;   // immutable once built (copies of the bot share it)
     Vec3 home_{}, enemyHome_{};
