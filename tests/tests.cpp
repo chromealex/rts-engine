@@ -10149,6 +10149,90 @@ TEST(ui_lua_meta_and_templates) {
     lua_close(L);
 }
 
+
+// Native extensions share the same snapshot/save/replay path as Lua and RTS state.
+namespace {
+class NativeProbe final : public game::NativeModule {
+public:
+    void setup(game::RtsModule&, Simulation&, game::NativeState& s, const Json& cfg) const override {
+        s.values["value"] = cfg.getInt("initial", 2);
+        s.arrays["history"] = {7, 9};
+    }
+    void tick(game::RtsModule&, Simulation& sim, game::NativeState& s) const override {
+        s.values["value"] += sim.rng().next() % 7;
+        s.arrays["history"].push_back(sim.tick());
+    }
+    void command(game::RtsModule&, Simulation&, game::NativeState& s, const Command& c) const override {
+        if (c.param < 0 || c.param > 10) return;
+        s.values["commands"] += c.param;
+    }
+};
+std::unique_ptr<game::NativeModule> nativeProbe() { return std::make_unique<NativeProbe>(); }
+std::unique_ptr<Simulation> nativeSim(const std::string& list, uint32_t version = 1, bool lua = true) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("nativeModules", Json::parse(list));
+    if (lua) {
+        rules.set("scripts", Json::parse(R"(["test.lua"])"));
+        rules.set("$scriptSources", Json::parse(R"json({"test.lua":"every(1, function() state.n = (state.n or 0) + 1 end)"})json"));
+    }
+    std::vector<game::NativeDefinition> defs{{"probe", version, nativeProbe}, {"other", 1, nativeProbe}};
+    auto sim = std::make_unique<Simulation>(SimConfig{}, std::make_unique<game::RtsModule>(std::move(defs)));
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    return sim;
+}
+const char* kNativeProbe = R"([{"id":"probe","command":32768,"config":{"initial":5}}])";
+}
+TEST(native_modules_rollback_save_lua_commands) {
+    auto a = nativeSim(kNativeProbe), b = nativeSim(kNativeProbe);
+    Command c; c.tick = 1; c.type = 32768; c.player = 1; c.param = 3; c.seq = 1;
+    a->inject(c); b->inject(c);
+    c.player = 0; c.seq = 2; a->inject(c); b->inject(c); // invalid player
+    c.player = 1; c.param = -1; c.seq = 3; a->inject(c); b->inject(c); // invalid payload
+    c.param = 8; c.type = 32769; c.seq = 4; a->inject(c); b->inject(c); // unassigned command
+    SimSnapshot before; a->saveState(before);
+    for (int i = 0; i < 30; ++i) { a->step(); b->step(); CHECK(a->checksum() == b->checksum()); }
+    CHECK(a->world().resource<game::NativeStore>()->modules[0].values.at("commands") == 3);
+    CHECK(mod(*a).scripts()->hasUserScripts() && mod(*a).scripts()->errorCount() == 0);
+    const auto expected = a->checksum();
+    auto replay = nativeSim(kNativeProbe);
+    for (const auto& executed : a->executedCommands()) replay->inject(executed);
+    for (int i = 0; i < 30; ++i) replay->step();
+    CHECK(replay->checksum() == expected);
+    const auto saved = a->serialize(); CHECK(!saved.empty());
+    a->loadState(before);
+    for (int i = 0; i < 30; ++i) a->step();
+    CHECK(a->checksum() == expected);
+    auto restored = nativeSim(kNativeProbe);
+    std::string err;
+    CHECK(restored->deserialize(saved, &err)); CHECK(restored->checksum() == expected);
+    for (int i = 0; i < 25; ++i) { restored->step(); a->step(); CHECK(restored->checksum() == a->checksum()); }
+    auto different = nativeSim(kNativeProbe, 2);
+    CHECK(!different->deserialize(saved, &err));
+    auto config = nativeSim(R"([{"id":"probe","command":32768,"config":{"initial":6}}])");
+    CHECK(!config->deserialize(saved, &err));
+    auto plain = nativeSim("[]"); CHECK(!plain->deserialize(saved, &err));
+    auto damaged = nativeSim(kNativeProbe); CHECK(!damaged->deserialize(saved.substr(0, saved.size() / 2), &err));
+}
+TEST(native_modules_validation_and_isolation) {
+    for (const auto* bad : {"{}", R"([{}])", R"([{"id":"missing"}])", R"([{"id":"probe"},{"id":"probe"}])",
+         R"([{"id":"probe","config":[]}])", R"([{"id":"probe","command":12}])",
+         R"([{"id":"probe","command":32768.5}])", R"([{"id":"probe","command":65536}])",
+         R"([{"id":"probe","command":32768},{"id":"other","command":32768}])"}) {
+        bool failed = false;
+        try { auto s = nativeSim(bad); } catch (const std::runtime_error&) { failed = true; }
+        CHECK(failed);
+    }
+    auto a = nativeSim(R"([{"id":"probe"},{"id":"other","config":{"initial":8}}])");
+    auto& states = a->world().resource<game::NativeStore>()->modules;
+    CHECK(states.size() == 2 && states[0].values.at("value") == 2 && states[1].values.at("value") == 8);
+    auto hash = a->checksum(); states[1].arrays["history"].push_back(100); CHECK(hash != a->checksum());
+    auto empty = nativeSim("[]", 1, false);
+    auto plain = makeSim(kSkirmish, "maps/valley.json", 1);
+    CHECK(empty->checksum() == plain->checksum());
+    CHECK(empty->serialize() == plain->serialize());
+    CHECK(!empty->world().resource<game::NativeStore>());
+}
+
 int main(int argc, char** argv) {
     for (auto& [name, fn] : registry()) {
         if (argc > 1 && std::string(name).find(argv[1]) == std::string::npos) continue;   // rts_tests [name filter]
