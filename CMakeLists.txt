@@ -119,7 +119,9 @@ add_library(rts_game STATIC
     modules/rts/RtsFidelityData.cpp
     modules/rts/RtsFidelity.cpp
     modules/rts/RtsAIOriginals.cpp
-    modules/rts/RtsAIFidelity.cpp)
+    modules/rts/RtsAIFidelity.cpp
+    modules/rts/RtsAITerrain.cpp
+    modules/rts/RtsAITactics.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
 include(modules/rts/native/Build.cmake)
 # agent-mech: mechanics of the top-100 strategy games plan (stances, transports, ...)

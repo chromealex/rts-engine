@@ -244,7 +244,9 @@ void RtsModule::sysProduction(Simulation& sim) {
             sim.emit({kEvReadyToPlace, d.owner, d.producer, kNullEntity, type, w.get<Transform>(d.producer).pos});
             continue;
         }
-        Vec3 spot = freeSpotNear(sim, d.producer, nt.pathLayer);
+        const auto& pr = w.get<Production>(d.producer);
+        const Vec3 rallyAt = w.alive(pr.rallyTarget) ? w.get<Transform>(pr.rallyTarget).pos : pr.rally;
+        Vec3 spot = freeSpotNear(sim, d.producer, nt.pathLayer, pr.hasRally && !surface(sim) ? &rallyAt : nullptr);
         eco.typeCountAll[type]--; // counted while queued; spawn() counts the unit itself
         Entity n = spawn(sim, type, d.owner, spot);
         sim.emit({kEvTrainDone, d.owner, n, d.producer, type, spot});

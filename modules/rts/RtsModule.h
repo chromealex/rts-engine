@@ -554,7 +554,8 @@ public:
     Fixed contactDistance(Simulation& sim, Entity a, Entity b);
     bool pay(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed supply, bool emitFail = true);
     void refund(Simulation& sim, uint8_t player, const std::vector<Amount>& cost, Fixed fraction);
-    Vec3 freeSpotNear(Simulation& sim, Entity structure, uint8_t layer);
+    // free cell around a structure; with `toward` (a rally point) the free cell of the first ring closest to it
+    Vec3 freeSpotNear(Simulation& sim, Entity structure, uint8_t layer, const Vec3* toward = nullptr);
     void recomputeMods(Simulation& sim, uint8_t player);
     void castAbility(Simulation& sim, Entity caster, int index, Entity target, Vec3 point);
     bool canCast(Simulation& sim, Entity caster, int index) const;

@@ -407,6 +407,14 @@ struct HeightRules {
     Fixed damagePerLevel{};                   // multiplier added per level of advantage
 };
 
+// Computer player knobs (rules "ai" block, agent-ai-terrain): -1 / unset = the bot's defaults (RtsAI.h AIConfig).
+struct AIRules {
+    int workersPerBase = -1, firstAttackArmy = -1, armyGrowth = -1, maxAttackArmy = -1;
+    int towers = -1, scouts = -1, invasionSize = -1, climbWeight = -1, exposureWeight = -1;
+    int escalateSeconds = -1;
+    int terrain = -1;                         // 0 / 1
+};
+
 // Terrain model (rules "terrain" block; visual keys there belong to the view and are ignored here).
 //   levels (default): cliff levels + ramps, exactly the classic behaviour; flat: levels ignored (all 0);
 //   heightfield: map corners drive surface height, slope passability, uphill speed, line of sight.
@@ -544,6 +552,7 @@ struct Rules {
     Fixed autoBuildGrowth{};                  // cost grows by x per structure already auto-built
     VictoryRules victory;
     HeightRules heights;
+    AIRules ai;
     FogRules fog;
     TerrainRules terrain;
     RegionRules regions;

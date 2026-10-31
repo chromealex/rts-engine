@@ -857,7 +857,7 @@ Fixed RtsModule::contactDistance(Simulation& sim, Entity a, Entity b) {
     return fxMax(dist2D(ta->pos, tb->pos) - A.radius - B.radius, Fixed{});
 }
 
-Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer) {
+Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer, const Vec3* toward) {
     World& w = sim.world();
     GameState& gs = state(sim);
     Vec3 c = w.get<Transform>(s).pos;
@@ -880,10 +880,13 @@ Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer) {
                 }
         return c;
     }
+    bool any = false;
+    Vec3 best{};
+    Fixed bestD{};
     int x0, y0; state(sim).grid.cellXY(c, x0, y0);
     int fw = 1, fh = 1;
     if (auto* f = w.tryGet<Footprint>(s)) { x0 = f->x; y0 = f->y; fw = f->w; fh = f->h; }
-    for (int ring = 0; ring < 10; ++ring)
+    for (int ring = 0; ring < 10; ++ring) {
         for (int y = y0 - 1 - ring; y <= y0 + fh + ring; ++y)
             for (int x = x0 - 1 - ring; x <= x0 + fw + ring; ++x) {
                 bool edge = x == x0 - 1 - ring || x == x0 + fw + ring || y == y0 - 1 - ring || y == y0 + fh + ring;
@@ -893,8 +896,14 @@ Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer) {
                 gs.hash.query(cc, kOne, [&](Entity o) {
                     if (auto* t = w.tryGet<Transform>(o); t && dist2D(t->pos, cc) < Fixed::fromRatio(6, 10) && w.has<Mobile>(o)) occupied = true;
                 });
-                if (!occupied) return cc;
+                if (occupied) continue;
+                if (!toward) return cc;
+                // rally point set: the side of the structure facing it (mirrored bases spawn alike)
+                const Fixed d = dist2D(cc, *toward);
+                if (!any || d < bestD) { any = true; best = cc; bestD = d; }
             }
+        if (any) return best;
+        }
     return c;
 }
 

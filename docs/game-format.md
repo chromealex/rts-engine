@@ -61,6 +61,7 @@ Optional `"camera"` block (2D games, see "2D games" below):
 | `roadNetwork` | `{"cost": {"stone": 1}, "speed": 1.5, "required": true}` — player-built road cells (map char `+`), faster movement, deliveries only between buildings on one network |
 | `movement` | `{"avoidance": "rvo", "neighbors": 8, "timeHorizon": 1.5}` — local avoidance between moving units: `rvo` (default, ORCA velocity obstacles in fixed point, idle allies step aside) or `simple` (separation only); `neighbors` = agents considered per unit (quality/cost knob), `timeHorizon` in seconds. See "Movement and bodies" |
 | `lanes` | `{"left": 4, "right": 2, "spacing": 0.35}` — Mushroom Wars 2 lanes between garrison buildings (replaces map `roads` for sends) |
+| `ai` | `{"towers": 1, "scouts": 1, "invasionSize": 6, "escalateSeconds": 300, "climbWeight": 24, "exposureWeight": 12, "terrain": true, "workersPerBase": 14, "firstAttackArmy": 8, "armyGrowth": 4, "maxAttackArmy": 16}` — computer player knobs, every key optional (defaults shown): `towers` defensive structures at the chokepoint toward the enemy once the base was raided (0 = none); `scouts` units holding a watch post on high ground along the attack route; `invasionSize` orbit units gathered before a fleet transfers to another body (planets); `escalateSeconds` no enemy structure destroyed for this long (after 8 min) raises the stalemate level (bigger waves, a little more range in the unit mix, economy targets, alternate routes, at level 3 no retreat); `climbWeight` / `exposureWeight` route cost per level climbed / per level of higher ground overlooking a cell (10 = one cell); `terrain: false` turns the terrain analysis off (direct attack-moves). See "Computer player" |
 
 ## resources
 
@@ -2195,3 +2196,35 @@ any overlay regardless of its `when`.
 `game.json` and maps can have a `"postfx"` block: a list of full-screen effects (bloom, colour
 grading, LUT, vignette, tilt-shift, sun shafts, FXAA, grain, ...) with quality tiers and a frame-cost
 model. Format, parameters, tiers and MCP tools: `docs/postfx.md`.
+
+## Computer player (`RtsAI`, agent-ai-terrain)
+
+The bot reads the state and submits commands like a player (replays don't re-run it). Generic for every template;
+knobs in rules `ai` (above). What it does with the terrain:
+
+- **Analysis at match start** (`RtsAITerrain.*`, integer, rebuilt identically after loading a save): per cell the
+  elevation in height-advantage units (cliff level, or heightfield / planet height divided by `levelHeight`), the
+  walkable mask of the ground layer (terrain only), corridor width (steps to the nearest wall: chokepoints), `over`
+  (how far higher ground within 4 cells rises above the cell) and `crest` (prominence). Flat maps, heightfields and
+  cube-sphere planets (neighbours across face seams) alike.
+- **Routes**: weighted Dijkstra from our base to the nearest enemy base: climbing into the enemy and cells overlooked
+  by higher ground cost extra (`climbWeight`, `exposureWeight`), so waves come through saddles and ramps instead of
+  up a ridge under fire; an alternate route avoids the main corridor (used on odd waves when stalemated).
+- **Posts on the route**: rally point on the highest well-covered ground 9-14 steps out of the base (the army waits
+  there, producers rally there); the narrowest cell on our side (towers after a raid); a watch post on the most
+  prominent ground in the middle of the route for a scout (vision over ridges). Idle units are not re-sent to the
+  rally point (a unit walking back would not count as ready for the next wave).
+- **Waves** follow waypoints every 12 cells, stop at a siege spot on high ground short of the target, then attack;
+  they hold up to 30 s instead of charging uphill into a stronger enemy (and pull in reinforcements), retreat to the
+  rally point below 25% of their start size without a kill (until stalemate level 3), launch early with what is at
+  home when our army is twice the enemy's whole armed force, stop at a stuck-wave watchdog (30 s without moving), retarget the next structure, attack construction sites by name.
+- **Economy guards**: own build spots (lanes between dropoffs and resources kept free, the rally area kept free,
+  random tie-breaks), stuck builders released and their spots avoided, the first army producer early, converters
+  (metal makers) only with a surplus, one more producer when resources float, expansion (a dropoff at the next
+  node) when the near nodes are gone, workers spread over crowded nodes and spawned on the side of their resource.
+- **Planets**: an orbit fleet (`invasionSize` + 2 per invasion) transfers together to the body with enemy
+  structures and fights there until the body is clear, then the next body; more orbital yards when the enemy can be
+  reached only through orbit; towers that hit the orbit when attacks come from there.
+- **Save states**: `RtsAI::saveState()` / `loadState()` (headless `--save F` writes `F.ai` next to the sim state,
+  `--load F` reads it): a restored bot plays on exactly like the saved one.
+

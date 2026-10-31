@@ -154,6 +154,20 @@ Rules loadRules(const Json& j) {
         r.heights.damagePerLevel = h.getFx("damagePerLevel");
     }
 
+    if (const Json& a = j["ai"]; a.isObject()) {   // computer player knobs (agent-ai-terrain)
+        auto num = [&](const char* k, int& out, int lo, int hi) {
+            if (!a.has(k)) return;
+            const int64_t v = a.getInt(k, -1);
+            if (v < lo || v > hi) throw std::runtime_error(std::string("ai.") + k + ": expected " + std::to_string(lo) + ".." + std::to_string(hi));
+            out = int(v);
+        };
+        num("workersPerBase", r.ai.workersPerBase, 0, 200); num("firstAttackArmy", r.ai.firstAttackArmy, 1, 500);
+        num("armyGrowth", r.ai.armyGrowth, 0, 100); num("maxAttackArmy", r.ai.maxAttackArmy, 1, 1000);
+        num("towers", r.ai.towers, 0, 16); num("scouts", r.ai.scouts, 0, 8); num("invasionSize", r.ai.invasionSize, 1, 200);
+        num("climbWeight", r.ai.climbWeight, 0, 1000); num("exposureWeight", r.ai.exposureWeight, 0, 1000);
+        num("escalateSeconds", r.ai.escalateSeconds, 30, 36000);
+        if (a.has("terrain")) r.ai.terrain = a.getBool("terrain", true) ? 1 : 0;
+    }
     if (const Json& tr = j["terrain"]; tr.isObject()) { // other keys of the block are visual (view)
         std::string model = tr.getStr("model", "levels");
         if (model == "levels") r.terrain.model = TerrainModel::Levels;

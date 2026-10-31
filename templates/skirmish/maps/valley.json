@@ -83,7 +83,7 @@
     {"type": "peasant", "owner": 1, "pos": [12.8, 27.8]},
     {"type": "farm", "owner": 1, "pos": [14, 20]},
     {"type": "townhall", "owner": 2, "pos": [55, 24]},
-    {"type": "goldmine", "owner": 0, "pos": [58, 16]},
+    {"type": "goldmine", "owner": 0, "pos": [57, 16]},
     {"type": "peasant", "owner": 2, "pos": [52.0, 27.0]},
     {"type": "peasant", "owner": 2, "pos": [51.2, 27.0]},
     {"type": "peasant", "owner": 2, "pos": [50.4, 27.0]},
