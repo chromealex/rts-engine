@@ -64,7 +64,7 @@ void RtsAI::applyRulesConfig(RtsModule& m) {
         auto get = [&](const char* k, int& out) { auto p = v.find(std::string(k) + "="); if (p != std::string::npos) out = std::atoi(v.c_str() + p + std::strlen(k) + 1); };
         int t = cfg_.terrain ? 1 : 0, esc = int(cfg_.escalateSeconds);
         get("towers", cfg_.towers); get("scouts", cfg_.scouts); get("terrain", t); get("esc", esc); get("first", cfg_.firstAttackArmy);
-        get("retreat", retreatPct_); get("hold", holdSec_);
+        get("retreat", retreatPct_); get("crowd", crowdFree_); get("crowdcost", crowdCost_); get("hold", holdSec_);
         cfg_.terrain = t != 0; cfg_.escalateSeconds = uint32_t(esc);
     }
 }
