@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -357,6 +358,11 @@ void Editor::syncGrid() {
     grid_.corner = d.corners;
     for (int i = 0; i < d.w * d.h; ++i) {
         grid_.flags[size_t(i)] = game::cellFlagsFromChar(d.cells[size_t(i)]);
+        // diggable rock (rules "diggable"): solid cells drawn as rock blocks, like the client does
+        const int dk = rules().findDiggable(d.cells[size_t(i)]);
+        grid_.dig[size_t(i)] = dk >= 0 ? uint8_t(dk + 1) : 0;
+        grid_.digHp[size_t(i)] = dk >= 0 ? rules().diggables[size_t(dk)].hardness : Fixed{};
+        if (dk >= 0) grid_.flags[size_t(i)] = 0;
         grid_.height[size_t(i)] = d.heights[size_t(i)];
         grid_.level[size_t(i)] = d.levels[size_t(i)];
         grid_.region[size_t(i)] = d.regions[size_t(i)] == '.' ? int16_t(-1) : int16_t(d.regions[size_t(i)]);
@@ -364,6 +370,21 @@ void Editor::syncGrid() {
         grid_.fieldRes[size_t(i)] = fr >= 0 ? int16_t(std::max(0, rules().findResource(d.fieldResources[size_t(fr)]))) : int16_t(-1);
         grid_.fieldAmt[size_t(i)] = Fixed::fromInt(d.fieldAmt[size_t(i)]);
     }
+    // starting territory (rules territory.startRadius around owned structures), so the scene shows the claimed floor
+    std::fill(grid_.territory.begin(), grid_.territory.end(), uint8_t(0));
+    if (const int r = rules().territory.startRadius; rules().territory.enabled && r > 0 && !d.planet())
+        for (const auto& e : d.entities) {
+            const int ti = rules().findType(e.type);
+            if (e.owner <= 0 || e.owner > 8 || ti < 0 || !rules().types[size_t(ti)].structure) continue;
+            const game::UnitType& t = rules().types[size_t(ti)];
+            int x0, y0; game::RtsModule::footprintAt(t, {Fixed::fromRatio(int64_t(std::lround(e.x * 1000)), 1000), Fixed{}, Fixed::fromRatio(int64_t(std::lround(e.z * 1000)), 1000)}, x0, y0);   // editor only: float -> fixed
+            for (int y = y0 - r; y < y0 + t.footprintH + r; ++y)
+                for (int x = x0 - r; x < x0 + t.footprintW + r; ++x) {
+                    if (!grid_.inside(x, y)) continue;
+                    const size_t i = size_t(grid_.index(x, y));
+                    if ((grid_.flags[i] & game::kCellGround) && !grid_.territory[i]) grid_.territory[i] = uint8_t(e.owner);
+                }
+        }
     view_.setTiles(d.extra["tiles"]);
     {   // planets: the world block (MapDoc bodies); sculpt / paint rebuild only what changed
         const Json world = d.planet() ? doc().worldJson() : Json();
