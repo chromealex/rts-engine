@@ -123,6 +123,7 @@ add_library(rts_game STATIC
     modules/rts/RtsAITerrain.cpp
     modules/rts/RtsAITactics.cpp)
 target_link_libraries(rts_game PUBLIC rts_engine)
+include(modules/rts/native/Build.cmake)
 # agent-mech: mechanics of the top-100 strategy games plan (stances, transports, ...)
 file(GLOB RTS_MECH_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/RtsMech*.cpp)
 target_sources(rts_game PRIVATE ${RTS_MECH_SOURCES} modules/rts/RtsSave.cpp modules/rts/RtsCampaign.cpp   # + save states, campaigns
@@ -911,3 +912,8 @@ if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/ScriptOps.cpp)
 endif()
 target_sources(rts_game_view PRIVATE modules/rts/view/RtsViewScript.cpp)
+
+# Project-local C++ module build selection (no graphics or game execution).
+if(RTS_BUILD_TESTS AND Python3_Interpreter_FOUND)
+    add_test(NAME native_project_build COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_project_build.py ${CMAKE_COMMAND})
+endif()

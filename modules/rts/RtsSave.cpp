@@ -15,7 +15,8 @@ namespace rts::game {
 void io(Archive& a, Unit& x) { a(x.type, x.hp, x.flags, x.lastAttacker, x.facing, x.energy); }
 void io(Archive& a, Order& x) { a(x.type, x.target, x.point, x.point2, x.param, x.state, x.timer, x.flow); }
 void io(Archive& a, Orders& x) { a(x.queue); }
-void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck); }
+void io(Archive& a, Mobile& x) { a(x.path, x.pathPos, x.goal, x.moving, x.goalRadius, x.stuck, x.roadPath, x.vel, x.yieldHome, x.yieldUntil, x.yielded, x.flow, x.flowRadius, x.flowStuck,
+                                      x.flowGoalCell, x.flowArea, x.flowNear, x.flowArrived); }
 void io(Archive& a, Combat& x) { a(x.cooldown, x.target, x.acquireTimer, x.autoTarget, x.chargeTarget, x.chargeStart, x.slotTarget, x.slot, x.slotTick, x.slotPos); }
 void io(Archive& a, Cargo& x) { a(x.res, x.amount, x.lastNode, x.lastPos, x.field); }
 void io(Archive& a, ProdItem& x) { a(x.item, x.progress, x.paid, x.upgrade); }
@@ -161,6 +162,7 @@ void ioState(Archive& a, GameState& s) {
     ioRle(a, s.vision);
     a(s.visibleCells, s.fogMode);
     ioRle(a, s.visionBase); ioRle(a, s.visionOcc);
+    if (!a.writing()) s.visionToken = 0;   // a loaded state never matches a vision cache (RtsVision.cpp)
     a(s.regionCount, s.regionOwner, s.regionAdj, s.regionNames, s.regionCenter, s.victory, s.tickets, s.wavePlayers, s.waves, s.fieldsDirty,
       s.nextWaveTick, s.score, s.autoBuilt, s.winnerTeam, s.trig, s.territoryCells, s.territoryTotal, s.territoryDirty, s.roomZones, s.roomCells,
       s.roomsDirty, s.hand, s.possessed, s.playerAbilities, s.nextGroupId);
@@ -209,6 +211,7 @@ bool RtsModule::serializeState(Simulation& sim, Archive& a) {
     if (!a.writing() && pools != kPools::count) { a.fail(); return false; }
     kPools::run(a, w);
     ioState(a, gs);
+    if (!native_.serialize(sim, a)) return false;
     // Lua state of games with their own scripts (the standard library keeps its state in GameState)
     if (auto* ss = w.resource<ScriptStore>(); ss && ss->userScripts) {
         io(a, *ss);
