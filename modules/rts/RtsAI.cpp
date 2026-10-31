@@ -316,17 +316,32 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
     std::vector<int> count(R.types.size(), 0);
     std::vector<Entity> idleWorkers;
     int workers = 0, building = 0;
+    std::vector<Entity> sitesHere;
     w.each<Unit, Owner>([&](Entity e, Unit& u, Owner& o) {
         if (o.player != player_) return;
         const UnitType& t = R.types[u.type];
         count[u.type]++;
-        if (u.flags & kUnitUnderConstruction) ++building;
+        if (u.flags & kUnitUnderConstruction) {
+            // abandoned sites (nobody builds them) don't hold up the build order; they are resumed below
+            auto* cs = w.tryGet<Construction>(e);
+            if (!cs || cs->selfBuild) ++building;
+            else sitesHere.push_back(e);
+        }
         if (t.worker) {
             ++workers;
             auto* ord = w.tryGet<Orders>(e);
             if (ord && ord->queue.empty() && controllable(w, e, u)) idleWorkers.push_back(e);
         }
     });
+    if (!sitesHere.empty())
+        w.each<Orders, Owner>([&](Entity, Orders& ord, Owner& o) {
+            if (o.player != player_ || ord.queue.empty() || ord.queue.front().type != OrderType::Build) return;
+            if (std::find(sitesHere.begin(), sitesHere.end(), ord.queue.front().target) != sitesHere.end()) {
+                ++building;
+                if (getenv("AIDBG3") && sim.tick() % 400 < 15) { Entity t = ord.queue.front().target; auto& cs = w.get<Construction>(t); std::fprintf(stderr, "  site %s at %.1f,%.1f progress %.2f state %d\n", R.types[w.get<Unit>(t).type].id.c_str(), w.get<Transform>(t).pos.x.toDouble(), w.get<Transform>(t).pos.z.toDouble(), cs.progress.toDouble(), ord.queue.front().state); }
+                sitesHere.erase(std::remove(sitesHere.begin(), sitesHere.end(), ord.queue.front().target), sitesHere.end());
+            }
+        });
 
     // 7) military production buildings (and the tech they require); firstOnly: only while there is none
     auto armyProducer = [&](bool firstOnly) -> bool {
@@ -343,7 +358,19 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             if (m.canTrain(sim, player_, uint16_t(ti)) || !m.requirementsMet(sim, player_, t.requires_)) candidates.push_back(uint16_t(ti));   // own faction
         }
         if (firstOnly && milProducers > 0) return false;
-        int want = 1 + workers / 6 + std::min(escalation_, 2);
+        int want = 1 + workers / 6;
+        // floating resources with every producer busy: one more producer (no stalemate on a full bank)
+        {
+            bool allBusy = true;
+            w.each<Production, Unit, Owner>([&](Entity, Production& p, Unit& u, Owner& o) {
+                if (o.player == player_ && R.types[u.type].structure && !R.types[u.type].produces.empty() && p.queue.empty() && !(u.flags & kUnitUnderConstruction)) allBusy = false;
+            });
+            if (allBusy && !candidates.empty()) {
+                std::vector<Amount> twice = R.types[candidates[0]].cost;
+                for (auto& a : twice) a.value = a.value * 3;
+                if (m.canAfford(sim, player_, twice)) want = std::max(want, milProducers + 1);
+            }
+        }
         if (m.surface(sim)) {   // planets: one of each producer kind first (an orbital yard opens the other bodies)
             std::vector<uint16_t> missingKinds;
             for (uint16_t c : candidates) if (count[c] == 0) missingKinds.push_back(c);
@@ -443,7 +470,8 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
 
     const bool canBuildNow = sim.tick() > lastBuildTick_ + 60;
     // abandoned construction sites (builder killed or re-tasked): send a worker back
-    if (sim.tick() % 100 == 0) {
+    if (sim.tick() >= lastSiteTick_ + 100) {   // (think ticks are jittered: a modulo test would rarely hit)
+        lastSiteTick_ = sim.tick();
         std::vector<Entity> sites, busy;
         w.each<Construction, Owner>([&](Entity e, Construction& c, Owner& o) { if (o.player == player_ && !c.selfBuild) sites.push_back(e); });
         w.each<Orders, Owner>([&](Entity, Orders& ord, Owner& o) {
@@ -587,6 +615,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             for (uint16_t rq : missing) if (build(sim, m, rq)) return;
     }
     // 7) military production buildings (and the tech they require)
+    if (getenv("AIDBG3") && sim.tick() % 400 < 15) std::fprintf(stderr, "t=%u p%d step7 last=%u building=%d sup=%d/%d\n", sim.tick() / sim.tickRate(), player_, lastBuildTick_ / sim.tickRate(), building, int(eco.supplyUsed.toInt()), int(eco.supplyCap.toInt()));
     if (sim.tick() > lastBuildTick_ + 100 && building == 0 && armyProducer(false)) return;
     // 8) towers at the chokepoint toward the enemy (agent-ai-terrain), once the army is under way
     if (sim.tick() > lastBuildTick_ + 100 && building == 0 && sim.tick() > 240 * sim.tickRate() && wave_ > 0) buildTowers(sim, m);

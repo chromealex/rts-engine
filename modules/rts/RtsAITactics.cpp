@@ -251,6 +251,7 @@ bool RtsAI::findSpot(Simulation& sim, RtsModule& m, uint16_t type, Vec3 near, in
             bool bad = false;
             for (auto& [c, until] : badSpots_) if (until > now && c == pc) bad = true;
             if (bad || !m.canPlace(sim, player_, type, p)) continue;
+            if (!defensive && hasRally_ && dist(p, rally_) < Fixed::fromInt(5)) continue;   // the army gathers there
             const Vec2 d = S ? S->toPlane(near, p - near).xz() : (p - near).xz();
             int64_t score = (d.length() * 16).toInt();
             if (defensive) {
@@ -273,10 +274,37 @@ void RtsAI::watchBuilders(Simulation& sim, RtsModule& m) {
     w.each<Unit, Owner, Orders>([&](Entity e, Unit&, Owner& o, Orders& ord) {
         if (o.player != player_ || ord.queue.empty()) return;
         const Order& f = ord.queue.front();
-        if (f.type != OrderType::Build || f.target.valid() || f.state > 1) return;
-        StuckBuild sb{e.packed(), now, f.point};
+        if (f.type != OrderType::Build) return;
+        if (f.target.valid()) {
+            // building but no progress (the builder can't get to the site, our own idle units stand around it):
+            // clear the idle units off after 15 s, give up on the site after 60 s
+            auto* cs = w.tryGet<Construction>(f.target);
+            if (!cs || !w.alive(f.target)) return;
+            StuckBuild sb{e.packed(), now, w.get<Transform>(f.target).pos, cs->progress};
+            for (auto& old : buildWatch_)
+                if (old.entity == sb.entity && old.point == sb.point && old.progress == sb.progress) sb.since = old.since;
+            if (now > sb.since + 15 * sim.tickRate() && now <= sb.since + 15 * sim.tickRate() + cfg_.thinkTicks * 2) {
+                std::vector<Entity> off;
+                w.each<Unit, Owner, Transform, Orders>([&](Entity u, Unit& uu, Owner& uo, Transform& ut, Orders& uord) {
+                    if (uo.player != player_ || u == e || m.rules().types[uu.type].structure || !uord.queue.empty()) return;
+                    if (dist(ut.pos, sb.point) < Fixed::fromInt(4)) off.push_back(u);
+                });
+                if (!off.empty()) {
+                    Vec3 away = hasRally_ && dist(rally_, sb.point) > Fixed::fromInt(6) ? rally_ : home_;
+                    Command c; c.type = kCmdMove; c.units = off; c.point = away; send(sim, c);
+                }
+            }
+            if (now > sb.since + 60 * sim.tickRate()) {
+                Command c; c.type = kCmdStop; c.units = {e}; send(sim, c);
+                return;
+            }
+            next.push_back(sb);
+            return;
+        }
+        if (f.state > 1) return;
+        StuckBuild sb{e.packed(), now, f.point, Fixed{}};
         for (auto& old : buildWatch_)
-            if (old.entity == sb.entity && old.point == f.point) sb.since = old.since;
+            if (old.entity == sb.entity && old.point == f.point && old.progress.raw == 0) sb.since = old.since;
         if (now > sb.since + limit) {
             Command c; c.type = kCmdStop; c.units = {e}; send(sim, c);
             badSpots_.push_back({m.state(sim).grid.cellOf(f.point), now + 180 * sim.tickRate()});
@@ -303,7 +331,8 @@ bool RtsAI::buildTowers(Simulation& sim, RtsModule& m) {
         if (t.structure && !t.weapons.empty() && t.produces.empty()) ++towers;
         for (uint16_t b : t.builds) canBuild[b] = 1;
     });
-    if (towers >= cfg_.towers + std::min(escalation_, 2)) return false;
+    // only after the enemy came to our base, and not in a stalemate (towers there only make it last)
+    if (towers >= cfg_.towers || !raided_ || escalation_ > 0) return false;
     const uint8_t want = enemyOffBody_ ? kLayerOrbit : kLayerGround;
     int pick = -1;
     int64_t bestCost = 0;
@@ -338,7 +367,7 @@ int RtsAI::pickUnit(Simulation& sim, RtsModule& m, const std::vector<uint16_t>& 
     for (uint16_t o : opts) if (R.types[o].layer & kLayerOrbit) anyOrbit = true;
     for (size_t i = 0; i < opts.size(); ++i) {
         const UnitType& t = R.types[opts[i]];
-        if (escalation_ > 0) wt[i] += bestRange(t).toInt() * escalation_;
+        if (escalation_ > 0 && !t.structure) wt[i] += bestRange(t).toInt() / 2;   // stalemate: a little more reach
         if (enemyOffBody_ && anyOrbit) wt[i] = (t.layer & kLayerOrbit) ? wt[i] * 12 : 1;
     }
     int64_t total = 0;
@@ -452,7 +481,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     if (enemyStructsSeen_ >= 0 && enemyStructs < enemyStructsSeen_) lastKillTick_ = now;
     enemyStructsSeen_ = enemyStructs;
     const uint32_t calm = std::max(lastKillTick_, lastEscalateTick_);
-    if (now > 360 * rate && now > calm + cfg_.escalateSeconds * rate && escalation_ < 3) { ++escalation_; lastEscalateTick_ = now; }
+    if (now > 480 * rate && now > calm + cfg_.escalateSeconds * rate && escalation_ < 3) { ++escalation_; lastEscalateTick_ = now; }
 
     if (S) planetOps(sim, m, idleArmy);
     std::vector<Entity> home, homeIdle;
@@ -478,6 +507,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 if (dist(p, tr.pos) < Fixed::fromInt(14)) { sum += tr.pos; ++n; threat += strengthOf(t, u); return; }
         });
         if (n > 0) {
+            if (n >= 3) raided_ = true;
             const Vec3 at = sum / Fixed::fromInt(n);
             std::vector<Entity> go;
             int64_t ours = 0;
@@ -498,7 +528,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     }
 
     // ---- waves
-    int needed = defend ? 1 : std::min(cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth, cfg_.maxAttackArmy + escalation_ * 6);
+    int needed = defend ? 1 : std::min(cfg_.firstAttackArmy + wave_ * cfg_.armyGrowth, cfg_.maxAttackArmy + escalation_ * 4);
     auto& eco = gs.players[player_];
     const bool maxed = eco.supplyCap.raw > 0 && eco.supplyUsed * 10 >= eco.supplyCap * 9 && eco.supplyCap * 10 >= R.supplyCap * 8;
     if (maxed) needed = std::min(needed, std::max(4, int(home.size()) * 3 / 4));
@@ -523,7 +553,6 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             Command mv; mv.type = kCmdMove; mv.units = wave_units_; mv.point = hasRally_ ? rally_ : home_; send(sim, mv);
             wave_units_.clear(); waypoints_.clear();
             ++failedWaves_;
-            if (failedWaves_ % 2 == 0 && escalation_ < 3) { ++escalation_; lastEscalateTick_ = now; }
         } else if (n > 0 && wp_ < waypoints_.size()) {
             const Vec3 wp = waypoints_[wp_];
             const Fixed nearR = Fixed::fromInt(5) + fxSqrt(Fixed::fromInt(n));

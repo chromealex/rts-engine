@@ -22,7 +22,7 @@ struct AIConfig {
     bool terrain = true;          // terrain analysis: high-ground rally / siege spots, routes, watch posts, chokepoint towers
     int climbWeight = 24;         // route cost per level climbed (x10 = one cell)
     int exposureWeight = 12;      // route cost per level of higher ground overlooking a cell
-    int towers = 2;               // defensive structures at the chokepoint toward the enemy (0 = none)
+    int towers = 1;               // defensive structures at the chokepoint toward the enemy once raided (0 = none)
     int scouts = 1;               // units holding watch posts on high ground
     uint32_t escalateSeconds = 300; // no enemy structure destroyed for this long: escalate (bigger waves, siege, economy targets)
     int invasionSize = 6;         // planets: orbit units gathered before an invasion of another body
@@ -79,7 +79,8 @@ private:
     // ---- agent-ai-terrain
     bool configured_ = false;
     int retreatPct_ = 35, holdSec_ = 30;
-    uint32_t rallyTick_ = 0;
+    uint32_t rallyTick_ = 0, lastSiteTick_ = 0;
+    bool raided_ = false;            // enemies came to our base at least once
     std::shared_ptr<const AITerrain> terr_;   // immutable once built (copies of the bot share it)
     Vec3 home_{}, enemyHome_{};
     bool hasHome_ = false, hasEnemy_ = false;
@@ -100,7 +101,7 @@ private:
     int escalation_ = 0, failedWaves_ = 0;
     uint32_t lastKillTick_ = 0, lastEscalateTick_ = 0, scoutTick_ = 0;
     int enemyStructsSeen_ = -1;
-    struct StuckBuild { uint64_t entity = 0; uint32_t since = 0; Vec3 point{}; };
+    struct StuckBuild { uint64_t entity = 0; uint32_t since = 0; Vec3 point{}; Fixed progress{}; };
     std::vector<StuckBuild> buildWatch_;
     std::vector<std::pair<int, uint32_t>> badSpots_;   // (cell, until tick)
     // planets
