@@ -25,6 +25,7 @@ uint32_t hashCell(int f, int x, int y) { uint32_t h = uint32_t(x) * 73856093u ^ 
 struct PU0 {
     float model[16];
     float morph[4], body[4], opts[4], scale[4], tint[4][4], cliff[4], cliffTint[4], water[4], fog[4], fogColor[4], atmo[4], sun[4];
+    float detail[4], rock[4];   // detail look (PLANET_DETAIL): x cavity, y rock on slopes, zw slope range; rock rgb
 };
 struct SU0 { float inv[16]; float eye[4], star[4], starColor[4]; };
 struct AU0 { float model[16]; float body[4], shell[4], color[4], sun[4]; };
@@ -66,17 +67,19 @@ void PlanetRenderer::shutdown(gfx::Device& dev) {
     for (auto& b : bodies_) {
         for (auto& c : b.chunks) freeChunk(dev, c);
         if (b.vision.valid()) dev.destroyTexture(b.vision);
+        if (b.detailTex.valid()) dev.destroyTexture(b.detailTex);
     }
     bodies_.clear();
     world_ = {};
     for (Mesh* m : {&sphere_, &atmoSphere_}) { dev.destroyBuffer(m->vb); dev.destroyBuffer(m->ib); *m = {}; }
     for (auto t : {white_, gray_, black_}) if (t.valid()) dev.destroyTexture(t);
     white_ = gray_ = black_ = {};
-    for (int i = 0; i < 3; ++i) {
-        for (auto& p : pipes_[i]) { if (p.valid()) dev.destroyPipeline(p); p = {}; }
-        if (shaders_[i].valid()) dev.destroyShader(shaders_[i]);
-        shaders_[i] = {}; shaderFailed_[i] = false;
-    }
+    for (int i = 0; i < 3; ++i)
+        for (int d = 0; d < 2; ++d) {
+            for (auto& p : pipes_[i][d]) { if (p.valid()) dev.destroyPipeline(p); p = {}; }
+            if (shaders_[i][d].valid()) dev.destroyShader(shaders_[i][d]);
+            shaders_[i][d] = {}; shaderFailed_[i][d] = false;
+        }
     for (auto p : {skyPipe_, atmoPipe_}) if (p.valid()) dev.destroyPipeline(p);
     for (auto s : {skyShader_, atmoShader_}) if (s.valid()) dev.destroyShader(s);
     skyPipe_ = atmoPipe_ = {}; skyShader_ = atmoShader_ = {};
@@ -90,7 +93,11 @@ void PlanetRenderer::freeChunk(gfx::Device& dev, Chunk& c) {
 }
 
 void PlanetRenderer::setWorld(const PlanetWorld& w) {
-    if (dev_) for (auto& b : bodies_) { for (auto& c : b.chunks) freeChunk(*dev_, c); if (b.vision.valid()) dev_->destroyTexture(b.vision); }
+    if (dev_) for (auto& b : bodies_) {
+        for (auto& c : b.chunks) freeChunk(*dev_, c);
+        if (b.vision.valid()) dev_->destroyTexture(b.vision);
+        if (b.detailTex.valid()) dev_->destroyTexture(b.detailTex);
+    }
     bodies_.clear();
     world_ = w;
     bodies_.resize(world_.bodies.size());
@@ -100,8 +107,9 @@ void PlanetRenderer::setWorld(const PlanetWorld& w) {
         Body& b = bodies_[i];
         b.surf = std::make_unique<PlanetSurface>();
         b.surf->init(pb);
-        const int N = pb.faceSize;
-        // levels: root chunk covers the face; leaf chunks are kGrid cells (one quad per cell)
+        setupDetail(pb, b);
+        const int N = b.surf->gridSize();   // cells, or detail samples
+        // levels: root chunk covers the face; leaf chunks are kGrid cells / samples (one quad each)
         b.levels = 1;
         while ((kGrid << (b.levels - 1)) < N) ++b.levels;
         for (int f = 0; f < 6; ++f) { Chunk c; c.face = f; c.size = N; c.level = b.levels - 1; b.chunks.push_back(c); }
@@ -132,22 +140,22 @@ void PlanetRenderer::buildTree(Body& b, int idx) {
 void PlanetRenderer::computeBounds(Body& b, Chunk& c) {
     const PlanetSurface& s = *b.surf;
     {
-        const int x1 = std::min(c.x0 + c.size, s.faceSize()), y1 = std::min(c.y0 + c.size, s.faceSize());
+        const int x1 = std::min(c.x0 + c.size, s.gridSize()), y1 = std::min(c.y0 + c.size, s.gridSize());
         float3 sum{};
         int cnt = 0;
         float minR = 1e9f, maxR = -1e9f;
         const int step = std::max(1, (x1 - c.x0) / 8);
         for (int j = c.y0; j <= y1; j += step)
             for (int i = c.x0; i <= x1; i += step) {
-                sum += s.cornerDir(c.face, i, j); ++cnt;
+                sum += s.gridDir(c.face, i, j); ++cnt;
             }
         // radial range over every corner (heights decide horizon culling)
         for (int j = c.y0; j <= y1; ++j)
-            for (int i = c.x0; i <= x1; ++i) { float h = s.cornerHeight(c.face, i, j); minR = std::min(minR, h); maxR = std::max(maxR, h); }
+            for (int i = c.x0; i <= x1; ++i) { float h = s.gridHeight(c.face, i, j); minR = std::min(minR, h); maxR = std::max(maxR, h); }
         c.dir = normalize(sum);
         float cosA = 1;
-        for (int j : {c.y0, y1}) for (int i : {c.x0, x1}) cosA = std::min(cosA, dot(c.dir, s.cornerDir(c.face, i, j)));
-        for (int j = c.y0; j <= y1; j += step) for (int i = c.x0; i <= x1; i += step) cosA = std::min(cosA, dot(c.dir, s.cornerDir(c.face, i, j)));
+        for (int j : {c.y0, y1}) for (int i : {c.x0, x1}) cosA = std::min(cosA, dot(c.dir, s.gridDir(c.face, i, j)));
+        for (int j = c.y0; j <= y1; j += step) for (int i = c.x0; i <= x1; i += step) cosA = std::min(cosA, dot(c.dir, s.gridDir(c.face, i, j)));
         c.cosAngle = cosA;
         c.minR = s.radius() + minR - 1.0f;   // skirts
         c.maxR = s.radius() + maxR;
@@ -196,9 +204,9 @@ float3 PlanetRenderer::cornerColor(const PlanetBody& pb, const PlanetSurface& s,
 
 void PlanetRenderer::buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b, Chunk& c) {
     const PlanetSurface& s = *b.surf;
-    const int N = s.faceSize();
+    const int N = s.faceSize(), G = s.gridSize(), K = std::max(1, s.detailScale());
     const int step = std::max(1, c.size / kGrid);
-    const int x1 = std::min(c.x0 + c.size, N), y1 = std::min(c.y0 + c.size, N);
+    const int x1 = std::min(c.x0 + c.size, G), y1 = std::min(c.y0 + c.size, G);
     std::vector<int> xs, ys;
     for (int x = c.x0; x < x1; x += step) xs.push_back(x);
     xs.push_back(x1);
@@ -212,10 +220,10 @@ void PlanetRenderer::buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b,
         // position on the next coarser grid (2 * step): odd vertices slide onto the coarse triangle
         const int S = 2 * step;
         const int X0 = c.x0 + ((X - c.x0) / S) * S, Y0 = c.y0 + ((Y - c.y0) / S) * S;
-        if (X0 == X && Y0 == Y) return s.cornerPos(c.face, X, Y);
+        if (X0 == X && Y0 == Y) return s.gridPos(c.face, X, Y);
         const int X1 = std::min(X0 + S, x1), Y1 = std::min(Y0 + S, y1);
         const float fx = X1 > X0 ? float(X - X0) / float(X1 - X0) : 0.0f, fz = Y1 > Y0 ? float(Y - Y0) / float(Y1 - Y0) : 0.0f;
-        const float3 p00 = s.cornerPos(c.face, X0, Y0), p10 = s.cornerPos(c.face, X1, Y0), p01 = s.cornerPos(c.face, X0, Y1), p11 = s.cornerPos(c.face, X1, Y1);
+        const float3 p00 = s.gridPos(c.face, X0, Y0), p10 = s.gridPos(c.face, X1, Y0), p01 = s.gridPos(c.face, X0, Y1), p11 = s.gridPos(c.face, X1, Y1);
         if (fx >= fz) return p00 + (p10 - p00) * fx + (p11 - p10) * fz;
         return p00 + (p11 - p01) * fx + (p01 - p00) * fz;
     };
@@ -227,13 +235,15 @@ void PlanetRenderer::buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b,
         for (int i = 0; i < nx; ++i) {
             const int X = xs[size_t(i)], Y = ys[size_t(j)];
             uint32_t splat = 0;
-            const float3 col = cornerColor(pb, s, c.face, X, Y, splat);
-            const float3 p = s.cornerPos(c.face, X, Y);
-            if (s.cornerHeight(c.face, X, Y) < pb.seaLevel + 0.2f) sea = true;
-            const auto uv = atlasUV(c.face, float(X), float(Y));
+            const float3 col = s.detailScale() ? sampleColor(pb, s, c.face, X, Y, splat) : cornerColor(pb, s, c.face, X, Y, splat);
+            const float3 p = s.gridPos(c.face, X, Y);
+            if (s.gridHeight(c.face, X, Y) < pb.seaLevel + 0.2f) sea = true;
+            const auto uv = s.detailScale() ? atlasUV(c.face, float(X) / float(K), float(Y) / float(K)) : atlasUV(c.face, float(X), float(Y));
             PV pv;
             pv.pos = p - origin;
-            pv.nrm = s.cornerNormal(c.face, X, Y);
+            pv.nrm = s.gridNormal(c.face, X, Y);
+            pv.duv[0] = (float((c.face % 3) * (G + 1) + X) + 0.5f) / float(3 * (G + 1));
+            pv.duv[1] = (float((c.face / 3) * (G + 1) + Y) + 0.5f) / float(2 * (G + 1));
             pv.rgba = rgbaf({col.x, col.y, col.z, 1});
             pv.morph = (step < c.size ? morphPos(X, Y) : p) - origin;
             pv.uv[0] = uv[0]; pv.uv[1] = uv[1];
@@ -253,7 +263,7 @@ void PlanetRenderer::buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b,
         if (dot(cross(p1 - p0, p2 - p0), c.dir) < 0) for (size_t k = 0; k + 2 < idx.size(); k += 3) std::swap(idx[k + 1], idx[k + 2]);
     }
     // skirts: every chunk edge drops a strip towards the centre (cracks between LODs and across seams)
-    const float depth = 0.4f + 0.35f * float(step);
+    const float depth = 0.4f + 0.35f * float(step) / float(K);   // step in cells
     auto skirt = [&](uint32_t ia, uint32_t ib) {
         PV a = v[ia], bb = v[ib];
         PV a2 = a, b2 = bb;
@@ -323,22 +333,181 @@ void PlanetRenderer::updateHeights(int body, const std::vector<int16_t>& corners
             }
     }
     b.surf->updateHeights(pb, grown);
+    const int K = b.surf->detailScale();
+    if (K) {
+        // the synthesised detail follows the corners (explicit detail is edited on its own: updateDetail)
+        if (pb.detail.empty() || pb.detailK <= 0) {
+            // Catmull-Rom reads one corner past the seam: neighbour faces whose edge strip is within reach
+            for (int f = 0; f < 6; ++f) {
+                PlanetSurface::Rect r = grown[f];
+                if (r.x1 < r.x0) continue;
+                r.x0 -= 2; r.y0 -= 2; r.x1 += 2; r.y1 += 2;
+                grown[f] = r;
+            }
+            b.surf->resynthDetail(pb, grown);
+            PlanetSurface::Rect gr[6];
+            const int m = 2 * K + 2;
+            for (int f = 0; f < 6; ++f) if (grown[f].x1 >= grown[f].x0) gr[f] = {grown[f].x0 * K - m, grown[f].y0 * K - m, grown[f].x1 * K + m, grown[f].y1 * K + m};
+            for (int f = 0; f < 6; ++f) if (gr[f].x1 >= gr[f].x0) fillAtlas(b, f, gr[f].x0, gr[f].y0, gr[f].x1, gr[f].y1);
+            uploadAtlas(b);
+            freeChunksOver(b, gr, 1);
+        }
+        return;
+    }
     // chunks over the changed corners (+1 for normals) rebuild on demand; their bounds are refreshed
+    freeChunksOver(b, grown, 1);
+}
+
+void PlanetRenderer::freeChunksOver(Body& b, const PlanetSurface::Rect (&gr)[6], int margin) {
     for (auto& c : b.chunks) {
-        const PlanetSurface::Rect& r = grown[c.face];
+        const PlanetSurface::Rect& r = gr[c.face];
         if (r.x1 < r.x0) continue;
-        if (c.x0 > r.x1 + 1 || c.y0 > r.y1 + 1 || c.x0 + c.size < r.x0 - 1 || c.y0 + c.size < r.y0 - 1) continue;
-        freeChunk(*dev_, c);
+        if (c.x0 > r.x1 + margin || c.y0 > r.y1 + margin || c.x0 + c.size < r.x0 - margin || c.y0 + c.size < r.y0 - margin) continue;
+        if (dev_) freeChunk(*dev_, c);
         computeBounds(b, c);
     }
+}
+
+bool PlanetRenderer::updateDetail(int body, const std::vector<int16_t>& detail) {
+    if (body < 0 || size_t(body) >= bodies_.size() || !bodies_[size_t(body)].surf || !dev_) return false;
+    PlanetBody& pb = world_.bodies[size_t(body)];
+    Body& b = bodies_[size_t(body)];
+    const int K = b.surf->detailScale();
+    if (!K || pb.detailK != K || detail.size() != size_t(6) * size_t(b.surf->gridSize() + 1) * size_t(b.surf->gridSize() + 1)) return false;
+    pb.detail = detail;
+    PlanetSurface::Rect gr[6];
+    if (!b.surf->updateDetail(detail, gr)) return true;
+    for (int f = 0; f < 6; ++f) if (gr[f].x1 >= gr[f].x0) fillAtlas(b, f, gr[f].x0 - 1, gr[f].y0 - 1, gr[f].x1 + 1, gr[f].y1 + 1);
+    uploadAtlas(b);
+    freeChunksOver(b, gr, 1);
+    return true;
+}
+
+// ------------------------------------------------------------------ detail
+
+int PlanetRenderer::detailScaleFor(const PlanetBody& pb) const {
+    const bool smooth = pb.style == 1 || (pb.style < 0 && (look_.smooth || !pb.detail.empty()));
+    if (!smooth || pb.faceSize <= 0) return 0;
+    int want = pb.detailScale > 0 ? pb.detailScale : !pb.detail.empty() ? pb.detailK : look_.detailScale;
+    want = std::clamp(want, 1, 16);
+    bool low = false;
+    if (const char* e = std::getenv("RTS_TERRAIN")) low = std::string(e) == "low";
+    else if (dev_) low = Renderer3D::defaultMaterialQualityFor(*dev_, platform::isTouchDevice()) == MaterialQuality::Low;
+    if (low) want = std::min(want, 2);
+    // budget: samples of one body (CPU ~32 B each + one atlas texel); the atlas side stays under the texture limit
+    const size_t cap = platform::isTouchDevice() ? size_t(600000) : size_t(2400000);
+    const int maxSide = platform::isTouchDevice() ? 2048 : 4096;
+    auto fits = [&](int k) { const size_t M = size_t(pb.faceSize) * size_t(k); return 6 * (M + 1) * (M + 1) <= cap && int(3 * (M + 1)) <= maxSide; };
+    while (want > 1 && !fits(want)) want /= 2;
+    return fits(want) ? want : 0;
+}
+
+void PlanetRenderer::setupDetail(const PlanetBody& pb, Body& b) {
+    const int k = detailScaleFor(pb);
+    if (!k) return;
+    PlanetDetailParams p;
+    p.k = k;
+    p.roughness = pb.roughness >= 0 ? pb.roughness : look_.roughness * 1.5f;
+    p.craters = pb.craters >= 0 ? pb.craters : pb.kind == PlanetBody::Kind::Moon ? 0.6f : 0.0f;
+    uint32_t h = 2166136261u;
+    for (char ch : pb.id) h = (h ^ uint8_t(ch)) * 16777619u;
+    p.seed = h | 1u;
+    const auto t0 = std::chrono::steady_clock::now();
+    b.surf->initDetail(pb, p);
+    if (!b.surf->detailScale()) return;
+    const int G = b.surf->gridSize();
+    b.atlasW = 3 * (G + 1); b.atlasH = 2 * (G + 1);
+    b.detailPx.assign(size_t(b.atlasW) * size_t(b.atlasH) * 4, 0);
+    for (int f = 0; f < 6; ++f) fillAtlas(b, f, 0, 0, G, G);
+    if (dev_) {
+        gfx::TextureDesc td; td.width = b.atlasW; td.height = b.atlasH; td.filter = gfx::Filter::Linear;
+        td.data = b.detailPx.data(); td.label = "planet detail normals";
+        b.detailTex = dev_->createTexture(td);
+    }
+    stats_.buildMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (std::getenv("RTS_TERRAIN_STATS"))
+        std::fprintf(stderr, "[terrain] planet '%s' detail k=%d (%s) samples=%zu atlas %dx%d in %.0f ms\n", pb.id.c_str(), k,
+                     pb.detail.empty() ? "synthesised" : pb.detailK == k ? "explicit" : "explicit, resampled",
+                     size_t(6) * size_t(G + 1) * size_t(G + 1), b.atlasW, b.atlasH,
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+}
+
+void PlanetRenderer::fillAtlas(Body& b, int face, int i0, int j0, int i1, int j1) {
+    const PlanetSurface& s = *b.surf;
+    const int G = s.gridSize();
+    if (b.detailPx.empty()) return;
+    i0 = std::max(i0, 0); j0 = std::max(j0, 0); i1 = std::min(i1, G); j1 = std::min(j1, G);
+    for (int j = j0; j <= j1; ++j)
+        for (int i = i0; i <= i1; ++i) {
+            const float3 n = s.gridNormal(face, i, j);
+            uint8_t* px = &b.detailPx[(size_t((face / 3) * (G + 1) + j) * size_t(b.atlasW) + size_t((face % 3) * (G + 1) + i)) * 4];
+            px[0] = uint8_t(std::clamp(n.x * 127.5f + 127.5f, 0.0f, 255.0f));
+            px[1] = uint8_t(std::clamp(n.y * 127.5f + 127.5f, 0.0f, 255.0f));
+            px[2] = uint8_t(std::clamp(n.z * 127.5f + 127.5f, 0.0f, 255.0f));
+            px[3] = uint8_t(s.gridCavity(face, i, j) * 255.0f + 0.5f);
+        }
+}
+
+void PlanetRenderer::uploadAtlas(Body& b) {
+    if (!dev_ || !b.detailTex.valid() || b.detailPx.empty()) return;
+    dev_->updateTexture(b.detailTex, 0, 0, b.atlasW, b.atlasH, b.detailPx.data(), b.atlasW * 4);
+}
+
+// Colour / splat of a detail sample: bilinear between the corner colours of its cell.
+float3 PlanetRenderer::sampleColor(const PlanetBody& pb, const PlanetSurface& s, int face, int i, int j, uint32_t& splat) const {
+    const int K = s.detailScale(), N = s.faceSize();
+    const int X = std::min(i / K, N - 1), Y = std::min(j / K, N - 1);
+    const float fx = float(i - X * K) / float(K), fy = float(j - Y * K) / float(K);
+    float3 col{};
+    float w4[4] = {0, 0, 0, 0};
+    for (int q = 0; q < 4; ++q) {
+        const float w = ((q & 1) ? fx : 1 - fx) * ((q >> 1) ? fy : 1 - fy);
+        if (w <= 0) continue;
+        uint32_t sp = 0;
+        col += cornerColor(pb, s, face, X + (q & 1), Y + (q >> 1), sp) * w;
+        for (int l = 0; l < 4; ++l) w4[l] += float((sp >> (8 * l)) & 255u) * w;
+    }
+    splat = 0;
+    for (int l = 0; l < 4; ++l) splat |= uint32_t(std::clamp(w4[l] + 0.5f, 0.0f, 255.0f)) << (8 * l);
+    return col;
 }
 
 void PlanetRenderer::updateFlags(int body, const std::vector<uint8_t>& flags) {
     if (body < 0 || size_t(body) >= bodies_.size() || !bodies_[size_t(body)].surf || !dev_) return;
     PlanetBody& pb = world_.bodies[size_t(body)];
     if (flags == pb.flags) return;
-    pb.flags = flags;
     Body& b = bodies_[size_t(body)];
+    const int K = b.surf->detailScale(), N = pb.faceSize;
+    if (K && flags.size() == pb.flags.size()) { // detail: only around the changed cells (fine noise follows the cell kinds)
+        PlanetSurface::Rect rect[6];
+        for (int f = 0; f < 6; ++f)
+            for (int y = 0; y < N; ++y)
+                for (int x = 0; x < N; ++x) {
+                    const size_t i = (size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x);
+                    if (flags[i] == pb.flags[i]) continue;
+                    PlanetSurface::Rect& r = rect[f];   // corners of the cell
+                    if (r.x1 < r.x0) r = {x, y, x + 1, y + 1};
+                    else { r.x0 = std::min(r.x0, x); r.y0 = std::min(r.y0, y); r.x1 = std::max(r.x1, x + 1); r.y1 = std::max(r.y1, y + 1); }
+                }
+        pb.flags = flags;
+        b.surf->setFlags(flags);
+        PlanetSurface::Rect gr[6];
+        for (int f = 0; f < 6; ++f) if (rect[f].x1 >= rect[f].x0) gr[f] = {rect[f].x0 * K - 1, rect[f].y0 * K - 1, rect[f].x1 * K + 1, rect[f].y1 * K + 1};
+        if (pb.detail.empty()) {
+            b.surf->resynthDetail(pb, rect);
+            for (int f = 0; f < 6; ++f) if (gr[f].x1 >= gr[f].x0) { const int m = 2 * K + 2; gr[f] = {gr[f].x0 - m, gr[f].y0 - m, gr[f].x1 + m, gr[f].y1 + m}; }
+            for (int f = 0; f < 6; ++f) if (gr[f].x1 >= gr[f].x0) fillAtlas(b, f, gr[f].x0, gr[f].y0, gr[f].x1, gr[f].y1);
+            uploadAtlas(b);
+        }
+        freeChunksOver(b, gr, K + 1);   // colours / splat of the cells (+ seams: neighbours rebuild through their own rects)
+        // seam cells: the neighbour faces' chunks along the shared edges take the new colours too
+        for (int f = 0; f < 6; ++f) if (rect[f].x1 >= rect[f].x0 && (rect[f].x0 == 0 || rect[f].y0 == 0 || rect[f].x1 == N || rect[f].y1 == N)) {
+            for (auto& c : b.chunks) if (c.face != f) { freeChunk(*dev_, c); }
+            break;
+        }
+        return;
+    }
+    pb.flags = flags;
     b.surf->init(pb);   // flags live in the surface (cheap compared to the mesh rebuild)
     for (auto& c : b.chunks) freeChunk(*dev_, c);
 }
@@ -370,38 +539,41 @@ int PlanetRenderer::tierFor(const Renderer3D& r) const {
     return std::min(tier(r.materialQuality()), deviceTier);
 }
 
-gfx::PipelineHandle PlanetRenderer::terrainPipe(gfx::Device& dev, int tier, bool ocean) {
+gfx::PipelineHandle PlanetRenderer::terrainPipe(gfx::Device& dev, int tier, bool ocean, bool detail) {
+    const int dt = detail && !ocean ? 1 : 0;   // the ocean never reads the detail
     for (; tier >= 0; --tier) {
-        if (pipes_[tier][ocean].valid()) return pipes_[tier][ocean];
-        if (shaderFailed_[tier]) continue;
-        if (!shaders_[tier].valid()) {
-            const std::string def = "#define PLANET_TIER " + std::to_string(tier) + "\n";
+        if (pipes_[tier][dt][ocean].valid()) return pipes_[tier][dt][ocean];
+        if (shaderFailed_[tier][dt]) continue;
+        if (!shaders_[tier][dt].valid()) {
+            std::string def = "#define PLANET_TIER " + std::to_string(tier) + "\n";
+            def += dt ? "#define PLANET_DETAIL 1\n" : "#define PLANET_DETAIL 0\n";
             const std::string vs = def + shaders::kPlanetVS, fs = def + shaders::kPlanetFS, msl = def + shaders::kPlanetMSL;
             gfx::ShaderDesc sd;
             sd.glslVertex = vs.c_str(); sd.glslFragment = fs.c_str(); sd.msl = msl.c_str();
-            sd.uniformSlots = 3; sd.textureSlots = 14; sd.label = "planet";
-            shaders_[tier] = dev.createShader(sd);
-            if (!shaders_[tier].valid()) {
-                std::fprintf(stderr, "[planet] tier %d shader: %s\n", tier, dev.lastError().c_str());
-                shaderFailed_[tier] = true;
+            sd.uniformSlots = 3; sd.textureSlots = 14; sd.label = dt ? "planet detail" : "planet";
+            shaders_[tier][dt] = dev.createShader(sd);
+            if (!shaders_[tier][dt].valid()) {
+                std::fprintf(stderr, "[planet] tier %d%s shader: %s\n", tier, dt ? " detail" : "", dev.lastError().c_str());
+                shaderFailed_[tier][dt] = true;
                 continue;
             }
         }
         gfx::PipelineDesc p;
-        p.shader = shaders_[tier];
+        p.shader = shaders_[tier][dt];
         p.attrs[0] = {0, gfx::VertexFormat::Float3, 0};
         p.attrs[1] = {1, gfx::VertexFormat::Float3, 12};
         p.attrs[2] = {2, gfx::VertexFormat::UByte4N, 24};
         p.attrs[3] = {3, gfx::VertexFormat::Float3, 28};
         p.attrs[4] = {4, gfx::VertexFormat::Float2, 40};
         p.attrs[5] = {5, gfx::VertexFormat::UByte4N, 48};
-        p.attrCount = 6; p.stride = sizeof(PV);
+        p.attrs[6] = {6, gfx::VertexFormat::Float2, 52};
+        p.attrCount = dt ? 7 : 6; p.stride = sizeof(PV);
         p.indexType = gfx::IndexType::UInt32;
         if (ocean) { p.blend = gfx::BlendMode::Alpha; p.depthWrite = false; }
-        p.label = ocean ? "planet ocean" : "planet";
-        pipes_[tier][ocean] = dev.createPipeline(p);
-        if (pipes_[tier][ocean].valid()) return pipes_[tier][ocean];
-        shaderFailed_[tier] = true;
+        p.label = ocean ? "planet ocean" : dt ? "planet detail" : "planet";
+        pipes_[tier][dt][ocean] = dev.createPipeline(p);
+        if (pipes_[tier][dt][ocean].valid()) return pipes_[tier][dt][ocean];
+        shaderFailed_[tier][dt] = true;
     }
     return {};
 }
@@ -521,7 +693,8 @@ void PlanetRenderer::draw(Renderer3D& r, const PlanetViewFrame& fr, double secon
             const float3 cv = C + rot.transformDir(c.center);
             if (!sphereVisible(cv, c.boundR)) { ++stats_.culledFrustum; continue; }
             const float d = std::max(length(cv - eye) - c.boundR, 0.0f);
-            const float range = options.lodRange * float(1 << c.level);
+            // detail grids: leaves are 16 samples (16 / k cells); 1.5 / k keeps triangles ~1.5x smaller on screen
+            const float range = options.lodRange * float(1 << c.level) * (b.surf->detailScale() ? 1.5f / float(b.surf->detailScale()) : 1.0f);
             const bool split = c.child >= 0 && d < range;
             if (split) {
                 bool ready = true;
@@ -542,6 +715,8 @@ void PlanetRenderer::draw(Renderer3D& r, const PlanetViewFrame& fr, double secon
     }
     const int tier = tierFor(r);
     gfx::PipelineHandle pipe = terrainPipe(dev, tier, false), ocean = terrainPipe(dev, tier, true);
+    gfx::PipelineHandle pipeDetail;
+    for (auto& b : bodies_) if (b.surf && b.surf->detailScale() && b.detailTex.valid()) { pipeDetail = terrainPipe(dev, tier, false, true); break; }
     // ---- uniforms per body
     PU0 base{};
     base.opts[0] = 0.05f;
@@ -553,6 +728,10 @@ void PlanetRenderer::draw(Renderer3D& r, const PlanetViewFrame& fr, double secon
     }
     put(base.cliff, {look_.cliffScale, look_.splatStrength, cliffTex_.valid() ? look_.slopeStart : 2.0f}, cliffTex_.valid() ? look_.slopeEnd : 3.0f);
     put(base.cliffTint, look_.cliffTint, 1);
+    // detail: cavity, and rock colour on steep slopes where no cliff texture is drawn (Low tier, no cliff texture)
+    const bool cliffDrawn = tier >= 1 && look_.materials() && cliffTex_.valid();
+    put(base.detail, {0.8f, cliffDrawn ? 0.0f : 1.0f, look_.slopeStart}, look_.slopeEnd);
+    put(base.rock, look_.rockColor, 1);
     base.water[0] = look_.waterColor.x; base.water[1] = look_.waterColor.y; base.water[2] = look_.waterColor.z; base.water[3] = look_.waterColor.w;
     const bool shadows = r.shadowQuality() != ShadowQuality::Off && planetBlend < 0.5f;
     struct BodyU { PU0 u; int body; };
@@ -580,8 +759,9 @@ void PlanetRenderer::draw(Renderer3D& r, const PlanetViewFrame& fr, double secon
     }
     // ---- terrain (opaque, before meshes and models)
     if (pipe.valid() && !items->empty()) {
-        r.drawCustomOpaque([this, &r, items, bodyU, pipe](gfx::Device& d) {
+        r.drawCustomOpaque([this, &r, items, bodyU, pipe, pipeDetail](gfx::Device& d) {
             d.setPipeline(pipe);
+            bool detailBound = false;
             r.bindLitFrame();
             for (int i = 0; i < 4; ++i) d.setTexture(5 + i, layerTex_[i].valid() ? layerTex_[i].tex : white_);
             d.setTexture(13, cliffTex_.valid() ? cliffTex_.tex : gray_);
@@ -592,6 +772,17 @@ void PlanetRenderer::draw(Renderer3D& r, const PlanetViewFrame& fr, double secon
                     cur = it.body;
                     for (auto& bu : *bodyU) if (bu.body == cur) u = bu.u;
                     d.setTexture(2, bodies_[size_t(cur)].vision.valid() ? bodies_[size_t(cur)].vision : white_);
+                    const Body& bb = bodies_[size_t(cur)];
+                    const bool det = pipeDetail.valid() && bb.surf && bb.surf->detailScale() && bb.detailTex.valid();
+                    if (det != detailBound) {
+                        d.setPipeline(det ? pipeDetail : pipe);
+                        detailBound = det;
+                        r.bindLitFrame();
+                        for (int i = 0; i < 4; ++i) d.setTexture(5 + i, layerTex_[i].valid() ? layerTex_[i].tex : white_);
+                        d.setTexture(13, cliffTex_.valid() ? cliffTex_.tex : gray_);
+                        d.setTexture(2, bb.vision.valid() ? bb.vision : white_);
+                    }
+                    if (det) d.setTexture(3, bb.detailTex);
                 }
                 PU0 uu = u;
                 // chunk-relative vertices: model = rotation * translate(chunk centre) + body centre

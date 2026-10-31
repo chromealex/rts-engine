@@ -288,6 +288,29 @@ bool Editor::groundAt(const Viewport& vp, const RTSCamera& cam, float sx, float 
         x = float(at["x"].toDouble()); z = float(at["y"].toDouble());
         return true;
     }
+    // the drawn surface under the cursor (high ground, detail relief): march the view ray against
+    // RtsView::heightAt, then bisect; the y = 0 plane only when the ray never meets it
+    float3 o, d;
+    if (cam.screenRay(sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, o, d) && d.y < -1e-4f) {
+        const game::MapGrid& gr = editGrid();
+        auto above = [&](float t) { const float3 p = o + d * t; return p.y - view_.heightAt(gr, p.x, p.z); };
+        float t = std::max(0.0f, (64.0f - o.y) / d.y);          // from 64 units up (or the eye)
+        const float tEnd = (-16.0f - o.y) / d.y;                 // down to 16 units below 0
+        float prev = t;
+        if (above(t) > 0)
+            for (int i = 0; i < 4096 && t < tEnd; ++i) {
+                const float step = 0.2f * (1.0f + t * 0.01f);
+                t = std::min(t + step, tEnd);
+                if (above(t) <= 0) {
+                    float lo = prev, hi = t;
+                    for (int k = 0; k < 20; ++k) { const float m = 0.5f * (lo + hi); (above(m) > 0 ? lo : hi) = m; }
+                    const float3 p = o + d * hi;
+                    x = p.x; z = p.z;
+                    return true;
+                }
+                prev = t;
+            }
+    }
     if (!cam.screenToGround(sx - vp.originX, sy - vp.originY, vp.pointsW, vp.pointsH, g)) return false;
     x = g.x; z = g.z;
     return true;

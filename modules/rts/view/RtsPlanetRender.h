@@ -38,6 +38,10 @@ public:
     void updateHeights(int body, const std::vector<int16_t>& corners);   // only chunks over changed corners rebuild
     // Cell flags of a body changed (painting): colours / splat of every chunk of that body rebuild.
     void updateFlags(int body, const std::vector<uint8_t>& flags);
+    // Explicit detail heights of a body changed (editor detail sculpt; same scale as drawn): rebuilds the
+    // affected chunks. Returns false when the body draws no detail at that scale (caller re-sets the world).
+    bool updateDetail(int body, const std::vector<int16_t>& detail);
+    int detailScale(int body) const { return surface(body) ? surface(body)->detailScale() : 0; }
 
     struct Options { bool orbits = true, atmosphere = true, sky = true; float lodRange = 48; };
     Options options;
@@ -48,7 +52,7 @@ public:
     const Stats& stats() const { return stats_; }
 
 private:
-    struct PV { render::float3 pos, nrm; uint32_t rgba; render::float3 morph; float uv[2]; uint32_t splat; };
+    struct PV { render::float3 pos, nrm; uint32_t rgba; render::float3 morph; float uv[2]; uint32_t splat; float duv[2]; };
     struct Chunk {
         int face = 0, x0 = 0, y0 = 0, size = 0, level = 0;
         int child = -1;                     // index of the first of 4 children, -1 = leaf
@@ -67,13 +71,23 @@ private:
         std::vector<uint8_t> visionPx;
         bool fog = false;
         FogLook fogLook;
+        // detail (k > 0): normal + cavity atlas, faces in 3 x 2 blocks of (G+1)^2 texels (G = N * k)
+        gfx::TextureHandle detailTex;
+        std::vector<uint8_t> detailPx;
+        int atlasW = 0, atlasH = 0;
     };
+    int detailScaleFor(const PlanetBody& pb) const;
+    void setupDetail(const PlanetBody& pb, Body& b);
+    void fillAtlas(Body& b, int face, int i0, int j0, int i1, int j1);
+    void uploadAtlas(Body& b);
+    void freeChunksOver(Body& b, const PlanetSurface::Rect (&gridRect)[6], int margin);
+    render::float3 sampleColor(const PlanetBody& pb, const PlanetSurface& s, int face, int i, int j, uint32_t& splat) const;
     void buildTree(Body& b, int idx);
     void computeBounds(Body& b, Chunk& c);
     void buildChunk(gfx::Device& dev, const PlanetBody& pb, Body& b, Chunk& c);
     void freeChunk(gfx::Device& dev, Chunk& c);
     render::float3 cornerColor(const PlanetBody& pb, const PlanetSurface& s, int face, int i, int j, uint32_t& splat) const;
-    gfx::PipelineHandle terrainPipe(gfx::Device& dev, int tier, bool ocean);
+    gfx::PipelineHandle terrainPipe(gfx::Device& dev, int tier, bool ocean, bool detail = false);
     void initSpace(gfx::Device& dev);
     int tierFor(const render::Renderer3D& r) const;
 
@@ -85,9 +99,9 @@ private:
     render::TextureRef layerTex_[4], cliffTex_;
     bool texturesLoaded_ = false;
     gfx::TextureHandle white_, gray_, black_;
-    gfx::ShaderHandle shaders_[3];
-    gfx::PipelineHandle pipes_[3][2];
-    bool shaderFailed_[3] = {};
+    gfx::ShaderHandle shaders_[3][2];          // [tier][detail]
+    gfx::PipelineHandle pipes_[3][2][2];       // [tier][detail][ocean]
+    bool shaderFailed_[3][2] = {};
     gfx::ShaderHandle skyShader_, atmoShader_;
     gfx::PipelineHandle skyPipe_, atmoPipe_;
     render::Mesh sphere_, atmoSphere_;   // unit spheres (stars, distant bodies / atmosphere shell)

@@ -32,6 +32,7 @@ Json str(const std::string& s) { return Json::string(s); }
 const std::set<std::string> kPresentationKeys = {
     "view", "sprite", "name", "description", "comment", "_comment", "//", "notes", "note", "icon", "portrait", "hotkey",
     "tooltip", "lore", "label", "color", "colour", "sound", "sounds", "voice", "music", "ui", "hud", "card", "help", "title",
+    "detail", "detailLook", "style",   // visual terrain detail (docs/terrain.md; planets: world body terrain)
 };
 // Top-level blocks whose other keys are visual (the sim reads only some of them).
 const std::set<std::string> kMixedBlocks = {"terrain", "fogOfWar"};

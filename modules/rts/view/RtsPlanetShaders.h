@@ -12,6 +12,9 @@
 //       vec4 atmo (rgb haze colour, w night ambient), vec4 sun (xyz direction to the star, w shadows on)
 //   U1 / U2 / tex0 / tex1: Renderer3D::bindLitFrame (sun = direction to the star)
 //   tex2 vision atlas (R8: 3 x 2 faces of N x N cells)   tex5..8 layer albedo   tex13 cliff albedo
+// "#define PLANET_DETAIL 1" (bodies with a detail grid, docs/terrain.md): extra vertex attribute 6 duv (texel
+//   centre in the detail atlas), tex3 detail atlas (RGBA8, 3 x 2 faces of (G+1)^2 texels: rgb body-local
+//   normal, a cavity), vec4 detail (x cavity strength, y rock on slopes, zw slope range), vec4 rock (rgb)
 #pragma once
 #include "../../../engine/render/Shaders.h"
 
@@ -19,10 +22,10 @@ namespace rts::game::shaders {
 
 #define RTS_PLANET_GLSL_U0 \
     "layout(std140) uniform U0 { mat4 p_model; vec4 p_morph; vec4 p_body; vec4 p_opts; vec4 p_scale; vec4 p_tint[4];\n" \
-    "  vec4 p_cliff; vec4 p_cliffTint; vec4 p_water; vec4 p_fog; vec4 p_fogColor; vec4 p_atmo; vec4 p_sun; };\n"
+    "  vec4 p_cliff; vec4 p_cliffTint; vec4 p_water; vec4 p_fog; vec4 p_fogColor; vec4 p_atmo; vec4 p_sun; vec4 p_detail; vec4 p_rock; };\n"
 #define RTS_PLANET_MSL_U0 \
     "struct PU0 { float4x4 model; float4 morph; float4 body; float4 opts; float4 scale; float4 tint[4];\n" \
-    "  float4 cliff; float4 cliffTint; float4 water; float4 fog; float4 fogColor; float4 atmo; float4 sun; };\n"
+    "  float4 cliff; float4 cliffTint; float4 water; float4 fog; float4 fogColor; float4 atmo; float4 sun; float4 detail; float4 rock; };\n"
 
 inline const char* kPlanetVS =
     RTS_PLANET_GLSL_U0 RTS_GLSL_FRAME
@@ -33,6 +36,10 @@ layout(location = 2) in vec4 a_col;
 layout(location = 3) in vec3 a_morph;
 layout(location = 4) in vec2 a_uv;
 layout(location = 5) in vec4 a_splat;
+#if PLANET_DETAIL
+layout(location = 6) in vec2 a_duv;
+out vec2 v_duv;
+#endif
 out vec3 v_nrm;
 out vec3 v_wpos;
 out vec3 v_col;
@@ -54,6 +61,9 @@ void main() {
     v_col = a_col.rgb;
     v_uv = a_uv;
     v_splat = a_splat;
+#if PLANET_DETAIL
+    v_duv = a_duv;
+#endif
     gl_Position = u_viewProj * vec4(wp, 1.0);
 }
 )";
@@ -67,6 +77,10 @@ uniform sampler2D tex6;
 uniform sampler2D tex7;
 uniform sampler2D tex8;
 uniform sampler2D tex13;
+#if PLANET_DETAIL
+uniform sampler2D tex3;
+in vec2 v_duv;
+#endif
 in vec3 v_nrm;
 in vec3 v_wpos;
 in vec3 v_col;
@@ -83,6 +97,12 @@ void main() {
     vec3 up = normalize(v_wpos - p_body.xyz);
     bool ocean = p_morph.w > 0.5;
     vec3 albedoS = ocean ? p_water.rgb : v_col;
+#if PLANET_DETAIL
+    // per-pixel normal of the detail grid (body-local in the atlas), cavity darkens hollows
+    vec4 dt = texture(tex3, v_duv);
+    n = normalize(mat3(p_model) * (dt.xyz * 2.0 - 1.0));
+    float cav = mix(1.0, 0.55 + 0.9 * dt.a, p_detail.x);
+#endif
 #if PLANET_TIER >= 1
     if (!ocean && p_opts.y > 0.5) {
         vec3 q = v_wpos - p_body.xyz;            // body-local (rotation of the view frame only)
@@ -98,6 +118,9 @@ void main() {
         if (cw > 0.002) s = mix(s, triplanar(tex13, q / p_cliff.x, bw) * p_cliffTint.rgb, cw);
         albedoS = mix(v_col, s, p_cliff.y);
     }
+#endif
+#if PLANET_DETAIL
+    albedoS = mix(albedoS, p_rock.rgb, smoothstep(p_detail.z, p_detail.w, 1.0 - dot(n, up)) * p_detail.y) * cav;
 #endif
     vec3 base = albedoS * albedoS;
     vec3 L = normalize(p_sun.xyz);
@@ -136,8 +159,12 @@ inline const char* kPlanetMSL =
     "#include <metal_stdlib>\nusing namespace metal;\n" RTS_PLANET_MSL_U0 RTS_MSL_FRAME RTS_MSL_SHADOW RTS_MSL_LIGHTS
     R"(
 struct VIn { float3 pos [[attribute(0)]]; float3 nrm [[attribute(1)]]; float4 col [[attribute(2)]]; float3 morph [[attribute(3)]];
-             float2 uv [[attribute(4)]]; float4 splat [[attribute(5)]]; };
-struct VOut { float4 pos [[position]]; float3 nrm; float3 wpos; float3 col; float2 uv; float4 splat; };
+             float2 uv [[attribute(4)]]; float4 splat [[attribute(5)]];
+#if PLANET_DETAIL
+             float2 duv [[attribute(6)]];
+#endif
+};
+struct VOut { float4 pos [[position]]; float3 nrm; float3 wpos; float3 col; float2 uv; float4 splat; float2 duv; };
 vertex VOut vs_main(VIn in [[stage_in]], constant PU0& u [[buffer(1)]], constant U1& f [[buffer(2)]]) {
     VOut o;
     float3 wp = (u.model * float4(in.pos, 1.0)).xyz;
@@ -155,6 +182,11 @@ vertex VOut vs_main(VIn in [[stage_in]], constant PU0& u [[buffer(1)]], constant
     o.col = in.col.rgb;
     o.uv = in.uv;
     o.splat = in.splat;
+#if PLANET_DETAIL
+    o.duv = in.duv;
+#else
+    o.duv = float2(0.0);
+#endif
     o.pos = f.viewProj * float4(wp, 1.0);
     return o;
 }
@@ -167,6 +199,9 @@ fragment float4 fs_main(VOut in [[stage_in]], constant PU0& u [[buffer(1)]], con
                         depth2d<float> tex0 [[texture(0)]], sampler s0 [[sampler(0)]],
                         constant LightU& l [[buffer(3)]], texture2d<float> tex1 [[texture(1)]], sampler s1 [[sampler(1)]],
                         texture2d<float> tex2 [[texture(2)]], sampler s2 [[sampler(2)]],
+#if PLANET_DETAIL
+                        texture2d<float> tex3 [[texture(3)]], sampler s3 [[sampler(3)]],
+#endif
                         texture2d<float> tex5 [[texture(5)]], sampler s5 [[sampler(5)]],
                         texture2d<float> tex6 [[texture(6)]], sampler s6 [[sampler(6)]],
                         texture2d<float> tex7 [[texture(7)]], sampler s7 [[sampler(7)]],
@@ -176,6 +211,11 @@ fragment float4 fs_main(VOut in [[stage_in]], constant PU0& u [[buffer(1)]], con
     float3 up = normalize(in.wpos - u.body.xyz);
     bool ocean = u.morph.w > 0.5;
     float3 albedoS = ocean ? u.water.rgb : in.col;
+#if PLANET_DETAIL
+    float4 dt = tex3.sample(s3, in.duv);
+    n = normalize((u.model * float4(dt.xyz * 2.0 - 1.0, 0.0)).xyz);
+    float cav = mix(1.0, 0.55 + 0.9 * dt.a, u.detail.x);
+#endif
 #if PLANET_TIER >= 1
     if (!ocean && u.opts.y > 0.5) {
         float3 q = in.wpos - u.body.xyz;
@@ -191,6 +231,9 @@ fragment float4 fs_main(VOut in [[stage_in]], constant PU0& u [[buffer(1)]], con
         if (cw > 0.002) s = mix(s, triplanar(tex13, s13, q / u.cliff.x, bw) * u.cliffTint.rgb, cw);
         albedoS = mix(in.col, s, u.cliff.y);
     }
+#endif
+#if PLANET_DETAIL
+    albedoS = mix(albedoS, u.rock.rgb, smoothstep(u.detail.z, u.detail.w, 1.0 - dot(n, up)) * u.detail.y) * cav;
 #endif
     float3 base = albedoS * albedoS;
     float3 L = normalize(u.sun.xyz);

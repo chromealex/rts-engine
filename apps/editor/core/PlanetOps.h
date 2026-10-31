@@ -26,4 +26,17 @@ int planetSculpt(MapDoc& doc, const std::string& body, Sculpt op, render::float3
 int planetPaint(MapDoc& doc, const std::string& body, render::float3 dir, float radius, char cell);
 int planetMaterial(MapDoc& doc, const std::string& body, render::float3 dir, float radius, int layer);
 
+// Detail grids (PlanetDetailOps.cpp, docs/terrain.md "Detail surface"): DocBody::detail, k samples per cell.
+// Creates the grid from the surface the view draws (same synthesis and look keys); false when it exists.
+bool ensurePlanetDetail(Workspace& ws, DocBody& b, int k);
+// One dab on the detail grid (creates it at k=4, capped by the sample budget): Raise / Lower / Smooth /
+// Flatten / Noise / Set; radius in cells (sub-cell allowed), hardness 0..1. The corners follow the detail.
+// Returns the samples changed, -1 on error (err set).
+int planetDetailSculpt(Workspace& ws, const std::string& body, Sculpt op, render::float3 dir, float radius, float strength, float hardness,
+                       uint32_t seed, std::string* err);
+// Corner sculpt on a body with a detail grid: the detail takes the corner change (bilinear per cell).
+void planetDetailFollowCorners(DocBody& b, const std::vector<int16_t>& oldCorners);
+// terrain_detail {body, action info / create / remove, scale}
+Json planetDetailOp(Workspace& ws, const Json& p);
+
 } // namespace rts::editor

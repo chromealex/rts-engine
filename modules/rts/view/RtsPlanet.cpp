@@ -83,6 +83,21 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings)
                 if (cj.size() != b.corners.size()) warn("body '" + b.id + "': terrain.corners has " + std::to_string(cj.size()) + " values, expected " + std::to_string(b.corners.size()));
                 for (size_t i = 0; i < cj.size() && i < b.corners.size(); ++i) b.corners[i] = int16_t(cj[i].integer());
             }
+            // detail surface keys (docs/terrain.md "Detail surface", planets)
+            const std::string st = t.getStr("style");
+            b.style = st == "smooth" ? 1 : st == "classic" ? 0 : -1;
+            if (const Json& dl = t["detailLook"]; dl.isObject()) {
+                b.detailScale = int(std::clamp<int64_t>(dl["scale"].integer(0), 0, 16));
+                b.roughness = num(dl["roughness"], -1);
+                b.craters = num(dl["craters"], -1);
+            }
+            if (const Json& dj = t["detail"]; dj.isObject()) {
+                b.detailK = int(std::clamp<int64_t>(dj["scale"].integer(4), 1, 16));
+                if (dj["blob"].isString()) {
+                    std::string err;
+                    if (!decodePlanetDetail(dj["blob"].str(), N, b.detailK, b.detail, &err)) warn("body '" + b.id + "': " + err);
+                }
+            }
             b.flags.assign(size_t(6 * N * N), kCellGround);
             const Json& faces = t["faces"];
             for (size_t f = 0; f < faces.size() && f < 6; ++f) {
@@ -104,6 +119,41 @@ PlanetWorld loadPlanetWorld(const Json& map, std::vector<std::string>* warnings)
     w.start = std::max(0, w.find(wj.getStr("start")));
     if (wj.getStr("start").empty()) for (size_t i = 0; i < w.bodies.size(); ++i) if (w.bodies[i].surface()) { w.start = int(i); break; }
     return w;
+}
+
+bool decodePlanetDetail(const std::string& bytes, int N, int k, std::vector<int16_t>& out, std::string* err) {
+    const size_t M = size_t(N) * size_t(k), n = 6 * (M + 1) * (M + 1);
+    if (bytes.size() != n * 2) {
+        if (err) *err = "terrain.detail: expected " + std::to_string(n * 2) + " bytes (6 * (faceSize*scale+1)^2 int16), got " + std::to_string(bytes.size());
+        out.clear();
+        return false;
+    }
+    out.resize(n);
+    for (size_t i = 0; i < n; ++i) out[i] = int16_t(uint16_t(uint8_t(bytes[2 * i])) | uint16_t(uint8_t(bytes[2 * i + 1])) << 8);
+    return true;
+}
+
+std::string encodePlanetDetail(const std::vector<int16_t>& v) {
+    std::string out(v.size() * 2, '\0');
+    for (size_t i = 0; i < v.size(); ++i) { out[2 * i] = char(uint16_t(v[i]) & 0xff); out[2 * i + 1] = char(uint16_t(v[i]) >> 8); }
+    return out;
+}
+
+void loadPlanetDetailFiles(PlanetWorld& w, const Json& map, const ContentReader& read, std::vector<std::string>* warnings) {
+    const Json& bodies = map["world"]["bodies"];
+    if (!bodies.isArray() || !read) return;
+    for (const Json& bj : bodies.items()) {
+        const Json& dj = bj["terrain"]["detail"];
+        if (!dj.isObject() || dj.has("blob") || !dj["file"].isString()) continue;
+        const int i = w.find(bj.getStr("id"));
+        if (i < 0) continue;
+        PlanetBody& b = w.bodies[size_t(i)];
+        if (!b.surface() || !b.detail.empty()) continue;
+        std::string bytes, err;
+        if (!read(dj.getStr("file"), bytes)) err = "terrain.detail: cannot read '" + dj.getStr("file") + "'";
+        else decodePlanetDetail(bytes, b.faceSize, b.detailK, b.detail, &err);
+        if (!err.empty() && warnings) warnings->push_back("world: body '" + b.id + "': " + err);
+    }
 }
 
 PlanetWorld planetWorldFromSim(std::shared_ptr<const Surface> surf, const std::vector<uint8_t>& gridFlags, const PlanetWorld& visual) {

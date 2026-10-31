@@ -131,9 +131,51 @@ gameplay camera): 256² - 135k triangles, 31 ms/frame (classic 8k / 19 ms), buil
 use; Low tier (k=2) 1024²: 35k triangles, 24 ms, build 0.29 s. Whole 1024² map in view: 896 chunks, 57k triangles.
 Texture memory k=4 on 1024²: 2 x 4096² RGBA8 (+mips) ≈ 170 MB on desktop; mobile caps the samples at 2049² (≈ 43 MB).
 
-**Planets (plan, not implemented)**: the detail surface is a per-face grid in the same format. A cube-sphere body has
-6 faces of N x N cells; a per-body `detail` block would carry 6 grids of `(N*k+1)^2` samples (`face`-major, the same
-seam duplication rule as the corners), synthesised by `synthCorners` per face with the neighbouring faces' corners as
-the bicubic border. The planet renderer (`RtsPlanetRender`) already draws per-face CDLOD patches; it would sample the
-face grid instead of the corners and use the same normal/splat textures per face. The editor brushes would reuse
-`detailDab` per face through `PlanetOps`' 3D dab (dir -> face, i, j).
+Apron: outside the map the detail normal / splat textures would repeat their edge texels in streaks; the
+`TERRAIN_DETAIL` shader fades to the geometric normal and to a high-mip (blurred) edge material within 2 cells
+of the border, and the border walls keep their geometric normals.
+
+### Planets (agent-terrain)
+The same idea per cube-sphere body: a detail grid of `M = N*k` samples per face side, `(M+1)^2` per face, indexed
+like the corners (`face`-major, row-major; sample `(i, j)` at face coordinates `(i/k, j/k)` cells).
+
+**Data** (world body `terrain`, visual only - the simulation never reads them):
+| Key | What |
+|---|---|
+| `style` | `"smooth"` / `"classic"`; default: the game's visual `terrain.style` (templates/planets: `"smooth"`) |
+| `detailLook` | `{scale (samples per cell, default the game's detailLook.scale = 4), roughness (fine noise, world units; default the game's roughness x 1.5), craters 0..1 (default 0.6 on moons, 0 otherwise)}`. The planet generator (`GenPlanet.cpp`) writes hints: moons / barren `{craters 0.7, roughness 0.08}`, ocean worlds `{roughness 0.04}` |
+| `detail` | `{"scale": k, "file": "maps/<map>.<body>.detail.r16"}`: explicit heights, int16 LE in **1/256** units (`kPlanetDetailUnit`; 1/16 steps show as faceted normals on fine relief), 6 x (N*k+1)^2. Seam duplicates must be equal (the loader averages them). The editor writes it; drawn whenever present unless the body says `style: "classic"` |
+
+**Seams**: seam samples are the corner duplicates of a `CubeSphere(M)` (`cornerDuplicates`): one canonical
+direction (bit-identical on every face), one averaged height, one normal. Synthesis is a function of the direction
+except the Catmull-Rom basis (rows continue across the seam through the coarse surface), and the seam average removes
+that. Normals / cavity of edge samples read their neighbours across the seam (no one-sided bias, no seam lines).
+
+**Synthesis** (`modules/rts/view/RtsPlanetDetail.cpp`, `PlanetSurface::initDetail`): Catmull-Rom through the corners
++ 3D value noise on the direction (2 octaves, scaled per cell kind like the flat roughness) + on moons a crater field
+(3D cell lattice, 2 octaves: 3-cell spacing with 0.5-1.4-cell craters and 1.1-cell spacing with small ones; bowl +
+raised rim). Explicit detail at another k is resampled bilinearly. `heightAt`, `normalAt`, `raycast` follow the grid
+(exactly the drawn triangles), so units, rings, picking and effects stand on it; `coarseHeightAt` keeps the corner
+surface. Corner edits resynthesise only the samples around the changed corners (+2 corners across seams), flag
+painting only around the changed cells.
+
+**Rendering** (`RtsPlanetRender`): the per-face CDLOD quadtree runs in samples (leaf = 16 x 16 samples), LOD range
+`lodRange * 2^level * 1.5/k`, geomorph onto the coarser sample grid, skirts on every chunk edge (depth in cells) -
+no cracks between LODs or across seams. Shader variant `PLANET_DETAIL` (GLSL + MSL): vertex attribute 6 = texel
+centre in a per-body atlas (tex3, RGBA8, faces in 3 x 2 blocks of (M+1)^2 texels: rgb body-local normal, a cavity)
+-> per-pixel normal on every tier, cavity darkening, rock colour on steep slopes when no cliff texture is drawn
+(Low tier); colours / splat per sample = bilinear of the corner colours. k=0 bodies keep the exact old path
+(pixel-identical). Budget: <= 2.4M samples per body on desktop, 0.6M on touch devices, atlas side <= 4096 / 2048,
+Low tier caps k at 2.
+
+**Editor / MCP** (`apps/editor/core/PlanetDetailOps.cpp`): `terrain_detail {body, action: info|create|remove,
+scale}`; `terrain_sculpt {body, face + x, y | dir | points, op raise|lower|smooth|flatten|noise|set, radius (cells,
+sub-cell ok), strength, hardness, detail}` - detail defaults to true when the body has a grid; 3D dabs across seams
+(duplicates written equal), the body corners follow the detail at the corner samples; corner sculpts carry the
+detail along (bilinear delta). Window **Рельеф** -> "Детально" works on planets. `MapDoc` loads / saves
+`maps/<map>.<body>.detail.r16` (live documents pass it to the view inline as `detail.blob`).
+
+**Performance** (VM llvmpipe, 1280x800, templates/planets Big Planet: N=128, k=4 = 1.58M samples): synthesis +
+normals + atlas 107 ms at load, atlas 1539x1026 RGBA8 (6 MB), CPU grid ~50 MB; surface zoom 153 chunks / 98k
+triangles, 46 ms/frame (classic look: 26 chunks / 17k, 21 ms - but classic planets have no material textures; Low
+tier k=2: 82 chunks / 52k, 33 ms); planet zoom 68 chunks / 44k triangles, 27-50 ms (classic 32 / 20k, 19 ms).
