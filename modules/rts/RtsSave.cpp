@@ -153,6 +153,7 @@ void ioGrid(Archive& a, MapGrid& g) {
     ioRle(a, g.blocked); ioRle(a, g.creep); ioRle(a, g.fieldRes); ioRle(a, g.fieldAmt); ioRle(a, g.region);
     ioRle(a, g.dig); ioRle(a, g.digHp); ioRle(a, g.digMark); ioRle(a, g.territory); ioRle(a, g.room);
     ioRle(a, g.foundation);   // fidelity: concrete slabs (Dune II)
+    ioRle(a, g.wall); a(g.airSolid);   // dungeon walls (territory.fortify), rock-bound fliers (save version 3)
 }
 
 void ioState(Archive& a, GameState& s) {

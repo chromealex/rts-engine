@@ -79,6 +79,7 @@ void MapGrid::init(int width, int h_) {
     digHp.assign(n, Fixed{});
     digMark.assign(n, 0);
     territory.assign(n, 0);
+    wall.assign(n, 0);
     room.assign(n, -1);
     clearance.assign(n, 0);
     clearanceDirty = true;
@@ -194,8 +195,8 @@ bool MapGrid::lineOk(int x, int y) const {
 
 bool MapGrid::passable(int x, int y, uint8_t layer) const {
     if (!inside(x, y)) return false;
-    if (layer & 2 /*air*/) return true;
     const size_t i = size_t(index(x, y));
+    if (layer & 2 /*air*/) return !airSolid || (flags[i] & (kCellGround | kCellWater)) != 0;   // dungeons: rock has no sky above it
     if (blocked[i]) return false;
     if (layer & 4 /*naval*/) { if (flags[i] & kCellWater) return true; if (!(layer & 1)) return false; }   // ground | naval: amphibious
     const bool ok = (layer & 8 /*sand only*/) ? (flags[i] & kCellGround) && !(flags[i] & (kCellRock | kCellRamp)) : (flags[i] & kCellGround) != 0;
@@ -323,7 +324,7 @@ bool MapGrid::findPath(Vec3 from, Vec3 to, uint8_t layer, std::vector<Vec3>& out
     struct Timed { MapGrid& g; int64_t t0; ~Timed() { if (g.clockNs) g.pathNs += g.clockNs() - t0; } } timed{*this, clockNs ? clockNs() : 0};
     out.clear();
     if (surf) return findPathSphere(from, to, layer, out, maxNodes, clear, useSoft);
-    if (layer & 2) { out.push_back(to); return true; } // air: straight line
+    if ((layer & 2) && !airSolid) { out.push_back(to); return true; } // air: straight line (rock-bound fliers search like walkers)
     int sx = cellX(from.x), sy = cellY(from.z), gx = cellX(to.x), gy = cellY(to.z);
     if (!inside(sx, sy) || w == 0) return false;
     if (!passable(sx, sy, layer)) nearestPassable(sx, sy, layer, 3);

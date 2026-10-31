@@ -137,7 +137,7 @@ private:
     double nextScan_ = -1;
     uint8_t viewer_ = 0;
     // what the viewer last saw, per cell (fog of war memory)
-    std::vector<uint8_t> memT_, memD_, memR_, memM_, memC_;
+    std::vector<uint8_t> memT_, memD_, memR_, memM_, memC_, memW_;   // memW_: reinforced wall owner (territory.fortify)
     std::vector<int16_t> memRoom_;
     std::vector<uint32_t> marked_;             // cells with a mark shown (progress bars)
     std::vector<Chunk> chunks_;

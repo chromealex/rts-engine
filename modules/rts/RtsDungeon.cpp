@@ -309,6 +309,7 @@ bool RtsModule::runDig(Simulation& sim, Entity e, Order& o) {
     if (dc < 0 || t.digRate.raw <= 0) return true;
     size_t di = size_t(dc);
     if (!g.dig[di] || !(g.digMark[di] & markBit(owner))) return true;
+    if (g.wall[di] != 0 && g.wall[di] != owner) { g.digMark[di] &= uint8_t(~markBit(owner)); return true; }   // fortified meanwhile
     Transform& tr = w.get<Transform>(e);
     if (o.state == 0) { moveTo(sim, e, o.point, Fixed::fromRatio(3, 10)); o.state = 1; return false; }
     if (o.state == 1) {
@@ -329,6 +330,7 @@ bool RtsModule::runDig(Simulation& sim, Entity e, Order& o) {
     }
     g.dig[di] = 0;
     g.digMark[di] = 0;
+    g.wall[di] = 0;
     g.digHp[di] = Fixed{};
     g.flags[di] = kCellGround;
     g.cellChanged(int(di) % g.w, int(di) / g.w);
@@ -347,16 +349,35 @@ bool RtsModule::runClaimCell(Simulation& sim, Entity e, Order& o) {
     const int cc = g.cellOf(o.point);
     if (cc < 0 || t.claimerTime.raw <= 0) return true;
     size_t ci = size_t(cc);
-    if (g.territory[ci] == owner || !(g.flags[ci] & kCellGround)) return true;
+    // param 1: reinforce the rock cell at point2 (standing on the own floor cell at point) into an owned wall
+    const bool fortify = o.param == 1;
+    const int wc = fortify ? g.cellOf(o.point2) : -1;
+    if (fortify && (wc < 0 || rules_.territory.fortifyTime.raw <= 0)) return true;
+    if (fortify ? (!g.dig[size_t(wc)] || g.wall[size_t(wc)] == owner || g.territory[ci] != owner)
+                : (g.territory[ci] == owner || !(g.flags[ci] & kCellGround))) return true;
     Transform& tr = w.get<Transform>(e);
     if (o.state == 0) { moveTo(sim, e, o.point, Fixed::fromRatio(2, 10)); o.state = 1; return false; }
     if (o.state == 1) {
         if (dist2D(tr.pos, o.point) <= Fixed::fromRatio(45, 100)) {
             stopMoving(sim, e);
             o.state = 2;
-            o.timer = t.claimerTime * (g.territory[ci] != 0 ? 2 : 1); // enemy floor takes longer
+            if (fortify) {
+                o.timer = rules_.territory.fortifyTime;
+                Vec3 face = flat(o.point2 - tr.pos);
+                if (face.length().raw > 0) w.get<Unit>(e).facing = face / face.length();
+            } else o.timer = t.claimerTime * (g.territory[ci] != 0 ? 2 : 1); // enemy floor takes longer
         } else if (!m || !m->moving) return true;
         return false;
+    }
+    if (fortify) {
+        if (g.wall[size_t(wc)] != 0 && g.wall[size_t(wc)] != owner) return true;   // someone else got it first
+        o.timer -= sim.dt() * stat(sim, e, Stat::GatherRate);
+        if (o.timer.raw > 0) return false;
+        g.wall[size_t(wc)] = owner;
+        g.digMark[size_t(wc)] &= markBit(owner);   // other players' marks on it are void now
+        state(sim).territoryDirty = true;
+        sim.emit({kEvFortified, owner, e, kNullEntity, int64_t(wc), o.point2});
+        return true;
     }
     if (!adjacentOwned(g, int(ci), owner)) return true;
     o.timer -= sim.dt() * stat(sim, e, Stat::GatherRate);
@@ -472,6 +493,7 @@ void RtsModule::applyDungeonCommand(Simulation& sim, const Command& cmd) {
                 if (c < 0) continue;
                 size_t i = size_t(c);
                 if (!g.dig[i]) continue;
+                if (extra != 1 && i < g.wall.size() && g.wall[i] != 0 && g.wall[i] != pl) continue;   // reinforced by someone else
                 if (extra == 1) g.digMark[i] &= uint8_t(~bit); else g.digMark[i] |= bit;
                 gs.territoryDirty = true;
             }
@@ -629,7 +651,7 @@ void RtsModule::movePossessed(Simulation& sim) {
         if (ps.dir.length().raw > 0 && !stunned) {
             Vec3 d = ps.dir * (stat(sim, e, Stat::Speed) * dt);
             auto ok = [&](Vec3 np) {
-                if (t.layer & kLayerAir) return true;
+                if ((t.layer & kLayerAir) && !g.airSolid) return true;
                 int cx0 = g.cellX(tr.pos.x), cy0 = g.cellY(tr.pos.z), cx = g.cellX(np.x), cy = g.cellY(np.z);
                 if (cx == cx0 && cy == cy0) return true;
                 if (cx != cx0 && cy != cy0) return g.canStep(cx0, cy0, cx, cy0, t.pathLayer) && g.canStep(cx, cy0, cx, cy, t.pathLayer) && g.canStep(cx0, cy0, cx, cy, t.pathLayer);
@@ -742,6 +764,17 @@ void RtsModule::sysDungeon(Simulation& sim) {
         }
     }
 
+    // ---- reinforced walls stand only while their keeper owns floor next to them
+    if (rules_.territory.fortifyTime.raw > 0 && tick % 20 == 10)
+        for (size_t i = 0; i < g.wall.size(); ++i) {
+            if (!g.wall[i]) continue;
+            if (!g.dig[i]) { g.wall[i] = 0; continue; }
+            if (adjacentOwned(g, int(i), g.wall[i])) continue;
+            g.wall[i] = 0;
+            gs.territoryDirty = true;
+            sim.emit({kEvFortified, 0, kNullEntity, kNullEntity, int64_t(i), g.centerOf(int(i))});
+        }
+
     // ---- area claims by units (territory war front line)
     if (rules_.territory.enabled && rules_.territory.claimBy != ClaimBy::Workers && tick % 10 == 0) {
         const Fixed step = dt * 10;
@@ -784,7 +817,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
 
     // ---- worker jobs: dig marked cells, claim territory (idle workers, staggered)
     {
-        struct Job { Entity e; OrderType type; Vec3 a, b; };
+        struct Job { Entity e; OrderType type; Vec3 a, b; int32_t param = 0; };
         std::vector<Job> jobs;
         std::vector<Entity> idle;
         bool anyWorker = false;
@@ -803,7 +836,7 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 if (ord.queue.empty()) return;
                 const Order& o = ord.queue.front();
                 if (o.type == OrderType::Dig) { const int c = g.cellOf(o.point2); if (c >= 0) digTaken[size_t(c)]++; }
-                if (o.type == OrderType::ClaimCell) { const int c = g.cellOf(o.point); if (c >= 0) claimTaken[size_t(c)] = 1; }
+                if (o.type == OrderType::ClaimCell) { const int c = g.cellOf(o.param == 1 ? o.point2 : o.point); if (c >= 0) claimTaken[size_t(c)] = 1; }
             });
             for (Entity e : idle) {
                 const UnitType& t = rules_.types[w.get<Unit>(e).type];
@@ -813,7 +846,8 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 Vec3 p = w.get<Transform>(e).pos;
                 const int sc = g.cellOf(p);
                 if (sc < 0) continue;
-                int claimCell = -1, digCell = -1, standCell = -1;
+                int claimCell = -1, digCell = -1, standCell = -1, wallCell = -1, wallStand = -1;
+                const bool fortifier = claimer && rules_.territory.fortifyTime.raw > 0;
                 bfsCells(g, sc, t.pathLayer, 6000, [&](int c) {
                     if (t.digRate.raw > 0 && bit)
                         for (int k = 0; k < 4; ++k) {
@@ -826,6 +860,16 @@ void RtsModule::sysDungeon(Simulation& sim) {
                         claimCell = c;
                         if (t.digRate.raw <= 0) return true;
                     }
+                    // reinforce plain rock next to own floor (Dungeon Keeper walls); dig and claim come first
+                    if (fortifier && wallCell < 0 && g.territory[size_t(c)] == owner && !g.blocked[size_t(c)])
+                        for (int k = 0; k < 4; ++k) {
+                            const int nc = nb4(g, c, k);
+                            if (nc < 0) continue;
+                            size_t n = size_t(nc);
+                            if (!g.dig[n] || g.wall[n] == owner || (g.digMark[n] & bit) || claimTaken[n] || !rules_.diggables[size_t(g.dig[n] - 1)].fortifiable) continue;
+                            if (g.wall[n] != 0) continue;   // another keeper's wall: take the floor next to it first
+                            wallCell = int(n); wallStand = c; break;
+                        }
                     return false;
                 });
                 if (digCell >= 0) {
@@ -834,9 +878,12 @@ void RtsModule::sysDungeon(Simulation& sim) {
                 } else if (claimCell >= 0) {
                     claimTaken[size_t(claimCell)] = 1;
                     jobs.push_back({e, OrderType::ClaimCell, g.centerOf(claimCell), {}});
+                } else if (wallCell >= 0) {
+                    claimTaken[size_t(wallCell)] = 1;
+                    jobs.push_back({e, OrderType::ClaimCell, g.centerOf(wallStand), g.centerOf(wallCell), 1});
                 }
             }
-            for (auto& j : jobs) { Order o; o.type = j.type; o.point = j.a; o.point2 = j.b; issue(sim, j.e, o, false); }
+            for (auto& j : jobs) { Order o; o.type = j.type; o.point = j.a; o.point2 = j.b; o.param = j.param; issue(sim, j.e, o, false); }
         }
     }
 
@@ -1079,6 +1126,7 @@ void RtsModule::hashDungeon(Simulation& sim, Hasher& h) {
     for (size_t i = 0; i < g.dig.size(); ++i) {
         h.u32(uint32_t(g.dig[i]) | uint32_t(g.digMark[i]) << 8 | uint32_t(g.territory[i]) << 16 | uint32_t(g.flags[i]) << 24);
         h.i32(g.room[i]);
+        if (g.wall[i]) h.u32(uint32_t(g.wall[i]) | uint32_t(i) << 8);
         if (g.dig[i]) h.fx(g.digHp[i]);
     }
     for (int c : gs.territoryCells) h.i32(c);

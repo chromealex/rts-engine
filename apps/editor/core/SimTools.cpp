@@ -26,10 +26,10 @@ const char* const kEventNames[] = {
     "triggerFired", "loaded", "unloaded", "cyclePhase", "traded", "diplomacy", "item", "merged",
     "objective", "dialog", "camera", "missionEnd",
     "learned", "crewKilled", "crewed", "infected", "submerged", "trapFired", "groupTeleport", "paved",   // originals / fidelity
-    "morale", "turn",
+    "morale", "turn", "fortified",
 };
 constexpr size_t kEventCount = sizeof(kEventNames) / sizeof(kEventNames[0]);
-static_assert(kEventCount == size_t(kEvTurn) + 1, "kEventNames must list every GameEvent");
+static_assert(kEventCount == size_t(kEvFortified) + 1, "kEventNames must list every GameEvent");
 
 struct CmdName { const char* name; uint16_t type; };
 const CmdName kCommands[] = {

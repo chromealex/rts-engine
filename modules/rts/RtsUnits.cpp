@@ -716,7 +716,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         Fixed step = stat(sim, e, Stat::Speed) * dt;
         if (rules_.roadNetwork.enabled && g.cellOf(tr.pos) >= 0 && (g.flags[size_t(g.cellOf(tr.pos))] & kCellRoad))
             step = step * rules_.roadNetwork.speed;
-        const bool ignoreGrid = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison); // road walkers pass through buildings
+        const bool ignoreGrid = ((t.layer & kLayerAir) && !g.airSolid) || (gs.roadsOnly && t.entersGarrison); // road walkers pass through buildings
         if (g.hf && (t.layer & kLayerGround) && m.pathPos < m.path.size()) { // uphill slower, downhill faster
             Vec2 d = (m.path[m.pathPos] - tr.pos).xz();
             Fixed len = d.length();
@@ -809,7 +809,7 @@ void RtsModule::sysMovement(Simulation& sim) {
         const UnitType& t = rules_.types[w.get<Unit>(p.e).type];
         Vec3 np = tr.pos + p.d;
         int cx0, cy0, cx, cy; g.cellXY(tr.pos, cx0, cy0); g.cellXY(np, cx, cy);
-        bool ok = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison) ||
+        bool ok = ((t.layer & kLayerAir) && !g.airSolid) || (gs.roadsOnly && t.entersGarrison) ||
                   ((cx == cx0 && cy == cy0) ? g.passable(cx, cy, t.pathLayer) || !g.passable(cx0, cy0, t.pathLayer) : g.canStep(cx0, cy0, cx, cy, t.pathLayer));
         if (ok) tr.pos = np;
     }

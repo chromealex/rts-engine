@@ -434,7 +434,8 @@ struct RegionRules {
 };
 
 // Diggable terrain: map character -> hardness and what digging it yields (gold veins, gems).
-struct DiggableDef { char ch = 'D'; Fixed hardness = Fixed::fromInt(3); std::vector<Amount> yields; bool infinite = false; };
+struct DiggableDef { char ch = 'D'; Fixed hardness = Fixed::fromInt(3); std::vector<Amount> yields; bool infinite = false;
+                     bool fortifiable = true; };   // workers may reinforce it into an owned wall (territory.fortify); default: plain rock only
 
 // Painted rooms: effects scale with the number of cells the player owns of that room type.
 struct RoomDef {
@@ -456,6 +457,7 @@ struct TerritoryRules {
     int startRadius = 0;                       // cells around starting structures / start points
     bool buildOnlyOwned = false;
     std::vector<Amount> incomePerCell;         // per owned cell per second (Dungeon Keeper mana)
+    Fixed fortifyTime{};                       // > 0: claimer workers reinforce diggable rock next to own floor into owned walls (seconds per cell)
 };
 
 struct HandRules {
@@ -490,6 +492,7 @@ struct FlowFieldRules {
 struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2);
                        FlowFieldRules flow;
                        bool blockedGoalNearest = false;   // movement.blockedGoals: "nearest" (vs "search")
+                       bool airOverRock = true;           // false: fliers are confined to open cells (ground / water) - no flying over undug rock / '#'
                        int planetHpaCells = 256 * 256; };   // planets: HPA* on bodies with >= this many cells (0 = all)
 
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.

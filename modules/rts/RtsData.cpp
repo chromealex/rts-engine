@@ -318,6 +318,7 @@ Rules loadRules(const Json& j) {
         if (d.hardness.raw <= 0) fail(where, "hardness must be positive");
         amounts(where + " yields", dj["yields"], d.yields, {});
         d.infinite = dj.getBool("infinite", false);
+        d.fortifiable = dj.getBool("fortifiable", d.yields.empty() && !d.infinite);
         r.diggables.push_back(d);
     }
     for (auto& [id, rj] : j["rooms"].members()) {
@@ -650,6 +651,10 @@ Rules loadRules(const Json& j) {
         r.territory.startFromRegions = tr.getBool("startFromRegions", false);
         r.territory.startRadius = int(tr.getInt("startRadius", 0));
         r.territory.buildOnlyOwned = tr.getBool("buildOnlyOwned", false);
+        if (const Json& ft = tr["fortify"]; !ft.isNull()) {
+            r.territory.fortifyTime = ft.isObject() ? ft.getFx("time", Fixed::fromInt(2)) : ft.fx();
+            if (r.territory.fortifyTime.raw <= 0) fail("territory.fortify", "time must be positive");
+        }
     }
     if (const Json& h = j["hand"]; h.isObject()) {
         r.hand.max = int(h.getInt("max", 8));
@@ -694,6 +699,7 @@ Rules loadRules(const Json& j) {
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
         r.movement.planetHpaCells = int(std::clamp<int64_t>(mv.getInt("planetHpaCells", r.movement.planetHpaCells), 0, int64_t(1) << 30));
+        r.movement.airOverRock = mv.getBool("airOverRock", true);
         if (mv.has("blockedGoals")) {
             const std::string bg = mv.getStr("blockedGoals");
             if (bg != "nearest" && bg != "search") fail("movement.blockedGoals", "expected 'nearest' or 'search', got '" + bg + "'");

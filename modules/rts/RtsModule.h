@@ -152,6 +152,7 @@ enum GameEvent : uint16_t {
     kEvPaved,         // a = slab (removed), value = cells paved, pos = slab centre
     kEvMorale,          // a = unit, value = 0 steady / 1 wavering / 2 routing (stage 4)
     kEvTurn,            // turn-based mode: player = whose turn starts, value = turn number
+    kEvFortified,       // dungeon walls: value = cell, player = new wall owner (0: the wall fell back to plain rock), a = worker
 };
 
 // ---------------------------------------------------------------- components

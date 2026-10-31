@@ -67,9 +67,10 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // big maps: build the hierarchical pathing graph now (it is derived data, so this only moves the cost
     // from the first long path of the match to the loading screen)
     MapGrid& g = state(sim).grid;
+    g.airSolid = !rules_.movement.airOverRock;   // rock-bound fliers path like walkers (RtsMap passable / findPath)
     if (g.bigMap())
         for (auto& t : rules_.types)
-            if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpa(t.pathLayer);
+            if (t.speed.raw > 0 && (!(t.layer & kLayerAir) || g.airSolid)) g.prepareHpa(t.pathLayer);
     // planets: HPA* on bodies above the cell threshold (RtsHpaSphere.cpp). RTS_PLANET_HPA=1 / 0 forces it on / off
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;

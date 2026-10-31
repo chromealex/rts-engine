@@ -117,6 +117,9 @@ any tag in `deficitDisables`).
 - `movement.blockedGoals: "nearest"` (rules or map, default `"search"`): paths to a goal inside a structure or obstacle
   (attacking a building) end at the free cell around it nearest to the unit - much cheaper for hordes; different cells
   than the classic search, so it is opt-in (on in `templates/lastcolony/maps/horde_plain.json`).
+- `movement.airOverRock: false` (default `true`): fliers are confined to open cells - ground and water - so they
+  follow tunnels like everyone else instead of crossing undug rock and `#` (`MapGrid::airSolid`; their paths are
+  searched like walkers', structures and units still don't block them). Dungeon games (`underlord`).
 
 ## types — blocks
 
@@ -183,7 +186,7 @@ More type blocks (dungeon management and territory, see the section below):
 | block | meaning |
 |---|---|
 | `digs` | `{"rate": 2}` — worker digs cells its owner marked (hardness per second); idle diggers find jobs themselves |
-| `claimer` | `{"time": 0.5}` — worker walks to unowned cells next to own territory and claims them (seconds per cell, x2 for enemy cells) |
+| `claimer` | `{"time": 0.5}` — worker walks to unowned cells next to own territory and claims them (seconds per cell, x2 for enemy cells); with `territory.fortify` it also reinforces the rock next to own floor |
 | `claim` | `{"radius": 1.5, "rate": 2}` — the unit converts cells around it (cells per second): only cells touching own territory, never while hostile units stand on them (territory war front line) |
 | `claimedByTerritory` | `true` — a neutral structure (portal) joins the player owning territory next to it |
 | `capturable` | `true` — with `territory`: the structure flips to whoever owns the ground under its centre |
@@ -505,6 +508,14 @@ player-only cues.
 - **Diggable terrain**: map characters listed in `diggable` (one character, not `. ~ # , = / R` or a digit) are
   solid cells. Players mark cells with the dig command; idle `digs` workers dig marked cells next to ground they
   can reach; the cell becomes ground (paths update) and `yields` is credited (`infinite`: the seam stays).
+- **Reinforced walls** (`territory.fortify: {"time": 2.5}`, seconds per cell; `"fortify": 2.5` works too): idle
+  `claimer` workers, once nothing is left to dig or claim, reinforce diggable rock 4-adjacent to own floor into walls
+  of their keeper (`MapGrid::wall` = owner slot, drawn in the owner colour with masonry courses). Nobody else can
+  mark or dig such a wall - the enemy has to take the floor behind it first: a wall that no longer touches its
+  keeper's floor falls back to plain rock within a second (and can then be reinforced by whoever owns the floor).
+  The keeper digs through own walls normally. `diggable.<char>.fortifiable` (default: true for plain rock, false
+  for cells with `yields` or `infinite`) says which rock can be reinforced. Event `fortified` (value = cell, player
+  = new owner, 0 when a wall fell). Dungeon Keeper: the AI keeper's imps do it on their own.
 - **Territory** (per-cell owner layer, `MapGrid::territory`; `GameState::territoryCells[slot]` / `territoryTotal`
   for the HUD share): starts from map `"territory": {"rows": ["..11..", ...]}` (digits = player slots), from owned
   regions (`startFromRegions`) and `startRadius` cells around starting structures and start points. Claimed by
@@ -1445,7 +1456,7 @@ image with transparency (it is flattened on `background`).
 - **Z**: regions with `capture.region` flags, `productionPerRegion`, factories in sectors with `capturable`.
 - **Mushroom Wars**: `garrison` structures, `roads` + `roadsOnly`, `entersGarrison` units, Send command.
 - **Lane battlers**: `autoBuild`, `waveClock` + `waveSpawn`, `upgrades`, `victory: score`.
-- **Dungeon Keeper**: `diggable` rock and gold veins, imps with `digs` + `claimer`, `territory.buildOnlyOwned`, painted `rooms` (lair `supply`, hatchery food `income`, library `work`), neutral `portal` with `claimedByTerritory`, creatures with `attractedBy` + `needs`, `hand`, `possession`, `victory: keyUnits` (dungeon heart).
+- **Dungeon Keeper**: `diggable` rock and gold veins, imps with `digs` + `claimer`, `territory.buildOnlyOwned`, reinforced walls (`territory.fortify`), painted `rooms` (lair `supply`, hatchery food `income`, library `work`), neutral `portal` with `claimedByTerritory`, creatures with `attractedBy` + `needs`, flies that follow the tunnels (`movement.airOverRock: false`), `hand`, `possession`, `victory: keyUnits` (dungeon heart).
 - **Knights and Merchants / Settlers**: `"storage": "buildings"`, storehouses, `recipe` chains (woodcutter → sawmill, farm → mill → bakery), `carrier` serfs, `roadNetwork`, materials delivered to sites, `trainFrom` recruits, inn food `needs` with `starve`.
 - **Mushroom Wars 2**: `garrison` villages + `lanes` instead of hand-made `roads`.
 - **Territory war (State.io)**: `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `capturable` towns, barracks with `autoTrain`, `playerAbilities`, repeatable `levels` techs, `victory: territory`.
@@ -1790,7 +1801,7 @@ outputs to it: buildings that gather around them (They Are Billions sawmills, No
 | `clanlands` | Northgard | scouted and cleared regions, births, production in buildings, warband from villagers, happiness |
 | `flagsectors` | Z | flags, free factories with levels, drivers and empty vehicles / guns, fort |
 | `laneclash` | lane battler | `autoBuild` pool, `waveClock` + `waveSpawn`, `upgrades`, `victory: score` with `keyLoses` |
-| `underlord` | Dungeon Keeper | `diggable` rock/gold/gem, imps with `digs` + `claimer`, `rooms`, neutral `portal` + `claimedByTerritory`, creatures with `attractedBy`, `needs` and hero levels from training, `hand`, `possession`, leveled tech paid in research |
+| `underlord` | Dungeon Keeper | `diggable` rock/gold/gem, imps with `digs` + `claimer`, reinforced walls (`territory.fortify`), `rooms`, neutral `portal` + `claimedByTerritory`, creatures with `attractedBy`, `needs` and hero levels from training, flies bound to the tunnels (`movement.airOverRock: false`), `hand`, `possession`, leveled tech paid in research, traps |
 | `borderrush` | State.io (portrait) | `territory` with `claimBy: units` + `startFromRegions`, soldiers with `claim`, `autoTrain` capital and towns, `capturable` towns, `playerAbilities` (air strike, drones with charges), leveled techs incl. `productionSpeed`, `victory: territory` |
 | `hearthhaul` | Knights and Merchants | `storage: buildings`, storehouse, recipe chains (woodcutter → sawmill, farm → mill → bakery, armoury), serf `carrier`s, `roadNetwork`, delivered construction materials, `trainFrom: recruit`, inn `needs` with `starve` |
 | `sporelanes` | Mushroom Wars 2 | `garrison` hives/huts/towers, `lanes` instead of `roads` |

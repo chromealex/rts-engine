@@ -135,7 +135,7 @@ void Simulation::loadState(const SimSnapshot& in) {
 // ---------------------------------------------------------------- save states
 namespace {
 constexpr uint32_t kSaveMagic = 0x56535452;   // "RTSV"
-constexpr uint32_t kSaveVersion = 2;   // 2: agent-mech MechShield / Abandoned pools merged into Shield / crews
+constexpr uint32_t kSaveVersion = 3;   // 2: agent-mech MechShield / Abandoned pools merged into Shield / crews; 3: MapGrid wall + airSolid
 } // namespace
 void io(Archive& a, Command& c) { a(c.tick, c.player, c.flags, c.type, c.seq, c.units, c.target, c.point, c.param); }   // found by ADL
 void io(Archive& a, PlayerInfo& p) { a(p.slot, p.name, p.team, p.alive); }

@@ -263,7 +263,7 @@ void RtsModule::moveAgents(Simulation& sim) {
         Transform& tr = w.get<Transform>(a.e);
         Unit& u = w.get<Unit>(a.e);
         const UnitType& t = rules_.types[u.type];
-        const bool ignoreGrid = (t.layer & kLayerAir) || (gs.roadsOnly && t.entersGarrison);
+        const bool ignoreGrid = ((t.layer & kLayerAir) && !g.airSolid) || (gs.roadsOnly && t.entersGarrison);
         Vec3 step{a.nv.x * dt, Fixed{}, a.nv.y * dt};
         auto ok = [&](Vec3 np) {
             if (ignoreGrid) return true;

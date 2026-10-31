@@ -297,7 +297,7 @@ void RtsGroundFx::resetGrid(const MapGrid& g) {
     const size_t n = size_t(g.w * g.h);
     // terrain (rock, roads) is known from the start like the map itself; territory and rooms are learned by seeing them
     memT_.assign(n, 0); memRoom_.assign(n, -1); memM_.assign(n, 0);
-    memD_.assign(n, 0); memR_.assign(n, 0); memC_.assign(n, 0);
+    memD_.assign(n, 0); memR_.assign(n, 0); memC_.assign(n, 0); memW_.assign(n, 0);
     bool anyRoad = false;
     for (size_t i = 0; i < n; ++i) {
         memD_[i] = i < g.dig.size() ? g.dig[i] : 0;
@@ -334,6 +334,8 @@ void RtsGroundFx::scan(const MapGrid& g, const std::vector<uint8_t>* vision, uin
             }
             const uint8_t d = hasDig ? g.dig[i] : 0;
             if (d != memD_[i]) { memD_[i] = d; dirty(x, y, true, kDirtyD | kDirtyT | kDirtyM); }
+            const uint8_t wl = d && i < g.wall.size() ? g.wall[i] : 0;
+            if (wl != memW_[i]) { memW_[i] = wl; dirty(x, y, true, kDirtyD); }
             const uint8_t r = (g.flags[i] & kCellRoad) ? 1 : 0;
             if (r != memR_[i]) { memR_[i] = r; dirty(x, y, true, kDirtyR); }
             if (useC_) {
@@ -419,6 +421,9 @@ void RtsGroundFx::buildDig(Chunk& c, int cx, int cy, const MapGrid& g, const Rts
             const float n0 = rnd(x, y, 1);
             float3 rock = K.rock * (0.97f + 0.06f * n0);
             if (K.style != 0 && !hi_) rock = lerp(rock, K.vein, 0.35f);   // low quality: vein shown as a tint only
+            // reinforced wall (territory.fortify): the keeper's colour shows on the block, bricks on the faces
+            const int wOwner = memW_[size_t(y * g.w + x)];
+            if (wOwner) rock = lerp(rock, ownerColor(wOwner), 0.3f);
             // walls on edges towards dug / open cells; map edge: no wall
             static const int dx[4] = {1, -1, 0, 0}, dy[4] = {0, 0, 1, -1};
             bool wall[4];
@@ -449,6 +454,17 @@ void RtsGroundFx::buildDig(Chunk& c, int cx, int cy, const MapGrid& g, const Rts
                 float3 fa{oa.x, floorY, oa.z}, fb2{ob.x, floorY, ob.z};
                 const float3 wc = rock * 0.72f, wd = rock * 0.5f;
                 quad(rb, oa, ob, fb2, fa, nrm, c4(wc, 1), c4(wc, 1), c4(wd, 1), c4(wd, 1));
+                if (wOwner) { // masonry courses in the owner colour (two bands, offset like bricks)
+                    const float3 oc = ownerColor(wOwner);
+                    float3 along = ob - oa; along.y = 0;
+                    const float3 off = nrm * 0.012f;
+                    for (int s = 0; s < (hi_ ? 2 : 1); ++s) {
+                        const float y0 = floorY + 0.18f + 0.34f * float(s) * (wallTop - floorY - 0.3f), y1 = y0 + 0.1f;
+                        const float t0 = s ? 0.1f : 0.0f, t1 = s ? 0.9f : 1.0f;
+                        const float3 a0 = oa + along * t0 + off, a1 = oa + along * t1 + off;
+                        quad(vb, float3{a0.x, y0, a0.z}, float3{a1.x, y0, a1.z}, float3{a1.x, y1, a1.z}, float3{a0.x, y1, a0.z}, nrm, c4(oc * 0.9f, 1));
+                    }
+                }
                 if (K.style == 1 && hi_) { // vein streaks on the wall face
                     for (int s = 0; s < 2; ++s) {
                         float t = 0.2f + 0.6f * rnd(x * 4 + d, y, 31 + uint32_t(s)), hgt = 0.12f + 0.15f * rnd(x, y * 4 + d, 41 + uint32_t(s));
