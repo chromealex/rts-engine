@@ -266,6 +266,7 @@ Rules loadRules(const Json& j) {
         for (auto& a : tj["abilities"].items()) for (auto& e : a["effects"].items()) damageIdx(e.getStr("damageType", "normal"));
     }
     for (auto& pa : j["playerAbilities"].items()) for (auto& e : pa["effects"].items()) damageIdx(e.getStr("damageType", "normal"));
+    for (auto& [fid, fj] : j["fields"].members()) for (auto& e : fj["effects"].items()) if (e.has("damageType")) damageIdx(e.getStr("damageType"));   // grid fields
     r.damageTable.assign(r.damageTypes.size(), std::vector<Fixed>(r.armorTypes.size(), Fixed::fromInt(1)));
     for (auto& [dt, row] : j["damageTable"].members())
         for (auto& [at, v] : row.members()) r.damageTable[size_t(indexOf(r.damageTypes, dt))][size_t(indexOf(r.armorTypes, at))] = v.fx();
@@ -694,6 +695,11 @@ Rules loadRules(const Json& j) {
         r.movement.neighbors = std::clamp<int>(int(mv.getInt("neighbors", 8)), 1, 32);
         r.movement.timeHorizon = mv.getFx("timeHorizon", r.movement.timeHorizon);
         r.movement.planetHpaCells = int(std::clamp<int64_t>(mv.getInt("planetHpaCells", r.movement.planetHpaCells), 0, int64_t(1) << 30));
+        if (mv.has("blockedGoals")) {
+            const std::string bg = mv.getStr("blockedGoals");
+            if (bg != "nearest" && bg != "search") fail("movement.blockedGoals", "expected 'nearest' or 'search', got '" + bg + "'");
+            r.movement.blockedGoalNearest = bg == "nearest";
+        }
         if (const Json& ff = mv["flowField"]; ff.isObject()) {
             loadFlowFieldRules(ff, r.movement.flow, "movement.flowField");
         } else if (mv.has("flowField")) fail("movement.flowField", "expected an object");
@@ -758,6 +764,7 @@ Rules loadRules(const Json& j) {
                 r.possession.enabled || !r.playerAbilities.empty();
     loadMechRules(r, j);
     r.armor.plainFloor = !r.originals && !r.mech.any && !j.has("armor") && !j.has("armorModel");   // old games: damage - armor, at least raw / 5
+    loadGridFieldRules(r, j);   // RtsGridFieldData.cpp: rules "fields", type "field" emitters, "field" effects
     return r;
 }
 

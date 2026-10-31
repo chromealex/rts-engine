@@ -4821,6 +4821,202 @@ TEST(fog_line_of_sight_3d_blockers) {
     CHECK(!vis(*smoke, 16) && vis(*smoke, 8));
 }
 
+// Vision (agent-vision): the cached / incremental passes give exactly the brute-force reference's cells (vision,
+// visibleCells order, LOS heights) on random maps: cliff levels, line of sight with blockers / smoke / undug rock,
+// heightfields, planets (seams, cube corners, horizon), moving and parked units, terrain / level / dig changes,
+// destroyed blockers, snapshot rollback and loading a save into the running simulation.
+namespace {
+struct VisionLcg { uint64_t s; uint32_t next() { s = s * 6364136223846793005ull + 1442695040888963407ull; return uint32_t(s >> 33); } int below(int n) { return int(next() % uint32_t(n)); } };
+bool sameVision(Simulation& a, Simulation& b) {
+    auto& x = mod(a).state(a); auto& y = mod(b).state(b);
+    return x.vision == y.vision && x.visibleCells == y.visibleCells && x.visionBase == y.visionBase && x.visionOcc == y.visionOcc;
+}
+// A = fast, B = reference; same random orders and the same world changes in both; true when every pass matched
+bool visionMatches(const std::function<std::unique_ptr<Simulation>()>& mk, const std::function<Vec3(Simulation&, VisionLcg&)>& randomPoint,
+                   const std::function<void(Simulation&, VisionLcg&)>& mutate, int ticks, uint64_t seed, int* passes) {
+    auto A = mk(), B = mk();
+    mod(*B).setVisionReference(true);
+    VisionLcg ra{seed}, rb{seed};
+    SimSnapshot sa, sb;
+    std::string save;
+    for (int t = 0; t < ticks; ++t) {
+        if (t % 15 == 0) {
+            std::vector<Entity> movers;
+            A->world().each<game::Unit, Owner, game::Mobile>([&](Entity e, game::Unit&, Owner& o, game::Mobile&) { if (o.player && e.index % 3 != 0) movers.push_back(e); });   // every third unit stays put
+            for (Entity e : movers) {
+                const int roll = ra.below(3); rb.below(3);
+                if (roll == 0) continue;   // some stay parked (cached lists replayed)
+                Command c; c.player = A->world().get<Owner>(e).player; c.type = game::kCmdMove; c.units = {e};
+                c.point = randomPoint(*A, ra); randomPoint(*B, rb);
+                A->submit(c); B->submit(c);
+            }
+        }
+        if (t % 40 == 20) { mutate(*A, ra); mutate(*B, rb); }
+        if (t == 100) { A->saveState(sa); B->saveState(sb); }
+        if (t == 160) { A->loadState(sa); B->loadState(sb); }        // rollback: caches must start over
+        if (t == 200) save = A->serialize();
+        if (t == 260) { if (!A->deserialize(save) || !B->deserialize(save)) return false; }   // load a save into the running sims
+        A->step(); B->step();
+        if (A->tick() % 5 == 1) {
+            if (!sameVision(*A, *B)) {
+                auto& x = mod(*A).state(*A); auto& y = mod(*B).state(*B);
+                std::fprintf(stderr, "vision mismatch seed %llu tick %u: vision %d cells %d base %d occ %d\n", (unsigned long long)seed, A->tick(),
+                             int(x.vision != y.vision), int(x.visibleCells != y.visibleCells), int(x.visionBase != y.visionBase), int(x.visionOcc != y.visionOcc));
+                return false;
+            }
+            ++*passes;
+        }
+    }
+    return true;
+}
+} // namespace
+
+TEST(vision_fast_equals_reference_flat) {
+    const char* rulesLos = R"({
+      "fogOfWar": {"lineOfSight": true, "rockHeight": 2},
+      "victory": {"mode": "survive", "seconds": 900},
+      "diggable": {"D": {"hardness": 2}},
+      "types": {
+        "scout": {"move": {"speed": 3}, "sight": 9},
+        "tower": {"move": {"speed": 2}, "sight": 11, "vision": {"eye": 4}},
+        "drone": {"move": {"speed": 3}, "sight": 8, "vision": {"seesOver": true}},
+        "flyer": {"move": {"speed": 4, "layer": "air"}, "sight": 7},
+        "wall": {"structure": {"footprint": [1, 4]}, "health": {"max": 500}, "vision": {"blocks": 3}},
+        "post": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "sight": 6},
+        "smoker": {"move": {"speed": 2}, "sight": 3, "abilities": [
+          {"id": "smoke", "target": "point", "range": 60, "cooldown": 1, "autocast": false,
+           "delivery": {"type": "area", "radius": 2, "lifetime": 4, "blocksVision": 4}, "effects": [{"type": "damage", "amount": 0}]}]}
+      }})";
+    const char* rulesLevels = R"({"victory": {"mode": "survive", "seconds": 900},
+      "types": {"scout": {"move": {"speed": 3}, "sight": 9}, "flyer": {"move": {"speed": 4, "layer": "air"}, "sight": 7},
+                "post": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "sight": 6}}})";
+    const char* rulesHf = R"({"terrain": {"model": "heightfield"}, "victory": {"mode": "survive", "seconds": 900},
+      "types": {"scout": {"move": {"speed": 3}, "sight": 10}, "tower": {"move": {"speed": 2}, "sight": 12, "vision": {"eye": 3}},
+                "flyer": {"move": {"speed": 4, "layer": "air"}, "sight": 7},
+                "wall": {"structure": {"footprint": [1, 4]}, "health": {"max": 500}, "vision": {"blocks": 3}},
+                "post": {"structure": {"footprint": [2, 2]}, "health": {"max": 500}, "sight": 6}}})";
+    const int W = 56, H = 40;
+    auto entities = [&](VisionLcg& r, bool los) {
+        const char* kinds[] = {"scout", "tower", "drone", "flyer", "smoker"};
+        std::string e = ",\"entities\":[";
+        for (int i = 0; i < 26; ++i) {
+            const char* k = los ? kinds[r.below(5)] : (r.below(2) ? "scout" : "flyer");
+            e += std::string(i ? "," : "") + "{\"type\":\"" + k + "\",\"owner\":" + std::to_string(1 + i % 3) + ",\"pos\":[" +
+                 std::to_string(2 + r.below(W - 4)) + ".5," + std::to_string(2 + r.below(H - 4)) + ".5]}";
+        }
+        for (int i = 0; i < 6; ++i) e += std::string(",{\"type\":\"") + (los && i % 2 ? "wall" : "post") + "\",\"owner\":" + std::to_string(i % 3) +
+                                         ",\"pos\":[" + std::to_string(6 + r.below(W - 12)) + "," + std::to_string(6 + r.below(H - 12)) + "]}";
+        return e + "]";
+    };
+    auto map = [&](VisionLcg& r, bool dig, bool los, bool hf = false) {
+        std::string rows, corners;
+        if (hf) for (int i = 0; i < (W + 1) * (H + 1); ++i) corners += std::string(i ? "," : "") + std::to_string(r.below(33));
+        for (int y = 0; y < H; ++y) {
+            std::string row(size_t(W), '.');
+            if (dig) for (int x = 0; x < W; ++x) if (r.below(9) == 0) row[size_t(x)] = 'D';
+            rows += std::string(y ? "," : "") + "\"" + row + "\"";
+        }
+        return "{\"size\":[" + std::to_string(W) + "," + std::to_string(H) + "],\"players\":[{\"name\":\"A\",\"team\":1},{\"name\":\"B\",\"team\":1},{\"name\":\"C\",\"team\":2}],"
+               "\"terrain\":{\"rows\":[" + rows + "]" + (hf ? ",\"corners\":[" + corners + "]" : std::string()) + "}" + entities(r, los) + "}";
+    };
+    auto randomLevels = [&](Simulation& s, VisionLcg& r, int n) {   // a few random cliff blocks
+        auto& g = mod(s).state(s).grid;
+        for (int k = 0; k < n; ++k) {
+            const int x0 = r.below(W - 6), y0 = r.below(H - 6), lv = r.below(3);
+            for (int y = y0; y < y0 + 1 + r.below(5); ++y) for (int x = x0; x < x0 + 1 + r.below(5); ++x) g.level[size_t(g.index(x, y))] = int8_t(lv);
+        }
+    };
+    auto randomCorners = [&](Simulation& s, VisionLcg& r, int n) {   // hills: raise / lower corner blocks
+        auto& g = mod(s).state(s).grid;
+        for (int k = 0; k < n; ++k) {
+            const int x0 = r.below(W - 6), y0 = r.below(H - 6), dh = r.below(97) - 48;
+            for (int y = y0; y < y0 + 2 + r.below(6); ++y) for (int x = x0; x < x0 + 2 + r.below(6); ++x) g.corner[size_t(g.cornerIndex(x, y))] = int16_t(g.corner[size_t(g.cornerIndex(x, y))] + dh);
+        }
+    };
+    auto pt = [&](Simulation&, VisionLcg& r) { return P(1.5 + r.below(W - 3), 1.5 + r.below(H - 3)); };
+    int passes = 0;
+    for (uint64_t seed = 1; seed <= 3; ++seed) {
+        // cliff levels + 3D line of sight with walls, smoke, undug rock (dug out over time), destroyed walls
+        VisionLcg r0{seed * 77};
+        const std::string mLos = map(r0, true, true);
+        auto mkLos = [&] { auto s = makeSimJson(rulesLos, mLos, seed); VisionLcg rr{seed}; randomLevels(*s, rr, 30); return s; };
+        CHECK(visionMatches(mkLos, pt, [&](Simulation& s, VisionLcg& r) {
+            auto& g = mod(s).state(s).grid;
+            for (int k = 0; k < 40; ++k) { const size_t i = size_t(r.below(W * H)); if (i < g.dig.size()) g.dig[i] = 0; }   // dug out
+            randomLevels(s, r, 2);
+            std::vector<Entity> walls, smokers;
+            const int wall = mod(s).rules().findType("wall"), smoker = mod(s).rules().findType("smoker");
+            s.world().each<game::Unit>([&](Entity e, game::Unit& u) { if (u.type == wall && u.hp.raw > 0) walls.push_back(e); if (u.type == smoker) smokers.push_back(e); });
+            if (!walls.empty() && r.below(2)) s.world().get<game::Unit>(walls[size_t(r.below(int(walls.size())))]).hp = Fixed{};
+            for (Entity e : smokers) castAbility(s, e, 0, kNullEntity, pt(s, r));
+        }, 420, seed, &passes));
+        // plain cliff levels (no line of sight), level changes
+        VisionLcg r1{seed * 91};
+        const std::string mLv = map(r1, false, false);
+        auto mkLv = [&] { auto s = makeSimJson(rulesLevels, mLv, seed); VisionLcg rr{seed}; randomLevels(*s, rr, 30); return s; };
+        CHECK(visionMatches(mkLv, pt, [&](Simulation& s, VisionLcg& r) { randomLevels(s, r, 3); }, 300, seed, &passes));
+        // heightfield line of sight, sculpted while units watch
+        VisionLcg r2{seed * 13};
+        std::string mHf = map(r2, false, false, true);
+        auto mkHf = [&] { auto s = makeSimJson(rulesHf, mHf, seed); VisionLcg rr{seed}; randomCorners(*s, rr, 40); return s; };
+        CHECK(visionMatches(mkHf, pt, [&](Simulation& s, VisionLcg& r) { randomCorners(s, r, 3); }, 300, seed, &passes));
+    }
+    CHECK(passes > 400);
+}
+
+TEST(vision_fast_equals_reference_planet) {
+    // small planet: 6 faces of 10 x 10, random hills (the horizon), rock to dig on two faces, blocking structures,
+    // units on seams and next to cube corners
+    const int N = 10;
+    const std::string rules = R"J({"fogOfWar": {"lineOfSight": true, "rockHeight": 1.5}, "victory": {"mode": "survive", "seconds": 900},
+      "diggable": {"D": {"hardness": 2}},
+      "types": {"scout": {"move": {"speed": 3, "radius": 0.3}, "sight": 6},
+                "tower": {"move": {"speed": 2, "radius": 0.3}, "sight": 8, "vision": {"eye": 2}},
+                "flyer": {"move": {"speed": 3, "layer": "air", "radius": 0.3}, "sight": 5},
+                "seer": {"move": {"speed": 2, "radius": 0.3}, "sight": 30},
+                "wall": {"structure": {"footprint": [1, 3]}, "health": {"max": 500}, "vision": {"blocks": 2}}}})J";
+    for (uint64_t seed = 1; seed <= 3; ++seed) {
+        VisionLcg r{seed * 5};
+        std::string corners;
+        for (int i = 0; i < 6 * (N + 1) * (N + 1); ++i) corners += std::string(i ? "," : "") + std::to_string(r.below(49) - 16);
+        auto face = [&](bool dig) {
+            std::string rows;
+            for (int y = 0; y < N; ++y) { std::string row(size_t(N), '.'); if (dig) for (int x = 0; x < N; ++x) if (r.below(4) == 0) row[size_t(x)] = 'D'; rows += std::string(y ? "," : "") + "\"" + row + "\""; }
+            return "{\"rows\":[" + rows + "]}";
+        };
+        std::string faces;
+        for (int f = 0; f < 6; ++f) faces += std::string(f ? "," : "") + face(f != 4);
+        const char* kinds[] = {"scout", "tower", "flyer", "scout", "seer"};
+        std::string ents;
+        for (int i = 0; i < 18; ++i) {
+            const int f = r.below(6);
+            const int x = i % 3 == 0 ? (r.below(2) ? 0 : N - 1) : r.below(N), y = i % 3 == 0 ? (r.below(2) ? 0 : N - 1) : r.below(N);   // cube corners / seams
+            ents += std::string(i ? "," : "") + "{\"type\":\"" + kinds[i % 5] + "\",\"owner\":" + std::to_string(1 + i % 3) +
+                    ",\"at\":{\"body\":\"p\",\"face\":" + std::to_string(f) + ",\"x\":" + std::to_string(x) + ".5,\"y\":" + std::to_string(y) + ".5}}";
+        }
+        for (int i = 0; i < 10; ++i) ents += ",{\"type\":\"wall\",\"owner\":0,\"at\":{\"body\":\"p\",\"face\":" + std::to_string(i % 6) + ",\"x\":" + std::to_string(2 + r.below(6)) + ",\"y\":" + std::to_string(2 + r.below(5)) + "}}";
+        const std::string map = R"J({"players": [{"name":"A","team":1,"start": {"body": "p", "face": 4, "x": 4, "y": 4}}, {"name":"B","team":1,"start": {"body": "p", "face": 0, "x": 4, "y": 4}}, {"name":"C","team":2,"start": {"body": "p", "face": 5, "x": 4, "y": 4}}],
+          "world": {"start": "p", "bodies": [{"id": "p", "kind": "planet", "radius": 14, "faceSize": 10, "terrain": {"faces": [)J" + faces + "], \"corners\": [" + corners + "]}}]},\"entities\": [" + ents + "]}";
+        auto mk = [&] { return makeSimJson(rules, map, seed); };
+        auto pt = [&](Simulation& s, VisionLcg& rr) { const game::Surface* S = mod(s).surface(s); return S->cellCenter(S->gridCell(0, rr.below(6), rr.below(N), rr.below(N))); };
+        int passes = 0;
+        { auto s0 = mk(); CHECK(mod(*s0).surface(*s0) != nullptr); }
+        CHECK(visionMatches(mk, pt, [&](Simulation& s, VisionLcg& rr) {
+            auto& g = mod(s).state(s).grid;
+            for (int k = 0; k < 30; ++k) { const size_t i = size_t(rr.below(int(g.dig.size()))); if (i < g.dig.size()) g.dig[i] = 0; }
+            std::vector<Entity> walls;
+            const int wall = mod(s).rules().findType("wall");
+            s.world().each<game::Unit>([&](Entity e, game::Unit& u) { if (u.type == wall && u.hp.raw > 0) walls.push_back(e); });
+            if (!walls.empty() && rr.below(2) == 0) s.world().get<game::Unit>(walls[size_t(rr.below(int(walls.size())))]).hp = Fixed{};
+        }, 420, seed, &passes));
+        CHECK(passes > 60);
+        // and the shipped planet maps over a stretch of a match
+        auto big = [&] { return makeSim(std::string(RTS_SOURCE_DIR) + "/templates/planets", "maps/two_worlds.json", seed); };
+        auto ptBig = [&](Simulation& s, VisionLcg& rr) { const game::Surface* S = mod(s).surface(s); const int b = S->startBody, M = S->bodies[size_t(b)].faceSize; return S->cellCenter(S->gridCell(b, rr.below(6), rr.below(M), rr.below(M))); };
+        if (seed == 1) CHECK(visionMatches(big, ptBig, [](Simulation&, VisionLcg&) {}, 300, seed, &passes));
+    }
+}
+
 // ---------------- Lighting (lighting agent): GPU-free logic ----------------
 #include "modules/rts/view/RtsLights.h"
 #include "engine/render/QualityGovernor.h"
@@ -9099,6 +9295,120 @@ TEST(flow_field_cache_lru_and_sharing) {
     CHECK(g.flowBytes() > 0);
 }
 
+// ---------------- Crowds (flow-field groups settle instead of jamming) ----------------
+namespace {
+Json crowdMap(int n, uint64_t seed) {
+    Random rng(seed, 21);
+    std::vector<std::string> rows(size_t(n), std::string(size_t(n), '.'));
+    for (int k = 0; k < n * n / 120; ++k) {
+        const int x = int(rng.below(uint32_t(n))), y = int(rng.below(uint32_t(n))), r = 1 + int(rng.below(2));
+        for (int dy = -r; dy <= r; ++dy) for (int dx = -r; dx <= r; ++dx)
+            if (x + dx >= 0 && y + dy >= 0 && x + dx < n && y + dy < n && dx * dx + dy * dy <= r * r) rows[size_t(y + dy)][size_t(x + dx)] = '#';
+    }
+    for (int y = 0; y < n; ++y) if (y % 19 > 3) rows[size_t(y)][size_t(n / 2)] = '#';   // a wall with gaps: funnels
+    for (int y = 0; y < 24; ++y) for (int x = 0; x < 24; ++x) rows[size_t(y)][size_t(x)] = '.';
+    for (int y = n - 20; y < n - 4; ++y) for (int x = n - 20; x < n - 4; ++x) rows[size_t(y)][size_t(x)] = '.';
+    Json m = Json::object();
+    m.set("name", Json::string("crowd"));
+    Json size = Json::array(); size.push(Json::number(int64_t(n))); size.push(Json::number(int64_t(n))); m.set("size", size);
+    Json pl = Json::array();
+    for (int p = 0; p < 2; ++p) { Json pj = Json::object(); pj.set("name", Json::string("P")); pj.set("team", Json::number(int64_t(p + 1))); pl.push(pj); }
+    m.set("players", pl);
+    Json t = Json::object(), rj = Json::array();
+    for (auto& r : rows) rj.push(Json::string(r));
+    t.set("rows", rj); m.set("terrain", t);
+    Json ents = Json::array();
+    for (int p = 1; p <= 2; ++p) {   // keep both players alive
+        Json e = Json::object(); e.set("type", Json::string("farm")); e.set("owner", Json::number(int64_t(p)));
+        Json pos = Json::array(); pos.push(Json::number(int64_t(p == 1 ? 20 : n - 8))); pos.push(Json::number(int64_t(p == 1 ? 3 : 3))); e.set("pos", pos);
+        ents.push(e);
+    }
+    m.set("entities", ents);
+    Json mv = Json::object(), ff = Json::object(); ff.set("minGroup", Json::number(int64_t(8))); mv.set("flowField", ff); m.set("movement", mv);
+    return m;
+}
+struct CrowdRun { int arrived = 0, settled = 0; double t90 = -1; uint64_t sum = 0; std::vector<Command> cmds; bool roundTrip = true; };
+CrowdRun crowdRun(int units, uint64_t seed, const std::vector<Command>* replay = nullptr) {
+    SimConfig cfg; cfg.seed = seed;
+    auto sim = std::make_unique<Simulation>(cfg, std::make_unique<game::RtsModule>());
+    sim->setup(Json::parseFile(kSkirmish + "/rules.json"), crowdMap(96, seed));
+    auto& m = mod(*sim);
+    const int ft = m.rules().findType("footman");
+    auto& g = m.state(*sim).grid;
+    Command c; c.player = 1; c.type = game::kCmdMove;
+    for (int i = 0; c.units.size() < size_t(units) && i < 24 * 24 * 4; ++i) {
+        const int x = 2 + (i % 40) / 2, y = 2 + i / 40;
+        if (!g.passable(x, y, game::kLayerGround)) continue;
+        c.units.push_back(m.spawn(*sim, uint16_t(ft), 1, {Fixed::fromInt(x) + Fixed::fromRatio((i & 1) ? 3 : 1, 4), Fixed{}, Fixed::fromInt(y) + Fixed::fromRatio(1, 2)}));
+    }
+    c.point = {Fixed::fromInt(84), Fixed{}, Fixed::fromInt(84)};
+    if (replay) for (const Command& rc : *replay) sim->submit(rc); else sim->submit(c);
+    // window from distance and speed: the mean straight distance at walking speed, x1.6, + 20 s to settle
+    Fixed mean{};
+    for (Entity e : c.units) mean += (sim->world().get<Transform>(e).pos - c.point).xz().length();
+    mean = mean / int64_t(c.units.size());
+    const Fixed speed = m.rules().types[size_t(ft)].speed;
+    const int window = int((mean / speed * Fixed::fromRatio(16, 10)).toInt()) + 20;
+    const Fixed arriveR = Fixed::fromRatio(int64_t(std::sqrt(double(units)) * 60) + 600, 100);
+    CrowdRun r;
+    for (int t = 0; t < window * 20; ++t) {
+        sim->step();
+        if (t == window * 12 && !replay) {   // save / load mid-settling (crowd state on Mobile): both copies stay identical
+            const std::string bytes = sim->serialize();
+            SimConfig cb; cb.seed = seed;
+            Simulation b(cb, std::make_unique<game::RtsModule>());
+            b.setup(Json::parseFile(kSkirmish + "/rules.json"), crowdMap(96, seed));
+            std::string err;
+            if (bytes.empty() || !b.deserialize(bytes, &err)) r.roundTrip = false;
+            for (int i = 0; i < 200 && r.roundTrip; ++i) { sim->step(); b.step(); ++t; if (sim->checksum() != b.checksum()) r.roundTrip = false; }
+            if (r.roundTrip && sim->serialize() != b.serialize()) r.roundTrip = false;
+        }
+        if (t % 20 == 0 && r.t90 < 0) {
+            int near = 0;
+            for (Entity e : c.units) if ((sim->world().get<Transform>(e).pos - c.point).xz().length() < arriveR) ++near;
+            if (near * 10 >= units * 9) r.t90 = t / 20.0;
+        }
+    }
+    for (Entity e : c.units) {
+        if ((sim->world().get<Transform>(e).pos - c.point).xz().length() < arriveR) ++r.arrived;
+        if (sim->world().get<game::Mobile>(e).flowArrived >= 0) ++r.settled;
+    }
+    r.sum = sim->checksum();
+    r.cmds = sim->executedCommands();
+    std::printf("  crowd %d: window %d s, arrived %d, settled %d, 90%% at %.0f s\n", units, window, r.arrived, r.settled, r.t90);
+    return r;
+}
+} // namespace
+
+TEST(crowd_flow_group_arrives_and_settles) {
+    const CrowdRun a = crowdRun(200, 3);
+    CHECK(a.arrived * 10 >= 200 * 9);    // >= 90% inside the crowd disc within the window
+    CHECK(a.settled * 10 >= 200 * 9);    // and they stopped there (no circling)
+    CHECK(a.t90 > 0);
+    CHECK(a.roundTrip);                  // serialize / deserialize while the crowd settles: exact
+    const CrowdRun b = crowdRun(200, 3);
+    CHECK(a.sum == b.sum);               // deterministic
+    const CrowdRun rp = crowdRun(200, 3, &a.cmds);
+    CHECK(rp.sum == a.sum);              // replaying the executed commands gives the same state
+}
+
+TEST(crowd_blocked_goal_nearest) {
+    // movement.blockedGoals: "nearest" - a path to a goal inside a structure ends next to it, without a full search
+    game::MapGrid g;
+    g.init(80, 80);
+    g.block(60, 60, 4, 4, +1);
+    std::vector<Vec3> p1, p2;
+    const Vec3 from{Fixed::fromInt(5), Fixed{}, Fixed::fromInt(5)}, to{Fixed::fromInt(62), Fixed{}, Fixed::fromInt(62)};
+    g.findPath(from, to, game::kLayerGround, p1);
+    g.blockedGoalNearest = true;
+    CHECK(!g.findPath(from, to, game::kLayerGround, p2));    // the goal itself stays unreachable
+    CHECK(!p2.empty());
+    const Vec3 end = p2.back();
+    const int ex = int(end.x.floorInt()), ey = int(end.z.floorInt());
+    CHECK(g.passable(ex, ey, game::kLayerGround) && ex >= 59 && ex <= 64 && ey >= 59 && ey <= 64);   // next to the footprint
+    CHECK(ex <= 61 || ey <= 61);   // on the side facing the start
+}
+
 TEST(pack_file_copy_into_existing) {
     // fs::copy / copy_file(overwrite_existing) fail on MinGW when the destination exists;
     // rtsbuild re-stages into the same folders, the editor copies a template over dst/maps.
@@ -10131,8 +10441,93 @@ TEST(script_g1_view_send) {   // view.send encodes by name; the simulation runs 
     CHECK(mod(*sim).state(*sim).trig.vars["n_rally"] == Fixed::fromInt(1));
 }
 
-int main() {
+
+// Native extensions share the same snapshot/save/replay path as Lua and RTS state.
+namespace {
+class NativeProbe final : public game::NativeModule {
+public:
+    void setup(game::RtsModule&, Simulation&, game::NativeState& s, const Json& cfg) const override {
+        s.values["value"] = cfg.getInt("initial", 2);
+        s.arrays["history"] = {7, 9};
+    }
+    void tick(game::RtsModule&, Simulation& sim, game::NativeState& s) const override {
+        s.values["value"] += sim.rng().next() % 7;
+        s.arrays["history"].push_back(sim.tick());
+    }
+    void command(game::RtsModule&, Simulation&, game::NativeState& s, const Command& c) const override {
+        if (c.param < 0 || c.param > 10) return;
+        s.values["commands"] += c.param;
+    }
+};
+std::unique_ptr<game::NativeModule> nativeProbe() { return std::make_unique<NativeProbe>(); }
+std::unique_ptr<Simulation> nativeSim(const std::string& list, uint32_t version = 1, bool lua = true) {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("nativeModules", Json::parse(list));
+    if (lua) {
+        rules.set("scripts", Json::parse(R"(["test.lua"])"));
+        rules.set("$scriptSources", Json::parse(R"json({"test.lua":"every(1, function() state.n = (state.n or 0) + 1 end)"})json"));
+    }
+    std::vector<game::NativeDefinition> defs{{"probe", version, nativeProbe}, {"other", 1, nativeProbe}};
+    auto sim = std::make_unique<Simulation>(SimConfig{}, std::make_unique<game::RtsModule>(std::move(defs)));
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    return sim;
+}
+const char* kNativeProbe = R"([{"id":"probe","command":32768,"config":{"initial":5}}])";
+}
+TEST(native_modules_rollback_save_lua_commands) {
+    auto a = nativeSim(kNativeProbe), b = nativeSim(kNativeProbe);
+    Command c; c.tick = 1; c.type = 32768; c.player = 1; c.param = 3; c.seq = 1;
+    a->inject(c); b->inject(c);
+    c.player = 0; c.seq = 2; a->inject(c); b->inject(c); // invalid player
+    c.player = 1; c.param = -1; c.seq = 3; a->inject(c); b->inject(c); // invalid payload
+    c.param = 8; c.type = 32769; c.seq = 4; a->inject(c); b->inject(c); // unassigned command
+    SimSnapshot before; a->saveState(before);
+    for (int i = 0; i < 30; ++i) { a->step(); b->step(); CHECK(a->checksum() == b->checksum()); }
+    CHECK(a->world().resource<game::NativeStore>()->modules[0].values.at("commands") == 3);
+    CHECK(mod(*a).scripts()->hasUserScripts() && mod(*a).scripts()->errorCount() == 0);
+    const auto expected = a->checksum();
+    auto replay = nativeSim(kNativeProbe);
+    for (const auto& executed : a->executedCommands()) replay->inject(executed);
+    for (int i = 0; i < 30; ++i) replay->step();
+    CHECK(replay->checksum() == expected);
+    const auto saved = a->serialize(); CHECK(!saved.empty());
+    a->loadState(before);
+    for (int i = 0; i < 30; ++i) a->step();
+    CHECK(a->checksum() == expected);
+    auto restored = nativeSim(kNativeProbe);
+    std::string err;
+    CHECK(restored->deserialize(saved, &err)); CHECK(restored->checksum() == expected);
+    for (int i = 0; i < 25; ++i) { restored->step(); a->step(); CHECK(restored->checksum() == a->checksum()); }
+    auto different = nativeSim(kNativeProbe, 2);
+    CHECK(!different->deserialize(saved, &err));
+    auto config = nativeSim(R"([{"id":"probe","command":32768,"config":{"initial":6}}])");
+    CHECK(!config->deserialize(saved, &err));
+    auto plain = nativeSim("[]"); CHECK(!plain->deserialize(saved, &err));
+    auto damaged = nativeSim(kNativeProbe); CHECK(!damaged->deserialize(saved.substr(0, saved.size() / 2), &err));
+}
+TEST(native_modules_validation_and_isolation) {
+    for (const auto* bad : {"{}", R"([{}])", R"([{"id":"missing"}])", R"([{"id":"probe"},{"id":"probe"}])",
+         R"([{"id":"probe","config":[]}])", R"([{"id":"probe","command":12}])",
+         R"([{"id":"probe","command":32768.5}])", R"([{"id":"probe","command":65536}])",
+         R"([{"id":"probe","command":32768},{"id":"other","command":32768}])"}) {
+        bool failed = false;
+        try { auto s = nativeSim(bad); } catch (const std::runtime_error&) { failed = true; }
+        CHECK(failed);
+    }
+    auto a = nativeSim(R"([{"id":"probe"},{"id":"other","config":{"initial":8}}])");
+    auto& states = a->world().resource<game::NativeStore>()->modules;
+    CHECK(states.size() == 2 && states[0].values.at("value") == 2 && states[1].values.at("value") == 8);
+    auto hash = a->checksum(); states[1].arrays["history"].push_back(100); CHECK(hash != a->checksum());
+    auto empty = nativeSim("[]", 1, false);
+    auto plain = makeSim(kSkirmish, "maps/valley.json", 1);
+    CHECK(empty->checksum() == plain->checksum());
+    CHECK(empty->serialize() == plain->serialize());
+    CHECK(!empty->world().resource<game::NativeStore>());
+}
+
+int main(int argc, char** argv) {
     for (auto& [name, fn] : registry()) {
+        if (argc > 1 && std::string(name).find(argv[1]) == std::string::npos) continue;   // rts_tests [name filter]
         int before = g_failed;
         fn();
         std::printf("%s %s\n", g_failed == before ? "[ OK ]" : "[FAIL]", name);
@@ -10261,3 +10656,5 @@ TEST(planet_fog_blur_seams_and_speed) {
     std::printf("  fog blur faceSize 256 (%zu cells), radius 2: old %.2f ms, new %.2f ms per update\n", n, tOld, tNew);
     CHECK(tNew < tOld);
 }
+
+#include "tests_fields.inc"   // grid fields (G5)

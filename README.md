@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/logo.png" alt="RTSEngine" width="520"></p>
+
 # RTSEngine
 
 Движок для любых RTS на C++20: от Mushroom Wars до Warcraft, Red Alert и Total Annihilation.
@@ -570,3 +572,11 @@ HTML; для Google Play и RuStore собирайте отдельно: `--plug
 
 Модели glTF и анимация, звук, сеть (lockstep), способности и баффы из данных, flow fields и
 RVO для больших армий, улучшения ИИ, скриптинг на C# (AOT для iOS).
+
+## Модули игры на C++
+
+Помимо Lua, проект может содержать `native/CMakeLists.txt` и C++20-модули.
+Они подключаются через `rts_native_module(...)` при сборке и включаются массивом
+`nativeModules` в `rules.json`. Поддержаны тики, команды, rollback и сохранение
+состояния; Lua и C++ работают вместе. После изменения C++ нужна пересборка игры
+и редактора. [API, пример и инструкция сборки](docs/native-modules.md).

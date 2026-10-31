@@ -12,10 +12,10 @@ using namespace detail;
 namespace {
 enum Ev : uint8_t {
     EvStart, EvTick, EvUnitDied, EvSpawned, EvBuilt, EvTrained, EvResearched, EvCaptured, EvPlayerDefeated,
-    EvAbility, EvDamage, EvLevelUp, EvUpgraded, EvEvery, EvEnterArea, EvLeaveArea, EvCount
+    EvAbility, EvDamage, EvLevelUp, EvUpgraded, EvEvery, EvEnterArea, EvLeaveArea, EvFieldThreshold, EvCount
 };
 const char* const kEvNames[EvCount] = {"start", "tick", "unit_died", "spawned", "built", "trained", "researched", "captured",
-                                        "player_defeated", "ability", "damage", "level_up", "upgraded", "every", "enter_area", "leave_area"};
+                                        "player_defeated", "ability", "damage", "level_up", "upgraded", "every", "enter_area", "leave_area", "field_threshold"};
 constexpr int kNamedEvents = EvUpgraded + 1;   // events registered with on(name, fn) / global on_<name>
 
 int evFromSim(uint16_t t) {
@@ -312,6 +312,36 @@ struct ScriptEngine::Impl {
         }
     }
 
+    // grid field threshold crossings recorded since the last scripts phase (RtsGridFields.cpp); handlers may
+    // write fields: crossings they cause are dispatched in the next tick
+    void tickFieldHooks(Simulation& sim) {
+        GridFields* gf = m.gridFields();
+        GridFieldStore* fs = sim.world().resource<GridFieldStore>();
+        if (!gf || !fs || fs->crossings.empty()) return;
+        std::vector<GridFieldStore::Crossing> cross;
+        cross.swap(fs->crossings);
+        for (const auto& c : cross) {
+            const GridFields::Hook& hk = gf->hooks()[c.hook];
+            const GridFieldDef& d = gf->defs()[size_t(hk.field)];
+            const int fw = sim.world().resource<GridFieldStore>()->fields[size_t(hk.field)].w;
+            const int cx = c.cell % fw, cz = c.cell / fw;
+            const Vec3 at = gf->centerOf(hk.field, cx, cz);
+            for (size_t hi = 0; hi < handlers.size(); ++hi) {
+                if (handlers[hi].ev != EvFieldThreshold || handlers[hi].area != int(c.hook) || store(sim).disabled[hi]) continue;
+                lua_State* L = vm.L;
+                lua_createtable(L, 0, 9);
+                setStr(L, "event", "field_threshold");
+                setStr(L, "field", d.id);
+                setFx(L, "x", at.x); setFx(L, "z", at.z);
+                setInt(L, "cx", cx); setInt(L, "cz", cz);
+                if (d.fixed) setFx(L, "value", Fixed::fromRaw(c.value)); else setInt(L, "value", c.value);
+                setInt(L, "player", c.layer);
+                setInt(L, "tick", sim.tick());
+                callHandler(sim, hi, 1);
+            }
+        }
+    }
+
     void pushCtx(Simulation& sim, uint8_t player, Entity unit, Vec3 at, const Json* args) {
         lua_State* L = vm.L;
         lua_createtable(L, 0, 6);
@@ -399,6 +429,21 @@ int lAfter(lua_State* L, Vm& vm) {
     st.timers.insert(it, std::move(t));
     return 0;
 }
+// on_field_threshold("fire", 50, function(e) ... end [, "rise" | "fall"]): a grid field cell crosses the value
+// (rise: from below to >= value; fall: from >= value to below). e: field, x, z, cx, cz, value, player
+int lOnFieldThreshold(lua_State* L, Vm& vm) {
+    const char* id = lua_tostring(L, 1);
+    GridFields* gf = implOf(vm).m.gridFields();
+    const int fi = id && gf ? gf->find(id) : -1;
+    if (fi < 0) return fail(vm, std::string("on_field_threshold: unknown field '") + (id ? id : "?") + "'");
+    Fixed v;
+    if (!argFx(L, vm, 2, v, "on_field_threshold: value")) return -1;
+    std::string dir = lua_isnoneornil(L, 4) ? "rise" : (lua_tostring(L, 4) ? lua_tostring(L, 4) : "");
+    if (dir != "rise" && dir != "fall") return fail(vm, "on_field_threshold: direction \"rise\" or \"fall\"");
+    if (!vm.loading) return fail(vm, "handlers are registered while the script files load (at the top level of a file)");
+    const int hook = gf->addHook(fi, gf->defs()[size_t(fi)].raw(v), dir == "fall");
+    return addHandler(L, vm, EvFieldThreshold, 3, 0, hook);
+}
 int lStrictIndex(lua_State* L, Vm& vm) {
     const char* k = lua_tostring(L, 2);
     return fail(vm, std::string("undefined global '") + (k ? k : "?") + "'");
@@ -448,6 +493,7 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     lua_pushcfunction(L, bind<lOn>); lua_setglobal(L, "on");
     lua_pushcfunction(L, bind<lEvery>); lua_setglobal(L, "every");
     lua_pushcfunction(L, bind<lOnArea>); lua_setglobal(L, "on_area");
+    lua_pushcfunction(L, bind<lOnFieldThreshold>); lua_setglobal(L, "on_field_threshold");
     lua_newtable(L);
     lua_setfield(L, LUA_REGISTRYINDEX, "rts.data");
     lua_newtable(L);
@@ -588,7 +634,7 @@ void ScriptEngine::tick(Simulation& sim) {
         for (size_t hi = 0; hi < im.handlers.size(); ++hi)
             if (active(hi, EvTick)) { lua_pushinteger(L, tick); im.callHandler(sim, hi, 1); }
     // simulation events of this tick
-    const uint32_t eventBits = im.evMask & ~((1u << EvStart) | (1u << EvTick) | (1u << EvEvery) | (1u << EvEnterArea) | (1u << EvLeaveArea));
+    const uint32_t eventBits = im.evMask & ~((1u << EvStart) | (1u << EvTick) | (1u << EvEvery) | (1u << EvEnterArea) | (1u << EvLeaveArea) | (1u << EvFieldThreshold));
     if (eventBits) {
         const std::vector<SimEvent> evs = sim.events();
         for (const SimEvent& ev : evs) {
@@ -602,6 +648,7 @@ void ScriptEngine::tick(Simulation& sim) {
         }
     }
     if ((im.evMask & ((1u << EvEnterArea) | (1u << EvLeaveArea))) && tick % 5 == 0) im.tickAreas(sim);
+    if (im.evMask & (1u << EvFieldThreshold)) im.tickFieldHooks(sim);
     // ability effects queued during this tick
     std::vector<PendingEffect> fx;
     fx.swap(im.effects);
@@ -749,7 +796,8 @@ void ScriptStore::hash(Hasher& h) const {
 }
 
 // The module owns the engine (unique_ptr of an incomplete type in RtsModule.h).
-RtsModule::RtsModule() = default;
+RtsModule::RtsModule() : nativeDefinitions_(compiledNativeModules()) {}
+RtsModule::RtsModule(std::vector<NativeDefinition> definitions) : nativeDefinitions_(std::move(definitions)) {}
 RtsModule::~RtsModule() = default;
 
 } // namespace rts::game

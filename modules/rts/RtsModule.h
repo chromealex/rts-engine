@@ -17,6 +17,8 @@
 #include "RtsTriggers.h"
 #include "RtsScript.h"
 #include "RtsMech.h"
+#include "RtsGridFields.h"
+#include "RtsNative.h"
 #include <memory>
 
 namespace rts::game {
@@ -211,7 +213,12 @@ struct Mobile {
     // flow field following (RtsFlowField.cpp): the field is keyed by (goal cell, radius, path layer, clearance)
     bool flow = false;
     uint8_t flowRadius = 0;
-    uint8_t flowStuck = 0;       // stuck events while on the field: the first re-samples it, the second falls back to A*
+    uint8_t flowStuck = 0;       // stuck events while on the field: re-sample first, A* after repeated stalls
+    int32_t flowGoalCell = -1;   // goal cell of the field this unit follows / followed
+    Fixed flowArea{};            // goal area radius of the order (contagion reaches out to twice that)
+    uint16_t flowNear = 0;       // ticks spent near the settled crowd without settling (lets it settle farther out)
+    int32_t flowArrived = -1;    // goal cell this unit arrived at (stopped there): followers of the same goal that
+                                 // touch it arrive too ("arrival contagion"), so a crowd settles instead of jamming
 };
 
 struct Orders { std::vector<Order> queue; };
@@ -474,6 +481,7 @@ struct VisionCache;   // RtsVision.cpp
 class RtsModule final : public GameModule {
 public:
     RtsModule();
+    explicit RtsModule(std::vector<NativeDefinition> nativeDefinitions);
     ~RtsModule() override;
     std::string name() const override { return "rts"; }
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
@@ -486,6 +494,7 @@ public:
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
     ScriptEngine* scripts() const { return script_.get(); }   // the Lua VM (standard library + game scripts)
+    GridFields* gridFields() const { return fields_.get(); }  // grid fields (RtsGridFields.h); null before setup
     // The map the simulation was set up from when the map had a "generate" block (nullptr otherwise):
     // presentation reads terrainMaterial / heights / regions from it (agent-terrain-gen).
     const Json* generatedMap() const { return generated_.isObject() ? &generated_ : nullptr; }
@@ -790,6 +799,9 @@ private:
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
+    std::unique_ptr<GridFields> fields_;   // grid fields config + kernels (state: GridFieldStore resource)
+    std::vector<NativeDefinition> nativeDefinitions_;
+    NativeModules native_;
     std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
     // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
     void sysFidelity(Simulation& sim);

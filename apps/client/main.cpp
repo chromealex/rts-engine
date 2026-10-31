@@ -784,6 +784,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             view_.setOverlayContext(oc);
         }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
+        for (auto& fe : view_.fieldView().takeEffects()) fx_.particles().play(fe.name, {fe.pos.x, fe.pos.y + 0.2f, fe.pos.z});   // grid field particles
         fx_.setPlanetView(planet() ? &view_ : nullptr);   // planets: effects in the camera body's space
         fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
                    screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);

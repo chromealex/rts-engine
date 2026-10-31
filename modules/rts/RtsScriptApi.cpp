@@ -1209,6 +1209,7 @@ void openGameApi(Vm& vm) {
         lua_pop(L, 1);
     }
     lua_setglobal(L, "game");
+    openFieldApi(vm);   // grid fields (RtsGridFieldsApi.cpp)
 }
 
 } // namespace script
@@ -1302,6 +1303,16 @@ Json scriptApiReference() {
     v.push(fn("view.player()", "the local player slot"));
     v.push(fn("view.send(id, args)", "issue a rules \"commands\" command as the local player (args by name, args.units = selection)"));
     r.set("view", v);
+    Json fl = Json::array();   // grid fields (RtsGridFieldsApi.cpp, docs/fields.md)
+    fl.push(fn("field.ids() / field.info(id)", "grid fields of the game (rules \"fields\", map \"gridFields\"); info = {id, type, w, h, resolution, default, min, max, per_player, layers}"));
+    fl.push(fn("field.get(id, x, z [, player]) / field.get_cell(id, cx, cz [, player])", "value at a world position / field cell: integer (\"int\" fields) or fx (\"fixed\"); per-player fields without player: the highest layer"));
+    fl.push(fn("field.cell(id, x, z) -> cx, cz / field.center(id, cx, cz) -> x, z", "world <-> field cell (resolution map cells per field cell)"));
+    fl.push(fn("field.sum(id, x0, z0, x1, z1 [, player]) / field.max(...) -> v, x, z / field.count(id, x0, z0, x1, z1, above [, player])", "aggregates over a world rectangle"));
+    fl.push(fn("field.find(id, {above, below, x, z, radius, limit, player}) / field.find(id, fn(v, x, z), opts)", "cells matching (limit 64 by default, at most 4096; at most 65536 cells examined): {{x, z, v, cx, cz}, ...}"));
+    fl.push(fn("field.set(id, x, z, v [, player]) / field.add(...) / field.set_cell / field.add_cell (simulation scripts)", "write one cell (clamped to min..max); per-player fields need the player"));
+    fl.push(fn("field.fill_rect(id, x0, z0, x1, z1, v [, \"set\"|\"add\"|\"max\" [, player]]) / field.fill_circle(id, x, z, r, v [, mode [, player]])", "write many cells; returns cells changed"));
+    fl.push(fn("on_field_threshold(id, value, fn(e) [, \"rise\"|\"fall\"])", "a cell crosses the value: e = {field, x, z, cx, cz, value, player} (in the scripts phase of the next tick at the latest)"));
+    r.set("fields", fl);
     return r;
 }
 

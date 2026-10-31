@@ -101,6 +101,7 @@ struct WeaponDef {
 struct Amount { uint16_t res = 0; Fixed value{}; };
 } // namespace rts::game
 #include "RtsAbilityData.h"
+#include "RtsGridFieldData.h"
 namespace rts::game {
 // ------------------------------------------------------------------ economy blocks
 struct GatherDef { uint16_t res = 0; Fixed carry = Fixed::fromInt(10); Fixed time = Fixed::fromInt(2); };
@@ -321,6 +322,7 @@ struct UnitType {
     bool foundation = false;                   // concrete slab: once placed its cells become the owner's foundation, the slab goes away
     bool weathers = true;                      // "weathers": false - never damaged by a missing foundation (walls, turrets)
     int16_t trap = -1;                         // index into Rules::traps
+    std::vector<FieldEmitDef> fieldEmit;       // "field": grid field emitters (RtsGridFieldData.h)
     Json view;
 };
 
@@ -489,6 +491,7 @@ struct FlowFieldRules {
 };
 struct MovementRules { bool rvo = true; int neighbors = 8; Fixed timeHorizon = Fixed::fromRatio(3, 2);
                        FlowFieldRules flow;
+                       bool blockedGoalNearest = false;   // movement.blockedGoals: "nearest" (vs "search")
                        int planetHpaCells = 256 * 256; };   // planets: HPA* on bodies with >= this many cells (0 = all)
 
 // Mushroom Wars 2 style lanes: generated spline paths between garrison buildings.
@@ -576,6 +579,7 @@ struct Rules {
     std::vector<TrapDef> traps;
     bool fidelity = false;                     // any of them present: their system runs, their state is hashed
     int16_t stTrapHidden = -1, stTrapSeen = -1; // built-in statuses of hidden / exposed traps
+    std::vector<GridFieldDef> gridFields;      // rules "fields" (RtsGridFieldData.h); maps add / override in setup
 
     int findRoom(const std::string& id) const;
     int findDiggable(char c) const;

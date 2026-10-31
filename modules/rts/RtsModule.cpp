@@ -27,6 +27,8 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     setupMap(sim, mapIn);
     loadTriggers(rules_, rulesJson, mapIn, triggers_);
     mechSetup(sim, mapIn);   // agent-mech
+    fields_ = std::make_unique<GridFields>();   // grid fields (rules "fields", map "gridFields"); nothing without them
+    fields_->setup(sim, *this, mapIn);
     // Lua: the engine's standard library (rule-level mechanics, modules/rts/lua) + the game's scripts
     script_ = std::make_unique<ScriptEngine>(*this);
     script_->load(sim, rulesJson, mapIn);
@@ -56,6 +58,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("death", [this](Simulation& s) { sysDeath(s); });
     sim.addSystem("capture", [this](Simulation& s) { sysCapture(s); });
     sim.addSystem("creep", [this](Simulation& s) { sysCreep(s); });
+    if (fields_->active()) sim.addSystem("gridfields", [this](Simulation& s) { fields_->tick(s); });   // RtsGridFields.cpp
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
     sim.addSystem("victory", [this](Simulation& s) { script_->callStd(s, StdFn::Victory); });   // lua/victory.lua
     sim.addSystem("triggers", [this](Simulation& s) {   // last: sees every event of the tick (lua/triggers.lua)
@@ -74,11 +77,13 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     // (testing and benchmarks only: every peer of a match must use the same setting)
     g.sphereHpaMinCells = rules_.movement.planetHpaCells;
     g.flowMaxFields = rules_.movement.flow.maxFields;
+    g.blockedGoalNearest = rules_.movement.blockedGoalNearest;
     g.flowBudgetBytes = size_t(rules_.movement.flow.budgetMB) << 20;
     if (const char* f = std::getenv("RTS_PLANET_HPA"); f && *f) g.sphereHpaMinCells = *f == '0' ? (1 << 30) : 0;
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
         for (auto& t : rules_.types)
             if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpaSphere(t.pathLayer);
+    native_.load(*this, sim, rulesJson, nativeDefinitions_);
 }
 
 void RtsModule::setupMap(Simulation& sim, const Json& map) {
@@ -225,7 +230,12 @@ void RtsModule::setupMap(Simulation& sim, const Json& map) {
     gs.victory = map.has("victory") ? loadVictory(map["victory"], rules_.victory) : rules_.victory;
     // a map may switch flow fields on / tune them for itself ("movement": {"flowField": {...}}): big horde maps
     if (const Json& ff = map["movement"]["flowField"]; ff.isObject()) loadFlowFieldRules(ff, rules_.movement.flow, "map movement.flowField");
-    else if (map["movement"].has("flowField")) throw std::runtime_error("map movement.flowField: expected an object");
+    if (map["movement"].has("blockedGoals")) {
+        const std::string bg = map["movement"].getStr("blockedGoals");
+        if (bg != "nearest" && bg != "search") throw std::runtime_error("map movement.blockedGoals: expected 'nearest' or 'search'");
+        rules_.movement.blockedGoalNearest = bg == "nearest";
+    }
+    if (map["movement"].has("flowField") && !map["movement"]["flowField"].isObject()) throw std::runtime_error("map movement.flowField: expected an object");
 
     // players
     const size_t np = sim.players().size();
@@ -661,6 +671,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
     }
     if (mechOn(sim)) mechStatMod(sim, e, s, add, mul);   // agent-mech states (retreat speed, cargo arrows, veterancy)
     if (rules_.originals) add += playerModsStat(sim, owner, u.type, s, mul);   // forges, morale
+    if (s == Stat::Speed && fields_ && fields_->hasSpeed()) if (auto* tr = w.tryGet<Transform>(e)) mul *= fields_->speedMul(sim, tr->pos, owner);   // grid fields
     // Damage/Range/GatherRate/AttackSpeed "add" are fractional bonuses on top of 1 / absolute range
     return (base + add) * mul;
 }
@@ -932,6 +943,7 @@ void RtsModule::issue(Simulation& sim, Entity e, const Order& o, bool queue) {
     if (!queue) {
         ord->queue.clear();
         stopMoving(sim, e);
+        if (auto* m = w.tryGet<Mobile>(e)) { m->flowGoalCell = -1; m->flowArrived = -1; }   // leaves its flow crowd
         if (auto* c = w.tryGet<Combat>(e)) c->target = kNullEntity;
         if (auto* u = w.tryGet<Unit>(e)) u->flags &= uint8_t(~kUnitHold);
     }
@@ -943,6 +955,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     GameState& gs = state(sim);
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
+    if (cmd.type >= 32768) { native_.command(*this, sim, cmd); return; }
     const bool queue = cmd.flags & kCmdQueue;
     if (cmd.type >= kCmdStance || mechOn(sim) || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue))) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
@@ -1386,6 +1399,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
     if (script_) script_->flush(sim);                         // lazily persisted Lua state (RtsScriptEngine.cpp)
+    native_.hash(sim, h);
     if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
     if (w.count<ScriptData>()) w.each<ScriptData>([&](Entity e, ScriptData& d) { h.u64(e.packed()); h.u64(d.hash); });
     if (w.count<ScriptStats>()) w.each<ScriptStats>([&](Entity e, ScriptStats& d) { h.u64(e.packed()); for (auto& x : d.list) { h.u32(x.stat); h.fx(x.base); } });   // game.data
@@ -1412,6 +1426,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     if (mechOn(sim)) hashMechGlobal(sim, h);
     h.u32(uint32_t(w.count<Projectile>()));
     w.each<Projectile, Transform>([&](Entity e, Projectile&, Transform& t) { h.u64(e.packed()); h.v3(t.pos); });
+    if (fields_ && fields_->active()) fields_->hash(sim, h);   // games with grid fields only (per-chunk cached hashes)
 }
 
 } // namespace rts::game

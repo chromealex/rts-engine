@@ -182,23 +182,44 @@ IconSpec parseIcons(const Json& game) {
     return s;
 }
 
+namespace {
+// The RTSEngine mark in a 1000 x 1000 frame (tools/branding/logo/make_logo.py has the same polygons).
+struct Pt { float x, y; };
+const Pt kTop[] = {{500, 94}, {373, 179}, {373, 476}, {500, 397}, {627, 476}, {627, 179}};
+const Pt kRight[] = {{567, 741}, {853, 907}, {977, 833}, {977, 719}, {693, 561}, {693, 663}};
+const Pt kDiamond[] = {{500, 438}, {350, 588}, {500, 738}, {650, 588}};
+
+bool insidePoly(const Pt* p, int n, float x, float y, bool mirror) {
+    bool in = false;
+    for (int i = 0, j = n - 1; i < n; j = i++) {
+        float xi = mirror ? 1000 - p[i].x : p[i].x, xj = mirror ? 1000 - p[j].x : p[j].x;
+        if ((p[i].y > y) != (p[j].y > y) && x < (xj - xi) * (y - p[i].y) / (p[j].y - p[i].y) + xi) in = !in;
+    }
+    return in;
+}
+} // namespace
+
+// The engine's default icon: the dark mark with the orange diamond on white (the master; platform
+// looks add their own margins and corners).
 Image defaultIcon(int size) {
     Image img = makeImage(size, size);
+    const float inset = 0.1f, k = (1 - 2 * inset) * size / 1000.0f, o = inset * size;
+    const int ss = 4;
     for (int y = 0; y < size; ++y)
         for (int x = 0; x < size; ++x) {
-            float u = (x + 0.5f) / size, v = (y + 0.5f) / size;
-            float r = 0.27f, g = 0.47f, b = 0.30f;
-            float cx = u - 0.5f, cy = v - 0.47f;
-            bool cap = cy < 0.02f && (cx * cx) / 0.13f + (cy * cy) / 0.06f < 1.0f;
-            bool stem = std::fabs(cx) < 0.11f && v > 0.47f && v < 0.80f;
-            if (stem) { r = 0.93f; g = 0.88f; b = 0.76f; }
-            if (cap) {
-                r = 0.88f; g = 0.22f; b = 0.20f;
-                float sx = cx + 0.12f, sy = cy + 0.12f, tx = cx - 0.12f, ty = cy + 0.16f, qx = cx, qy = cy + 0.25f;
-                if (sx * sx + sy * sy < 0.0025f || tx * tx + ty * ty < 0.002f || qx * qx + qy * qy < 0.0018f) r = g = b = 0.97f;
-            }
+            int ink = 0, orange = 0;
+            for (int sy = 0; sy < ss; ++sy)
+                for (int sx = 0; sx < ss; ++sx) {
+                    const float u = (x + (sx + 0.5f) / ss - o) / k, v = (y + (sy + 0.5f) / ss - o) / k;
+                    if (insidePoly(kDiamond, 4, u, v, false)) ++orange;
+                    else if (insidePoly(kTop, 6, u, v, false) || insidePoly(kRight, 6, u, v, false) || insidePoly(kRight, 6, u, v, true)) ++ink;
+                }
+            const float n = float(ss * ss), wi = ink / n, wo = orange / n, ww = 1 - wi - wo;
             uint8_t* p = img.px(x, y);
-            p[0] = uint8_t(r * 255); p[1] = uint8_t(g * 255); p[2] = uint8_t(b * 255); p[3] = 255;
+            p[0] = uint8_t(ww * 255 + wi * 21 + wo * 254 + 0.5f);
+            p[1] = uint8_t(ww * 255 + wi * 21 + wo * 111 + 0.5f);
+            p[2] = uint8_t(ww * 255 + wi * 21 + wo * 3 + 0.5f);
+            p[3] = 255;
         }
     return img;
 }

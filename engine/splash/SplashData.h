@@ -102,6 +102,9 @@ struct Spec {
 // Parses game.json["splash"]. Throws std::runtime_error with a readable message ("splash.logos[1]:
 // unknown fit 'x'"); warnings get non-fatal notes.
 Spec parseSpec(const Json& splash, std::vector<std::string>* warnings = nullptr);
+// The engine's default "splash" block (the RTSEngine mark), used when game.json has none;
+// "splash": false keeps the old behaviour (background colour only while loading).
+Json defaultBlock();
 
 // One quad to draw: centre and size in pixels of the target, frame of the layer, rotation, opacity.
 struct DrawItem {

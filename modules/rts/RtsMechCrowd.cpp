@@ -54,7 +54,8 @@ void RtsModule::mechSeparation(Simulation& sim, const std::vector<Fixed>& weight
                 for (int32_t j = head[size_t(y) * size_t(gw) + size_t(x)]; j >= 0; j = next[size_t(j)]) {
                     if (size_t(j) == i) continue;
                     const Body& b = bodies[size_t(j)];
-                    if (std::abs(b.bx - hcx) > hr || std::abs(b.by - hcy) > hr) continue;                    if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) continue;
+                    if (std::abs(b.bx - hcx) > hr || std::abs(b.by - hcy) > hr) continue;
+                    if (!(b.layer & a.layer) && !((b.layer | a.layer) == (kLayerGround | kLayerSandOnly))) continue;
                     Vec3 d = flat(a.pos - b.pos);
                     Fixed len = d.length();
                     Fixed overlap = a.r + b.r - len - deadZone;

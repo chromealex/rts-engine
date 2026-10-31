@@ -419,6 +419,7 @@ fs::path contentPack(Options& o) {
          (audio == "off" ? std::string() : " (звук: " + audio + ")"));
     rts::pack::PackWriter w;
     rts::pack::IgnoreRules rules;
+    rules.add("native/"); // compiled game modules are source code, not runtime data
     rules.add("unpackers/"); // the game's own unpacker plugins are build tools, not content
     for (const char* d : {"Builds/", "Logs/", "logs/", "dist/", ".rtsengine/"}) rules.add(d);   // project outputs and editor state
     std::vector<std::string> notes;
@@ -604,6 +605,8 @@ std::string cmakeVars(const Game& g, const Options& o, const fs::path& content, 
     std::string s;
     s += " -DCMAKE_BUILD_TYPE=" + o.config;
     s += " -DRTS_CONTENT_DIR=" + quote(content);
+    // Each project selects its own native/ directory, including when reusing a CMake cache.
+    s += " -DRTS_NATIVE_DIR=";
     s += " -DRTS_GAME_NAME=" + quote(g.name);
     s += " -DRTS_GAME_ID=" + g.id;
     s += " -DRTS_GAME_VERSION=" + g.version;
@@ -627,6 +630,9 @@ void exportSources(const Options& o, const fs::path& dst) {
     for (const char* d : {"engine", "modules", "third_party", "platform"}) copyDir(o.engine / d, dst / d);
     copyDir(o.engine / "apps" / "client", dst / "apps" / "client");
     copyFile(o.engine / "CMakeLists.txt", dst / "CMakeLists.txt");
+    // Source exports must retain compiled modules even when runtime data is packed.
+    if (fs::exists(o.project / "native" / "CMakeLists.txt"))
+        copyDir(o.project / "native", dst / "native");
 }
 
 // Native plugins for a target: report what goes in and write plugins.cmake into `dir`.
