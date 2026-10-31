@@ -2206,10 +2206,12 @@ knobs in rules `ai` (above). What it does with the terrain:
   up a ridge under fire; an alternate route avoids the main corridor (used on odd waves when stalemated).
 - **Posts on the route**: rally point on the highest well-covered ground 9-14 steps out of the base (the army waits
   there, producers rally there); the narrowest cell on our side (towers after a raid); a watch post on the most
-  prominent ground in the middle of the route for a scout (vision over ridges).
+  prominent ground in the middle of the route for a scout (vision over ridges). Idle units are not re-sent to the
+  rally point (a unit walking back would not count as ready for the next wave).
 - **Waves** follow waypoints every 12 cells, stop at a siege spot on high ground short of the target, then attack;
   they hold up to 30 s instead of charging uphill into a stronger enemy (and pull in reinforcements), retreat to the
-  rally point when beaten (until stalemate level 3), retarget the next structure, attack construction sites by name.
+  rally point below 25% of their start size without a kill (until stalemate level 3), launch early with what is at
+  home when our army is twice the enemy's whole armed force, stop at a stuck-wave watchdog (30 s without moving), retarget the next structure, attack construction sites by name.
 - **Economy guards**: own build spots (lanes between dropoffs and resources kept free, the rally area kept free,
   random tie-breaks), stuck builders released and their spots avoided, the first army producer early, converters
   (metal makers) only with a surplus, one more producer when resources float, expansion (a dropoff at the next
