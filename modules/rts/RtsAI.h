@@ -103,7 +103,8 @@ private:
     std::vector<Entity> wave_units_, scouts_;
     std::vector<Vec3> waypoints_;
     size_t wp_ = 0;
-    uint32_t wpTick_ = 0, waveTick_ = 0, holdUntil_ = 0;
+    uint32_t wpTick_ = 0, waveTick_ = 0, holdUntil_ = 0, waveMoveTick_ = 0;
+    Vec3 waveCentre_{};
     int waveStart_ = 0, waveEnemyStructs_ = 0;
     Entity waveTarget_;
     int escalation_ = 0, failedWaves_ = 0;

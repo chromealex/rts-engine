@@ -591,7 +591,8 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             const UnitType& t = R.types[ti];
             bool stores = false;
             for (auto& a : t.storage) if (a.res == r) stores = true;
-            if (stores && t.structure && t.produces.empty() && build(sim, m, uint16_t(ti))) return;
+            // a few storages; beyond that a full store means income outruns spending, more storage won't help
+            if (stores && t.structure && t.produces.empty() && count[ti] < 6 && build(sim, m, uint16_t(ti))) return;
         }
     }
     // 6) workers

@@ -561,6 +561,10 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         }
         if (n > 0) c = c / Fixed::fromInt(n);
         const bool killed = lastKillTick_ > waveTick_;
+        // stuck watchdog: the wave's centre hasn't moved for 30 s (blocked crowd, unreachable point) -> next step
+        if (n > 0 && dist(c, waveCentre_) > Fixed::fromInt(2)) { waveCentre_ = c; waveMoveTick_ = now; }
+        const bool stuck = n > 0 && now > waveMoveTick_ + 30 * rate;
+        if (stuck) waveMoveTick_ = now;
         if (n * 100 < waveStart_ * retreatPct_ && escalation_ < 3 && !killed) {
             // beaten: back to the rally point, bigger next time
             Command mv; mv.type = kCmdMove; mv.units = wave_units_; mv.point = hasRally_ ? rally_ : home_; send(sim, mv);
@@ -572,7 +576,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             int near = 0;
             for (Entity e : wave_units_) if (!(w.get<Unit>(e).flags & kUnitInTransit) && dist(w.get<Transform>(e).pos, wp) < nearR) ++near;
             const bool last = wp_ + 1 >= waypoints_.size();
-            bool advance = near * 10 >= n * 6 || (idle * 10 >= n * 8 && now > wpTick_ + 5 * rate) || now > wpTick_ + 45 * rate;
+            bool advance = near * 10 >= n * 6 || (idle * 10 >= n * 8 && now > wpTick_ + 5 * rate) || now > wpTick_ + 45 * rate || stuck;
             if (advance && !last && terr_ && cfg_.terrain) {
                 // don't charge uphill into a stronger enemy: wait (and gather reinforcements) for up to 30 s
                 const Vec3 nx = waypoints_[wp_ + 1];
@@ -609,7 +613,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 std::vector<Entity> go;
                 for (Entity e : wave_units_) if (!(w.get<Unit>(e).flags & kUnitInTransit)) go.push_back(e);
                 attack(go, waypoints_[wp_]);
-            } else if (last && idle * 10 >= n * 5 && (now > wpTick_ + 8 * rate || !w.alive(waveTarget_) || w.get<Unit>(waveTarget_).hp.raw <= 0)) {
+            } else if (last && (stuck || (idle * 10 >= n * 5 && (now > wpTick_ + 8 * rate || !w.alive(waveTarget_) || w.get<Unit>(waveTarget_).hp.raw <= 0)))) {
                 // target gone: the next enemy structure close to the wave (else any enemy), straight there
                 Entity best; Fixed bd{};
                 w.each<Unit, Owner, Transform>([&](Entity t, Unit& u, Owner& o, Transform& tr) {
@@ -704,7 +708,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 // planets: orbit units elsewhere take a transfer first (as before)
                 attack(go, waypoints_[0]);
                 wave_units_ = go;
-                wp_ = 0; wpTick_ = now; waveTick_ = now; holdUntil_ = 0;
+                wp_ = 0; wpTick_ = now; waveTick_ = now; holdUntil_ = 0; waveMoveTick_ = now; waveCentre_ = c;
                 waveStart_ = int(go.size());
                 waveEnemyStructs_ = enemyStructs;
                 waveTarget_ = best;
@@ -818,6 +822,7 @@ void RtsAI::stateIo(Archive& a) {
     uint32_t n = a.count(buildWatch_.size(), 8);
     if (!a.writing()) buildWatch_.assign(n, StuckBuild{});
     for (uint32_t i = 0; i < n && a.ok(); ++i) { io(a, buildWatch_[i].entity); io(a, buildWatch_[i].since); io(a, buildWatch_[i].point); io(a, buildWatch_[i].progress); }
+    io(a, waveCentre_); io(a, waveMoveTick_);
     io(a, badSpots_); io(a, invaders_); io(a, invadeBody_); io(a, invasions_); io(a, invadeTick_); io(a, enemyOffBody_);
 }
 
