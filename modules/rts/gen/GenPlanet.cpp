@@ -164,6 +164,12 @@ void planetWrite(Ctx& c, PlanetGen& pg, Json& body) {
     terrain.set("faces", faces);
     terrain.set("corners", corners);
     if (!c.layerIds.empty()) terrain.set("material", matFaces);
+    // visual detail hints (docs/terrain.md "Detail surface"; used when the game's terrain.style is "smooth"):
+    // small craters on moons / barren bodies, calmer fine relief on ocean worlds
+    Json look = Json::object();
+    if (c.preset == "moon" || c.pbool("barren", false)) { look.set("craters", Json::number(0.7, 2)); look.set("roughness", Json::number(0.08, 2)); }
+    else if (c.preset == "ocean") look.set("roughness", Json::number(0.04, 2));
+    if (look.size() > 0) terrain.set("detailLook", look);
     body.set("terrain", terrain);
     body.set("seaLevel", Json::number(int64_t(0)));
 }
