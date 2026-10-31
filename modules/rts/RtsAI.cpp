@@ -481,6 +481,37 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
     }
 
+    // 1b) rebalance: a resource piling up while another runs short -> move a worker over (workers keep
+    //     their resource once assigned, so the first split would otherwise last the whole match)
+    if (sim.tick() >= rebalanceTick_) {
+        rebalanceTick_ = sim.tick() + 15 * sim.tickRate();
+        int rich = -1, poor = -1;
+        for (size_t r = 0; r < R.resources.size(); ++r) {
+            if (R.resources[r].kind == ResourceKind::Flow || R.resources[r].field) continue;
+            if (rich < 0 || eco.stock[r] > eco.stock[size_t(rich)]) rich = int(r);
+            if (poor < 0 || eco.stock[r] < eco.stock[size_t(poor)]) poor = int(r);
+        }
+        if (rich >= 0 && poor >= 0 && rich != poor && eco.stock[size_t(rich)] > eco.stock[size_t(poor)] * 4 + Fixed::fromInt(300)) {
+            Entity mover, node;
+            w.each<Unit, Owner, Orders, Transform>([&](Entity e, Unit& u, Owner& o, Orders& ord, Transform& tr) {
+                if (mover.valid() || o.player != player_ || !R.types[u.type].worker || ord.queue.empty()) return;
+                const Order& f = ord.queue.front();
+                if (f.type != OrderType::Gather || !f.target.valid() || !w.alive(f.target) || !w.has<ResourceStock>(f.target)) return;
+                if (w.get<ResourceStock>(f.target).res != rich) return;
+                bool can = false;
+                for (auto& gd : R.types[u.type].gathers) if (gd.res == poor) can = true;
+                if (!can) return;
+                Fixed bd{};
+                w.each<ResourceStock, Unit, Owner, Transform>([&](Entity n, ResourceStock& rs, Unit& nu, Owner& no, Transform& nt) {
+                    if (rs.res != poor || (!rs.infinite && rs.amount.raw <= 0) || (R.types[nu.type].ownerOnly && no.player != player_)) return;
+                    const Fixed d = dist(nt.pos, tr.pos);
+                    if (d < Fixed::fromInt(25) && (!node.valid() || d < bd)) { node = n; bd = d; }
+                });
+                if (node.valid()) mover = e;
+            });
+            if (mover.valid()) { Command c; c.type = kCmdGather; c.units = {mover}; c.target = node; send(sim, c); }
+        }
+    }
     const bool canBuildNow = sim.tick() > lastBuildTick_ + 60;
     // abandoned construction sites (builder killed or re-tasked): send a worker back
     if (sim.tick() >= lastSiteTick_ + 100) {   // (think ticks are jittered: a modulo test would rarely hit)

@@ -678,8 +678,8 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             if (defend && dist(t.pos, home_) > Fixed::fromInt(25)) return;
             if (S && S->bodyAt(t.pos) != hb) return;   // other bodies: invasions (planetOps)
             const UnitType& ut = R.types[u.type];
-            // structures: units on the way are fought anyway by the attack-move
-            Fixed d = dist(t.pos, c) + (ut.structure ? Fixed{} : Fixed::fromInt(15));
+            // the nearest enemy, structures a little preferred: their army in the field is a fine target too
+            Fixed d = dist(t.pos, c) - (ut.structure ? Fixed::fromInt(5) : Fixed{});
             if (o.player == kHostileNeutral) d += Fixed::fromInt(10);
             if (escalation_ >= 2 && (ut.worker || ut.dropoffMask || !ut.income.empty())) d -= Fixed::fromInt(8);   // the economy
             d += Fixed::fromRatio(int64_t(rng_.below(64)), 32);   // up to 2 cells: no fixed preference
@@ -823,7 +823,7 @@ void RtsAI::stateIo(Archive& a) {
     io(a, player_); io(a, next_); io(a, wave_); io(a, lastBuildTick_); io(a, lastTechTick_); io(a, saveForWorkers_);
     io(a, lastDungeonTick_); io(a, lastSkillTick_); io(a, savingFor_); io(a, savingUntil_); io(a, lastSettlersTick_);
     io(a, lastMechTick_); io(a, turnActed_);
-    io(a, rallyTick_); io(a, lastSiteTick_); io(a, allInTick_); io(a, spotRetryTick_); io(a, expandTick_); io(a, raided_);
+    io(a, rallyTick_); io(a, lastSiteTick_); io(a, allInTick_); io(a, spotRetryTick_); io(a, expandTick_); io(a, rebalanceTick_); io(a, raided_);
     io(a, home_); io(a, enemyHome_); io(a, hasHome_); io(a, hasEnemy_); io(a, homeCell_); io(a, enemyCell_);
     io(a, mainRoute_); io(a, altRoute_); io(a, routeTick_); io(a, routeEnemyCell_); io(a, rally_); io(a, hasRally_);
     io(a, chokeCell_); io(a, watchCell_); io(a, wave_units_); io(a, scouts_); io(a, waypoints_);
