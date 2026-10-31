@@ -85,7 +85,7 @@ private:
     uint32_t turnActed_ = 0;   // turn-based mode: false when it is not our turn; ends our turns   // few workers left and one can be trained: don't spend on the army
     // ---- agent-ai-terrain
     bool configured_ = false;
-    int retreatPct_ = 35, holdSec_ = 30, crowdFree_ = 5, crowdCost_ = 6;
+    int retreatPct_ = 25, holdSec_ = 30, crowdFree_ = 5, crowdCost_ = 6;
     uint32_t rallyTick_ = 0, lastSiteTick_ = 0;
     uint32_t allInTick_ = 0, spotRetryTick_ = 0, expandTick_ = 0;
     bool raided_ = false;            // enemies came to our base at least once

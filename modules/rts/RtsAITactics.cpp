@@ -547,6 +547,17 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     auto& eco = gs.players[player_];
     const bool maxed = eco.supplyCap.raw > 0 && eco.supplyUsed * 10 >= eco.supplyCap * 9 && eco.supplyCap * 10 >= R.supplyCap * 8;
     if (maxed) needed = std::min(needed, std::max(4, int(home.size()) * 3 / 4));
+    // clearly stronger than everything the enemy fields: go now with what we have
+    if (!defend && hasEnemy_ && int(homeIdle.size()) >= 3) {
+        int64_t ours = 0, theirs = 0;
+        for (Entity e : army) ours += strengthOf(R.types[w.get<Unit>(e).type], w.get<Unit>(e));
+        w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) {
+            const UnitType& t = R.types[u.type];
+            if (o.player == kHostileNeutral || !m.hostile(sim, player_, o.player) || u.hp.raw <= 0 || t.weapons.empty() || t.worker) return;
+            theirs += strengthOf(t, u);   // towers count too
+        });
+        if (ours >= theirs * 2 + 1) needed = std::min(needed, int(homeIdle.size()));
+    }
     if (!wave_units_.empty()) {
         // ---------- manage the wave in flight
         Vec3 c{};
