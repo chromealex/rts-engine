@@ -23,6 +23,7 @@ uint32_t ringColor(const SceneObject& o) { return o.selected ? (o.owner == 0 ? r
 void RtsView::setWorld(const Json& map) {
     fog_.setBlur({});
     PlanetWorld w = loadPlanetWorld(map, &warnings_);
+    loadPlanetDetailFiles(w, map, read_, &warnings_);
     planets_.setWorld(w);
     planetVision_.clear();
     if (!planets_.active()) return;
@@ -31,12 +32,15 @@ void RtsView::setWorld(const Json& map) {
 
 void RtsView::updateWorld(const Json& map) {
     PlanetWorld w = loadPlanetWorld(map);
+    loadPlanetDetailFiles(w, map, read_, nullptr);
     const PlanetWorld& cur = planets_.world();
     bool same = w.bodies.size() == cur.bodies.size() && !w.empty();
     for (size_t i = 0; same && i < w.bodies.size(); ++i) {
         const PlanetBody &a = w.bodies[i], &b = cur.bodies[i];
         same = a.id == b.id && a.kind == b.kind && a.faceSize == b.faceSize && a.radius == b.radius && a.seaLevel == b.seaLevel &&
-               a.parent == b.parent && a.orbitRadius == b.orbitRadius && a.period == b.period && a.phase == b.phase && a.atmosphere == b.atmosphere;
+               a.parent == b.parent && a.orbitRadius == b.orbitRadius && a.period == b.period && a.phase == b.phase && a.atmosphere == b.atmosphere &&
+               a.style == b.style && a.detailScale == b.detailScale && a.roughness == b.roughness && a.craters == b.craters &&
+               a.detailK == b.detailK && a.detail.empty() == b.detail.empty();
     }
     if (!same) {
         const int body = planetCam_.body();
@@ -53,6 +57,18 @@ void RtsView::updateWorld(const Json& map) {
         if (!w.bodies[i].surface()) continue;
         planets_.updateFlags(int(i), w.bodies[i].flags);
         planets_.updateHeights(int(i), w.bodies[i].corners);
+        if (!w.bodies[i].detail.empty() && w.bodies[i].detail != cur.bodies[i].detail && planets_.detailScale(int(i)) &&
+            !planets_.updateDetail(int(i), w.bodies[i].detail)) { // drawn at another scale (tier cap): rebuild the body
+            const int body = planetCam_.body();
+            const float3 dir = planetCam_.dir();
+            const float dist = planetCam_.distance;
+            setWorld(map);
+            if (planets_.active() && body < int(planets_.world().bodies.size())) {
+                planetCam_.reset(planets_.world(), body, planets_.surface(body), planetSeconds_, dir);
+                planetCam_.distance = dist;
+            }
+            return;
+        }
     }
 }
 
@@ -61,7 +77,9 @@ void RtsView::setSimWorld(std::shared_ptr<const Surface> surf, const MapGrid& gr
         auto blur = std::make_shared<PlanetFieldBlur>(surf);
         fog_.setBlur([blur](std::vector<uint8_t>& f, int radius) { (*blur)(f, radius); });
     } else fog_.setBlur({});
-    PlanetWorld w = planetWorldFromSim(std::move(surf), grid.flags, loadPlanetWorld(map, &warnings_));
+    PlanetWorld visual = loadPlanetWorld(map, &warnings_);
+    loadPlanetDetailFiles(visual, map, read_, &warnings_);
+    PlanetWorld w = planetWorldFromSim(std::move(surf), grid.flags, visual);
     planets_.setWorld(w);
     planetVision_.clear();
     if (!planets_.active()) return;

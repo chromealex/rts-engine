@@ -23,7 +23,7 @@ void MapDoc::loadWorld(const Json& w, MapData& d) {
         for (auto& [k, v] : bj.members()) if (k != "id" && k != "faceSize" && k != "terrain") b.meta.set(k, v);
         b.faceExtra.assign(6, Json::object());
         const Json& t = bj["terrain"];
-        for (auto& [k, v] : t.members()) if (k != "faces" && k != "corners" && k != "cornersFile" && k != "cornersBlob") b.terrainExtra.set(k, v);
+        for (auto& [k, v] : t.members()) if (k != "faces" && k != "corners" && k != "cornersFile" && k != "cornersBlob" && k != "detail") b.terrainExtra.set(k, v);
         if (b.surface()) {
             const int N = b.faceSize;
             b.cells.assign(size_t(6 * N * N), '.');
@@ -49,6 +49,18 @@ void MapDoc::loadWorld(const Json& w, MapData& d) {
                 std::string cerr;   // 6 faces of (N+1)^2 = a (6(N+1)) x (N+1) corner grid
                 if (!game::decodeCorners(t, 6 * (N + 1) - 1, N, b.corners, &cerr)) throw std::runtime_error("world body '" + b.id + "': " + cerr);
             }
+            // detail grid: load() attached the file bytes as "blob" (a missing / broken file drops the detail)
+            if (const Json& dj = t["detail"]; dj.isObject()) {
+                b.detailScale = std::clamp(int(dj.getInt("scale", 4)), 1, 16);
+                b.detailFile = dj.getStr("file");
+                const size_t M1 = size_t(N * b.detailScale + 1), n = 6 * M1 * M1;
+                const Json& blob = dj["blob"];
+                if (blob.isString() && blob.str().size() == n * 2) {
+                    const std::string& s = blob.str();
+                    b.detail.resize(n);
+                    for (size_t i = 0; i < n; ++i) b.detail[i] = int16_t(uint16_t(uint8_t(s[2 * i])) | uint16_t(uint8_t(s[2 * i + 1])) << 8);
+                } else { b.detailScale = 0; b.detailFile.clear(); }
+            }
         }
         d.bodies.push_back(std::move(b));
     }
@@ -57,6 +69,12 @@ void MapDoc::loadWorld(const Json& w, MapData& d) {
     d.cells.assign(16, '.'); d.levels.assign(16, 0); d.heights.assign(16, 0);
     d.fieldRes.assign(16, -1); d.fieldAmt.assign(16, 0); d.regions.assign(16, '.');
     d.corners.clear();
+}
+
+std::string MapDoc::bodyDetailFileName(const DocBody& b) const {
+    if (!b.detailFile.empty()) return b.detailFile;
+    std::string stem = path.empty() ? "map" : std::filesystem::path(path).stem().string();
+    return "maps/" + stem + "." + b.id + ".detail.r16";
 }
 
 std::string MapDoc::bodyCornersFileName(const DocBody& b) const {
@@ -107,6 +125,13 @@ Json MapDoc::worldJson() const {
                 }
             }
             for (auto& [k, v] : b.terrainExtra.members()) t.set(k, v);
+            if (b.detailScale > 0 && b.detail.size() == size_t(6) * size_t(b.detailSide() + 1) * size_t(b.detailSide() + 1)) {
+                Json dj = Json::object();
+                dj.set("scale", Json::number(int64_t(b.detailScale)));
+                dj.set("file", Json::string(bodyDetailFileName(b)));
+                dj.set("blob", Json::string(game::encodeCorners(b.detail)));   // the view reads it; save() writes the file
+                t.set("detail", dj);
+            }
             bj.set("terrain", t);
         }
         bodies.push(bj);
