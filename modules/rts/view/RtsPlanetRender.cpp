@@ -476,12 +476,39 @@ void PlanetRenderer::updateFlags(int body, const std::vector<uint8_t>& flags) {
     if (body < 0 || size_t(body) >= bodies_.size() || !bodies_[size_t(body)].surf || !dev_) return;
     PlanetBody& pb = world_.bodies[size_t(body)];
     if (flags == pb.flags) return;
-    pb.flags = flags;
     Body& b = bodies_[size_t(body)];
+    const int K = b.surf->detailScale(), N = pb.faceSize;
+    if (K && flags.size() == pb.flags.size()) { // detail: only around the changed cells (fine noise follows the cell kinds)
+        PlanetSurface::Rect rect[6];
+        for (int f = 0; f < 6; ++f)
+            for (int y = 0; y < N; ++y)
+                for (int x = 0; x < N; ++x) {
+                    const size_t i = (size_t(f) * size_t(N) + size_t(y)) * size_t(N) + size_t(x);
+                    if (flags[i] == pb.flags[i]) continue;
+                    PlanetSurface::Rect& r = rect[f];   // corners of the cell
+                    if (r.x1 < r.x0) r = {x, y, x + 1, y + 1};
+                    else { r.x0 = std::min(r.x0, x); r.y0 = std::min(r.y0, y); r.x1 = std::max(r.x1, x + 1); r.y1 = std::max(r.y1, y + 1); }
+                }
+        pb.flags = flags;
+        b.surf->setFlags(flags);
+        PlanetSurface::Rect gr[6];
+        for (int f = 0; f < 6; ++f) if (rect[f].x1 >= rect[f].x0) gr[f] = {rect[f].x0 * K - 1, rect[f].y0 * K - 1, rect[f].x1 * K + 1, rect[f].y1 * K + 1};
+        if (pb.detail.empty()) {
+            b.surf->resynthDetail(pb, rect);
+            for (int f = 0; f < 6; ++f) if (gr[f].x1 >= gr[f].x0) { const int m = 2 * K + 2; gr[f] = {gr[f].x0 - m, gr[f].y0 - m, gr[f].x1 + m, gr[f].y1 + m}; }
+            for (int f = 0; f < 6; ++f) if (gr[f].x1 >= gr[f].x0) fillAtlas(b, f, gr[f].x0, gr[f].y0, gr[f].x1, gr[f].y1);
+            uploadAtlas(b);
+        }
+        freeChunksOver(b, gr, K + 1);   // colours / splat of the cells (+ seams: neighbours rebuild through their own rects)
+        // seam cells: the neighbour faces' chunks along the shared edges take the new colours too
+        for (int f = 0; f < 6; ++f) if (rect[f].x1 >= rect[f].x0 && (rect[f].x0 == 0 || rect[f].y0 == 0 || rect[f].x1 == N || rect[f].y1 == N)) {
+            for (auto& c : b.chunks) if (c.face != f) { freeChunk(*dev_, c); }
+            break;
+        }
+        return;
+    }
+    pb.flags = flags;
     b.surf->init(pb);   // flags live in the surface (cheap compared to the mesh rebuild)
-    if (b.detailTex.valid()) { dev_->destroyTexture(b.detailTex); b.detailTex = {}; }
-    b.detailPx.clear();
-    setupDetail(pb, b);   // fine noise follows the cell kinds
     for (auto& c : b.chunks) freeChunk(*dev_, c);
 }
 

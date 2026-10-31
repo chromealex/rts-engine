@@ -143,6 +143,7 @@ public:
     const render::float3& cornerNormal(int face, int i, int j) const { return normals_[size_t(cornerIndex(face, i, j))]; }
     int canonical(int face, int i, int j) const { return canon_[size_t(cornerIndex(face, i, j))]; }
     uint8_t cellFlags(int face, int x, int y) const;
+    void setFlags(const std::vector<uint8_t>& flags) { flags_ = flags; }   // then resynthDetail over the changed cells
 
     // Continuous maps (same tangent warp as RtsSphere, in float).
     render::float3 dirFromFace(int face, float a, float b) const;
