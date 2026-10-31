@@ -179,6 +179,34 @@ Handlers are registered at the top level of a file (while it loads):
 Every event table also has `e.event`, `e.tick`, `e.player`. Scripts run in the **scripts** phase at
 the end of the tick (after triggers) and see every event of that tick.
 
+**Every other simulation event** works with `on(name, fn)` too and gets a generic table `{event,
+player, tick, x, z, unit (a), other (b), value}` plus `unit_type` (spawn / train / build / upgrade
+events), `status` (`status_start`, `status_end`), `resource` (`gathered`, `delivered`, `produced`),
+`amount` (`damage`), `text` (`message`). Names: `attack hit miss train_started build_placed gathered
+not_enough ready_to_place sold region_claimed wave low_power message dug territory room_painted
+recruited creature_left picked_up dropped slapped possessed payday player_ability produced delivered
+road_built lanes_changed status_start status_end area_start area_trigger area_end projectile_launch
+impact chain_jump cast_start channel_start channel_end alert garrison_changed transit_start
+transit_end trigger_fired loaded unloaded cycle_phase traded diplomacy item merged objective dialog
+camera mission_end learned crew_killed crewed infected submerged trap_fired group_teleport paved
+morale turn` (what `unit` / `other` / `value` mean per event: `GameEvent` in modules/rts/RtsModule.h).
+View scripts get the same names with `view.on` (read-only).
+
+**Before-hooks** — global functions the engine calls *before* something happens, in the middle of
+the tick (so keep them short; they share the tick budget and don't nest: damage dealt from inside a
+hook doesn't call `before_damage` again):
+
+| function | called | return |
+|---|---|---|
+| `before_damage(e)` | every hit, after armor / mitigation: `e = {unit, source, player, amount, damage_type}` | the new amount (fx / integer, >= 0); nothing = unchanged |
+| `before_command(player, c)` | every built-in player command: `c = {type, units, target, x, z, param, queue}` (`type` as in `game.command`) | `false [, reason]` drops it |
+| `can_train(player, type, producer)` | a train command passed the engine's checks | `false [, reason]` refuses |
+| `can_build(player, type, x, z, builder)` | build order / sidebar placement | `false [, reason]` refuses |
+| `can_cast(caster, ability, target, x, z)` | an ability is about to fire (commands, autocast, AI) | `false [, reason]` refuses |
+
+A `reason` string is shown to that player like `game.message`. Games without these functions pay
+nothing (the module checks a flag).
+
 ## The `game` table
 
 Entities are integer **handles**. A handle of a dead or removed unit is harmless: queries return
@@ -331,6 +359,45 @@ outputs are requests the host shows: `view.notice(text)`, `view.effect(name, x, 
 effect of `fx/`), `view.sound(name, x, z)`, and script commands as the local player
 (`view.send(id, args)`, above). They never change the simulation directly, so they don't need the
 determinism rules.
+
+## Script UI (view scripts drive in-match panels)
+
+View scripts own a data model **`script`** in the client's RmlUi: they set values, open the game's
+documents `ui/hud/<name>.rml` and receive their button events. Simulation state stays read-only:
+buttons act through script commands (above), which go through the simulation like any input.
+
+```lua
+-- scripts/view/hud.lua
+ui.open("war", {title = "War report"})                -- ui/hud/war.rml; params -> {{params.title}}
+ui.on("hide", function(args) ui.close("war") end)      -- data-event-click="event('hide', 1)" -> args = {1}
+view.on_frame(function()
+  local s = view.state()                                -- read-only copy of the simulation's `state`
+  ui.set("trained", (s.trained or {})[view.player()] or 0)   -- {{trained}}
+end)
+```
+
+```html
+<!-- ui/hud/war.rml: links ../theme.rcss, ../skin.rcss like the engine HUD; body ignores the mouse, panels take it -->
+<div class="root" data-model="script">
+  <div class="panel">{{params.title}}: {{trained}}
+    <button data-event-click="send('rally_cry')">Rally cry</button>          <!-- rules "commands" -->
+    <button data-event-click="send('muster', {where = {x = 10, z = 12}})">Muster</button>
+    <button data-event-click="event('hide')">Hide</button>
+  </div>
+</div>
+```
+
+| view Lua | |
+|---|---|
+| `ui.set(key, value)` | a top-level value of model `script` (numbers, strings, booleans, fx, tables / arrays); unchanged values are not resent. A document binds its `{{names}}` when it loads: set every key it uses before (or in the same frame as) its first `ui.open` |
+| `ui.open(name [, params])`, `ui.close(name)` | show / hide `ui/hud/<name>.rml` (only while the match is on screen); `params` -> `{{params.*}}` |
+| `ui.on(event, fn(args))` | `event('name', ...)` in a document; `args` = the extra values as an array |
+| `view.state()` | the simulation scripts' `state` as of this tick (a copy; writing to it changes nothing) |
+
+`send('id', {...})` in a document sends a script command as the local player (the current selection
+is added as `units` unless given). The engine part is `engine/ui/lib/scriptui.lua` (model, documents)
+and `apps/client/ClientScriptUi.cpp` (bridge); the UI documents' general rules (styles, `@keys`,
+sandbox) are in docs/ui-scripting.md. Sample: `templates/scripted` (`ui/hud/war.rml`).
 
 ## Engine standard library (rule-level mechanics in Lua)
 

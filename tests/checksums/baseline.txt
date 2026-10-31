@@ -34,9 +34,6 @@ laneclash 3 d4d11d37cfe3f49f
 lastcolony 1 b4f7f01933503bf2
 lastcolony 2 09a186839fe6a642
 lastcolony 3 6a0a361f64b877a7
-lastcolony 1 394314cea7cba704
-lastcolony 2 7c75a554c95f9641
-lastcolony 3 c7804696c353e006
 lua_lab 1 489e3fa55fd7632c
 lua_lab 2 4402c4aded378bf0
 lua_lab 3 6aeaded19a286db2

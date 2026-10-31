@@ -763,6 +763,42 @@ bool loadChunk(Vm& vm, const std::string& name, const std::string& text, std::st
     return true;
 }
 
+// Every simulation event by its Lua name (on(name, fn) in simulation scripts, view.on in view scripts)
+namespace {
+const std::pair<uint16_t, const char*> kSimEventNames[] = {
+    {kEvSpawned, "spawned"}, {kEvDied, "unit_died"}, {kEvAttack, "attack"}, {kEvHit, "damage"},
+    {kEvTrainStarted, "train_started"}, {kEvTrainDone, "trained"}, {kEvBuildPlaced, "build_placed"},
+    {kEvBuildDone, "built"}, {kEvGathered, "gathered"}, {kEvCaptured, "captured"},
+    {kEvPlayerDefeated, "player_defeated"}, {kEvNotEnough, "not_enough"}, {kEvResearched, "researched"},
+    {kEvLevelUp, "level_up"}, {kEvAbility, "ability"}, {kEvMiss, "miss"}, {kEvReadyToPlace, "ready_to_place"},
+    {kEvSold, "sold"}, {kEvRegionClaimed, "region_claimed"}, {kEvWave, "wave"}, {kEvLowPower, "low_power"},
+    {kEvUpgraded, "upgraded"}, {kEvMessage, "message"}, {kEvDug, "dug"}, {kEvTerritory, "territory"},
+    {kEvRoomPainted, "room_painted"}, {kEvRecruited, "recruited"}, {kEvCreatureLeft, "creature_left"},
+    {kEvPickedUp, "picked_up"}, {kEvDropped, "dropped"}, {kEvSlapped, "slapped"}, {kEvPossessed, "possessed"},
+    {kEvPayday, "payday"}, {kEvPlayerAbility, "player_ability"}, {kEvProduced, "produced"},
+    {kEvDelivered, "delivered"}, {kEvRoadBuilt, "road_built"}, {kEvLanesChanged, "lanes_changed"},
+    {kEvStatusStart, "status_start"}, {kEvStatusEnd, "status_end"}, {kEvAreaStart, "area_start"},
+    {kEvAreaTrigger, "area_trigger"}, {kEvAreaEnd, "area_end"}, {kEvProjectileLaunch, "projectile_launch"},
+    {kEvImpact, "impact"}, {kEvChainJump, "chain_jump"}, {kEvCastStart, "cast_start"},
+    {kEvChannelStart, "channel_start"}, {kEvChannelEnd, "channel_end"}, {kEvAlert, "alert"},
+    {kEvGarrisonChanged, "garrison_changed"}, {kEvTransitStart, "transit_start"}, {kEvTransitEnd, "transit_end"},
+    {kEvTriggerFired, "trigger_fired"}, {kEvLoaded, "loaded"}, {kEvUnloaded, "unloaded"},
+    {kEvCyclePhase, "cycle_phase"}, {kEvTraded, "traded"}, {kEvDiplomacy, "diplomacy"}, {kEvItem, "item"},
+    {kEvMerged, "merged"}, {kEvObjective, "objective"}, {kEvDialog, "dialog"}, {kEvCamera, "camera"},
+    {kEvMissionEnd, "mission_end"}, {kEvLearned, "learned"}, {kEvCrewKilled, "crew_killed"}, {kEvCrewed, "crewed"},
+    {kEvInfected, "infected"}, {kEvSubmerged, "submerged"}, {kEvTrapFired, "trap_fired"},
+    {kEvGroupTeleport, "group_teleport"}, {kEvPaved, "paved"}, {kEvMorale, "morale"}, {kEvTurn, "turn"},
+};
+} // namespace
+const char* simEventName(uint16_t type) {
+    for (auto& [t, n] : kSimEventNames) if (t == type) return n;
+    return nullptr;
+}
+int simEventType(const std::string& name) {
+    for (auto& [t, n] : kSimEventNames) if (name == n) return t;
+    return -1;
+}
+
 bool protectedCall(Vm& vm, int nargs, int nresults, std::string* error) {
     lua_State* L = vm.L;
     if (!vm.exceeded) lua_sethook(L, countHook, LUA_MASKCOUNT, kHookStep);   // resets the residual count: deterministic

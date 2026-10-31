@@ -166,6 +166,16 @@ public:
     // Seconds (fx) until `player` can use command `index` again (0 = ready).
     Fixed commandCooldown(Simulation& sim, uint8_t player, int index) const;
 
+    // Before-hooks (G12): global functions of the game's scripts, looked up at load. The module calls them
+    // only when hooks() has the bit, so games without them pay nothing.
+    enum Hook : uint8_t { kHookDamage = 1, kHookCommand = 2, kHookBuild = 4, kHookTrain = 8, kHookCast = 16 };
+    uint8_t hooks() const { return hooks_; }
+    Fixed beforeDamage(Simulation& sim, Entity target, Entity source, uint8_t sourceOwner, Fixed amount, uint16_t dmgType);
+    bool allowCommand(Simulation& sim, const Command& c);                         // before_command(player, cmd)
+    bool allowBuild(Simulation& sim, uint8_t player, uint16_t type, Vec3 at, Entity builder);   // can_build
+    bool allowTrain(Simulation& sim, uint8_t player, uint16_t type, Entity producer);           // can_train
+    bool allowCast(Simulation& sim, Entity caster, int index, Entity target, Vec3 at);          // can_cast
+
     bool hasFunction(const std::string& name) const;
     const std::vector<ScriptLogEntry>& log() const { return log_; }
     int errorCount() const { return errors_; }
@@ -179,6 +189,7 @@ private:
     std::vector<ScriptCommandDef> commands_;
     int errors_ = 0;
     bool userScripts_ = false;
+    uint8_t hooks_ = 0;
     friend struct Impl;
 };
 

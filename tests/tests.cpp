@@ -10525,6 +10525,164 @@ TEST(native_modules_validation_and_isolation) {
     CHECK(!empty->world().resource<game::NativeStore>());
 }
 
+TEST(script_g2_view_ui) {   // view scripts drive the script UI: ui.set / open / close / on, view.state(), UI send
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("commands", Json::parse(kCmdRules));
+    rules.set("scripts", Json::parse(R"(["scripts/c.lua"])"));
+    rules.set("viewScripts", Json::parse(R"(["scripts/view/v.lua"])"));
+    Json src = Json::object();
+    src.set("scripts/c.lua", Json::string(std::string(kCmdScript) + "\nfunction on_start() state.score = {[1] = 7}; state.name = 'x' end\n"));
+    src.set("scripts/view/v.lua", Json::string(R"(
+        ui.open("war", {title = "War"})
+        local clicks = 0
+        ui.on("hide", function(args) clicks = clicks + 1; ui.close("war"); ui.set("arg", args[1]) end)
+        view.on_frame(function(dt)
+          local s = view.state()
+          ui.set("score", (s.score or {})[1] or -1)
+          ui.set("half", 0.5)
+          ui.set("list", {1, 2, {a = "b"}})
+          ui.set("clicks", clicks)
+        end)
+    )"));
+    rules.set("$scriptSources", src);
+    Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
+    Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim.setup(rules, map);
+    sim.step(); sim.step();
+    const uint64_t c0 = sim.checksum();
+    game::ViewScripts vs;
+    CHECK(vs.load(sim, rules, map, 1));
+    vs.update(sim, 0.016f);
+    {   // view.state() flushed the simulation's `state` early: outcomes and checksums are unchanged
+        Simulation ref(SimConfig{}, std::make_unique<game::RtsModule>());
+        ref.setup(rules, map);
+        ref.step(); ref.step();
+        CHECK(ref.checksum() == sim.checksum() && c0 == sim.checksum());
+    }
+    auto rq = vs.takeUiRequests();
+    CHECK(rq.size() == 5 && rq[0].kind == game::UiRequest::Open && rq[0].key == "war" && rq[0].value.getStr("title") == "War");
+    std::map<std::string, Json> vals;
+    for (auto& r : rq) if (r.kind == game::UiRequest::Set) vals[r.key] = r.value;
+    CHECK(vals["score"].integer() == 7 && vals["half"].toDouble() == 0.5 && vals["list"].size() == 3 && vals["list"][2].getStr("a") == "b");
+    vs.update(sim, 0.016f);
+    CHECK(vs.takeUiRequests().empty());                   // unchanged values are not resent
+    vs.uiEvent(sim, "hide", Json::parse("[42]"));
+    vs.update(sim, 0.016f);
+    rq = vs.takeUiRequests();
+    CHECK(rq.size() == 3 && rq[0].kind == game::UiRequest::Close);
+    for (auto& r : rq) if (r.kind == game::UiRequest::Set) vals[r.key] = r.value;
+    CHECK(vals["arg"].integer() == 42 && vals["clicks"].integer() == 1);
+    // a UI button sends a script command (args by name, points as {x, z})
+    Entity hall = findType(sim, "townhall", 1);
+    Entity f = mod(sim).spawn(sim, uint16_t(mod(sim).rules().findType("footman")), 1, sim.world().get<Transform>(hall).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    const Vec3 hp = sim.world().get<Transform>(hall).pos;
+    Json a = Json::object();
+    Json where = Json::object(); where.set("x", Json::number(hp.x + Fixed::fromInt(2))); where.set("z", Json::number(hp.z));
+    a.set("where", where); a.set("mode", Json::string("calm"));
+    Json units = Json::array(); units.push(Json::number(int64_t(f.packed()))); a.set("units", units);
+    CHECK(vs.send(sim, "rally", a));
+    CHECK(!vs.send(sim, "nope", a));
+    auto cmds = vs.takeCommands();
+    CHECK(cmds.size() == 1 && cmds[0].args.size() == 4 && cmds[0].args[3] == 0 && cmds[0].units.size() == 1);
+    for (auto& c : cmds) { c.player = 1; sim.submit(c); }
+    for (int i = 0; i < 3; ++i) sim.step();
+    CHECK(mod(sim).state(sim).trig.vars["n_rally"] == Fixed::fromInt(1));
+    int errs = 0;
+    for (auto& e : vs.log()) if (e.error && e.text.find("nope") == std::string::npos) { ++errs; std::printf("  view log: %s\n", e.text.c_str()); }
+    CHECK(errs == 0);
+}
+
+TEST(script_g12_events_and_hooks) {   // every GameEvent in Lua; before_damage / before_command / can_train / can_build / can_cast
+    const char* src = R"(
+        state.ev = {}
+        on("gathered", function(e) state.ev.gathered = (state.ev.gathered or 0) + 1; state.res = e.resource end)
+        on("train_started", function(e) state.ev.train = (state.ev.train or 0) + 1; state.tt = e.unit_type end)
+        on("attack", function(e) state.ev.attack = (state.ev.attack or 0) + 1 end)
+        function before_damage(e)
+          state.hits = (state.hits or 0) + 1
+          if game.type_of(e.unit) == "townhall" then return 0 end      -- halls take no damage
+          return e.amount * 2
+        end
+        function before_command(player, c)
+          if c.type == "stop" and player == 2 then return false, "no stopping" end
+        end
+        function can_train(player, type, producer)
+          if type == "footman" and player == 1 then return false, "footmen are banned" end
+        end
+        function can_build(player, type, x, z, builder) if type == "farm" then return false end end
+        function can_cast() return true end
+    )";
+    auto sim = scriptSim({{"scripts/h.lua", src}});
+    auto& m = mod(*sim);
+    auto* se = m.scripts();
+    using SE = game::ScriptEngine;
+    CHECK(se->hooks() == (SE::kHookDamage | SE::kHookCommand | SE::kHookBuild | SE::kHookTrain | SE::kHookCast));
+    World& w = sim->world();
+    Entity hall = findType(*sim, "townhall", 1);
+    Entity f = m.spawn(*sim, uint16_t(m.rules().findType("footman")), 1, w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    sim->step();
+    const Fixed hp0 = w.get<game::Unit>(f).hp, hall0 = w.get<game::Unit>(hall).hp;
+    m.dealDamage(*sim, f, Fixed::fromInt(5), 0, kNullEntity, 2);
+    m.dealDamage(*sim, hall, Fixed::fromInt(50), 0, kNullEntity, 2);
+    CHECK(hp0 - w.get<game::Unit>(f).hp == Fixed::fromInt(6));    // 5 - armor 2, doubled
+    CHECK(w.get<game::Unit>(hall).hp == hall0);
+    // can_train: footmen refused for player 1 with a message; peasants fine
+    auto queued = [&]() { auto* p = w.tryGet<game::Production>(hall); return p ? p->queue.size() : size_t(0); };
+    Command tr; tr.player = 1; tr.type = game::kCmdTrain; tr.units = {hall}; tr.param = m.rules().findType("peasant");
+    sim->submit(tr);
+    for (int i = 0; i < 6; ++i) sim->step();
+    const size_t q1 = queued();
+    CHECK(q1 >= 1);
+    // before_command veto for player 2's stop: their unit keeps its order
+    Entity e2 = m.spawn(*sim, uint16_t(m.rules().findType("footman")), 2, w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(8), Fixed{}, Fixed{}});
+    sim->step();
+    Command mv; mv.player = 2; mv.type = game::kCmdMove; mv.units = {e2}; mv.point = w.get<Transform>(e2).pos + Vec3{Fixed::fromInt(6), Fixed{}, Fixed{}};
+    sim->submit(mv);
+    for (int i = 0; i < 6; ++i) sim->step();
+    Command st; st.player = 2; st.type = game::kCmdStop; st.units = {e2};
+    sim->submit(st);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(!w.get<game::Orders>(e2).queue.empty());
+    auto& msgs = m.state(*sim).trig.messages;
+    CHECK(std::find(msgs.begin(), msgs.end(), "no stopping") != msgs.end());
+    // can_build: farms refused at order time
+    Entity peasant;
+    w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && m.rules().types[u.type].id == "peasant" && !peasant.valid()) peasant = e; });
+    if (peasant.valid()) {
+        Command b; b.player = 1; b.type = game::kCmdBuild; b.units = {peasant}; b.param = m.rules().findType("farm");
+        b.point = w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(6), Fixed{}, Fixed::fromInt(6)};
+        sim->submit(b);
+        for (int i = 0; i < 6; ++i) sim->step();
+        auto* o = w.tryGet<game::Orders>(peasant);
+        CHECK(!o || o->queue.empty() || o->queue.front().type != game::OrderType::Build);
+    }
+    // the footman train is refused with its reason
+    Command tf = tr; tf.param = m.rules().findType("footman");
+    Entity rax = m.spawn(*sim, uint16_t(m.rules().findType("barracks")), 1, w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(-8), Fixed{}, Fixed{}});
+    tf.units = {rax};
+    sim->submit(tf);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(!w.tryGet<game::Production>(rax) || w.get<game::Production>(rax).queue.empty());
+    CHECK(std::find(msgs.begin(), msgs.end(), "footmen are banned") != msgs.end());
+    {   // peasants go mining: "gathered" events
+        Entity mine;
+        w.each<game::Unit>([&](Entity e, game::Unit& u) { if (!mine.valid() && m.rules().types[u.type].id == "goldmine") mine = e; });
+        Command g; g.player = 1; g.type = game::kCmdGather; g.target = mine;
+        w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && m.rules().types[u.type].id == "peasant") g.units.push_back(e); });
+        CHECK(mine.valid() && !g.units.empty());
+        sim->submit(g);
+    }
+    for (int i = 0; i < 1200; ++i) sim->step();
+    sim->checksum();
+    const std::string& stb = w.resource<game::ScriptStore>()->state;
+    CHECK(game::script::blobHasKey(stb, "res") && game::script::blobHasKey(stb, "tt") && game::script::blobHasKey(stb, "hits"));
+    for (auto& e : se->log()) if (e.error) std::printf("  log: %s\n", e.text.c_str());
+    CHECK(se->errorCount() == 0);
+    // games without hooks: no hook bits (zero cost)
+    auto plain = scriptSim({{"scripts/p.lua", "on('tick', function() end)"}});
+    CHECK(mod(*plain).scripts()->hooks() == 0);
+}
+
 int main(int argc, char** argv) {
     for (auto& [name, fn] : registry()) {
         if (argc > 1 && std::string(name).find(argv[1]) == std::string::npos) continue;   // rts_tests [name filter]

@@ -955,6 +955,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     GameState& gs = state(sim);
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
+    if (script_ && (script_->hooks() & ScriptEngine::kHookCommand) && cmd.type != kCmdScript && !script_->allowCommand(sim, cmd)) return;   // before_command (G12)
     if (cmd.type >= 32768) { native_.command(*this, sim, cmd); return; }
     const bool queue = cmd.flags & kCmdQueue;
     if (cmd.type >= kCmdStance || mechOn(sim) || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue))) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
@@ -1074,6 +1075,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             uint16_t bt = uint16_t(cmd.param);
             if (std::find(t.builds.begin(), t.builds.end(), bt) == t.builds.end()) break;
             if (!canTrain(sim, cmd.player, bt)) break;
+            if (script_ && (script_->hooks() & ScriptEngine::kHookBuild) && !script_->allowBuild(sim, cmd.player, bt, flat(cmd.point), e)) break;   // can_build
             o.type = OrderType::Build; o.param = bt; o.target = kNullEntity; o.point = flat(cmd.point);
             issue(sim, e, o, queue);
             break;
@@ -1084,6 +1086,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             uint16_t ut = uint16_t(cmd.param);
             if (std::find(t.produces.begin(), t.produces.end(), ut) == t.produces.end()) break;
             if (!canTrain(sim, cmd.player, ut) || int(prod->queue.size()) >= rules_.maxQueue) break;
+            if (script_ && (script_->hooks() & ScriptEngine::kHookTrain) && !script_->allowTrain(sim, cmd.player, ut, e)) break;   // can_train
             if (prod->ready != kNoType && rules_.types[ut].structure) break; // place the finished one first
             if (t.chargesMax > 0 && prod->charges <= 0) break;
             Entity recruit;
@@ -1180,6 +1183,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!prod || prod->ready == kNoType) break;
             uint16_t st = prod->ready;
             if (!canPlace(sim, cmd.player, st, cmd.point)) break;
+            if (script_ && (script_->hooks() & ScriptEngine::kHookBuild) && !script_->allowBuild(sim, cmd.player, st, flat(cmd.point), e)) break;   // can_build
             prod->ready = kNoType;
             placeStructure(sim, cmd.player, st, cmd.point, kNullEntity, true);
             return; // one placement per command

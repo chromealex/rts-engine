@@ -12,10 +12,10 @@ using namespace detail;
 namespace {
 enum Ev : uint8_t {
     EvStart, EvTick, EvUnitDied, EvSpawned, EvBuilt, EvTrained, EvResearched, EvCaptured, EvPlayerDefeated,
-    EvAbility, EvDamage, EvLevelUp, EvUpgraded, EvEvery, EvEnterArea, EvLeaveArea, EvFieldThreshold, EvCount
+    EvAbility, EvDamage, EvLevelUp, EvUpgraded, EvEvery, EvEnterArea, EvLeaveArea, EvFieldThreshold, EvSim, EvCount
 };
 const char* const kEvNames[EvCount] = {"start", "tick", "unit_died", "spawned", "built", "trained", "researched", "captured",
-                                        "player_defeated", "ability", "damage", "level_up", "upgraded", "every", "enter_area", "leave_area", "field_threshold"};
+                                        "player_defeated", "ability", "damage", "level_up", "upgraded", "every", "enter_area", "leave_area", "field_threshold", "event"};
 constexpr int kNamedEvents = EvUpgraded + 1;   // events registered with on(name, fn) / global on_<name>
 
 int evFromSim(uint16_t t) {
@@ -35,7 +35,7 @@ int evFromSim(uint16_t t) {
     }
 }
 
-struct Handler { Ev ev = EvStart; int ref = LUA_NOREF; uint32_t period = 0; int area = -1; std::string where; };
+struct Handler { Ev ev = EvStart; int ref = LUA_NOREF; uint32_t period = 0; int area = -1; std::string where; uint16_t simType = 0; };
 struct PendingEffect { std::string fn; const Json* args = nullptr; EffectCtx ctx; std::vector<Entity> targets; };
 
 void setInt(lua_State* L, const char* k, int64_t v) { lua_pushinteger(L, v); lua_setfield(L, -2, k); }
@@ -56,6 +56,8 @@ struct ScriptEngine::Impl {
     std::map<uint64_t, DataEntry> dataCache;   // entity (packed) -> its table in registry "rts.data"
     std::vector<uint64_t> dataDirty;           // tables handed out since the last flush
     uint32_t budgetTick = UINT32_MAX;
+    std::vector<bool> simWanted = std::vector<bool>(256, false);   // EvSim handlers by GameEvent type
+    int hookDepth = 0;                            // before-hooks don't nest (a hook's own damage / casts skip them)
     std::map<uint8_t, int64_t> cmdUsed;          // script command handlers: instructions per player this tick
     int64_t cmdBudget = 200000;                   // rules "commandBudget"
     bool noCmdHandlerLogged = false;
@@ -280,6 +282,80 @@ struct ScriptEngine::Impl {
         }
     }
 
+    // Any GameEvent: {event, player, tick, x, z, unit (a), other (b), value} + unit_type / status / ability names
+    void pushSimEvent(Simulation& sim, const SimEvent& ev) {
+        lua_State* L = vm.L;
+        const Rules& r = m.rules();
+        lua_createtable(L, 0, 10);
+        const char* n = simEventName(ev.type);
+        setStr(L, "event", n ? n : "event");
+        setInt(L, "player", ev.player);
+        setInt(L, "tick", sim.tick());
+        setFx(L, "x", ev.pos.x);
+        setFx(L, "z", ev.pos.z);
+        setEnt(L, "unit", ev.a);
+        setEnt(L, "other", ev.b);
+        setInt(L, "value", ev.value);
+        switch (ev.type) {
+        case kEvSpawned: case kEvDied: case kEvTrainStarted: case kEvTrainDone: case kEvBuildPlaced: case kEvBuildDone:
+        case kEvUpgraded: case kEvReadyToPlace: case kEvInfected:
+            if (ev.value >= 0 && size_t(ev.value) < r.types.size()) setStr(L, "unit_type", r.types[size_t(ev.value)].id);
+            break;
+        case kEvStatusStart: case kEvStatusEnd:
+            if (ev.value >= 0 && size_t(ev.value) < r.statuses.size()) setStr(L, "status", r.statuses[size_t(ev.value)].id);
+            break;
+        case kEvGathered: case kEvDelivered: case kEvProduced:
+            if (ev.value >= 0 && size_t(ev.value) < r.resources.size()) setStr(L, "resource", r.resources[size_t(ev.value)].id);
+            break;
+        case kEvHit: setFx(L, "amount", Fixed::fromRaw(ev.value)); break;
+        case kEvMessage: {
+            auto& msgs = m.state(sim).trig.messages;
+            if (ev.value >= 0 && size_t(ev.value) < msgs.size()) setStr(L, "text", msgs[size_t(ev.value)]);
+            break;
+        }
+        default: break;
+        }
+    }
+
+    // ---- before-hooks (G12): global functions found at load; budgeted like other handlers, no nesting
+    bool hookCall(Simulation& sim, const char* fn, int nargs, int nres) {   // args on the stack; leaves nres results on success
+        enter(sim);
+        ++hookDepth;
+        lua_rawgeti(vm.L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+        lua_getfield(vm.L, -1, fn);
+        lua_remove(vm.L, -2);
+        lua_insert(vm.L, -nargs - 1);
+        const std::string name = fn;
+        bool ok = !fnDisabled(sim, name) && !vm.exceeded && lua_isfunction(vm.L, -nargs - 1);
+        if (!ok) lua_pop(vm.L, nargs + 1);
+        else {
+            std::string err;
+            ok = protectedCall(vm, nargs, nres, &err);
+            if (!ok) {
+                auto& d = store(sim).disabledFns;
+                d.insert(std::upper_bound(d.begin(), d.end(), name), name);
+                logLine(true, err + " [function " + name + " disabled]");
+            }
+        }
+        --hookDepth;
+        return ok;
+    }
+    // veto hooks: false (+ optional reason, shown to the player) refuses; anything else allows
+    bool hookAllows(Simulation& sim, const char* fn, int nargs, uint8_t player) {
+        if (!hookCall(sim, fn, nargs, 2)) return true;
+        const bool veto = lua_isboolean(vm.L, -2) && !lua_toboolean(vm.L, -2);
+        if (veto && lua_type(vm.L, -1) == LUA_TSTRING && player > 0) {
+            const std::string text = lua_tostring(vm.L, -1);
+            GameState& gs = m.state(sim);
+            auto it = std::find(gs.trig.messages.begin(), gs.trig.messages.end(), text);
+            const int64_t idx = it - gs.trig.messages.begin();
+            if (it == gs.trig.messages.end()) gs.trig.messages.push_back(text);
+            sim.emit({kEvMessage, player, kNullEntity, kNullEntity, idx, {}});
+        }
+        lua_pop(vm.L, 2);
+        return !veto;
+    }
+
     void tickAreas(Simulation& sim) {
         World& w = sim.world();
         ScriptStore& st = store(sim);
@@ -386,9 +462,13 @@ int lOn(lua_State* L, Vm& vm) {
     if (!name) return fail(vm, "on: event name expected");
     for (int k = 0; k < kNamedEvents; ++k)
         if (std::string(name) == kEvNames[k]) return addHandler(L, vm, Ev(k), 2, 0, -1);
-    std::string known;
-    for (int k = 0; k < kNamedEvents; ++k) known += std::string(k ? ", " : "") + kEvNames[k];
-    return fail(vm, std::string("on: unknown event '") + name + "' (" + known + ")");
+    if (int t = simEventType(name); t >= 0) {   // any other simulation event: generic table (G12)
+        if (addHandler(L, vm, EvSim, 2, 0, -1) < 0) return -1;
+        implOf(vm).handlers.back().simType = uint16_t(t);
+        if (size_t(t) < implOf(vm).simWanted.size()) implOf(vm).simWanted[size_t(t)] = true;
+        return 0;
+    }
+    return fail(vm, std::string("on: unknown event '") + name + "' (docs/scripting.md § Events)");
 }
 // every(seconds, function(tick) ... end)
 int lEvery(lua_State* L, Vm& vm) {
@@ -562,6 +642,12 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     }
     vm.loading = false;
     vm.budget = tickBudget;
+    hooks_ = 0;   // before-hooks of the game's own scripts
+    if (userScripts_) {
+        const std::pair<const char*, uint8_t> hk[] = {{"before_damage", kHookDamage}, {"before_command", kHookCommand},
+                                                      {"can_build", kHookBuild}, {"can_train", kHookTrain}, {"can_cast", kHookCast}};
+        for (auto& [n, bit] : hk) if (hasFunction(n)) hooks_ |= bit;
+    }
     // strict, read-only globals from now on
     lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
     lua_createtable(L, 0, 2);
@@ -647,6 +733,17 @@ void ScriptEngine::tick(Simulation& sim) {
             }
         }
     }
+    if (im.evMask & (1u << EvSim)) {   // on("<any event>", fn): generic tables
+        const std::vector<SimEvent> evs = sim.events();
+        for (const SimEvent& ev : evs) {
+            if (ev.type >= im.simWanted.size() || !im.simWanted[ev.type]) continue;
+            for (size_t hi = 0; hi < im.handlers.size(); ++hi) {
+                if (!active(hi, EvSim) || im.handlers[hi].simType != ev.type) continue;
+                im.pushSimEvent(sim, ev);
+                im.callHandler(sim, hi, 1);
+            }
+        }
+    }
     if ((im.evMask & ((1u << EvEnterArea) | (1u << EvLeaveArea))) && tick % 5 == 0) im.tickAreas(sim);
     if (im.evMask & (1u << EvFieldThreshold)) im.tickFieldHooks(sim);
     // ability effects queued during this tick
@@ -713,6 +810,77 @@ void ScriptEngine::callAction(Simulation& sim, const std::string& fn, const Json
 
 void ScriptEngine::queueEffect(const EffectDef& e, const EffectCtx& ctx, std::vector<Entity> targets) {
     impl_->effects.push_back({e.scriptFn, &e.scriptArgs, ctx, std::move(targets)});
+}
+
+Fixed ScriptEngine::beforeDamage(Simulation& sim, Entity target, Entity source, uint8_t sourceOwner, Fixed amount, uint16_t dmgType) {
+    Impl& im = *impl_;
+    if (!im.vm.L || im.hookDepth > 0) return amount;
+    lua_State* L = im.vm.L;
+    lua_createtable(L, 0, 6);
+    setEnt(L, "unit", target);
+    setEnt(L, "source", sim.world().alive(source) ? source : kNullEntity);
+    setInt(L, "player", sourceOwner);
+    setFx(L, "amount", amount);
+    const auto& dts = im.m.rules().damageTypes;
+    if (dmgType < dts.size()) setStr(L, "damage_type", dts[dmgType]);
+    if (!im.hookCall(sim, "before_damage", 1, 1)) return amount;
+    Fixed out = amount;
+    if (Fixed* f = testFx(L, -1)) out = *f;
+    else if (lua_isinteger(L, -1)) out = Fixed::fromInt(lua_tointeger(L, -1));
+    lua_pop(L, 1);
+    return fxMax(Fixed{}, out);
+}
+
+bool ScriptEngine::allowCommand(Simulation& sim, const Command& c) {
+    Impl& im = *impl_;
+    if (!im.vm.L || im.hookDepth > 0) return true;
+    lua_State* L = im.vm.L;
+    lua_pushinteger(L, c.player);
+    lua_createtable(L, 0, 8);
+    setStr(L, "type", commandName(c.type));
+    lua_createtable(L, int(c.units.size()), 0);
+    for (size_t i = 0; i < c.units.size(); ++i) { pushEntity(L, c.units[i]); lua_rawseti(L, -2, lua_Integer(i + 1)); }
+    lua_setfield(L, -2, "units");
+    setEnt(L, "target", c.target);
+    setFx(L, "x", c.point.x);
+    setFx(L, "z", c.point.z);
+    setInt(L, "param", c.param);
+    lua_pushboolean(L, (c.flags & kCmdQueue) != 0); lua_setfield(L, -2, "queue");
+    return im.hookAllows(sim, "before_command", 2, c.player);
+}
+
+bool ScriptEngine::allowBuild(Simulation& sim, uint8_t player, uint16_t type, Vec3 at, Entity builder) {
+    Impl& im = *impl_;
+    if (!im.vm.L || im.hookDepth > 0) return true;
+    lua_State* L = im.vm.L;
+    lua_pushinteger(L, player);
+    lua_pushstring(L, im.m.rules().types[type].id.c_str());
+    pushFx(L, at.x); pushFx(L, at.z);
+    if (builder.valid()) pushEntity(L, builder); else lua_pushnil(L);
+    return im.hookAllows(sim, "can_build", 5, player);
+}
+
+bool ScriptEngine::allowTrain(Simulation& sim, uint8_t player, uint16_t type, Entity producer) {
+    Impl& im = *impl_;
+    if (!im.vm.L || im.hookDepth > 0) return true;
+    lua_State* L = im.vm.L;
+    lua_pushinteger(L, player);
+    lua_pushstring(L, im.m.rules().types[type].id.c_str());
+    if (producer.valid()) pushEntity(L, producer); else lua_pushnil(L);
+    return im.hookAllows(sim, "can_train", 3, player);
+}
+
+bool ScriptEngine::allowCast(Simulation& sim, Entity caster, int index, Entity target, Vec3 at) {
+    Impl& im = *impl_;
+    if (!im.vm.L || im.hookDepth > 0) return true;
+    lua_State* L = im.vm.L;
+    World& w = sim.world();
+    const uint8_t owner = w.get<Owner>(caster).player;
+    pushEntity(L, caster);
+    lua_pushstring(L, im.m.abilityFor(sim, caster, index).id.c_str());
+    if (target.valid() && w.alive(target)) pushEntity(L, target); else lua_pushnil(L);
+    pushFx(L, at.x); pushFx(L, at.z);
+    return im.hookAllows(sim, "can_cast", 5, owner);
 }
 
 int ScriptEngine::findCommand(const std::string& id) const {

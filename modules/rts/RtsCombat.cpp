@@ -86,6 +86,7 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
             if (ls.raw > 0) { Unit& su = w.get<Unit>(source); su.hp = fxMin(stat(sim, source, Stat::MaxHp), su.hp + fin * ls); }
         }
     }
+    if (script_ && (script_->hooks() & ScriptEngine::kHookDamage)) fin = script_->beforeDamage(sim, target, source, sourceOwner, fin, dmgType);   // before_damage (G12)
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
     if (source.valid()) u->lastHitBy = source;
@@ -299,6 +300,7 @@ void addBuff(Buffs& b, const Buff& nb) {
 void RtsModule::castAbility(Simulation& sim, Entity caster, int index, Entity target, Vec3 point) {
     World& w = sim.world();
     if (!canCast(sim, caster, index)) return;
+    if (script_ && (script_->hooks() & ScriptEngine::kHookCast) && !script_->allowCast(sim, caster, index, target, point)) return;   // can_cast (G12)
     Unit& u = w.get<Unit>(caster);
     const uint16_t casterType = u.type;
     const AbilityDef a = rules_.types[casterType].abilities[size_t(index)]; // copy: spawning may move vectors? (rules are stable, but be safe)

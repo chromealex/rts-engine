@@ -1176,6 +1176,11 @@ int gEnableTrigger(lua_State* L, Vm& vm) {
 
 } // namespace
 
+const char* commandName(uint16_t type) {
+    for (auto& [n, v] : kCommands) if (v == type) return n;
+    return type == kCmdScript ? "script" : "other";
+}
+
 void openGameApi(Vm& vm) {
     lua_State* L = vm.L;
     static const luaL_Reg queries[] = {
@@ -1240,6 +1245,8 @@ Json scriptApiReference() {
                           "on(\"damage\", fn(e)) e: unit, source, player (source owner), amount (fx)", "on(\"level_up\", fn(e)) e: unit, player, level",
                           "on_area(name, \"enter\"|\"leave\", fn(e)) e: unit, owner, area, x, z (checked every 5 ticks)",
                           "global functions named on_start, on_tick, on_unit_died, ... are registered too",
+                          "on(\"<any GameEvent>\", fn(e)): gathered, attack, status_start, impact, ... e: event, player, tick, x, z, unit, other, value (+ unit_type / status / resource / amount / text)",
+                          "before_damage(e) -> amount; before_command(player, c) / can_train(player, type, producer) / can_build(player, type, x, z, builder) / can_cast(caster, ability, target, x, z) -> false [, reason] refuses",
                           "game.after(seconds, \"global_fn\", arg): one-shot timer kept in the simulation state"})
         ev.push(Json::string(e));
     r.set("events", ev);
@@ -1302,6 +1309,9 @@ Json scriptApiReference() {
     v.push(fn("view.notice(text) / view.effect(name, x, z) / view.sound(name, x, z)", "requests to the host (UI notice, particle effect, sound)"));
     v.push(fn("view.player()", "the local player slot"));
     v.push(fn("view.send(id, args)", "issue a rules \"commands\" command as the local player (args by name, args.units = selection)"));
+    v.push(fn("view.state()", "read-only copy of the simulation scripts' state (this tick)"));
+    v.push(fn("ui.set(key, value) / ui.open(name [, params]) / ui.close(name) / ui.on(event, fn(args))",
+              "script UI: data model \"script\" of the game's ui/hud/<name>.rml documents; event('name', ...) / send('command', {...}) in documents"));
     r.set("view", v);
     Json fl = Json::array();   // grid fields (RtsGridFieldsApi.cpp, docs/fields.md)
     fl.push(fn("field.ids() / field.info(id)", "grid fields of the game (rules \"fields\", map \"gridFields\"); info = {id, type, w, h, resolution, default, min, max, per_player, layers}"));
