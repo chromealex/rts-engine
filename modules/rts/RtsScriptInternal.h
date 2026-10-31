@@ -42,6 +42,14 @@ struct Vm {
     std::map<std::string, std::string> sources;   // path -> text (require)
     std::function<void(bool error, const std::string& text)> log;
     void* owner = nullptr;                  // ScriptEngine::Impl / view host
+    // per-entity data (game.data), provided by the simulation engine; view VMs read the stored copy
+    std::function<void(Entity)> pushData;
+    std::function<bool(Entity, const char*)> dataHas;
+    // radius queries: a bucket grid of the living units, built on first use and dropped whenever C++ may
+    // have moved / spawned / killed something (every entry into the VM and every non-query binding)
+    struct Spatial { int cell = 8, w = 0, h = 0; std::vector<std::vector<Entity>> buckets; std::vector<int32_t> used; };
+    Spatial spatial;
+    bool spatialOk = false;
 
     ~Vm();
     bool open(Mode m, size_t memLimit);     // new state + sandbox
@@ -50,9 +58,11 @@ struct Vm {
 
 Vm& vmOf(lua_State* L);
 
-template <int (*F)(lua_State*, Vm&)>
+// bind: any binding (it may change the world); bindQ: a pure query (keeps the radius-query grid)
+template <int (*F)(lua_State*, Vm&), bool kQuery = false>
 int bind(lua_State* L) {
     Vm& vm = vmOf(L);
+    if constexpr (!kQuery) vm.spatialOk = false;
     int n = F(L, vm);
     if (n >= 0) return n;
     luaL_where(L, 1);
@@ -61,6 +71,7 @@ int bind(lua_State* L) {
     lua_concat(L, 2);
     return lua_error(L);
 }
+template <int (*F)(lua_State*, Vm&)> int bindQ(lua_State* L) { return bind<F, true>(L); }
 inline int fail(Vm& vm, std::string msg) { vm.err = std::move(msg); return -1; }
 
 // ---- fx numbers
@@ -77,20 +88,34 @@ std::string fxText(Fixed v);            // integer-only decimal formatting ("1.2
 // ---- values
 void pushJson(lua_State* L, const Json& j);      // numbers: integer when whole, fx otherwise
 // Canonical serialization of the value at idx (bool, integer, fx, string, nested tables with
-// integer/string keys, sorted). False with `where` = path of the offending value.
-bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int depth = 0);
+// integer/string keys, sorted). False with `where` = path of the offending value. lenient: values that
+// can't be stored are left out (`where` = the first one) and the rest is written.
+bool serialize(lua_State* L, int idx, std::string& out, std::string& where, int depth = 0, bool lenient = false);
 // Pushes the value; returns the read position (0 on malformed input, pushes nil).
 size_t deserialize(lua_State* L, const std::string& in, size_t pos = 0, int depth = 0);
+// Does a serialized table have this (string) key at its top level? (no Lua state needed)
+bool blobHasKey(const std::string& blob, const char* key);
 // Source scan for float literals (sim scripts): "" or "line N: ...".
 std::string findFloatLiteral(const std::string& text);
 // Load a chunk (text only) into the VM; pushes the function or returns false with message.
 bool loadChunk(Vm& vm, const std::string& name, const std::string& text, std::string& error);
 // lua_pcall with budget reset handling; on error logs "message" and returns false.
 bool protectedCall(Vm& vm, int nargs, int nresults, std::string* error = nullptr);
+// every GameEvent by its Lua name ("unit_died", "gathered", "status_start", ...); nullptr / -1 when unknown
+const char* simEventName(uint16_t type);
+int simEventType(const std::string& name);
+// built-in command names of game.command ("move", "train", ...; RtsScriptApi.cpp)
+const char* commandName(uint16_t type);
+// script commands (RtsScriptCommands.cpp)
+int argSlots(const ScriptCommandDef& d);
+bool encodeScriptArgs(lua_State* L, Vm& vm, int idx, const ScriptCommandDef& d, Command& c);
+bool validateScriptCommand(RtsModule& m, Simulation& sim, const ScriptCommandDef& d, Command& c);
+void pushScriptArgs(lua_State* L, const ScriptCommandDef& d, const Command& c);
 
 // ---- API tables (RtsScriptApi.cpp)
 void openGameApi(Vm& vm);           // `game` table: queries always, actions in Sim mode
 void openStdApi(Vm& vm);            // `rts` table for the standard library (RtsScriptStd.cpp)
+void openFieldApi(Vm& vm);          // `field` table: grid fields (RtsGridFieldsApi.cpp)
 void pushEntity(lua_State* L, Entity e);
 bool argEntity(lua_State* L, int idx, Entity& out); // integer handle (no liveness check)
 

@@ -227,6 +227,7 @@ void GameClient::startMatch(size_t idx) {
         Json rules = rulesJson_;
         if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_->setup(rules, map);
+        scriptUiReset();
         if (viewScripts_.load(*sim_, rules, map, uint8_t(spectator_ ? 0 : human_))) viewScripts_.attach(*sim_);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
         configurePostFx(map);
@@ -460,6 +461,7 @@ void GameClient::event(const Event& e) {
                 if (!(e.mods & platform::kModShift)) mode_ = Mode::Normal;
                 return;
             }
+            if (scriptCommandClick(e)) return;   // ClientScriptCmd.cpp
             if (mode_ == Mode::Ability || mode_ == Mode::Claim) {
                 float3 g;
                 if (groundAt(e.x, e.y, g)) {
@@ -604,7 +606,7 @@ void GameClient::event(const Event& e) {
                 if (touchMoved_) command(kCmdSmart, e.x, e.y, false);
             } else if (!touchMoved_ && !uiWants) {
                 Entity t = pick(e.x, e.y);
-                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim || mode_ == Mode::Skill || mode_ == Mode::Drop) {
+                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim || mode_ == Mode::Skill || mode_ == Mode::Drop || mode_ == Mode::ScriptCmd) {
                     Event fake = e; fake.type = EventType::MouseDown; fake.button = 0; fake.mods = 0;
                     event(fake);
                 } else if (t.valid() && w.get<Owner>(t).player == human_ && !selectionHasGarrison()) {
@@ -633,6 +635,7 @@ void GameClient::event(const Event& e) {
             else if (selectionHasGarrison() && gi <= 4) sendPercent_ = gi * 25; // garrison games: 1-4 = 25..100%
             else if (!groups_[size_t(gi)].empty()) selection_ = groups_[size_t(gi)];
         }
+        if (!ctrl && scriptCommandKey(e.key)) break;   // rules "commands" hotkeys first
         if (!ctrl && !selection_.empty()) {
             if (e.key == Key::A) mode_ = Mode::AttackMove;
             if (e.key == Key::P) mode_ = Mode::Patrol;
@@ -668,6 +671,8 @@ void GameClient::processEvents() {
 void GameClient::runViewScripts(float dt) {
     if (!viewScripts_.active()) return;
     viewScripts_.update(*sim_, dt);
+    issueViewCommands();
+    scriptUiFrame();
     for (auto& r : viewScripts_.takeRequests()) {
         if (r.kind == game::ViewRequest::Notice) notice(r.text);
         else if (r.kind == game::ViewRequest::Effect) fx_.particles().play(r.text, {r.x, 0.5f, r.z});
@@ -781,6 +786,7 @@ void GameClient::frame(gfx::Device& dev, double dt) {
             view_.setOverlayContext(oc);
         }
         view_.draw(r3d_, scene_, time_, spectator_ ? nullptr : &gs.vision[human_], gs.grid);
+        for (auto& fe : view_.fieldView().takeEffects()) fx_.particles().play(fe.name, {fe.pos.x, fe.pos.y + 0.2f, fe.pos.z});   // grid field particles
         fx_.setPlanetView(planet() ? &view_ : nullptr);   // planets: effects in the camera body's space
         fx_.update(*sim_, scene_, cam_, r3d_.viewProj(), dev.framebufferWidth(), dev.framebufferHeight(),
                    screen_ == Screen::Playing || screen_ == Screen::Over ? float(dt) : 0.0f);

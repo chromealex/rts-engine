@@ -86,8 +86,10 @@ void RtsModule::dealDamage(Simulation& sim, Entity target, Fixed dmg, uint16_t d
             if (ls.raw > 0) { Unit& su = w.get<Unit>(source); su.hp = fxMin(stat(sim, source, Stat::MaxHp), su.hp + fin * ls); }
         }
     }
+    if (script_ && (script_->hooks() & ScriptEngine::kHookDamage)) fin = script_->beforeDamage(sim, target, source, sourceOwner, fin, dmgType);   // before_damage (G12)
     u->hp -= fin;
     if (sourceOwner != 0) u->lastAttacker = sourceOwner;
+    if (source.valid()) u->lastHitBy = source;
     if ((rules_.mech.veterancy || rules_.mech.infection || rules_.mech.morale) && w.alive(source)) mechOnHit(sim, target, source, fin);   // agent-mech: last hitter, morale
     sim.emit({kEvHit, sourceOwner, target, source, fin.raw, w.get<Transform>(target).pos});
     if (rules_.originals) afterHit(sim, target, source, wd, u->hp.raw <= 0);   // crews, infection, eaters
@@ -298,6 +300,7 @@ void addBuff(Buffs& b, const Buff& nb) {
 void RtsModule::castAbility(Simulation& sim, Entity caster, int index, Entity target, Vec3 point) {
     World& w = sim.world();
     if (!canCast(sim, caster, index)) return;
+    if (script_ && (script_->hooks() & ScriptEngine::kHookCast) && !script_->allowCast(sim, caster, index, target, point)) return;   // can_cast (G12)
     Unit& u = w.get<Unit>(caster);
     const uint16_t casterType = u.type;
     const AbilityDef a = rules_.types[casterType].abilities[size_t(index)]; // copy: spawning may move vectors? (rules are stable, but be safe)
@@ -587,7 +590,7 @@ void RtsModule::sysDeath(Simulation& sim) {
             }
             grantKill(sim, e, u.lastAttacker);
             if (!t.wreck.empty() && wreckType >= 0) leftovers.push_back({uint16_t(wreckType), pos, int16_t(t.wreck[0].res), t.wreck[0].value});
-            sim.emit({kEvDied, owner, e, kNullEntity, u.type, pos});
+            sim.emit({kEvDied, owner, e, u.lastHitBy, u.type, pos});
         }
         if (rules_.originals) onDeathOriginals(sim, e, owner, pos, silent);   // explosions, infection, dead heroes
         if (rules_.fidelity && !silent) deathFidelity(sim, e);                // the foundation goes with the structure

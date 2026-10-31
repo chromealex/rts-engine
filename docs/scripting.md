@@ -103,22 +103,35 @@ integers when they can't (ticks, counts, players, levels, handles). `math` keeps
 `math.random` (simulation RNG: `math.random(n)`, `math.random(a, b)` integers, `math.random()` an
 fx in [0, 1)). `tonumber("12")` works; `tonumber("1.5")` is an error (use `fx("1.5")`).
 
-### State: `state`, not upvalues
+### State: `state`, `game.data(h)`, not upvalues
 
-Everything a script remembers between ticks must be in the global table **`state`** (or in trigger
-variables, `game.set_var`). After every tick the engine serializes `state` canonically (sorted
-keys) into the simulation: it is hashed into the checksum (desync detection), copied by rollback
-snapshots and restored into the VM when the netcode rewinds.
+Everything a script remembers between ticks must be in the global table **`state`**, in an
+entity's own table **`game.data(h)`**, or in trigger variables (`game.set_var`). The engine writes
+them into the simulation canonically (sorted keys) **when the world is observed** — before a
+checksum, a rollback snapshot or a save — not after every tick: they are hashed into the checksum
+(desync detection), copied by rollback snapshots, saved, and read back into the VM when the
+netcode rewinds or a save is loaded. A tick that only changes Lua tables costs nothing until then.
 
-- Allowed in `state`: integers, `fx`, strings, booleans and nested tables whose keys are integers or
-  strings. Anything else (functions, floats, tables as keys, cycles) is an error — the tick's
-  changes to `state` are reverted and the error is logged.
+- **`game.data(h)`** returns the entity's own table (created on first use, gone when the entity
+  dies, kept by `transform`). Only tables handed out since the last write are serialized again, and
+  only changed ones are re-hashed, so per-unit records belong here, not in one big `state` table:
+  ```lua
+  local d = game.data(h)            -- {} the first time
+  d.morale = (d.morale or 10) - 1
+  for _, h in ipairs(game.units{has = "morale"}) do ... end   -- entities whose table has the key
+  game.has_data(h, "morale")  game.clear_data(h)
+  ```
+  View scripts get a read-only copy of the stored table.
+- Allowed in `state` and `game.data`: integers, `fx`, strings, booleans and nested tables whose keys
+  are integers or strings. A value that can't be stored (function, float, table key, cycle) is left
+  out of the saved state and logged; keep such values out of persistent tables.
 - **Globals are read-only after loading**: assigning a new global in a handler is an error, reading
   an undefined one too (typos show up immediately). Define functions and constants at the top level.
 - **Don't change file-level `local` variables from handlers** (`local count = 0` ... `count = count + 1`
   in a handler): such state isn't part of the snapshot, so a rollback can't restore it. Use `state`.
   Constants and helper functions as locals are fine.
-- Don't keep references to `state` sub-tables in locals across ticks (a rollback replaces them).
+- Don't keep references to `state` sub-tables or `game.data` tables in locals across ticks (a rollback
+  replaces them); call `game.data(h)` again.
 
 ### Order and randomness
 
@@ -152,7 +165,7 @@ Handlers are registered at the top level of a file (while it loads):
 | `on("start", fn)` / `function on_start()` | once, first tick | — |
 | `on("tick", fn)` / `on_tick` | every tick | tick |
 | `every(seconds, fn)` | every N seconds (seconds: integer or fx) | tick |
-| `on("unit_died", fn)` / `on_unit_died` | a unit or structure died | `e.unit` (dead handle), `e.owner`, `e.unit_type`, `e.x`, `e.z` |
+| `on("unit_died", fn)` / `on_unit_died` | a unit or structure died | `e.unit` (dead handle), `e.owner`, `e.unit_type`, `e.x`, `e.z`, `e.killer` (last damage source, may be dead too), `e.killer_owner` (when the killer lives) |
 | `on("spawned" \| "built" \| "trained" \| "upgraded", fn)` | created / construction done / trained / upgraded | `e.unit`, `e.owner`, `e.unit_type` (`trained`: `e.producer`) |
 | `on("researched", fn)` | a tech finished | `e.player`, `e.tech`, `e.producer` |
 | `on("captured", fn)` | changed owner | `e.unit`, `e.owner`, `e.old_owner`, `e.by` |
@@ -165,6 +178,34 @@ Handlers are registered at the top level of a file (while it loads):
 
 Every event table also has `e.event`, `e.tick`, `e.player`. Scripts run in the **scripts** phase at
 the end of the tick (after triggers) and see every event of that tick.
+
+**Every other simulation event** works with `on(name, fn)` too and gets a generic table `{event,
+player, tick, x, z, unit (a), other (b), value}` plus `unit_type` (spawn / train / build / upgrade
+events), `status` (`status_start`, `status_end`), `resource` (`gathered`, `delivered`, `produced`),
+`amount` (`damage`), `text` (`message`). Names: `attack hit miss train_started build_placed gathered
+not_enough ready_to_place sold region_claimed wave low_power message dug territory room_painted
+recruited creature_left picked_up dropped slapped possessed payday player_ability produced delivered
+road_built lanes_changed status_start status_end area_start area_trigger area_end projectile_launch
+impact chain_jump cast_start channel_start channel_end alert garrison_changed transit_start
+transit_end trigger_fired loaded unloaded cycle_phase traded diplomacy item merged objective dialog
+camera mission_end learned crew_killed crewed infected submerged trap_fired group_teleport paved
+morale turn` (what `unit` / `other` / `value` mean per event: `GameEvent` in modules/rts/RtsModule.h).
+View scripts get the same names with `view.on` (read-only).
+
+**Before-hooks** — global functions the engine calls *before* something happens, in the middle of
+the tick (so keep them short; they share the tick budget and don't nest: damage dealt from inside a
+hook doesn't call `before_damage` again):
+
+| function | called | return |
+|---|---|---|
+| `before_damage(e)` | every hit, after armor / mitigation: `e = {unit, source, player, amount, damage_type}` | the new amount (fx / integer, >= 0); nothing = unchanged |
+| `before_command(player, c)` | every built-in player command: `c = {type, units, target, x, z, param, queue}` (`type` as in `game.command`) | `false [, reason]` drops it |
+| `can_train(player, type, producer)` | a train command passed the engine's checks | `false [, reason]` refuses |
+| `can_build(player, type, x, z, builder)` | build order / sidebar placement | `false [, reason]` refuses |
+| `can_cast(caster, ability, target, x, z)` | an ability is about to fire (commands, autocast, AI) | `false [, reason]` refuses |
+
+A `reason` string is shown to that player like `game.message`. Games without these functions pay
+nothing (the module checks a flag).
 
 ## The `game` table
 
@@ -187,9 +228,17 @@ Queries (simulation and view scripts):
 | `game.type_info("footman")`, `game.types()` | `{id, name, structure, max_hp, speed, armor, cost, tags}` |
 | `game.map_size()` → w, h, `game.passable(x, z [, "ground"\|"air"\|"naval"])`, `game.level(x, z)`, `game.height(x, z)`, `game.area(name)` | map |
 | `game.var(name)` | trigger variable (fx) |
+| `game.data(h)`, `game.has_data(h, key)` | the entity's own persistent table (view: read-only copy) / does it have the key |
+| `game.orders(h)`, `game.current_order(h)` | the order queue / its first order: `{order, x, z, target, param, state}` (`order`: `move attack_move attack patrol gather return build repair enter cast dig claim_cell need haul board unload follow rearm trade pick_item merge`) |
+| `game.target(h)`, `game.idle(h)` | weapon target (else the current order's target) / no orders, not moving, not fighting, nothing in production |
+| `game.facing(h)` → dx, dz, `game.velocity(h)` → vx, vz, `game.path(h)`, `game.energy(h)` → energy, max | `path`: remaining waypoints `{{x, z}, ...}` ending at the goal |
 | `game.log(...)`, `print(...)` | script log |
 
-Filter: `{owner = 2, type = "footman", tag = "mechanical", kind = "unit" | "structure", area = "gate", x = 10, z = 12, radius = 6, limit = 5}` (all optional).
+Filter: `{owner = 2, type = "footman", tag = "mechanical", kind = "unit" | "structure", area = "gate", x = 10, z = 12, radius = 6, has = "morale", sort = "id" | "dist", limit = 5}` (all optional; `has`: the entity's `game.data` table has that key; `sort = "dist"`: nearest to x, z first, ties by handle).
+Radius queries use a bucket grid of the living units, built on the first radius query and kept while
+the script only reads (any action, or C++ running in between, drops it): many `game.units{x, z, radius}`
+calls in one handler cost one pass over the units plus the buckets they touch. Results are exactly
+those of a full scan (same order).
 
 Actions (simulation scripts only):
 
@@ -197,18 +246,44 @@ Actions (simulation scripts only):
 |---|---|
 | `game.give(p, res, amount)`, `game.take(p, res, amount)` → taken | resources |
 | `game.spawn(type, owner, x, z)` → handle or nil | owner 0 = neutral, 255 = hostile creeps |
-| `game.kill(h [, silent])`, `game.damage(h, amount [, source [, damageType]])`, `game.heal(h, amount)`, `game.set_owner(h, p)` | |
+| `game.kill(h [, silent])`, `game.damage(h, amount [, source [, damageType]])`, `game.heal(h, amount)` | |
+| `game.set_owner(h, p)` | ownership change: per-type counts move, production / orders / target are cleared, `captured` fires |
+| `game.set_pos(h, x, z [, exact])` (alias `game.teleport`) | mobile units only: the nearest passable cell (unless `exact` or flying), path dropped; false when it can't be placed |
+| `game.set_facing(h, dx, dz)`, `game.impulse(h, dx, dz)`, `game.knockback(h, x, z, distance)` | turn; push by a vector / away from a point (negative: towards), stopped by terrain in 8 steps |
+| `game.set_hp(h, hp)`, `game.set_energy(h, e)` | clamped to [0, max]; hp 0 = a normal death |
+| `game.set_stat_base(h, stat, value \| nil)` | replaces the type's base value of a stat (`maxHp speed armor sight range ...`) for this unit; techs, levels, buffs apply on top; `maxHp` keeps the hp fraction; nil restores |
+| `game.transform(h, type)` | the unit becomes another type in place (same handle, `game.data`, hp fraction); unit ↔ structure is refused |
 | `game.add_status(h, "status" [, seconds [, caster]])`, `game.buff(h, stat, add, mul [, seconds])` | statuses of rules `"statuses"`; stat modifiers |
 | `game.order(units, "move"\|"attack"\|"patrol"\|"stop"\|"hold", x, z \| target)` | through the normal command path |
-| `game.command(p, {type = "train", units = {h}, param = "footman", x =, z =, target =, queue =})` | any player command (`move attack stop hold patrol gather build train cancel rally smart send research place sell deploy ability reinforce claim auto_build upgrade surrender player_ability`), validated like network input |
+| `game.command(p, {type = "train", units = {h}, param = "footman", x =, z =, target =, queue =})` | any player command, validated like network input (see below) |
 | `game.cast(h, ability, target \| x, z)`, `game.player_ability(p, id, x, z [, free])` | abilities |
 | `game.set_var(name, v)`, `game.add_var(name, v)` | trigger variables, shared with rules triggers |
 | `game.message(p, text [, x, z])` | a notice (p = 0: everyone) |
 | `game.victory(p)`, `game.defeat(p)`, `game.draw()` | end conditions |
+| `game.clear_data(h)` | forget the entity's `game.data` table |
 | `game.research(p, tech)`, `game.enable_type(p, type, on)`, `game.add_score(p, n)`, `game.enable_trigger(id, on)` | |
 | `game.random(n)`, `game.random(a, b)` | simulation RNG |
 
+`game.command` types (all player commands of the engine): `move attack stop hold patrol gather build
+train cancel rally smart send research place sell deploy ability reinforce claim auto_build upgrade
+surrender player_ability dig paint_room pick_up drop slap possess direct build_road connect_road transit
+stance retreat load unload guard follow formation build_line merge split trade trade_route tribute
+diplomacy buy_item use_item drop_item pick_item learn bounty rotate lock end_turn`. `param` is a number
+or a name: a type (`train build upgrade build_line`), a tech (`research`), a player ability, a stance
+(`aggressive defensive hold passive`) or a formation (`line box wedge loose none`). Packed params can
+be given by field instead: rect commands (`dig paint_room build_road`) `w, h, extra`; `build_line`
+`end_x, end_z` (cells); `trade` `resource, sell`; `tribute` `resource, to, amount`; `diplomacy`
+`other, ally`; `bounty` `resource, reward`.
+
 Not available yet: fog reveal from scripts (use a `reveal` effect in an ability).
+
+### Grid fields: the `field` table
+
+Per-cell layers (fire, water, creep, influence...) defined in rules `"fields"` run as C++ kernels; scripts
+read and write them: `field.get(id, x, z [, player])`, `field.set` / `field.add` / `field.fill_rect` /
+`field.fill_circle`, `field.sum` / `field.max` / `field.count` / `field.find` over a rectangle or disc, and
+`on_field_threshold(id, value, fn [, "rise" | "fall"])` hooks. Values are integers (`int` fields) or `fx`
+(`fixed`). View scripts get the read-only part. Reference: `docs/fields.md`.
 
 ## Data hooks: scripts inside rules
 
@@ -226,6 +301,49 @@ Not available yet: fog reveal from scripts (use a `reveal` effect in an ability)
 
 Functions named in data that the scripts don't define are reported when the match loads.
 
+## Script commands (player input with data)
+
+A game defines its own player commands in rules; each becomes a button (with hotkey) on the command
+card of the client and of the editor play-test, can be sent from view scripts and through MCP
+(`play_command` with `command: "script"`), and arrives in the simulation as one generic command
+(`kCmdScript`) that the engine validates before the game's handler sees it.
+
+```json
+"commands": {
+  "rally_cry": { "label": "Rally cry", "hotkey": "Y", "tip": "+25% damage for 10 s",
+                 "targets": ["footman", "archer", "tag:infantry"], "cost": { "gold": 25 }, "cooldown": 30 },
+  "muster":    { "label": "Muster", "hotkey": "U", "targets": ["footman"], "cooldown": 5,
+                 "args": [{ "name": "where", "type": "point" },
+                          { "name": "pace", "type": "enum", "values": ["walk", "run"], "default": "run" },
+                          { "name": "count", "type": "int", "min": 1, "max": 20, "default": 5 }] }
+}
+```
+
+```lua
+function on_command(player, id, args)      -- or per command: "fn": "global_function_name"
+  if id == "muster" then game.order(args.units, "move", args.where.x, args.where.z) end
+  -- return false: refused (cost and cooldown are not taken)
+end
+```
+
+| key | |
+|---|---|
+| `label`, `icon`, `hotkey` (one letter / digit), `tip` | the button; script hotkeys win over the built-in ones (A, S, H, P) |
+| `targets` | unit types / `"tag:x"` / `"any"`: shown when the selection has such an own unit, and only those units reach the handler (`args.units`, sorted by handle); without `targets` the command needs no selection |
+| `args` | array `[{name, type, ...}]` (or an object `{name: {type, ...}}`): `int` (`min`, `max`, `default`), `enum` (`values`, `default`), `bool`, `point` (`{x, z}` in the handler), `unit` (a living unit; `own: true` = of the sender), `entity` |
+| `cost`, `cooldown` | resources taken and cooldown (seconds, per player) started when the handler accepts; while unaffordable / cooling down the command is dropped (the card shows the remaining seconds) |
+| `fn` | handler function (default `on_command`) |
+
+The first `point` / `unit` / `entity` argument is what a click picks: the button enters a targeting
+mode and the next left click fills it in; the other arguments take their defaults (view scripts and
+MCP pass them by name). Wire format: `param` = the command's index in id order, `args` = one integer
+per value (points: x and z as raw fx), so replays and network play carry them. Invalid input (unknown
+index, wrong count, out of range, dead or foreign handles, a point off the map) is dropped silently.
+Each player's handlers have their own instruction budget per tick (rules `"commandBudget"`, default
+200000): a player who sends endless loops only burns their own commands. `game.commands()` lists the
+definitions, `game.command_cooldown(p, id)` gives the remaining seconds; view scripts send with
+`view.send("muster", {where = {x = 10, z = 12}, pace = "walk", units = {h1, h2}})`.
+
 ## View scripts
 
 ```lua
@@ -238,8 +356,48 @@ view.on_frame(function(dt) end)            -- dt in seconds (float)
 
 View scripts are presentation: floats are fine, `game.*` queries work, actions don't exist. Their
 outputs are requests the host shows: `view.notice(text)`, `view.effect(name, x, z)` (particle
-effect of `fx/`), `view.sound(name, x, z)`. They never change the simulation, so they don't need
-the determinism rules.
+effect of `fx/`), `view.sound(name, x, z)`, and script commands as the local player
+(`view.send(id, args)`, above). They never change the simulation directly, so they don't need the
+determinism rules.
+
+## Script UI (view scripts drive in-match panels)
+
+View scripts own a data model **`script`** in the client's RmlUi: they set values, open the game's
+documents `ui/hud/<name>.rml` and receive their button events. Simulation state stays read-only:
+buttons act through script commands (above), which go through the simulation like any input.
+
+```lua
+-- scripts/view/hud.lua
+ui.open("war", {title = "War report"})                -- ui/hud/war.rml; params -> {{params.title}}
+ui.on("hide", function(args) ui.close("war") end)      -- data-event-click="event('hide', 1)" -> args = {1}
+view.on_frame(function()
+  local s = view.state()                                -- read-only copy of the simulation's `state`
+  ui.set("trained", (s.trained or {})[view.player()] or 0)   -- {{trained}}
+end)
+```
+
+```html
+<!-- ui/hud/war.rml: links ../theme.rcss, ../skin.rcss like the engine HUD; body ignores the mouse, panels take it -->
+<div class="root" data-model="script">
+  <div class="panel">{{params.title}}: {{trained}}
+    <button data-event-click="send('rally_cry')">Rally cry</button>          <!-- rules "commands" -->
+    <button data-event-click="send('muster', {where = {x = 10, z = 12}})">Muster</button>
+    <button data-event-click="event('hide')">Hide</button>
+  </div>
+</div>
+```
+
+| view Lua | |
+|---|---|
+| `ui.set(key, value)` | a top-level value of model `script` (numbers, strings, booleans, fx, tables / arrays); unchanged values are not resent. A document binds its `{{names}}` when it loads: set every key it uses before (or in the same frame as) its first `ui.open` |
+| `ui.open(name [, params])`, `ui.close(name)` | show / hide `ui/hud/<name>.rml` (only while the match is on screen); `params` -> `{{params.*}}` |
+| `ui.on(event, fn(args))` | `event('name', ...)` in a document; `args` = the extra values as an array |
+| `view.state()` | the simulation scripts' `state` as of this tick (a copy; writing to it changes nothing) |
+
+`send('id', {...})` in a document sends a script command as the local player (the current selection
+is added as `units` unless given). The engine part is `engine/ui/lib/scriptui.lua` (model, documents)
+and `apps/client/ClientScriptUi.cpp` (bridge); the UI documents' general rules (styles, `@keys`,
+sandbox) are in docs/ui-scripting.md. Sample: `templates/scripted` (`ui/hud/war.rml`).
 
 ## Engine standard library (rule-level mechanics in Lua)
 

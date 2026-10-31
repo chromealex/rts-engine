@@ -280,6 +280,7 @@ Rules loadRules(const Json& j) {
         for (auto& a : tj["abilities"].items()) for (auto& e : a["effects"].items()) damageIdx(e.getStr("damageType", "normal"));
     }
     for (auto& pa : j["playerAbilities"].items()) for (auto& e : pa["effects"].items()) damageIdx(e.getStr("damageType", "normal"));
+    for (auto& [fid, fj] : j["fields"].members()) for (auto& e : fj["effects"].items()) if (e.has("damageType")) damageIdx(e.getStr("damageType"));   // grid fields
     r.damageTable.assign(r.damageTypes.size(), std::vector<Fixed>(r.armorTypes.size(), Fixed::fromInt(1)));
     for (auto& [dt, row] : j["damageTable"].members())
         for (auto& [at, v] : row.members()) r.damageTable[size_t(indexOf(r.damageTypes, dt))][size_t(indexOf(r.armorTypes, at))] = v.fx();
@@ -777,6 +778,7 @@ Rules loadRules(const Json& j) {
                 r.possession.enabled || !r.playerAbilities.empty();
     loadMechRules(r, j);
     r.armor.plainFloor = !r.originals && !r.mech.any && !j.has("armor") && !j.has("armorModel");   // old games: damage - armor, at least raw / 5
+    loadGridFieldRules(r, j);   // RtsGridFieldData.cpp: rules "fields", type "field" emitters, "field" effects
     return r;
 }
 

@@ -449,6 +449,7 @@ void GameClient::runGameScript() {
     if (!lua_) return;
     std::string err;
     if (!ui::luaRunFile(lua_, readContent, "engine/ui/lib/meta.lua", &err)) std::fprintf(stderr, "[lua] %s\n", err.c_str());
+    initScriptUi();   // ClientScriptUi.cpp: data model "script" for view scripts (before ui/main.lua: games may extend it)
     std::string text;
     if (platform::readContentFile("ui/main.lua", text) && !ui::luaRunString(lua_, text, "@ui/main.lua", &err))
         std::fprintf(stderr, "[lua] %s\n", err.c_str());

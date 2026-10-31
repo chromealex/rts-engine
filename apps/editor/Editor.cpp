@@ -109,6 +109,7 @@ void Editor::init(gfx::Device& dev) {
         std::string err;
         if (!ws_.openGame(opt_.projectDir, &err)) { status = "Ошибка проекта: " + err; showPicker_ = true; }
     } else showPicker_ = true;
+    initFileAssoc();
     view_.setContentBase(ws_.project.dir.empty() ? "" : ws_.project.dir + "/");
     view_.init(dev, rules(), projectReader(ws_.project.dir));
     for (auto& w : view_.warnings()) ws_.log("view", w, true);
@@ -525,6 +526,7 @@ void Editor::renderScene(Viewport& vp, const RTSCamera& cam, bool editOverlays) 
     if (!vp.color.valid()) return;
     if (playing()) { renderGame(vp, cam); return; }
     buildEditScene(scene_);
+    fieldPreview_.fill(ws_.project.rules, ws_.map, scene_);   // grid fields: the map's initial values
     const bool planets = view_.planetMode();
     // planet maps: the orbit camera of the view (Scene window input drives it)
     const RTSCamera& useCam = planets ? view_.updatePlanetCamera(0, float(ImGui::GetIO().DeltaTime), vp.h) : cam;
@@ -734,6 +736,7 @@ void Editor::samplePlayStats() {
 void Editor::event(const platform::Event& e) {
     ui_.handleEvent(e);
     if (e.type == platform::EventType::QuitRequested) quit_ = true;
+    if (e.type == platform::EventType::OpenFile) requestOpenProject(e.path);   // double-clicked .rtsproj (macOS)
 }
 
 void Editor::handleShortcuts() {
@@ -834,6 +837,7 @@ void Editor::frame(gfx::Device& dev, double dt) {
         drawActivityToasts();
         if (focusFirst_ > 0) --focusFirst_;
     }
+    drawOpenRequest();
     // the screen: only the UI (3D views were rendered offscreen by their windows)
     gfx::PassDesc pass;
     pass.clearColor[0] = 0.10f; pass.clearColor[1] = 0.11f; pass.clearColor[2] = 0.13f;

@@ -1,0 +1,50 @@
+/* Iron and Gold: UI skin (linked after engine/ui/theme.rcss). Classic fantasy: dark oak and hammered gold.
+   Title font: fonts/title.ttf (Kelly Slab, SIL OFL, fonts/OFL.txt). */
+
+body { color: #f1e6cf; }
+h1 { font-family: title; color: #f0c45a; font-size: 28dp; font-weight: normal; letter-spacing: 1dp; }
+h2 { color: #b39d79; }
+.dim, #card .info, #topbar .sub, button .hotkey { color: #b39d79; }
+.error { color: #ff7a5c; }
+
+.panel {
+    background-color: #22170ee8;
+    border: 2dp #b8892f;
+    border-radius: 4dp;
+}
+
+button {
+    color: #f6ead1;
+    border: 1dp #6e5130;
+    border-radius: 3dp;
+    decorator: vertical-gradient(#5a3f22ff #3b2915ff);
+}
+button:hover { decorator: vertical-gradient(#6d4d2aff #4a331bff); border-color: #f0c45a; }
+button:active { decorator: vertical-gradient(#3b2915ff #5a3f22ff); }
+button.active { border-color: #f0c45a; color: #ffe39a; }
+button.disabled:hover { decorator: vertical-gradient(#5a3f22ff #3b2915ff); border-color: #6e5130; }
+button .cost { color: #e9c46a; }
+button .tip { color: #ff7a5c; }
+
+progress { background-color: #00000080; }
+progress fill { background-color: #f0c45a; }
+
+#card .title { color: #f0c45a; }
+#card .header { border-top-color: #ffffff18; }
+#topbar .item.warn { color: #ff7a5c; }
+.notice { color: #ffe08a; }
+#selbox { border-color: #f0c45a; background-color: #f0c45a20; }
+#modal-bg { background-color: #00000080; }
+#menu-bg { decorator: vertical-gradient(#402b1aff #120c07ff); }
+input.text { background-color: #120c06; border-color: #6e5130; color: #f1e6cf; }
+input.text:focus { border-color: #f0c45a; }
+#lobby .slot.mine { border-color: #f0c45a; }
+#lobby .roomtitle { color: #f0c45a; font-family: title; }
+
+#kb { background-color: #22170ee8; border-color: #b8892f; }
+#kb .key { color: #f6ead1; border-color: #6e5130; border-radius: 3dp; decorator: vertical-gradient(#5a3f22ff #3b2915ff); }
+#kb .key:active { border-color: #f0c45a; }
+#kb .key.on { border-color: #f0c45a; color: #ffe39a; }
+
+#topbar { border-radius: 0 0 6dp 6dp; border-top-width: 0; }
+#menu h1 { text-align: center; }

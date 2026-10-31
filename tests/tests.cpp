@@ -9685,6 +9685,7 @@ TEST(gen_planet_world_players) {
 
 // ---------------- Lua scripting (scripting agent) ----------------
 #include "modules/rts/RtsScript.h"
+#include "modules/rts/RtsScriptInternal.h"
 #include <fstream>
 #include <iterator>
 
@@ -9811,6 +9812,7 @@ TEST(script_state_hashed_and_rollback) {
     mod(*b).state(*b).trig.vars["step"] = Fixed::fromInt(2);
     mod(*a).state(*a).trig.vars["step"] = Fixed::fromInt(2);
     a->step(); b->step();
+    b->checksum();                  // state reaches the world lazily (when observed)
     CHECK(sb->state != before);
     // rollback: save, run ahead, load, re-run -> identical to a straight run
     SimSnapshot snap;
@@ -10074,6 +10076,88 @@ TEST(lua_lab_prototypes) {
     CHECK(run(3) == run(3));
 }
 
+// ---- G3: per-entity data (game.data) and lazily persisted state
+static const char* kDataScript = R"(
+    function on_start()
+      for _, h in ipairs(game.units{owner = 1}) do game.data(h).morale = 10 end
+      state.ticks = 0
+    end
+    on("tick", function(tick)
+      state.ticks = state.ticks + 1
+      for _, h in ipairs(game.units{has = "morale"}) do
+        local d = game.data(h)
+        d.morale = d.morale + (tick % 3 == 0 and 1 or 0)
+        if tick % 7 == 0 then d.hist = d.hist or {}; d.hist[#d.hist + 1] = fx(tick, 3) end
+      end
+      if tick == 40 then
+        local h = game.units{has = "morale"}[1]
+        game.data(h).marked = true
+      end
+    end)
+)";
+static int sumMorale(Simulation& sim) {
+    int total = 0, n = 0;
+    sim.world().each<game::ScriptData>([&](Entity, game::ScriptData& d) { if (game::script::blobHasKey(d.blob, "morale")) ++n; });
+    total = n;
+    return total;
+}
+TEST(script_g3_entity_data) {
+    auto a = scriptSim({{"scripts/d.lua", kDataScript}});
+    auto b = scriptSim({{"scripts/d.lua", kDataScript}});
+    for (int i = 0; i < 30; ++i) { a->step(); b->step(); }
+    CHECK(a->checksum() == b->checksum());
+    CHECK(sumMorale(*a) > 0);
+    CHECK(mod(*a).scripts()->errorCount() == 0);
+    // data is part of the hash
+    {
+        auto c = scriptSim({{"scripts/d.lua", kDataScript}});
+        for (int i = 0; i < 30; ++i) c->step();
+        const uint64_t c0 = c->checksum();
+        int nn = 0;
+        c->world().each<game::ScriptData>([&](Entity, game::ScriptData& d) { d.hash ^= 1; ++nn; });
+        CHECK(nn > 0 && c0 == a->checksum());   // flushed data, then a change only in the world
+        CHECK(c->checksum() != a->checksum());
+    }
+    // rollback: save, run ahead, load, run again == straight run
+    SimSnapshot snap;
+    b->saveState(snap);
+    for (int i = 0; i < 25; ++i) b->step();
+    const uint64_t ahead = b->checksum();
+    b->loadState(snap);
+    for (int i = 0; i < 25; ++i) { b->step(); a->step(); }
+    CHECK(b->checksum() == ahead && a->checksum() == ahead);
+    // save state bytes: load into a fresh simulation and continue identically
+    std::string bytes = a->serialize(), err;
+    auto c = scriptSim({{"scripts/d.lua", kDataScript}});
+    CHECK(c->deserialize(bytes, &err));
+    CHECK(c->checksum() == a->checksum());
+    for (int i = 0; i < 20; ++i) { a->step(); c->step(); }
+    CHECK(c->checksum() == a->checksum());
+    // data dies with its entity; the filter sees it
+    Entity some;
+    a->world().each<game::ScriptData>([&](Entity e, game::ScriptData&) { if (!some.valid()) some = e; });
+    CHECK(some.valid());
+    a->world().get<game::Unit>(some).hp = Fixed{};
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(!a->world().alive(some));
+    CHECK(mod(*a).scripts()->errorCount() == 0 && mod(*c).scripts()->errorCount() == 0);
+}
+
+TEST(script_g3_state_lazy_flush) {   // state is written into the world only when observed, still exact
+    auto a = scriptSim({{"scripts/d.lua", kDataScript}});
+    for (int i = 0; i < 50; ++i) a->step();
+    auto* st = a->world().resource<game::ScriptStore>();
+    const std::string before = st->state;          // last flush: setup
+    a->checksum();                                 // flushes
+    CHECK(st->state != before);
+    // a value that can't be stored is left out, logged, and the game goes on
+    auto b = scriptSim({{"scripts/e.lua", "on('tick', function(t) state.f = function() end; state.n = t end)"}});
+    for (int i = 0; i < 5; ++i) b->step();
+    b->checksum();
+    CHECK(scriptLogHas(*b, "can't be kept in state"));
+    CHECK(game::script::blobHasKey(b->world().resource<game::ScriptStore>()->state, "n"));
+    CHECK(!game::script::blobHasKey(b->world().resource<game::ScriptStore>()->state, "f"));
+}
 
 // ---- UI Lua sandbox (engine/ui/UiLua.h): game UI scripts can't reach files, the OS or bytecode
 TEST(ui_lua_sandbox) {
@@ -10147,6 +10231,214 @@ TEST(ui_lua_meta_and_templates) {
     CHECK(back["a"]["x"].numberLiteral() == "1.5" && back["a"].getBool("y") && back["a"].getStr("s") == "привет");
     CHECK(back.members().front().first == "a");
     lua_close(L);
+}
+
+TEST(script_g4_unit_control) {   // direct control, state queries, all commands, killer, radius grid
+    const char* src = R"(
+        local function ok(name, v) game.set_var(name, v and 1 or 0) end
+        function on_start()
+          local hall = game.units{owner = 1, type = "townhall"}[1]
+          local x, z = game.pos(hall)
+          local f = game.spawn("footman", 1, x + 4, z)
+          state.f, state.hx, state.hz = f, x, z
+          ok("setpos", game.set_pos(f, x + 6, z + 6))
+          local nx, nz = game.pos(f)
+          ok("setpos_at", nx == x + 6 and nz == z + 6)
+          ok("structure_stays", not game.set_pos(hall, x + 10, z))
+          game.set_facing(f, 0, 3)
+          local dx, dz = game.facing(f)
+          ok("facing", dx == fx(0) and dz == fx(1))
+          game.set_hp(f, 10)
+          ok("hp", game.hp(f) == fx(10))
+          local hp0, mx0 = game.hp(f)
+          game.set_stat_base(f, "maxHp", mx0 * 2)
+          local hp1, mx1 = game.hp(f)
+          ok("stat_base", mx1 == mx0 * 2 and hp1 == fx(20))
+          game.set_stat_base(f, "maxHp", nil)
+          ok("stat_restored", select(2, game.hp(f)) == mx0)
+          ok("transform", game.transform(f, "archer") and game.type_of(f) == "archer")
+          ok("idle", game.idle(f))
+          game.order(f, "move", x + 12, z + 12)
+          local o = game.current_order(f)
+          ok("order", o and o.order == "move" and o.x == x + 12 and #game.orders(f) == 1 and not game.idle(f))
+          game.command(1, {type = "stop", units = {f}})
+          game.command(1, {type = "stance", units = {f}, param = "defensive"})
+          game.command(1, {type = "formation", units = {f}, param = "wedge"})
+          game.command(1, {type = "tribute", resource = "gold", to = 2, amount = 5})
+          game.command(1, {type = "end_turn"})
+          local px, pz = game.pos(f)
+          game.impulse(f, 2, 0)
+          ok("impulse", (game.pos(f)) == px + 2)
+          game.knockback(f, px, pz, 4)
+          ok("knockback", (game.pos(f)) == px + 6)
+          -- radius queries (grid) == the full scan, sorted by handle; sort = "dist"
+          local all, same = game.units{}, true
+          for _, r in ipairs({0, 3, 7, 15, 40}) do
+            local want = {}
+            for _, h in ipairs(all) do
+              local ux, uz = game.pos(h)
+              if fx.sqrt((ux - x) * (ux - x) + (uz - z) * (uz - z)) <= r then want[#want + 1] = h end
+            end
+            local got = game.units{x = x, z = z, radius = r}
+            if #got ~= #want then same = false end
+            for i = 1, #got do if got[i] ~= want[i] then same = false end end
+          end
+          ok("grid", same)
+          local near = game.units{x = x, z = z, radius = 40, sort = "dist"}
+          ok("near_first", near[1] == hall)
+          local g = game.spawn("footman", 2, px + 4, pz)
+          state.g = g
+          ok("owner", game.set_owner(g, 1) and game.owner(g) == 1)
+          game.set_owner(g, 2)
+        end
+        on("unit_died", function(e) if e.unit == state.g then ok("killer", e.killer == state.f) end end)
+        on("captured", function(e) if e.unit == state.g then game.add_var("captured", 1) end end)
+        every(1, function() if not state.hit then state.hit = true; for i = 1, 40 do game.damage(state.g, 50, state.f) end end end)
+    )";
+    auto a = scriptSim({{"scripts/c.lua", src}});
+    auto b = scriptSim({{"scripts/c.lua", src}});
+    for (int i = 0; i < 60; ++i) { a->step(); b->step(); }
+    CHECK(a->checksum() == b->checksum());
+    auto& vars = mod(*a).state(*a).trig.vars;
+    for (const char* k : {"setpos", "setpos_at", "structure_stays", "facing", "hp", "stat_base", "stat_restored", "transform", "idle",
+                          "order", "impulse", "knockback", "grid", "near_first", "owner", "killer"}) {
+        if (vars[k] != Fixed::fromInt(1)) std::printf("  g4: %s failed\n", k);
+        CHECK(vars[k] == Fixed::fromInt(1));
+    }
+    CHECK(vars["captured"] == Fixed::fromInt(2));
+    for (auto& e : mod(*a).scripts()->log()) if (e.error) std::printf("  log: %s\n", e.text.c_str());
+    CHECK(mod(*a).scripts()->errorCount() == 0);
+    // ScriptStats is saved / restored
+    std::string bytes = a->serialize(), err;
+    auto c = scriptSim({{"scripts/c.lua", src}});
+    CHECK(c->deserialize(bytes, &err) && c->checksum() == a->checksum());
+}
+
+// ---- G1: script commands (rules "commands" -> kCmdScript -> on_command)
+static const char* kCmdRules = R"J({
+  "rally": {"label": "Rally", "hotkey": "R", "targets": ["footman"], "cost": {"gold": 50}, "cooldown": 2,
+            "args": [{"name": "where", "type": "point"}, {"name": "power", "type": "int", "min": 1, "max": 3, "default": 1},
+                     {"name": "mode", "type": "enum", "values": ["calm", "angry"], "default": "angry"}]},
+  "refuse": {"cost": {"gold": 10}},
+  "spin": {"fn": "cmd_spin"}
+})J";
+static const char* kCmdScript = R"(
+    function on_command(player, id, args)
+      if id == "refuse" then return false end
+      game.add_var("n_" .. id, 1)
+      game.set_var("last_player", player)
+      game.set_var("power", args.power)
+      game.set_var("units", #args.units)
+      game.set_var("angry", args.mode == "angry" and 1 or 0)
+      game.set_var("wx", args.where.x)
+      for _, h in ipairs(args.units) do game.order(h, "move", args.where.x, args.where.z) end
+    end
+    function cmd_spin(player) while true do end end
+)";
+static std::unique_ptr<Simulation> cmdSim() {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("commands", Json::parse(kCmdRules));
+    rules.set("scripts", Json::parse(R"(["scripts/c.lua"])"));
+    Json src = Json::object(); src.set("scripts/c.lua", Json::string(kCmdScript));
+    rules.set("$scriptSources", src);
+    auto sim = std::make_unique<Simulation>(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    return sim;
+}
+TEST(script_g1_commands) {
+    auto a = cmdSim();
+    auto& m = mod(*a);
+    auto* se = m.scripts();
+    CHECK(se->commands().size() == 3 && se->commands()[0].id == "rally" && se->findCommand("spin") == 2);   // sorted by id
+    CHECK(se->commands()[0].pick == 0 && se->commands()[0].args[2].def == 1);
+    Entity hall = findType(*a, "townhall", 1);
+    const Vec3 hp = a->world().get<Transform>(hall).pos;
+    Entity f1 = m.spawn(*a, uint16_t(m.rules().findType("footman")), 1, hp + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    Entity enemy = m.spawn(*a, uint16_t(m.rules().findType("footman")), 2, hp + Vec3{Fixed::fromInt(5), Fixed{}, Fixed{}});
+    auto rally = [&](uint8_t p, std::vector<Entity> units, int64_t power, int64_t mode = 1) {
+        Command c; c.player = p; c.type = game::kCmdScript; c.param = 0; c.units = std::move(units);
+        c.args = {(hp.x + Fixed::fromInt(6)).raw, hp.z.raw, power, mode};
+        a->submit(c);
+    };
+    auto& vars = m.state(*a).trig.vars;
+    const Fixed g0 = gold(*a, 1);
+    rally(1, {f1, enemy, hall}, 2);                       // the enemy unit and the hall are dropped
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(1) && vars["power"] == Fixed::fromInt(2) && vars["units"] == Fixed::fromInt(1));
+    CHECK(vars["angry"] == Fixed::fromInt(1) && vars["last_player"] == Fixed::fromInt(1) && vars["wx"] == hp.x + Fixed::fromInt(6));
+    CHECK(gold(*a, 1) == g0 - Fixed::fromInt(50));
+    CHECK(se->commandCooldown(*a, 1, 0).raw > 0);
+    rally(1, {f1}, 2);                                    // cooldown (2 s)
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(1));
+    for (int i = 0; i < 50; ++i) a->step();
+    rally(1, {f1}, 9);                                    // out of range
+    rally(1, {enemy}, 1);                                 // no own footman: refused
+    { Command c; c.player = 1; c.type = game::kCmdScript; c.param = 0; c.units = {f1}; c.args = {1, 2}; a->submit(c); }   // arg count
+    { Command c; c.player = 1; c.type = game::kCmdScript; c.param = 7; a->submit(c); }                                  // unknown index
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(1));
+    rally(1, {f1}, 3, 0);
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(2) && vars["power"] == Fixed::fromInt(3) && vars["angry"] == Fixed{});
+    CHECK(a->world().get<game::Orders>(f1).queue.size() == 1);
+    const Fixed g1 = gold(*a, 1);
+    { Command c; c.player = 1; c.type = game::kCmdScript; c.param = se->findCommand("refuse"); a->submit(c); }
+    // player 2 burns its own budget in the same tick: player 1's command still runs
+    { Command c; c.player = 2; c.type = game::kCmdScript; c.param = se->findCommand("spin"); a->submit(c); }
+    for (int i = 0; i < 52; ++i) a->step();
+    rally(1, {f1}, 1);
+    { Command c; c.player = 2; c.type = game::kCmdScript; c.param = se->findCommand("spin"); a->submit(c); }
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(gold(*a, 1) == g1 - Fixed::fromInt(50));       // refuse: nothing paid; rally paid
+    CHECK(vars["n_rally"] == Fixed::fromInt(3) && vars["n_refuse"] == Fixed{});
+    CHECK(scriptLogHas(*a, "instruction budget exceeded"));
+    // wire format: args survive replay / network encoding
+    Command c; c.player = 1; c.type = game::kCmdScript; c.param = 0; c.units = {f1}; c.args = {-5, 1 << 20, 3, 0};
+    ByteWriter bw; writeCommand(bw, c);
+    ByteReader br(bw.buf.data(), bw.buf.size());
+    Command back = readCommand(br);
+    CHECK(back == c);
+    Command plain; plain.type = game::kCmdStop; ByteWriter bw2; writeCommand(bw2, plain);
+    ByteReader br2(bw2.buf.data(), bw2.buf.size());
+    CHECK(readCommand(br2) == plain && bw2.buf.size() + 8 + 4 + 32 == bw.buf.size());
+    // determinism with commands, rollback and the cooldown table
+    auto b = cmdSim();
+    auto c2 = cmdSim();
+    for (auto* s : {b.get(), c2.get()}) {
+        Entity h = findType(*s, "townhall", 1);
+        Entity f = mod(*s).spawn(*s, uint16_t(mod(*s).rules().findType("footman")), 1, s->world().get<Transform>(h).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+        Command k; k.player = 1; k.type = game::kCmdScript; k.param = 0; k.units = {f};
+        k.args = {(hp.x + Fixed::fromInt(6)).raw, hp.z.raw, 2, 1};
+        s->submit(k);
+    }
+    for (int i = 0; i < 10; ++i) { b->step(); c2->step(); }
+    CHECK(b->checksum() == c2->checksum());
+    std::string bytes = b->serialize(), err;
+    auto d = cmdSim();
+    CHECK(d->deserialize(bytes, &err) && d->checksum() == b->checksum());
+    CHECK(mod(*d).scripts()->commandCooldown(*d, 1, 0).raw > 0);
+}
+
+TEST(script_g1_view_send) {   // view.send encodes by name; the simulation runs it like a card click
+    auto sim = cmdSim();
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("commands", Json::parse(kCmdRules));
+    rules.set("viewScripts", Json::parse(R"(["scripts/view/v.lua"])"));
+    rules.set("$scriptSources", Json::parse(R"J({"scripts/view/v.lua":
+        "local sent = false\nview.on_frame(function() if sent then return end sent = true\nlocal f = game.units{owner = 1, type = 'footman'}[1]\nlocal h = game.units{owner = 1, type = 'townhall'}[1]\nlocal x, z = game.pos(h)\nview.send('rally', {where = {x = x + 2, z = z}, power = 3, mode = 'calm', units = {f}}) end)"})J"));
+    Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
+    Entity hall = findType(*sim, "townhall", 1);
+    mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("footman")), 1, sim->world().get<Transform>(hall).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    game::ViewScripts vs;
+    CHECK(vs.load(*sim, rules, map, 1));
+    vs.update(*sim, 0.016f);
+    auto cmds = vs.takeCommands();
+    CHECK(cmds.size() == 1 && cmds[0].type == game::kCmdScript && cmds[0].args.size() == 4 && cmds[0].args[2] == 3 && cmds[0].args[3] == 0);
+    for (auto& e : vs.log()) if (e.error) std::printf("  view log: %s\n", e.text.c_str());
+    for (auto& c : cmds) { c.player = 1; sim->submit(c); }
+    for (int i = 0; i < 3; ++i) sim->step();
+    CHECK(mod(*sim).state(*sim).trig.vars["n_rally"] == Fixed::fromInt(1));
 }
 
 
@@ -10231,6 +10523,164 @@ TEST(native_modules_validation_and_isolation) {
     CHECK(empty->checksum() == plain->checksum());
     CHECK(empty->serialize() == plain->serialize());
     CHECK(!empty->world().resource<game::NativeStore>());
+}
+
+TEST(script_g2_view_ui) {   // view scripts drive the script UI: ui.set / open / close / on, view.state(), UI send
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("commands", Json::parse(kCmdRules));
+    rules.set("scripts", Json::parse(R"(["scripts/c.lua"])"));
+    rules.set("viewScripts", Json::parse(R"(["scripts/view/v.lua"])"));
+    Json src = Json::object();
+    src.set("scripts/c.lua", Json::string(std::string(kCmdScript) + "\nfunction on_start() state.score = {[1] = 7}; state.name = 'x' end\n"));
+    src.set("scripts/view/v.lua", Json::string(R"(
+        ui.open("war", {title = "War"})
+        local clicks = 0
+        ui.on("hide", function(args) clicks = clicks + 1; ui.close("war"); ui.set("arg", args[1]) end)
+        view.on_frame(function(dt)
+          local s = view.state()
+          ui.set("score", (s.score or {})[1] or -1)
+          ui.set("half", 0.5)
+          ui.set("list", {1, 2, {a = "b"}})
+          ui.set("clicks", clicks)
+        end)
+    )"));
+    rules.set("$scriptSources", src);
+    Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
+    Simulation sim(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim.setup(rules, map);
+    sim.step(); sim.step();
+    const uint64_t c0 = sim.checksum();
+    game::ViewScripts vs;
+    CHECK(vs.load(sim, rules, map, 1));
+    vs.update(sim, 0.016f);
+    {   // view.state() flushed the simulation's `state` early: outcomes and checksums are unchanged
+        Simulation ref(SimConfig{}, std::make_unique<game::RtsModule>());
+        ref.setup(rules, map);
+        ref.step(); ref.step();
+        CHECK(ref.checksum() == sim.checksum() && c0 == sim.checksum());
+    }
+    auto rq = vs.takeUiRequests();
+    CHECK(rq.size() == 5 && rq[0].kind == game::UiRequest::Open && rq[0].key == "war" && rq[0].value.getStr("title") == "War");
+    std::map<std::string, Json> vals;
+    for (auto& r : rq) if (r.kind == game::UiRequest::Set) vals[r.key] = r.value;
+    CHECK(vals["score"].integer() == 7 && vals["half"].toDouble() == 0.5 && vals["list"].size() == 3 && vals["list"][2].getStr("a") == "b");
+    vs.update(sim, 0.016f);
+    CHECK(vs.takeUiRequests().empty());                   // unchanged values are not resent
+    vs.uiEvent(sim, "hide", Json::parse("[42]"));
+    vs.update(sim, 0.016f);
+    rq = vs.takeUiRequests();
+    CHECK(rq.size() == 3 && rq[0].kind == game::UiRequest::Close);
+    for (auto& r : rq) if (r.kind == game::UiRequest::Set) vals[r.key] = r.value;
+    CHECK(vals["arg"].integer() == 42 && vals["clicks"].integer() == 1);
+    // a UI button sends a script command (args by name, points as {x, z})
+    Entity hall = findType(sim, "townhall", 1);
+    Entity f = mod(sim).spawn(sim, uint16_t(mod(sim).rules().findType("footman")), 1, sim.world().get<Transform>(hall).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    const Vec3 hp = sim.world().get<Transform>(hall).pos;
+    Json a = Json::object();
+    Json where = Json::object(); where.set("x", Json::number(hp.x + Fixed::fromInt(2))); where.set("z", Json::number(hp.z));
+    a.set("where", where); a.set("mode", Json::string("calm"));
+    Json units = Json::array(); units.push(Json::number(int64_t(f.packed()))); a.set("units", units);
+    CHECK(vs.send(sim, "rally", a));
+    CHECK(!vs.send(sim, "nope", a));
+    auto cmds = vs.takeCommands();
+    CHECK(cmds.size() == 1 && cmds[0].args.size() == 4 && cmds[0].args[3] == 0 && cmds[0].units.size() == 1);
+    for (auto& c : cmds) { c.player = 1; sim.submit(c); }
+    for (int i = 0; i < 3; ++i) sim.step();
+    CHECK(mod(sim).state(sim).trig.vars["n_rally"] == Fixed::fromInt(1));
+    int errs = 0;
+    for (auto& e : vs.log()) if (e.error && e.text.find("nope") == std::string::npos) { ++errs; std::printf("  view log: %s\n", e.text.c_str()); }
+    CHECK(errs == 0);
+}
+
+TEST(script_g12_events_and_hooks) {   // every GameEvent in Lua; before_damage / before_command / can_train / can_build / can_cast
+    const char* src = R"(
+        state.ev = {}
+        on("gathered", function(e) state.ev.gathered = (state.ev.gathered or 0) + 1; state.res = e.resource end)
+        on("train_started", function(e) state.ev.train = (state.ev.train or 0) + 1; state.tt = e.unit_type end)
+        on("attack", function(e) state.ev.attack = (state.ev.attack or 0) + 1 end)
+        function before_damage(e)
+          state.hits = (state.hits or 0) + 1
+          if game.type_of(e.unit) == "townhall" then return 0 end      -- halls take no damage
+          return e.amount * 2
+        end
+        function before_command(player, c)
+          if c.type == "stop" and player == 2 then return false, "no stopping" end
+        end
+        function can_train(player, type, producer)
+          if type == "footman" and player == 1 then return false, "footmen are banned" end
+        end
+        function can_build(player, type, x, z, builder) if type == "farm" then return false end end
+        function can_cast() return true end
+    )";
+    auto sim = scriptSim({{"scripts/h.lua", src}});
+    auto& m = mod(*sim);
+    auto* se = m.scripts();
+    using SE = game::ScriptEngine;
+    CHECK(se->hooks() == (SE::kHookDamage | SE::kHookCommand | SE::kHookBuild | SE::kHookTrain | SE::kHookCast));
+    World& w = sim->world();
+    Entity hall = findType(*sim, "townhall", 1);
+    Entity f = m.spawn(*sim, uint16_t(m.rules().findType("footman")), 1, w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    sim->step();
+    const Fixed hp0 = w.get<game::Unit>(f).hp, hall0 = w.get<game::Unit>(hall).hp;
+    m.dealDamage(*sim, f, Fixed::fromInt(5), 0, kNullEntity, 2);
+    m.dealDamage(*sim, hall, Fixed::fromInt(50), 0, kNullEntity, 2);
+    CHECK(hp0 - w.get<game::Unit>(f).hp == Fixed::fromInt(6));    // 5 - armor 2, doubled
+    CHECK(w.get<game::Unit>(hall).hp == hall0);
+    // can_train: footmen refused for player 1 with a message; peasants fine
+    auto queued = [&]() { auto* p = w.tryGet<game::Production>(hall); return p ? p->queue.size() : size_t(0); };
+    Command tr; tr.player = 1; tr.type = game::kCmdTrain; tr.units = {hall}; tr.param = m.rules().findType("peasant");
+    sim->submit(tr);
+    for (int i = 0; i < 6; ++i) sim->step();
+    const size_t q1 = queued();
+    CHECK(q1 >= 1);
+    // before_command veto for player 2's stop: their unit keeps its order
+    Entity e2 = m.spawn(*sim, uint16_t(m.rules().findType("footman")), 2, w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(8), Fixed{}, Fixed{}});
+    sim->step();
+    Command mv; mv.player = 2; mv.type = game::kCmdMove; mv.units = {e2}; mv.point = w.get<Transform>(e2).pos + Vec3{Fixed::fromInt(6), Fixed{}, Fixed{}};
+    sim->submit(mv);
+    for (int i = 0; i < 6; ++i) sim->step();
+    Command st; st.player = 2; st.type = game::kCmdStop; st.units = {e2};
+    sim->submit(st);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(!w.get<game::Orders>(e2).queue.empty());
+    auto& msgs = m.state(*sim).trig.messages;
+    CHECK(std::find(msgs.begin(), msgs.end(), "no stopping") != msgs.end());
+    // can_build: farms refused at order time
+    Entity peasant;
+    w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && m.rules().types[u.type].id == "peasant" && !peasant.valid()) peasant = e; });
+    if (peasant.valid()) {
+        Command b; b.player = 1; b.type = game::kCmdBuild; b.units = {peasant}; b.param = m.rules().findType("farm");
+        b.point = w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(6), Fixed{}, Fixed::fromInt(6)};
+        sim->submit(b);
+        for (int i = 0; i < 6; ++i) sim->step();
+        auto* o = w.tryGet<game::Orders>(peasant);
+        CHECK(!o || o->queue.empty() || o->queue.front().type != game::OrderType::Build);
+    }
+    // the footman train is refused with its reason
+    Command tf = tr; tf.param = m.rules().findType("footman");
+    Entity rax = m.spawn(*sim, uint16_t(m.rules().findType("barracks")), 1, w.get<Transform>(hall).pos + Vec3{Fixed::fromInt(-8), Fixed{}, Fixed{}});
+    tf.units = {rax};
+    sim->submit(tf);
+    for (int i = 0; i < 6; ++i) sim->step();
+    CHECK(!w.tryGet<game::Production>(rax) || w.get<game::Production>(rax).queue.empty());
+    CHECK(std::find(msgs.begin(), msgs.end(), "footmen are banned") != msgs.end());
+    {   // peasants go mining: "gathered" events
+        Entity mine;
+        w.each<game::Unit>([&](Entity e, game::Unit& u) { if (!mine.valid() && m.rules().types[u.type].id == "goldmine") mine = e; });
+        Command g; g.player = 1; g.type = game::kCmdGather; g.target = mine;
+        w.each<game::Unit, Owner>([&](Entity e, game::Unit& u, Owner& o) { if (o.player == 1 && m.rules().types[u.type].id == "peasant") g.units.push_back(e); });
+        CHECK(mine.valid() && !g.units.empty());
+        sim->submit(g);
+    }
+    for (int i = 0; i < 1200; ++i) sim->step();
+    sim->checksum();
+    const std::string& stb = w.resource<game::ScriptStore>()->state;
+    CHECK(game::script::blobHasKey(stb, "res") && game::script::blobHasKey(stb, "tt") && game::script::blobHasKey(stb, "hits"));
+    for (auto& e : se->log()) if (e.error) std::printf("  log: %s\n", e.text.c_str());
+    CHECK(se->errorCount() == 0);
+    // games without hooks: no hook bits (zero cost)
+    auto plain = scriptSim({{"scripts/p.lua", "on('tick', function() end)"}});
+    CHECK(mod(*plain).scripts()->hooks() == 0);
 }
 
 int main(int argc, char** argv) {
@@ -10452,6 +10902,218 @@ TEST(ai_invades_separate_planets) {
     CHECK(transits >= 6);        // fleets, not pairs of scouts
     CHECK(sim.result() != 0);    // and they win the match
 }
+// ---- project-file agent: <Title>.rtsproj (apps/editor/core/ProjectFile.h), OS file association
+// (FileAssoc.h, Linux part under a temporary HOME), editor / document icons (tools/branding/ProjectIcon.h)
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/FileAssoc.h"
+#include "apps/editor/core/ProjectFile.h"
+#include "apps/editor/core/Projects.h"
+#include "tools/branding/ProjectIcon.h"
+namespace {
+// HOME (and XDG_*) pointed at a fresh temp folder for the scope of a test: nothing reaches the real ~/.rtsengine
+struct TempHome {
+    std::filesystem::path dir;
+    std::string oldHome, oldData, oldConfig;
+    bool hadHome = false, hadData = false, hadConfig = false;
+    explicit TempHome(const char* tag) {
+        dir = std::filesystem::temp_directory_path() / (std::string("rts_") + tag + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(dir);
+        auto save = [](const char* k, std::string& v, bool& had) { if (const char* e = std::getenv(k)) { v = e; had = true; } };
+        save("HOME", oldHome, hadHome); save("XDG_DATA_HOME", oldData, hadData); save("XDG_CONFIG_HOME", oldConfig, hadConfig);
+#if !defined(_WIN32)
+        setenv("HOME", dir.string().c_str(), 1);
+        unsetenv("XDG_DATA_HOME");
+        unsetenv("XDG_CONFIG_HOME");
+#endif
+    }
+    ~TempHome() {
+#if !defined(_WIN32)
+        auto restore = [](const char* k, const std::string& v, bool had) { if (had) setenv(k, v.c_str(), 1); else unsetenv(k); };
+        restore("HOME", oldHome, hadHome); restore("XDG_DATA_HOME", oldData, hadData); restore("XDG_CONFIG_HOME", oldConfig, hadConfig);
+#endif
+        std::error_code ec;
+        std::filesystem::remove_all(dir, ec);
+    }
+};
+std::string slurp(const std::filesystem::path& p) { std::ifstream f(p, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); }
+} // namespace
+
+TEST(project_file_create_resolve_migrate) {
+    namespace fs = std::filesystem;
+    using namespace rts::editor;
+    TempHome home("projfile");
+    std::string err;
+    // a new project from a template: its own <Title>.rtsproj, the template's one is not copied
+    const std::string dir = createProject(RTS_SOURCE_DIR, "skirmish", "Моя стратегия", (home.dir / "Projects").string(), "", &err);
+    CHECK(!dir.empty());
+    const fs::path file = fs::path(dir) / "Моя стратегия.rtsproj";
+    CHECK(fs::exists(file));
+    CHECK(!fs::exists(fs::path(dir) / "Iron and Gold.rtsproj"));
+    CHECK(findProjectFile(dir) == file.string());
+    ProjectFile pf;
+    CHECK(readProjectFile(file.string(), pf, &err));
+    CHECK(pf.format == 1 && pf.name == "Моя стратегия" && pf.manifest == "game.json" && pf.engine == engineVersion() && pf.created.size() == 10);
+    CHECK(!engineVersion().empty() && engineVersion() != "0.0.0");
+    // the recent list remembers the file
+    auto recent = recentProjects();
+    CHECK(!recent.empty() && recent[0].file == fs::weakly_canonical(file).string() && recent[0].exists);
+
+    // anything that means "this project" resolves to the folder
+    const std::string canon = fs::path(dir).lexically_normal().string();
+    CHECK(resolveProjectDir(file.string(), &err) == canon);
+    CHECK(resolveProjectDir(dir, &err) == canon);
+    CHECK(resolveProjectDir(dir + "/", &err) == canon);
+    CHECK(resolveProjectDir(dir + "/game.json", &err) == canon);
+    CHECK(resolveProjectDir(dir + "/rules.json", &err).empty() && err.find("not a project") != std::string::npos);
+    CHECK(resolveProjectDir(dir + "/nope.rtsproj", &err).empty() && err.find("not found") != std::string::npos);
+    CHECK(resolveProjectDir((home.dir / "Projects").string(), &err).empty() && err.find("game.json") != std::string::npos);
+    CHECK(isProjectFilePath("A/B/Game.RTSPROJ") && !isProjectFilePath("game.json"));
+
+    // a file from a newer editor is refused with a readable reason; unknown keys survive a rewrite
+    std::ofstream(fs::path(dir) / "future.rtsproj") << R"({"format": 9, "name": "x"})";
+    CHECK(!readProjectFile((fs::path(dir) / "future.rtsproj").string(), pf, &err) && err.find("newer") != std::string::npos);
+    fs::remove(fs::path(dir) / "future.rtsproj");
+    {
+        std::ofstream(file) << "// project\n{\"format\": 1, \"name\": \"Old\", \"custom\": {\"k\": 3}}\n";
+        ProjectFile n; n.name = "Моя стратегия";
+        CHECK(writeProjectFile(file.string(), n, &err));
+        Json j = Json::parseFile(file.string());
+        CHECK(j["custom"].getInt("k") == 3 && j.getStr("name") == "Моя стратегия" && j.getStr("manifest") == "game.json");
+    }
+
+    // migration: a project made before .rtsproj existed gets one when opened
+    const fs::path old = home.dir / "Projects" / "legacy";
+    fs::create_directories(old / "maps");
+    fs::copy_file(fs::path(RTS_SOURCE_DIR) / "templates/skirmish/rules.json", old / "rules.json");
+    std::ofstream(old / "game.json") << R"({"name": "Old Game", "rules": "rules.json", "maps": []})";
+    {
+        Workspace ws;
+        ws.engineDir = RTS_SOURCE_DIR;
+        CHECK(ws.openGame(old.string(), &err));
+        CHECK(ws.project.file == (fs::weakly_canonical(old) / "Old Game.rtsproj").string());
+        CHECK(fs::exists(old / "Old Game.rtsproj"));
+        bool created = true;
+        CHECK(ensureProjectFile(old.string(), &created) == ws.project.file && !created);
+        // and the .rtsproj path opens the project (double-click / argv / MCP open_game)
+        CHECK(ws.openGame(file.string(), &err));
+        CHECK(ws.project.dir == fs::weakly_canonical(dir).string() && ws.project.file == fs::weakly_canonical(file).string());
+        Json r = ws.call("open_game", Json::parse("{\"game\": \"" + (old / "Old Game.rtsproj").generic_string() + "\"}"));
+        CHECK(!r.has("error") && r.getStr("file").find("Old Game.rtsproj") != std::string::npos);
+        // template ids still work and the engine's templates are not rewritten
+        CHECK(ws.openGame("mushrooms", &err) && fs::path(ws.project.file).filename() == "Mushroom Clash.rtsproj");
+        CHECK(!ws.openGame((old / "missing.rtsproj").string(), &err) && !err.empty());
+    }
+}
+
+TEST(templates_have_project_files) {
+    namespace fs = std::filesystem;
+    using namespace rts::editor;
+    int n = 0;
+    for (auto& e : fs::directory_iterator(fs::path(RTS_SOURCE_DIR) / "templates")) {
+        if (!fs::exists(e.path() / "game.json")) continue;
+        ++n;
+        int files = 0;
+        for (auto& f : fs::directory_iterator(e.path())) files += isProjectFilePath(f.path().string());
+        const std::string pf = findProjectFile(e.path().string());
+        if (files != 1 || pf.empty()) { std::printf("  %s: %d .rtsproj files\n", e.path().filename().string().c_str(), files); CHECK(false); continue; }
+        ProjectFile p;
+        std::string err;
+        CHECK(readProjectFile(pf, p, &err));
+        const std::string name = Json::parseFile((e.path() / "game.json").string()).getStr("name");
+        if (p.name != name || fs::path(pf).filename().string() != projectFileName(name)) {
+            std::printf("  %s: .rtsproj '%s' vs game.json name '%s'\n", e.path().filename().string().c_str(), fs::path(pf).filename().string().c_str(), name.c_str());
+            CHECK(false);
+        }
+    }
+    CHECK(n > 10);
+    // rtsbuild's pack rule: a .rtsproj at the root is not content
+    rts::pack::IgnoreRules rules;
+    rules.add("*.rtsproj");
+    CHECK(rules.ignored("Iron and Gold.rtsproj", false) && !rules.ignored("rules.json", false));
+}
+
+TEST(project_document_icons) {
+    namespace fs = std::filesystem;
+    using namespace rts::branding;
+    TempHome home("projicon");
+    std::string err;
+    auto files = writeEditorIcons((home.dir / "icons").string(), std::string(RTS_SOURCE_DIR) + "/apps/editor/branding/icon_1024.png", &err);
+    CHECK(files.size() == 5);
+    rts::branding::Image doc;
+    CHECK(loadImageFile((home.dir / "icons" / "rtsproj.png").string(), doc, &err) && doc.width == 256 && doc.height == 256);
+    CHECK(doc.px(2, 2)[3] == 0 && doc.px(253, 2)[3] == 0);           // around the page: transparent (and the folded corner)
+    CHECK(doc.px(128, 128)[3] == 255 && doc.px(60, 30)[3] == 255);   // the page itself is opaque
+    CHECK(doc.px(210, 18)[3] == 0);                                  // cut-off corner of the fold
+    const std::string ico = slurp(home.dir / "icons" / "rtsproj.ico"), icns = slurp(home.dir / "icons" / "rtsproj.icns");
+    CHECK(ico.size() > 1000 && ico.compare(0, 4, std::string("\0\0\1\0", 4)) == 0 && uint8_t(ico[4]) == 7);
+    CHECK(icns.size() > 1000 && icns.compare(0, 4, "icns") == 0);
+    CHECK(slurp(home.dir / "icons" / "editor.ico").compare(0, 4, std::string("\0\0\1\0", 4)) == 0);
+    CHECK(writeEditorIcons((home.dir / "fallback").string(), "/no/such/logo.png", &err).size() == 5);   // built-in icon
+    CHECK(projectDocumentIcon(16).width == 16 && editorAppIcon(48).width == 48);
+}
+
+#if defined(__linux__)
+TEST(file_assoc_linux_registration_temp_home) {
+    namespace fs = std::filesystem;
+    using namespace rts::editor;
+    TempHome home("assoc");
+    unsetenv("RTS_FILE_ASSOC");
+    // Exec= quoting (Desktop Entry spec)
+    CHECK(desktopExec("/usr/bin/rts_editor") == "/usr/bin/rts_editor %f");
+    CHECK(desktopExec("/opt/RTS Engine/rts_editor") == "\"/opt/RTS Engine/rts_editor\" %f");
+    CHECK(desktopExec("/o/a$b\\c 100%") == "\"/o/a\\\\$b\\\\\\\\c 100%%\" %f");
+    CHECK(xdgDataHome() == (home.dir / ".local" / "share").string() && xdgConfigHome() == (home.dir / ".config").string());
+
+    const std::string exe = "/opt/RTS Engine/rts_editor";
+    AssocStatus st = fileAssociationStatus(exe);
+    CHECK(st.supported && !st.registered && !st.otherDefault);
+    std::string msg;
+    CHECK(registerFileAssociation(exe, &msg));
+    const fs::path data = home.dir / ".local" / "share";
+    const std::string desk = slurp(data / "applications" / "rtsengine-editor.desktop");
+    CHECK(desk.find("Exec=\"/opt/RTS Engine/rts_editor\" %f\n") != std::string::npos);
+    CHECK(desk.find("MimeType=application/x-rtsengine-project;\n") != std::string::npos && desk.find("Icon=rtsengine-editor\n") != std::string::npos);
+    const std::string xml = slurp(data / "mime" / "packages" / "rtsengine-project.xml");
+    CHECK(xml.find("type=\"application/x-rtsengine-project\"") != std::string::npos && xml.find("<glob pattern=\"*.rtsproj\"") != std::string::npos);
+    CHECK(fs::exists(data / "icons/hicolor/48x48/mimetypes/application-x-rtsengine-project.png"));
+    CHECK(fs::exists(data / "icons/hicolor/256x256/apps/rtsengine-editor.png"));
+    CHECK(slurp(home.dir / ".config" / "mimeapps.list").find("application/x-rtsengine-project=rtsengine-editor.desktop") != std::string::npos);
+    st = fileAssociationStatus(exe);
+    CHECK(st.registered);
+    const bool mimeDb = std::system("command -v update-mime-database >/dev/null 2>&1") == 0;
+    if (mimeDb) CHECK(slurp(data / "mime" / "globs2").find("application/x-rtsengine-project:*.rtsproj") != std::string::npos);
+    if (std::system("command -v xdg-mime >/dev/null 2>&1") == 0) {
+        const std::string q = "xdg-mime query default application/x-rtsengine-project > '" + (home.dir / "q.txt").string() + "' 2>/dev/null";
+        CHECK(std::system(q.c_str()) == 0 && slurp(home.dir / "q.txt").find("rtsengine-editor.desktop") != std::string::npos);
+    }
+    std::printf("  registered under a temp HOME (update-mime-database: %s): %s\n", mimeDb ? "yes" : "no", msg.c_str());
+
+    // another editor build: not ours any more -> startup re-registers it
+    CHECK(!fileAssociationStatus("/other/rts_editor").registered);
+    CHECK(!ensureFileAssociation("/other/rts_editor").empty());
+    CHECK(fileAssociationStatus("/other/rts_editor").registered && !fileAssociationStatus(exe).registered);
+    CHECK(ensureFileAssociation("/other/rts_editor").empty());   // nothing to do
+    // the user picked another program: reported, never overridden at startup
+    {
+        std::string list = slurp(home.dir / ".config" / "mimeapps.list");
+        const std::string a = "application/x-rtsengine-project=rtsengine-editor.desktop";
+        list.replace(list.find(a), a.size(), "application/x-rtsengine-project=org.gnome.TextEditor.desktop");
+        std::ofstream(home.dir / ".config" / "mimeapps.list") << list;
+    }
+    st = fileAssociationStatus("/other/rts_editor");
+    CHECK(!st.registered && st.otherDefault && st.detail.find("org.gnome.TextEditor") != std::string::npos);
+    CHECK(ensureFileAssociation("/other/rts_editor").empty());
+    // the menu item does it on request
+    CHECK(registerFileAssociation("/other/rts_editor", &msg) && fileAssociationStatus("/other/rts_editor").registered);
+    // automated runs never touch the user's desktop
+    setenv("RTS_FILE_ASSOC", "off", 1);
+    CHECK(ensureFileAssociation("/third/rts_editor").empty() && !fileAssociationStatus("/third/rts_editor").registered);
+    unsetenv("RTS_FILE_ASSOC");
+}
+#endif
+#endif
+#include "tests_fields.inc"   // grid fields (G5)
+
 // ------------------------------------------------------------------ planet detail grids (agent-terrain)
 
 TEST(planet_detail_grid_seams_and_height) {

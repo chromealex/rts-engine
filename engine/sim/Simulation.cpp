@@ -4,12 +4,16 @@
 namespace rts {
 
 void writeCommand(ByteWriter& w, const Command& c) {
-    w.u32(c.tick); w.u8(c.player); w.u8(c.flags); w.u16(c.type); w.u32(c.seq);
+    w.u32(c.tick); w.u8(c.player); w.u8(uint8_t(c.args.empty() ? c.flags & ~kCmdHasArgs : c.flags | kCmdHasArgs)); w.u16(c.type); w.u32(c.seq);
     w.u32(uint32_t(c.units.size()));
     for (auto& e : c.units) w.u64(e.packed());
     w.u64(c.target.packed());
     w.i64(c.point.x.raw); w.i64(c.point.y.raw); w.i64(c.point.z.raw);
     w.i64(c.param);
+    if (!c.args.empty()) {
+        w.u32(uint32_t(c.args.size()));
+        for (int64_t v : c.args) w.i64(v);
+    }
 }
 
 Command readCommand(ByteReader& r) {
@@ -22,6 +26,12 @@ Command readCommand(ByteReader& r) {
     c.target = Entity::fromPacked(r.u64());
     c.point.x = Fixed::fromRaw(r.i64()); c.point.y = Fixed::fromRaw(r.i64()); c.point.z = Fixed::fromRaw(r.i64());
     c.param = r.i64();
+    if (c.flags & kCmdHasArgs) {
+        uint32_t na = r.u32();
+        if (na > 4096) na = 0; // corrupted input guard
+        for (uint32_t i = 0; i < na && r.ok(); ++i) c.args.push_back(r.i64());
+    }
+    c.flags &= uint8_t(~kCmdHasArgs);   // wire-only: commands compare equal to the ones submitted
     return c;
 }
 
@@ -110,7 +120,8 @@ int Simulation::advance(double realSeconds, int maxTicks) {
     return n;
 }
 
-void Simulation::saveState(SimSnapshot& out) const {
+void Simulation::saveState(SimSnapshot& out) {
+    module_->prepareSnapshot(*this);
     out.world = world_;
     out.rng = rng_;
     out.tick = tick_;
@@ -137,7 +148,7 @@ namespace {
 constexpr uint32_t kSaveMagic = 0x56535452;   // "RTSV"
 constexpr uint32_t kSaveVersion = 2;   // 2: agent-mech MechShield / Abandoned pools merged into Shield / crews
 } // namespace
-void io(Archive& a, Command& c) { a(c.tick, c.player, c.flags, c.type, c.seq, c.units, c.target, c.point, c.param); }   // found by ADL
+void io(Archive& a, Command& c) { a(c.tick, c.player, c.flags, c.type, c.seq, c.units, c.target, c.point, c.param, c.args); }   // found by ADL
 void io(Archive& a, PlayerInfo& p) { a(p.slot, p.name, p.team, p.alive); }
 
 std::string Simulation::serialize() {

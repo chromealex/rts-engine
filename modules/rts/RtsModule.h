@@ -17,6 +17,7 @@
 #include "RtsTriggers.h"
 #include "RtsScript.h"
 #include "RtsMech.h"
+#include "RtsGridFields.h"
 #include "RtsNative.h"
 #include <memory>
 
@@ -82,6 +83,7 @@ enum CommandType : uint16_t {
     kCmdRotate,       // conveyor pieces: param 1..4 = east, south, west, north; 0 = turn clockwise
     kCmdLock,         // gates / doors: param 1 lock (closed for everyone), 2 unlock, 0 toggle
     kCmdEndTurn,      // turn-based mode: the active player ends the turn
+    kCmdScript,       // rules "commands" (RtsScript.h): param = command index, args = encoded arguments, units = selection
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.
@@ -169,6 +171,7 @@ struct Unit {
     uint8_t lastAttacker = 0;   // owner slot of the last damage source (xp / bounty)
     Vec3 facing{Fixed::fromInt(1), Fixed{}, Fixed{}};
     Fixed energy{};
+    Entity lastHitBy = kNullEntity;   // last damage source entity (unit_died.killer; not hashed)
 };
 
 enum class OrderType : uint8_t { Move, AttackMove, Attack, Patrol, Gather, Return, Build, Repair, Enter, Cast,
@@ -484,12 +487,14 @@ public:
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
     void applyCommand(Simulation& sim, const Command& cmd) override;
     void hashState(Simulation& sim, Hasher& h) override;
+    void prepareSnapshot(Simulation& sim) override { if (script_) script_->flush(sim); }
     bool serializeState(Simulation& sim, Archive& a) override;   // RtsSave.cpp
     int result(Simulation& sim) override;
 
     const Rules& rules() const { return rules_; }
     const TriggerSet& triggers() const { return triggers_; }
     ScriptEngine* scripts() const { return script_.get(); }   // the Lua VM (standard library + game scripts)
+    GridFields* gridFields() const { return fields_.get(); }  // grid fields (RtsGridFields.h); null before setup
     // The map the simulation was set up from when the map had a "generate" block (nullptr otherwise):
     // presentation reads terrainMaterial / heights / regions from it (agent-terrain-gen).
     const Json* generatedMap() const { return generated_.isObject() ? &generated_ : nullptr; }
@@ -795,6 +800,7 @@ private:
     void assaultOriginals(Simulation& sim, Entity unit, Entity structure);   // gains for units lost in an assault
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
+    std::unique_ptr<GridFields> fields_;   // grid fields config + kernels (state: GridFieldStore resource)
     std::vector<NativeDefinition> nativeDefinitions_;
     NativeModules native_;
     std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource

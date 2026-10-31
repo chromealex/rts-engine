@@ -20,6 +20,7 @@ struct GameInfo { std::string id, dir, name; int maps = 0; };
 
 struct Project {
     std::string dir;              // folder with game.json
+    std::string file;             // <dir>/<Title>.rtsproj (ProjectFile.h); "" for engine templates without one
     Json manifest = Json::object();
     Json rulesJson = Json::object();
     game::Rules rules;
@@ -69,7 +70,7 @@ public:
     Json toolList() const;        // MCP tools/list payload
 
     std::vector<GameInfo> listGames() const;
-    bool openGame(const std::string& idOrDir, std::string* err);
+    bool openGame(const std::string& idOrDir, std::string* err);   // folder, .rtsproj, game.json or template id
     std::string gamesDir() const { return engineDir + "/templates"; }   // project templates (sample games)
     std::string mapsDir() const { return project.dir + "/maps"; }
     std::string relative(const std::string& file) const;

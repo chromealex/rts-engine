@@ -26,6 +26,7 @@
 // file-level locals must not be mutated by handlers (that state would escape snapshots) - see docs.
 // Replays re-run setup, so the VM is re-created identically from the same sources.
 #pragma once
+#include <climits>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
@@ -36,11 +37,12 @@
 #include "../../engine/core/Fixed.h"
 #include "../../engine/data/Json.h"
 
-namespace rts { class Simulation; class Hasher; }
+namespace rts { class Simulation; class Hasher; struct Command; }
 
 namespace rts::game {
 
 class RtsModule;
+struct Rules;
 struct EffectDef;
 struct EffectCtx;
 
@@ -48,8 +50,11 @@ using ScriptReader = std::function<bool(const std::string& relativePath, std::st
 
 // Script state of a match (a World resource, present only in games with scripts).
 struct ScriptStore {
-    std::string state;                          // canonical serialization of the `state` table
-    uint64_t serial = 0;                        // write stamp: the VM restores `state` when it differs
+    std::string state;                          // canonical serialization of the `state` table (flushed lazily:
+                                                // before checksums, snapshots and saves - ScriptEngine::flush)
+    uint64_t serial = 0;                        // epoch stamp written by the VM when it enters a tick: a different
+                                                // value means the world was replaced (rollback / load), so the VM
+                                                // restores `state` and the per-entity data from the world
     bool started = false;                       // "start" handlers ran
     std::vector<uint8_t> disabled;              // per handler: switched off after an error
     std::vector<std::string> disabledFns;       // functions called from data that failed (sorted)
@@ -57,10 +62,53 @@ struct ScriptStore {
     struct Timer { uint32_t tick = 0; uint32_t seq = 0; std::string fn, arg; }; // game.after(); arg serialized
     std::vector<Timer> timers;                  // sorted by (tick, seq)
     uint32_t timerSeq = 0;
+    std::vector<uint32_t> cmdReady;             // script commands: tick each (player, command) is off cooldown
+                                                // (index player * commands + command; empty until one is used)
     bool userScripts = false;                   // the game has its own simulation scripts: hashed only then (the
                                                 // standard library keeps its state in the C++ GameState)
     void hash(Hasher& h) const;
 };
+
+// Per-entity Lua data (game.data(h)): canonical serialization of the entity's table, written when the
+// table changed (flush), hashed through `hash`, saved with the world, gone with the entity.
+struct ScriptData {
+    std::string blob;
+    uint64_t hash = 0;     // FNV-1a of blob (hashState feeds entity + hash)
+    uint64_t serial = 0;   // VM write stamp (not saved, not hashed): the VM's cached table is current when equal
+};
+
+// Base stat overrides set by game.set_stat_base(h, stat, value): replace the unit type's base value
+// before techs / levels / buffs apply (RtsModule::stat). Saved and hashed; only games with scripts read it.
+struct ScriptStats {
+    struct Entry { uint8_t stat = 0; Fixed base{}; };
+    std::vector<Entry> list;
+};
+
+// A script-defined player command (rules "commands": {id: {...}}). Sent as kCmdScript: param = index
+// in commands() (sorted by id), args = one int64 per scalar argument (points: x then z as raw fx; units
+// and entities: packed handles; enums: value index; bools: 0 / 1), units = the selection.
+struct ScriptArgDef {
+    enum Kind : uint8_t { Int, Enum, Bool, Point, Unit, Entity };
+    std::string name;
+    Kind kind = Int;
+    int64_t min = INT32_MIN, max = INT32_MAX, def = 0;   // Int range / default (Enum, Bool: index / 0-1)
+    std::vector<std::string> values;                     // Enum
+    bool own = false;                                    // Unit: must belong to the issuing player
+    int slots() const { return kind == Point ? 2 : 1; }
+};
+struct ScriptCommandDef {
+    std::string id, label, icon, hotkey, tip;
+    std::vector<ScriptArgDef> args;
+    std::vector<std::pair<uint16_t, Fixed>> cost;       // resource index, amount: paid when the handler accepts
+    Fixed cooldown{};                                    // seconds per player
+    std::vector<uint16_t> types;                         // "targets": selected unit types it is shown for / accepts
+    uint64_t tags = 0;                                   //   ... or tags ("tag:x"); none of both = no units needed
+    bool needUnits = false;                              // targets given: at least one matching own unit
+    std::string fn;                                      // handler: global function (default on_command)
+    int pick = -1;                                       // first Point / Unit / Entity arg: what a click fills in
+};
+// Parses rules "commands" (unknown types / tags / resources are reported in `errors`).
+std::vector<ScriptCommandDef> parseScriptCommands(const Json& rules, const Rules& R, std::vector<std::string>* errors = nullptr);
 
 struct ScriptLogEntry {
     bool error = false;
@@ -101,12 +149,32 @@ public:
     // Extra integer arguments follow the tick (entities as packed handles).
     void callStd(Simulation& sim, StdFn fn, std::initializer_list<int64_t> args = {});
     bool hasUserScripts() const { return userScripts_; }
+    // Writes the VM's `state` and changed entity data into the world (ScriptStore / ScriptData). Called
+    // before checksums, rollback snapshots and saves; cheap when nothing changed.
+    void flush(Simulation& sim);
 
     // Entry points for data: trigger condition / action {"type": "script", "fn": ...} and the ability
     // effect {"type": "script", "fn": ...} (queued, runs in this tick's scripts phase).
     bool callCondition(Simulation& sim, const std::string& fn, const Json& args, uint8_t player, Entity unit, Vec3 at);
     void callAction(Simulation& sim, const std::string& fn, const Json& args, uint8_t player, Entity unit, Vec3 at, const std::string& trigger);
     void queueEffect(const EffectDef& e, const EffectCtx& ctx, std::vector<Entity> targets);
+
+    // Script commands (rules "commands"): definitions, and the kCmdScript handler (RtsModule::applyCommand).
+    const std::vector<ScriptCommandDef>& commands() const { return commands_; }
+    int findCommand(const std::string& id) const;
+    void runCommand(Simulation& sim, const Command& cmd);
+    // Seconds (fx) until `player` can use command `index` again (0 = ready).
+    Fixed commandCooldown(Simulation& sim, uint8_t player, int index) const;
+
+    // Before-hooks (G12): global functions of the game's scripts, looked up at load. The module calls them
+    // only when hooks() has the bit, so games without them pay nothing.
+    enum Hook : uint8_t { kHookDamage = 1, kHookCommand = 2, kHookBuild = 4, kHookTrain = 8, kHookCast = 16 };
+    uint8_t hooks() const { return hooks_; }
+    Fixed beforeDamage(Simulation& sim, Entity target, Entity source, uint8_t sourceOwner, Fixed amount, uint16_t dmgType);
+    bool allowCommand(Simulation& sim, const Command& c);                         // before_command(player, cmd)
+    bool allowBuild(Simulation& sim, uint8_t player, uint16_t type, Vec3 at, Entity builder);   // can_build
+    bool allowTrain(Simulation& sim, uint8_t player, uint16_t type, Entity producer);           // can_train
+    bool allowCast(Simulation& sim, Entity caster, int index, Entity target, Vec3 at);          // can_cast
 
     bool hasFunction(const std::string& name) const;
     const std::vector<ScriptLogEntry>& log() const { return log_; }
@@ -118,8 +186,10 @@ public:
 private:
     std::unique_ptr<Impl> impl_;
     std::vector<ScriptLogEntry> log_;
+    std::vector<ScriptCommandDef> commands_;
     int errors_ = 0;
     bool userScripts_ = false;
+    uint8_t hooks_ = 0;
     friend struct Impl;
 };
 

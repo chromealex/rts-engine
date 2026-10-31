@@ -33,6 +33,7 @@ struct State {
     Insets safe;              // safe area insets from the OS, logical points
     float bannerTop = 0, bannerBottom = 0; // ad banner shown by a plugin ("app.banner"), logical points
     bool fullscreen = false;
+    std::vector<std::string> openFiles;   // OpenFile requests waiting for the next frame (may arrive before init)
 };
 State& state();
 
@@ -65,6 +66,9 @@ void dispatchText(const std::string& utf8);
 void dispatchKeyPress(Key k);
 // Updates the safe area; dispatches Resized when it changed.
 void setSafeArea(const Insets& in);
+// The OS asked to open a document (macOS openURLs, ...): queued, dispatched as EventType::OpenFile
+// from pluginFrame(), i.e. after init and outside the OS callback.
+void requestOpenFile(const std::string& path);
 // Per-platform fullscreen switch (no-op on mobile, where the app is always fullscreen).
 void applyFullscreen(bool on);
 

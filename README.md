@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/logo.png" alt="RTSEngine" width="520"></p>
+
 # RTSEngine
 
 Движок для любых RTS на C++20: от Mushroom Wars до Warcraft, Red Alert и Total Annihilation.
@@ -200,6 +202,41 @@ rtsbuild --project ~/RTSGames/dune2 --target macos
 Рельеф приближённый: оригинальный генератор ландшафта не используется, базы стоят на скалах, спайс из
 `Field=`, квоты миссий — триггерами. Пехота, орнитоптер и транспортник пока рисуются 3D-фигурами.
 Папка помечена `"external": true` — её нельзя коммитить и распространять.
+
+## Файл проекта .rtsproj
+
+Проект — папка где угодно на диске (`game.json`, `rules.json`, `maps/`, ...). В её корне лежит
+файл проекта **`<Название>.rtsproj`** — его открывают двойным кликом, как `.uproject` в Unity/Unreal
+или `project.godot`. `game.json` остаётся манифестом игры (его читают клиент, rtsbuild, паки);
+`.rtsproj` только помечает папку как проект и хранит сведения редактора:
+
+```json
+{"format": 1, "name": "Моя стратегия", "engine": "0.2.0", "manifest": "game.json", "created": "2026-10-28"}
+```
+
+- Создаётся вместе с проектом (хаб «Новый проект», MCP `create_project`); у старого проекта без
+  него — при первом открытии в редакторе. У шаблонов в `templates/*/` он уже есть (и в новый проект
+  не копируется: тот получает свой).
+- Везде, где редактор принимает путь проекта, подходит и `.rtsproj`, и папка: `rts_editor "Моя
+  стратегия.rtsproj"`, `--project`, «Открыть…» в хабе (показывает `.rtsproj` и папки проектов),
+  недавние, MCP `open_game`, `rtsbuild --project x.rtsproj`. В сборку `.rtsproj` не попадает.
+- **Двойной клик.** Редактор при запуске сам связывает `.rtsproj` с собой (для пользователя, без прав
+  администратора), если связи нет или она ведёт к другому экземпляру редактора; выбранную вами другую
+  программу не перебивает. Вручную: «Проект → Сделать редактор программой по умолчанию для .rtsproj»;
+  состояние — внизу слева в хабе. Отключить: `RTS_FILE_ASSOC=off`.
+  - **macOS:** тип `com.rtsengine.project` объявлен в Info.plist `RTSEditor.app`
+    (`platform/macos/EditorInfo.plist.in`; иконку документа `rtsproj.icns` рисует `rts_projicon` из логотипа
+    редактора `apps/editor/branding/icon_1024.png`); редактор регистрирует бандл
+    в LaunchServices (`lsregister -f`) и становится обработчиком по умолчанию. Двойной клик и
+    `open -a RTSEditor x.rtsproj` открывают проект в уже запущенном редакторе (при несохранённой
+    карте он спросит, сохранить ли её).
+  - **Windows:** `HKCU\Software\Classes\.rtsproj` → `RTSEngine.Project` (иконка
+    `%USERPROFILE%\.rtsengine\icons\rtsproj.ico`, команда `"<rts_editor.exe>" "%1"`). Если в
+    Windows для `.rtsproj` уже выбрана другая программа, хаб подскажет «Открыть с помощью → Всегда».
+  - **Linux:** тип `application/x-rtsengine-project` (`~/.local/share/mime/packages/rtsengine-project.xml`),
+    `~/.local/share/applications/rtsengine-editor.desktop` (`Exec=<редактор> %f`), иконки в
+    `~/.local/share/icons/hicolor`, программа по умолчанию в `~/.config/mimeapps.list`;
+    `update-mime-database`, `update-desktop-database`, `xdg-mime` вызываются, если установлены.
 
 ## Как описывается игра
 

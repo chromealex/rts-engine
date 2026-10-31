@@ -1,0 +1,2 @@
+// Editor icon (resource 1 is also the window icon, see PlatformWin32). Art: tools/branding/logo/make_logo.py
+1 ICON "RTSEditor.ico"

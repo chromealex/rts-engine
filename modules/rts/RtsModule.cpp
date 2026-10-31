@@ -27,6 +27,8 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     setupMap(sim, mapIn);
     loadTriggers(rules_, rulesJson, mapIn, triggers_);
     mechSetup(sim, mapIn);   // agent-mech
+    fields_ = std::make_unique<GridFields>();   // grid fields (rules "fields", map "gridFields"); nothing without them
+    fields_->setup(sim, *this, mapIn);
     // Lua: the engine's standard library (rule-level mechanics, modules/rts/lua) + the game's scripts
     script_ = std::make_unique<ScriptEngine>(*this);
     script_->load(sim, rulesJson, mapIn);
@@ -56,6 +58,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     sim.addSystem("death", [this](Simulation& s) { sysDeath(s); });
     sim.addSystem("capture", [this](Simulation& s) { sysCapture(s); });
     sim.addSystem("creep", [this](Simulation& s) { sysCreep(s); });
+    if (fields_->active()) sim.addSystem("gridfields", [this](Simulation& s) { fields_->tick(s); });   // RtsGridFields.cpp
     sim.addSystem("vision", [this](Simulation& s) { sysVision(s); });
     sim.addSystem("victory", [this](Simulation& s) { script_->callStd(s, StdFn::Victory); });   // lua/victory.lua
     sim.addSystem("triggers", [this](Simulation& s) {   // last: sees every event of the tick (lua/triggers.lua)
@@ -643,6 +646,9 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
         case Stat::Armor2: base = t.armor2; break;
         default: break;
     }
+    if (script_ && script_->hasUserScripts())   // game.set_stat_base overrides
+        if (auto* ss = w.tryGet<ScriptStats>(e))
+            for (auto& x : ss->list) if (x.stat == uint8_t(s)) base = x.base;
     uint8_t owner = w.get<Owner>(e).player;
     Fixed add{}, mul = kOne;
     if (auto* gs = w.resource<GameState>(); owner < gs->players.size() && !gs->players[owner].mods.empty()) {
@@ -665,6 +671,7 @@ Fixed RtsModule::stat(Simulation& sim, Entity e, Stat s) const {
     }
     if (mechOn(sim)) mechStatMod(sim, e, s, add, mul);   // agent-mech states (retreat speed, cargo arrows, veterancy)
     if (rules_.originals) add += playerModsStat(sim, owner, u.type, s, mul);   // forges, morale
+    if (s == Stat::Speed && fields_ && fields_->hasSpeed()) if (auto* tr = w.tryGet<Transform>(e)) mul *= fields_->speedMul(sim, tr->pos, owner);   // grid fields
     // Damage/Range/GatherRate/AttackSpeed "add" are fractional bonuses on top of 1 / absolute range
     return (base + add) * mul;
 }
@@ -957,6 +964,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     GameState& gs = state(sim);
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
+    if (script_ && (script_->hooks() & ScriptEngine::kHookCommand) && cmd.type != kCmdScript && !script_->allowCommand(sim, cmd)) return;   // before_command (G12)
     if (cmd.type >= 32768) { native_.command(*this, sim, cmd); return; }
     const bool queue = cmd.flags & kCmdQueue;
     if (cmd.type >= kCmdStance || mechOn(sim) || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue))) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
@@ -981,6 +989,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         return;
     }
 
+    if (cmd.type == kCmdScript) { script_->runCommand(sim, cmd); return; }   // rules "commands" (RtsScriptCommands.cpp)
     if (cmd.type == kCmdAutoBuild) { script_->callStd(sim, StdFn::AutoBuild, {cmd.player, cmd.param}); return; }   // lua/commands.lua
 
     std::vector<Entity> sel;
@@ -1075,6 +1084,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             uint16_t bt = uint16_t(cmd.param);
             if (std::find(t.builds.begin(), t.builds.end(), bt) == t.builds.end()) break;
             if (!canTrain(sim, cmd.player, bt)) break;
+            if (script_ && (script_->hooks() & ScriptEngine::kHookBuild) && !script_->allowBuild(sim, cmd.player, bt, flat(cmd.point), e)) break;   // can_build
             o.type = OrderType::Build; o.param = bt; o.target = kNullEntity; o.point = flat(cmd.point);
             issue(sim, e, o, queue);
             break;
@@ -1085,6 +1095,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             uint16_t ut = uint16_t(cmd.param);
             if (std::find(t.produces.begin(), t.produces.end(), ut) == t.produces.end()) break;
             if (!canTrain(sim, cmd.player, ut) || int(prod->queue.size()) >= rules_.maxQueue) break;
+            if (script_ && (script_->hooks() & ScriptEngine::kHookTrain) && !script_->allowTrain(sim, cmd.player, ut, e)) break;   // can_train
             if (prod->ready != kNoType && rules_.types[ut].structure) break; // place the finished one first
             if (t.chargesMax > 0 && prod->charges <= 0) break;
             Entity recruit;
@@ -1181,6 +1192,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
             if (!prod || prod->ready == kNoType) break;
             uint16_t st = prod->ready;
             if (!canPlace(sim, cmd.player, st, cmd.point)) break;
+            if (script_ && (script_->hooks() & ScriptEngine::kHookBuild) && !script_->allowBuild(sim, cmd.player, st, flat(cmd.point), e)) break;   // can_build
             prod->ready = kNoType;
             placeStructure(sim, cmd.player, st, cmd.point, kNullEntity, true);
             return; // one placement per command
@@ -1399,8 +1411,11 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    if (script_) script_->flush(sim);                         // lazily persisted Lua state (RtsScriptEngine.cpp)
     native_.hash(sim, h);
     if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
+    if (w.count<ScriptData>()) w.each<ScriptData>([&](Entity e, ScriptData& d) { h.u64(e.packed()); h.u64(d.hash); });
+    if (w.count<ScriptStats>()) w.each<ScriptStats>([&](Entity e, ScriptStats& d) { h.u64(e.packed()); for (auto& x : d.list) { h.u32(x.stat); h.fx(x.base); } });   // game.data
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));
         for (size_t i = 0; i < gs.grid.corner.size(); i += 13) h.i32(gs.grid.corner[i]);
@@ -1424,6 +1439,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     if (mechOn(sim)) hashMechGlobal(sim, h);
     h.u32(uint32_t(w.count<Projectile>()));
     w.each<Projectile, Transform>([&](Entity e, Projectile&, Transform& t) { h.u64(e.packed()); h.v3(t.pos); });
+    if (fields_ && fields_->active()) fields_->hash(sim, h);   // games with grid fields only (per-chunk cached hashes)
 }
 
 } // namespace rts::game

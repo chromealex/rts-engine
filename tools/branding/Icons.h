@@ -59,7 +59,7 @@ std::vector<std::string> validateIcons(const IconSpec& spec, const std::string& 
 
 // Loads a project image (or the built-in default icon when path is empty / missing; noted in warnings).
 Image loadIconSource(const std::string& projectDir, const std::string& path, std::vector<std::string>* warnings);
-Image defaultIcon(int size);      // a mushroom on a green tile (no art in the game yet)
+Image defaultIcon(int size);      // the RTSEngine mark on white (no art in the game yet)
 // Renders one icon of `size` pixels with a look.
 Image renderIcon(const Image& src, int size, const IconLook& look);
 

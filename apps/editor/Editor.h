@@ -13,8 +13,10 @@
 
 #include "EditorTheme.h"
 #include "EditorWindow.h"
+#include "core/FileAssoc.h"
 #include "core/Net.h"
 #include "core/Workspace.h"
+#include "core/FieldOps.h"
 #include "engine/fx/ParticleSystem.h"
 #include "engine/render/TextureCache.h"
 #include "engine/gfx/Gfx.h"
@@ -136,6 +138,12 @@ public:
     void openMap(const std::string& file);
     bool saveMap(const std::string& file);
     void openGame(const std::string& idOrDir);
+    // Open a project asked for by the OS (double-clicked .rtsproj), the hub or the menus: asks to save
+    // unsaved map / rules changes first (EditorOpenFile.cpp). Accepts a .rtsproj, a folder or game.json.
+    void requestOpenProject(const std::string& path);
+    // .rtsproj file association (FileAssoc.h): status shown in the hub, registration from the Project menu
+    const AssocStatus& fileAssoc() const { return assoc_; }
+    void registerFileAssoc();
     void reloadRules();                        // after rules change: views, palette
     void showGamePicker() { showProjectHub(0); }
     void showProjectHub(int tab);   // 0: recent projects, 1: new project (EditorProjects.cpp)
@@ -225,8 +233,15 @@ private:
     double gridRebuildAt_ = 0;
     bool playTerrainBuilt_ = false;
     game::RtsScene scene_;
+    FieldPreview fieldPreview_;   // grid field initial values for the Scene view (FieldOps.h)
     double time_ = 0;
     bool quit_ = false;
+    // EditorOpenFile.cpp
+    void initFileAssoc();
+    void drawOpenRequest();
+    std::string pendingOpen_;
+    bool openAsked_ = false;
+    AssocStatus assoc_;
 
     struct Flash { float x0, z0, x1, z1; double until, length; };
     std::vector<Flash> flashes_;

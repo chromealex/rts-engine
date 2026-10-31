@@ -1,5 +1,5 @@
 // RTS editor entry point.
-//   rts_editor [--game <id> | --project <dir with game.json>] [--map <file.json>] [--engine <engine dir>]
+//   rts_editor [<project.rtsproj | project dir>] [--game <id> | --project <.rtsproj | dir with game.json>] [--map <file.json>] [--engine <engine dir>]
 //              [--listen <port>|0] [--play]
 #include <cstdlib>
 #include <filesystem>
@@ -59,9 +59,13 @@ int rtsMain(int argc, char** argv) {
     opt.engineDir = RTS_SOURCE_DIR;
     for (int i = 1; i < argc; ++i) if (std::string(argv[i]) == "--play") g_demoPlay = true;
     std::string game;
-    for (int i = 1; i + 1 < argc; ++i) {
+    for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
-        if (a == "--project") opt.projectDir = argv[++i];
+        // a bare argument is a project to open: "<editor> path/My Game.rtsproj" (Windows / Linux
+        // double-click, file managers' "Open with") or a project folder; -psn_* is macOS Finder noise
+        if (!a.empty() && a[0] != '-') { opt.projectDir = a; continue; }
+        if (i + 1 >= argc) break;
+        if (a == "--project") opt.projectDir = argv[++i];   // folder, .rtsproj or game.json
         else if (a == "--game") game = argv[++i];
         else if (a == "--listen") opt.listenPort = std::atoi(argv[++i]);
         else if (a == "--map") opt.openMap = argv[++i];

@@ -55,3 +55,13 @@ every(5, function(tick)
     end
   end
 end)
+
+-- Script commands (rules "commands"): args.units = the selected units the command accepts.
+function on_command(player, id, args)
+  if id == "rally_cry" then
+    for _, h in ipairs(args.units) do game.buff(h, "damage", fx(1, 4), 1, 10) end
+    game.message(player, "Rally cry! (" .. #args.units .. " soldiers)")
+  elseif id == "muster" then
+    game.order(args.units, "move", args.where.x, args.where.z)
+  end
+end

@@ -11,6 +11,7 @@ namespace rts {
 
 enum CommandFlags : uint8_t {
     kCmdQueue = 1 << 0, // shift-queue: append instead of replacing current orders
+    kCmdHasArgs = 1 << 1, // `args` present on the wire (set by writeCommand when args is not empty)
 };
 
 struct Command {
@@ -23,6 +24,7 @@ struct Command {
     Entity target = kNullEntity;
     Vec3 point{};
     int64_t param = 0;          // module-defined (percent, ability index, ...)
+    std::vector<int64_t> args;  // module-defined payload (script commands); serialized only when not empty
 
     bool operator==(const Command&) const = default;
 };
