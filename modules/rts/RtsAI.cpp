@@ -506,6 +506,14 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
     }
     // 2) supply (structures like farms/depots, or supply units like overlords)
     Fixed freeSupply = eco.supplyCap - eco.supplyUsed;
+    // supply already on its way (farms under construction, overlords in the queue) counts: no farm spam
+    w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) {
+        if (o.player == player_ && (u.flags & kUnitUnderConstruction)) freeSupply += R.types[u.type].supplyProvided;
+    });
+    w.each<Production, Owner>([&](Entity, Production& p, Owner& o) {
+        if (o.player != player_) return;
+        for (auto& q : p.queue) if (q.item >= 0 && !q.upgrade) freeSupply += R.types[size_t(q.item)].supplyProvided;
+    });
     if (eco.supplyCap < R.supplyCap && freeSupply < Fixed::fromInt(4) && canBuildNow) {
         // plain supply first (farms, depots, overlords); producers that also give supply when there is nothing else
         for (int pass = 0; pass < 2; ++pass)
