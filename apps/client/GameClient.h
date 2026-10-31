@@ -130,6 +130,8 @@ private:
 
 class GameClient {
     friend struct LuaApi;   // ClientScript.cpp: the `game` table for UI scripts
+    struct ScriptUiApi;     // ClientScriptUi.cpp: scripthost.event / send for engine/ui/lib/scriptui.lua
+    friend struct ScriptUiApi;
 public:
     void init(gfx::Device& dev);   // every init step at once
     // Startup in steps, one per frame, so the splash screen (ClientSplash.h) keeps animating.
@@ -203,6 +205,10 @@ private:
     bool scriptCommandKey(platform::Key k);
     std::string scriptCommandHint();
     void issueViewCommands();
+    // ClientScriptUi.cpp: view scripts' ui.* -> data model "script" and ui/hud documents (scriptui.lua)
+    void initScriptUi();
+    void scriptUiReset();
+    void scriptUiFrame();
     int scriptCmd_ = -1;
     void buildOverlays(UiState& s);
     void loadDocuments();

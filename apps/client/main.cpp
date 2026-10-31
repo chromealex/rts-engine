@@ -227,6 +227,7 @@ void GameClient::startMatch(size_t idx) {
         Json rules = rulesJson_;
         if (!embedScripts(rules, map, [](const std::string& p, std::string& o) { return platform::readContentFile(p, o); }, &terr)) throw std::runtime_error(terr);
         sim_->setup(rules, map);
+        scriptUiReset();
         if (viewScripts_.load(*sim_, rules, map, uint8_t(spectator_ ? 0 : human_))) viewScripts_.attach(*sim_);
         view_.lights().configure(manifest_["lighting"], map["lighting"], map["lights"]); // day/night, map lights
         configurePostFx(map);
@@ -671,6 +672,7 @@ void GameClient::runViewScripts(float dt) {
     if (!viewScripts_.active()) return;
     viewScripts_.update(*sim_, dt);
     issueViewCommands();
+    scriptUiFrame();
     for (auto& r : viewScripts_.takeRequests()) {
         if (r.kind == game::ViewRequest::Notice) notice(r.text);
         else if (r.kind == game::ViewRequest::Effect) fx_.particles().play(r.text, {r.x, 0.5f, r.z});
