@@ -101,6 +101,11 @@ std::string findFloatLiteral(const std::string& text);
 bool loadChunk(Vm& vm, const std::string& name, const std::string& text, std::string& error);
 // lua_pcall with budget reset handling; on error logs "message" and returns false.
 bool protectedCall(Vm& vm, int nargs, int nresults, std::string* error = nullptr);
+// script commands (RtsScriptCommands.cpp)
+int argSlots(const ScriptCommandDef& d);
+bool encodeScriptArgs(lua_State* L, Vm& vm, int idx, const ScriptCommandDef& d, Command& c);
+bool validateScriptCommand(RtsModule& m, Simulation& sim, const ScriptCommandDef& d, Command& c);
+void pushScriptArgs(lua_State* L, const ScriptCommandDef& d, const Command& c);
 
 // ---- API tables (RtsScriptApi.cpp)
 void openGameApi(Vm& vm);           // `game` table: queries always, actions in Sim mode

@@ -719,11 +719,11 @@ add_library(rts_ui STATIC engine/ui/UiLayer.cpp engine/ui/UiRender.cpp engine/ui
 target_include_directories(rts_ui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} PRIVATE third_party/stb)
 target_link_libraries(rts_ui PUBLIC rts_rmlui rts_rmlui_lua rts_lua rts_engine)
 if(TARGET rts_client)
-    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/ClientScript.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
+    target_sources(rts_client PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/ClientScript.cpp apps/client/ClientScriptCmd.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(rts_client PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 if(TARGET main)
-    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/ClientScript.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
+    target_sources(main PRIVATE apps/client/ClientUi.cpp apps/client/ClientActions.cpp apps/client/ClientScript.cpp apps/client/ClientScriptCmd.cpp apps/client/Minimap.cpp apps/client/Lobby.cpp apps/client/ClientFx.cpp apps/client/ClientPlanet.cpp apps/client/MinimapPlanet.cpp)
     target_link_libraries(main PRIVATE rts_ui rts_net rts_game_fx)
 endif()
 
@@ -894,7 +894,7 @@ target_sources(rts_lua PRIVATE third_party/lua/loslib.c)
 if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     target_compile_definitions(rts_lua PRIVATE LUA_USE_IOS)   # no system() on iOS
 endif()
-target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp
+target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp modules/rts/RtsScriptCommands.cpp
     modules/rts/RtsScriptStd.cpp)
 # the engine's standard Lua library (rule-level mechanics) is compiled in: modules/rts/lua/*.lua
 file(GLOB RTS_STD_LUA CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/*.lua)

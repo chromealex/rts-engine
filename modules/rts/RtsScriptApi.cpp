@@ -1103,6 +1103,52 @@ int gTransform(lua_State* L, Vm& vm) {
     return 1;
 }
 
+// ---------------------------------------------------------------- script commands (G1)
+// game.commands(): the rules "commands" definitions {id, label, icon, hotkey, tip, cooldown, cost, args}
+int gCommands(lua_State* L, Vm& vm) {
+    ScriptEngine* se = vm.module->scripts();
+    const auto& cs = se ? se->commands() : std::vector<ScriptCommandDef>{};
+    const Rules& R = vm.module->rules();
+    lua_createtable(L, int(cs.size()), 0);
+    static const char* const kinds[] = {"int", "enum", "bool", "point", "unit", "entity"};
+    for (size_t i = 0; i < cs.size(); ++i) {
+        const ScriptCommandDef& d = cs[i];
+        lua_createtable(L, 0, 8);
+        setS(L, "id", d.id); setS(L, "label", d.label); setS(L, "icon", d.icon); setS(L, "hotkey", d.hotkey); setS(L, "tip", d.tip);
+        setF(L, "cooldown", d.cooldown);
+        lua_newtable(L);
+        for (auto& [r, a] : d.cost) setF(L, R.resources[r].id.c_str(), a);
+        lua_setfield(L, -2, "cost");
+        lua_createtable(L, int(d.args.size()), 0);
+        for (size_t k = 0; k < d.args.size(); ++k) {
+            const ScriptArgDef& a = d.args[k];
+            lua_createtable(L, 0, 4);
+            setS(L, "name", a.name); setS(L, "type", kinds[a.kind]);
+            if (a.kind == ScriptArgDef::Int) { setI(L, "min", a.min); setI(L, "max", a.max); setI(L, "default", a.def); }
+            if (a.kind == ScriptArgDef::Enum) {
+                lua_createtable(L, int(a.values.size()), 0);
+                for (size_t v = 0; v < a.values.size(); ++v) { lua_pushstring(L, a.values[v].c_str()); lua_rawseti(L, -2, lua_Integer(v + 1)); }
+                lua_setfield(L, -2, "values");
+            }
+            lua_rawseti(L, -2, lua_Integer(k + 1));
+        }
+        lua_setfield(L, -2, "args");
+        lua_rawseti(L, -2, lua_Integer(i + 1));
+    }
+    return 1;
+}
+// game.command_cooldown(p, id): seconds (fx) until the player can use the command again
+int gCommandCooldown(lua_State* L, Vm& vm) {
+    uint8_t p; if (!playerArg(L, vm, 1, p)) return -1;
+    std::string id;
+    if (!nameArg(L, vm, 2, id, "command")) return -1;
+    ScriptEngine* se = vm.module->scripts();
+    const int k = se ? se->findCommand(id) : -1;
+    if (k < 0) return fail(vm, "unknown command '" + id + "'");
+    pushFx(L, se->commandCooldown(*vm.sim, p, k));
+    return 1;
+}
+
 int gAddScore(lua_State* L, Vm& vm) {
     CTX;
     uint8_t p; if (!playerArg(L, vm, 1, p)) return -1;
@@ -1142,7 +1188,8 @@ void openGameApi(Vm& vm) {
         {"passable", bindQ<gPassable>}, {"level", bindQ<gLevel>}, {"height", bindQ<gHeight>}, {"area", bindQ<gArea>},
         {"var", bindQ<gVar>}, {"log", bindQ<gLog>}, {"data", bindQ<gData>}, {"has_data", bindQ<gHasData>},
         {"orders", bindQ<gOrders>}, {"current_order", bindQ<gCurrentOrder>}, {"target", bindQ<gTarget>}, {"idle", bindQ<gIdle>},
-        {"facing", bindQ<gFacing>}, {"velocity", bindQ<gVelocity>}, {"path", bindQ<gPath>}, {"energy", bindQ<gEnergy>}, {nullptr, nullptr}};
+        {"facing", bindQ<gFacing>}, {"velocity", bindQ<gVelocity>}, {"path", bindQ<gPath>}, {"energy", bindQ<gEnergy>},
+        {"commands", bindQ<gCommands>}, {"command_cooldown", bindQ<gCommandCooldown>}, {nullptr, nullptr}};
     static const luaL_Reg actions[] = {
         {"give", bind<gGive>}, {"take", bind<gTake>}, {"spawn", bind<gSpawn>}, {"kill", bind<gKill>}, {"damage", bind<gDamage>},
         {"heal", bind<gHeal>}, {"set_owner", bind<gSetOwner>}, {"add_status", bind<gAddStatus>}, {"buff", bind<gBuff>},
@@ -1209,6 +1256,7 @@ Json scriptApiReference() {
     q.push(fn("game.orders(h) / game.current_order(h)", "order queue / first order: {order, x, z, target, param, state}"));
     q.push(fn("game.target(h) / game.idle(h)", "weapon target, else the order's target / no orders, not moving, not fighting, no production"));
     q.push(fn("game.facing(h) -> dx, dz / game.velocity(h) -> vx, vz / game.path(h) / game.energy(h) -> e, max", "movement state; path = remaining waypoints {{x, z}, ...}"));
+    q.push(fn("game.commands() / game.command_cooldown(p, id)", "rules \"commands\" definitions {id, label, icon, hotkey, tip, cooldown, cost, args} / seconds until ready"));
     q.push(fn("game.log(...) / print(...)", "to the script log (editor Console)"));
     r.set("queries", q);
     Json a = Json::array();
@@ -1244,11 +1292,15 @@ Json scriptApiReference() {
     d.push(fn("trigger action {\"type\": \"script\", \"fn\": \"name\", ...}", "fn(ctx): ctx = {player, unit, x, z, tick, trigger, args}"));
     d.push(fn("trigger condition {\"type\": \"script\", \"fn\": \"name\", ...}", "fn(ctx) -> boolean"));
     d.push(fn("rules \"scriptBudget\": 1000000", "instructions per tick for all simulation scripts"));
+    d.push(fn("rules \"commands\": {id: {label, icon, hotkey, tip, targets: [type | \"tag:x\" | \"any\"], args: [{name, type: int|enum|bool|point|unit|entity, min, max, default, values, own}], cost: {res: n}, cooldown: s, fn}}",
+              "script commands: command card / hotkeys / view.send -> fn(player, id, args) (default on_command); return false refuses (nothing paid); args.units = the accepted selection"));
+    d.push(fn("rules \"commandBudget\": 200000", "instructions per player per tick for script command handlers"));
     r.set("data", d);
     Json v = Json::array();
     v.push(fn("view.on(event, fn(e)) / view.on_frame(fn(dt))", "presentation events (same names as on()) / every frame"));
     v.push(fn("view.notice(text) / view.effect(name, x, z) / view.sound(name, x, z)", "requests to the host (UI notice, particle effect, sound)"));
     v.push(fn("view.player()", "the local player slot"));
+    v.push(fn("view.send(id, args)", "issue a rules \"commands\" command as the local player (args by name, args.units = selection)"));
     r.set("view", v);
     return r;
 }

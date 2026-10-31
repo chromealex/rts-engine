@@ -8,6 +8,7 @@
 #include "../Devices.h"
 #include "../Editor.h"
 #include "../EditorUtil.h"
+#include "modules/rts/RtsScript.h"
 
 namespace rts::editor {
 
@@ -66,7 +67,8 @@ public:
         // the HUD keeps to the safe area like a game should
         Insets4 safe = dev && dev->w > 0 ? deviceInsets(*dev, ed.gameLandscape) : Insets4{};
         hud(ed, dl, sx + safe.left * k, sy + safe.top * k, sw - (safe.left + safe.right) * k);
-        input(ed);
+        const bool cardClick = scriptCard(ed, sx + sw - safe.right * k, sy + sh - safe.bottom * k);
+        if (!cardClick) input(ed);
         ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + avail.y));
         ImGui::Dummy(ImVec2(0, 0));
     }
@@ -281,6 +283,89 @@ private:
         }
         ed.gameSelection.erase(std::remove_if(ed.gameSelection.begin(), ed.gameSelection.end(), [&](Entity e) { return !w.alive(e); }), ed.gameSelection.end());
     }
+
+    // rules "commands" (script commands) for the selection, bottom right: buttons + hotkeys; a command with
+    // a point / unit argument waits for a left click in the view (like the game client, ClientScriptCmd.cpp)
+    bool scriptCard(Editor& ed, float right, float bottom) {
+        Simulation* sim = ed.sim();
+        auto* m = ed.simModule();
+        game::ScriptEngine* se = m ? m->scripts() : nullptr;
+        if (!sim || !se || se->commands().empty() || ed.humanSlot() <= 0) return false;
+        World& w = sim->world();
+        const uint8_t me = uint8_t(ed.humanSlot());
+        const auto& cs = se->commands();
+        auto fits = [&](const game::ScriptCommandDef& d) {
+            if (!d.needUnits) return true;
+            for (Entity e : ed.gameSelection) {
+                if (!w.alive(e) || !w.has<game::Unit>(e)) continue;
+                const uint16_t t = w.get<game::Unit>(e).type;
+                if ((d.types.empty() && !d.tags) || std::find(d.types.begin(), d.types.end(), t) != d.types.end() || (d.tags && (ed.rules().types[t].tags & d.tags))) return true;
+            }
+            return false;
+        };
+        auto send = [&](int i, Entity target, Vec3 pt, bool havePt) {
+            const auto& d = cs[size_t(i)];
+            Command c;
+            c.type = game::kCmdScript; c.param = i; c.units = ed.gameSelection;
+            for (size_t a = 0; a < d.args.size(); ++a) {
+                const auto& ad = d.args[a];
+                if (ad.kind == game::ScriptArgDef::Point) { if (int(a) == d.pick && !havePt) return; c.args.push_back(pt.x.raw); c.args.push_back(pt.z.raw); }
+                else if (ad.kind == game::ScriptArgDef::Unit || ad.kind == game::ScriptArgDef::Entity) { if (int(a) == d.pick && !target.valid()) return; c.args.push_back(int64_t(target.packed())); }
+                else c.args.push_back(ad.def);
+            }
+            ed.issueCommand(c);
+        };
+        auto start = [&](int i) { if (cs[size_t(i)].pick >= 0) pending_ = i; else send(i, kNullEntity, Vec3{}, false); };
+        bool used = false;
+        ImGuiIO& io = ImGui::GetIO();
+        if (pending_ >= 0 && size_t(pending_) < cs.size() && vp_.hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            float x, z;
+            Vec3 pt{};
+            const bool have = ed.groundAt(vp_, ed.gameCam, io.MousePos.x, io.MousePos.y, x, z);
+            if (have) pt = {Fixed::fromRatio(int64_t(x * 256), 256), Fixed{}, Fixed::fromRatio(int64_t(z * 256), 256)};
+            Entity t;
+            float best = 1e9f;
+            if (have) w.each<game::Unit, Transform>([&](Entity e, game::Unit& u, Transform& tr) {
+                float dx = float(tr.pos.x.toDouble()) - x, dz = float(tr.pos.z.toDouble()) - z, dd = std::sqrt(dx * dx + dz * dz);
+                if (dd < ed.view().selectionRadius(u.type) + 0.2f && dd < best) { best = dd; t = e; }
+            });
+            send(pending_, t, pt, have);
+            if (!io.KeyShift) pending_ = -1;
+            used = true;
+        }
+        if (pending_ >= 0 && (ImGui::IsMouseClicked(ImGuiMouseButton_Right) || ImGui::IsKeyPressed(ImGuiKey_Escape))) { pending_ = -1; used = true; }
+        std::vector<int> shown;
+        for (size_t i = 0; i < cs.size(); ++i) if (fits(cs[i])) shown.push_back(int(i));
+        if (ImGui::IsWindowFocused() && !io.WantTextInput)
+            for (int i : shown) {
+                const std::string& h = cs[size_t(i)].hotkey;
+                if (h.size() != 1 || !std::isalnum(static_cast<unsigned char>(h[0]))) continue;
+                const char c = char(std::toupper(static_cast<unsigned char>(h[0])));
+                const ImGuiKey key = c >= 'A' ? ImGuiKey(ImGuiKey_A + (c - 'A')) : ImGuiKey(ImGuiKey_0 + (c - '0'));
+                if (ImGui::IsKeyPressed(key, false) && se->commandCooldown(*sim, me, i).raw <= 0) start(i);
+            }
+        if (shown.empty()) return used;
+        const float bw = 170, bh = ImGui::GetFrameHeight();
+        float y = bottom - 8 - float(shown.size()) * (bh + 4);
+        for (int i : shown) {
+            const auto& d = cs[size_t(i)];
+            const Fixed cd = se->commandCooldown(*sim, me, i);
+            std::string label = d.label + (d.hotkey.empty() ? "" : "  [" + d.hotkey + "]");
+            if (cd.raw > 0) { char b[24]; std::snprintf(b, sizeof b, "  %.0f s", cd.toDouble() + 0.5); label += b; }
+            if (pending_ == i) label = "> " + label;
+            ImGui::SetCursorScreenPos(ImVec2(right - bw - 8, y));
+            ImGui::PushID(i);
+            ImGui::BeginDisabled(cd.raw > 0);
+            if (ImGui::Button(label.c_str(), ImVec2(bw, bh))) { start(i); used = true; }
+            ImGui::EndDisabled();
+            if (!d.tip.empty()) ImGui::SetItemTooltip("%s", d.tip.c_str());
+            if (ImGui::IsItemHovered()) used = true;   // no box selection under the card
+            ImGui::PopID();
+            y += bh + 4;
+        }
+        return used;
+    }
+    int pending_ = -1;
 
     Viewport vp_;
     bool boxing_ = false;

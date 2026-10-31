@@ -265,6 +265,49 @@ Not available yet: fog reveal from scripts (use a `reveal` effect in an ability)
 
 Functions named in data that the scripts don't define are reported when the match loads.
 
+## Script commands (player input with data)
+
+A game defines its own player commands in rules; each becomes a button (with hotkey) on the command
+card of the client and of the editor play-test, can be sent from view scripts and through MCP
+(`play_command` with `command: "script"`), and arrives in the simulation as one generic command
+(`kCmdScript`) that the engine validates before the game's handler sees it.
+
+```json
+"commands": {
+  "rally_cry": { "label": "Rally cry", "hotkey": "Y", "tip": "+25% damage for 10 s",
+                 "targets": ["footman", "archer", "tag:infantry"], "cost": { "gold": 25 }, "cooldown": 30 },
+  "muster":    { "label": "Muster", "hotkey": "U", "targets": ["footman"], "cooldown": 5,
+                 "args": [{ "name": "where", "type": "point" },
+                          { "name": "pace", "type": "enum", "values": ["walk", "run"], "default": "run" },
+                          { "name": "count", "type": "int", "min": 1, "max": 20, "default": 5 }] }
+}
+```
+
+```lua
+function on_command(player, id, args)      -- or per command: "fn": "global_function_name"
+  if id == "muster" then game.order(args.units, "move", args.where.x, args.where.z) end
+  -- return false: refused (cost and cooldown are not taken)
+end
+```
+
+| key | |
+|---|---|
+| `label`, `icon`, `hotkey` (one letter / digit), `tip` | the button; script hotkeys win over the built-in ones (A, S, H, P) |
+| `targets` | unit types / `"tag:x"` / `"any"`: shown when the selection has such an own unit, and only those units reach the handler (`args.units`, sorted by handle); without `targets` the command needs no selection |
+| `args` | array `[{name, type, ...}]` (or an object `{name: {type, ...}}`): `int` (`min`, `max`, `default`), `enum` (`values`, `default`), `bool`, `point` (`{x, z}` in the handler), `unit` (a living unit; `own: true` = of the sender), `entity` |
+| `cost`, `cooldown` | resources taken and cooldown (seconds, per player) started when the handler accepts; while unaffordable / cooling down the command is dropped (the card shows the remaining seconds) |
+| `fn` | handler function (default `on_command`) |
+
+The first `point` / `unit` / `entity` argument is what a click picks: the button enters a targeting
+mode and the next left click fills it in; the other arguments take their defaults (view scripts and
+MCP pass them by name). Wire format: `param` = the command's index in id order, `args` = one integer
+per value (points: x and z as raw fx), so replays and network play carry them. Invalid input (unknown
+index, wrong count, out of range, dead or foreign handles, a point off the map) is dropped silently.
+Each player's handlers have their own instruction budget per tick (rules `"commandBudget"`, default
+200000): a player who sends endless loops only burns their own commands. `game.commands()` lists the
+definitions, `game.command_cooldown(p, id)` gives the remaining seconds; view scripts send with
+`view.send("muster", {where = {x = 10, z = 12}, pace = "walk", units = {h1, h2}})`.
+
 ## View scripts
 
 ```lua
@@ -277,8 +320,9 @@ view.on_frame(function(dt) end)            -- dt in seconds (float)
 
 View scripts are presentation: floats are fine, `game.*` queries work, actions don't exist. Their
 outputs are requests the host shows: `view.notice(text)`, `view.effect(name, x, z)` (particle
-effect of `fx/`), `view.sound(name, x, z)`. They never change the simulation, so they don't need
-the determinism rules.
+effect of `fx/`), `view.sound(name, x, z)`, and script commands as the local player
+(`view.send(id, args)`, above). They never change the simulation directly, so they don't need the
+determinism rules.
 
 ## Engine standard library (rule-level mechanics in Lua)
 

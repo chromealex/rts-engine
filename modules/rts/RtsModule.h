@@ -81,6 +81,7 @@ enum CommandType : uint16_t {
     kCmdRotate,       // conveyor pieces: param 1..4 = east, south, west, north; 0 = turn clockwise
     kCmdLock,         // gates / doors: param 1 lock (closed for everyone), 2 unlock, 0 toggle
     kCmdEndTurn,      // turn-based mode: the active player ends the turn
+    kCmdScript,       // rules "commands" (RtsScript.h): param = command index, args = encoded arguments, units = selection
 };
 
 // Rect parameter of kCmdDig / kCmdPaintRoom: width and height in cells (1..64) and a signed 24-bit extra value.

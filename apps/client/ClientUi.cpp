@@ -249,7 +249,7 @@ void GameClient::updateUi() {
     if (sim_) {
         cleanSelection();
         buildTopBar(s);
-        if (!spectator_) { buildCommandCard(s); buildTools(s); }
+        if (!spectator_) { buildCommandCard(s); buildScriptCommands(s); buildTools(s); }
         buildOverlays(s);
         for (auto& n : notices_) if (n.until >= time_) s.notices.push_back(n.text);
         if (screen_ == Screen::Over) {
@@ -587,7 +587,8 @@ void GameClient::buildOverlays(UiState& s) {
         s.hintStyle = fmt("left: %.0fpx; top: %.0fpx;", (mouseX_ + 16) * k, (mouseY_ + 8) * k);
     }
     if (mode_ != Mode::Normal && screen_ == Screen::Playing) {
-        const std::string th = toolHint();
+        std::string th = toolHint();
+        if (th.empty()) th = scriptCommandHint();
         s.modeHint = !th.empty() ? th : tr(mode_ == Mode::AttackMove ? "mode.attack" : mode_ == Mode::Patrol ? "mode.patrol"
                       : mode_ == Mode::Rally ? "mode.rally" : mode_ == Mode::Ability ? "mode.ability"
                       : mode_ == Mode::Claim ? "mode.claim" : "mode.place");

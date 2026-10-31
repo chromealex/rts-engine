@@ -460,6 +460,7 @@ void GameClient::event(const Event& e) {
                 if (!(e.mods & platform::kModShift)) mode_ = Mode::Normal;
                 return;
             }
+            if (scriptCommandClick(e)) return;   // ClientScriptCmd.cpp
             if (mode_ == Mode::Ability || mode_ == Mode::Claim) {
                 float3 g;
                 if (groundAt(e.x, e.y, g)) {
@@ -604,7 +605,7 @@ void GameClient::event(const Event& e) {
                 if (touchMoved_) command(kCmdSmart, e.x, e.y, false);
             } else if (!touchMoved_ && !uiWants) {
                 Entity t = pick(e.x, e.y);
-                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim || mode_ == Mode::Skill || mode_ == Mode::Drop) {
+                if (mode_ == Mode::Place || mode_ == Mode::Ability || mode_ == Mode::Claim || mode_ == Mode::Skill || mode_ == Mode::Drop || mode_ == Mode::ScriptCmd) {
                     Event fake = e; fake.type = EventType::MouseDown; fake.button = 0; fake.mods = 0;
                     event(fake);
                 } else if (t.valid() && w.get<Owner>(t).player == human_ && !selectionHasGarrison()) {
@@ -633,6 +634,7 @@ void GameClient::event(const Event& e) {
             else if (selectionHasGarrison() && gi <= 4) sendPercent_ = gi * 25; // garrison games: 1-4 = 25..100%
             else if (!groups_[size_t(gi)].empty()) selection_ = groups_[size_t(gi)];
         }
+        if (!ctrl && scriptCommandKey(e.key)) break;   // rules "commands" hotkeys first
         if (!ctrl && !selection_.empty()) {
             if (e.key == Key::A) mode_ = Mode::AttackMove;
             if (e.key == Key::P) mode_ = Mode::Patrol;
@@ -668,6 +670,7 @@ void GameClient::processEvents() {
 void GameClient::runViewScripts(float dt) {
     if (!viewScripts_.active()) return;
     viewScripts_.update(*sim_, dt);
+    issueViewCommands();
     for (auto& r : viewScripts_.takeRequests()) {
         if (r.kind == game::ViewRequest::Notice) notice(r.text);
         else if (r.kind == game::ViewRequest::Effect) fx_.particles().play(r.text, {r.x, 0.5f, r.z});

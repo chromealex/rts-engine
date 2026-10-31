@@ -56,6 +56,9 @@ struct ScriptEngine::Impl {
     std::map<uint64_t, DataEntry> dataCache;   // entity (packed) -> its table in registry "rts.data"
     std::vector<uint64_t> dataDirty;           // tables handed out since the last flush
     uint32_t budgetTick = UINT32_MAX;
+    std::map<uint8_t, int64_t> cmdUsed;          // script command handlers: instructions per player this tick
+    int64_t cmdBudget = 200000;                   // rules "commandBudget"
+    bool noCmdHandlerLogged = false;
     std::vector<PendingEffect> effects;
     int stdRefs[size_t(StdFn::Count)];
     uint32_t stdPeriod[size_t(StdFn::Count)] = {};   // std.period.<name>: call when tick % period == 0 (0: never)
@@ -150,6 +153,7 @@ struct ScriptEngine::Impl {
         dataDirty.clear();
         lua_newtable(vm.L);
         lua_setfield(vm.L, LUA_REGISTRYINDEX, "rts.data");
+        budgetTick = UINT32_MAX;   // a replayed tick starts with a fresh budget, like the first time
     }
     // Before any script code runs in a tick: world replaced? per-tick budget, epoch stamp.
     void enter(Simulation& sim) {
@@ -157,7 +161,7 @@ struct ScriptEngine::Impl {
         ScriptStore& st = store(sim);
         if (st.serial != lastEpoch) resetFromWorld(sim);
         if (budgetTick != sim.tick()) {
-            budgetTick = sim.tick(); vm.used = 0; vm.exceeded = false;
+            budgetTick = sim.tick(); vm.used = 0; vm.exceeded = false; cmdUsed.clear();
             st.serial = lastEpoch = ++epochCounter;
         }
         stateDirty = true;
@@ -423,6 +427,12 @@ void ScriptEngine::load(Simulation& sim, const Json& rules, const Json& map) {
     lua_State* L = vm.L;
     for (auto& [path, text] : rules["$scriptSources"].members()) vm.sources[path] = text.str();
     vm.budget = std::max<int64_t>(10000, rules.getInt("scriptBudget", 1000000));
+    im.cmdBudget = std::max<int64_t>(1000, rules.getInt("commandBudget", 200000));
+    {
+        std::vector<std::string> errs;
+        commands_ = parseScriptCommands(rules, im.m.rules(), &errs);
+        for (auto& e : errs) im.logLine(true, "rules " + e);
+    }
 
     vm.pushData = [&im](Entity e) { im.pushData(*im.vm.sim, e); };
     vm.dataHas = [&im](Entity e, const char* k) { return im.dataHas(*im.vm.sim, e, k); };
@@ -658,6 +668,73 @@ void ScriptEngine::queueEffect(const EffectDef& e, const EffectCtx& ctx, std::ve
     impl_->effects.push_back({e.scriptFn, &e.scriptArgs, ctx, std::move(targets)});
 }
 
+int ScriptEngine::findCommand(const std::string& id) const {
+    for (size_t i = 0; i < commands_.size(); ++i) if (commands_[i].id == id) return int(i);
+    return -1;
+}
+
+Fixed ScriptEngine::commandCooldown(Simulation& sim, uint8_t player, int index) const {
+    auto* st = sim.world().resource<ScriptStore>();
+    const size_t k = size_t(player) * commands_.size() + size_t(index);
+    if (!st || index < 0 || size_t(index) >= commands_.size() || k >= st->cmdReady.size() || st->cmdReady[k] <= sim.tick()) return Fixed{};
+    return Fixed::fromRatio(int64_t(st->cmdReady[k] - sim.tick()), int64_t(sim.tickRate()));
+}
+
+// kCmdScript: validate, cooldown, cost, then the handler fn(player, id, args) with the player's own
+// instruction budget; it may refuse with `return false` (nothing is paid). Bad input is dropped silently.
+void ScriptEngine::runCommand(Simulation& sim, const Command& in) {
+    Impl& im = *impl_;
+    if (!im.vm.L || in.param < 0 || size_t(in.param) >= commands_.size() || in.player == 0 || in.player > sim.players().size()) return;
+    const ScriptCommandDef& d = commands_[size_t(in.param)];
+    Command c = in;
+    if (!validateScriptCommand(im.m, sim, d, c)) return;
+    ScriptStore& st = sim.world().resource<ScriptStore>() ? *sim.world().resource<ScriptStore>() : sim.world().setResource<ScriptStore>();
+    const size_t slot = size_t(c.player) * commands_.size() + size_t(c.param);
+    if (slot < st.cmdReady.size() && st.cmdReady[slot] > sim.tick()) return;
+    GameState& gs = im.m.state(sim);
+    if (c.player >= gs.players.size()) return;
+    auto& stock = gs.players[c.player].stock;
+    for (auto& [r, a] : d.cost) if (r >= stock.size() || stock[r] < a) return;
+    im.enter(sim);
+    lua_State* L = im.vm.L;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_GLOBALS);
+    lua_pushlstring(L, d.fn.data(), d.fn.size());
+    lua_rawget(L, -2);
+    lua_remove(L, -2);
+    if (!lua_isfunction(L, -1)) {
+        lua_pop(L, 1);
+        if (!im.noCmdHandlerLogged) { im.noCmdHandlerLogged = true; im.logLine(true, "script command '" + d.id + "': no function " + d.fn); }
+        return;
+    }
+    lua_pushinteger(L, c.player);
+    lua_pushstring(L, d.id.c_str());
+    pushScriptArgs(L, d, c);
+    // the issuing player's budget (other players' commands and the scripts phase keep theirs)
+    const int64_t used = im.vm.used, budget = im.vm.budget;
+    const bool exceeded = im.vm.exceeded;
+    int64_t& mine = im.cmdUsed[c.player];
+    im.vm.used = mine; im.vm.budget = im.cmdBudget; im.vm.exceeded = false;
+    std::string err;
+    bool ok = mine <= im.cmdBudget && protectedCall(im.vm, 3, 1, &err);
+    if (mine > im.cmdBudget) lua_pop(L, 4);
+    mine = im.vm.used;
+    im.vm.used = used; im.vm.budget = budget; im.vm.exceeded = exceeded;
+    if (!ok) {
+        if (!err.empty()) im.logLine(true, err + " [command " + d.id + ", player " + std::to_string(c.player) + "]");
+        return;
+    }
+    const bool accepted = !(lua_isboolean(L, -1) && !lua_toboolean(L, -1));
+    lua_pop(L, 1);
+    if (!accepted) return;
+    for (auto& [r, a] : d.cost) stock[r] -= a;
+    if (d.cooldown.raw > 0) {
+        const size_t need = (sim.players().size() + 1) * commands_.size();
+        if (st.cmdReady.size() < need) st.cmdReady.resize(need, 0);
+        const int64_t ticks = ((d.cooldown * int64_t(sim.tickRate())).raw + (Fixed::fromInt(1).raw - 1)) >> Fixed::kFracBits;
+        st.cmdReady[slot] = sim.tick() + uint32_t(std::max<int64_t>(1, ticks));
+    }
+}
+
 void ScriptStore::hash(Hasher& h) const {
     if (!userScripts) return;   // only the standard library: its state lives in GameState (hashed there)
     h.str(state);
@@ -668,6 +745,7 @@ void ScriptStore::hash(Hasher& h) const {
     h.u32(uint32_t(timers.size()));
     for (auto& t : timers) { h.u32(t.tick); h.u32(t.seq); h.str(t.fn); h.str(t.arg); }
     h.u32(timerSeq);
+    if (!cmdReady.empty()) for (uint32_t t : cmdReady) h.u32(t);   // games with script commands only
 }
 
 // The module owns the engine (unique_ptr of an incomplete type in RtsModule.h).

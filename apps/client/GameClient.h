@@ -151,7 +151,7 @@ public:
 
 private:
     enum class Screen { Menu, Lobby, Playing, Paused, Over };
-    enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim, Skill, Dig, Undig, Room, Road, Unroad, Drop };
+    enum class Mode { Normal, AttackMove, Patrol, Place, Rally, Ability, Claim, Skill, Dig, Undig, Room, Road, Unroad, Drop, ScriptCmd };
 
     void startMatch(size_t idx);
     void fitCamera();
@@ -193,6 +193,17 @@ private:
     void updateUi();
     void buildTopBar(UiState& s);
     void buildCommandCard(UiState& s);
+    // ClientScriptCmd.cpp: rules "commands" (script commands) on the card, hotkeys, targeting, view.send
+    const std::vector<game::ScriptCommandDef>* scriptCommands();
+    bool scriptCommandFits(const game::ScriptCommandDef& d);
+    void buildScriptCommands(UiState& s);
+    void startScriptCommand(int index);
+    void issueScriptCommand(int index, Entity target, Vec3 point, bool havePoint);
+    bool scriptCommandClick(const platform::Event& e);
+    bool scriptCommandKey(platform::Key k);
+    std::string scriptCommandHint();
+    void issueViewCommands();
+    int scriptCmd_ = -1;
     void buildOverlays(UiState& s);
     void loadDocuments();
     // ClientScript.cpp: Lua for UI documents and the game's ui/*.lua

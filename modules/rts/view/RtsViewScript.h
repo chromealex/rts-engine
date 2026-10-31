@@ -9,6 +9,7 @@
 #include <vector>
 #include "../../../engine/data/Json.h"
 #include "../RtsScript.h"
+#include "../../../engine/sim/Command.h"
 
 namespace rts { class Simulation; }
 
@@ -35,6 +36,8 @@ public:
     // Per frame: dispatches the collected events and on_frame(dt).
     void update(Simulation& sim, float dt);
     std::vector<ViewRequest> takeRequests();
+    // view.send(id, args): script commands (kCmdScript) for the host to issue as the local player
+    std::vector<Command> takeCommands();
     const std::vector<ScriptLogEntry>& log() const { return log_; }
     bool active() const;
 

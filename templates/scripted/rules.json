@@ -5,6 +5,15 @@
   // Lua mechanics (docs/scripting.md): bounty, war chest, chain heal effect, a custom victory condition
   "scripts": ["scripts/rules.lua", "scripts/abilities.lua"],
   "viewScripts": ["scripts/view/notices.lua"],
+  // script commands (docs/scripting.md § Script commands): a button + hotkey on the command card of the
+  // listed types, sent as a validated kCmdScript, handled by on_command in scripts/rules.lua
+  "commands": {
+    "rally_cry": { "label": "Rally cry", "hotkey": "Y", "tip": "Selected soldiers deal +25% damage for 10 s",
+                   "targets": ["footman", "archer"], "cost": { "gold": 25 }, "cooldown": 30 },
+    "muster":    { "label": "Muster", "hotkey": "U", "tip": "Selected soldiers run to the clicked point",
+                   "targets": ["footman", "archer", "catapult"], "cooldown": 5,
+                   "args": [{ "name": "where", "type": "point" }] }
+  },
   "supplyCap": 100,
   "maxQueue": 5,
 

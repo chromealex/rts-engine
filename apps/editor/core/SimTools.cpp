@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iterator>
 #include "modules/rts/RtsTiles.h"
+#include "modules/rts/RtsScript.h"
 #include <stdexcept>
 
 namespace rts::editor {
@@ -45,6 +46,7 @@ const CmdName kCommands[] = {
     {"transit", kCmdTransit}, {"guard", kCmdGuard}, {"follow", kCmdFollow}, {"formation", kCmdFormation}, {"build_line", kCmdBuildLine},
     {"merge", kCmdMerge}, {"split", kCmdSplit}, {"trade", kCmdTrade}, {"trade_route", kCmdTradeRoute}, {"tribute", kCmdTribute},
     {"diplomacy", kCmdDiplomacy}, {"buy_item", kCmdBuyItem}, {"use_item", kCmdUseItem}, {"drop_item", kCmdDropItem}, {"pick_item", kCmdPickItem}, {"bounty", kCmdBounty}, {"rotate", kCmdRotate}, {"lock", kCmdLock}, {"end_turn", kCmdEndTurn},
+    {"script", kCmdScript},
 };
 
 Vec3 readPoint(const Json& p) {
@@ -184,7 +186,8 @@ const char* kCommandHelp =
     "'player_ability' (id), 'room' (paint_room), 'percent' (send), 'stance' (aggressive/defensive/hold/passive); or a raw 'param'. "
     "load: units board the target transport; unload: units = transports, with a point they drive there first. Rect commands (dig, paint_room, "
     "build_road): 'rect' [w, h] at the point with 'extra' (dig: 1 unmark; build_road: 1 remove). 'queue': true appends "
-    "to the current orders (Shift).";
+    "to the current orders (Shift). script: a rules \"commands\" command: 'id' + 'args' {name: value} (int / enum name / "
+    "bool / point [x, z] / unit reference), units = the selection.";
 
 const char* commandSchemaProps() {
     return R"("command": {"type": "string"}, "player": {"type": "integer"},
@@ -192,7 +195,8 @@ const char* commandSchemaProps() {
         "at": {"type": "array", "items": {"type": "number"}}, "x": {"type": "number"}, "z": {"type": "number"},
         "type": {"type": "string"}, "tech": {"type": "string"}, "ability": {"type": "string"}, "room": {"type": "string"}, "stance": {"type": "string"},
         "player_ability": {"type": "string"}, "percent": {"type": "integer"}, "param": {"type": "integer"},
-        "rect": {"type": "array", "items": {"type": "integer"}}, "extra": {"type": "integer"}, "queue": {"type": "boolean"})";
+        "rect": {"type": "array", "items": {"type": "integer"}}, "extra": {"type": "integer"}, "queue": {"type": "boolean"},
+        "id": {"type": "string", "description": "script: rules commands id"}, "args": {"type": "object", "description": "script: arguments by name"})";
 }
 
 Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
@@ -251,6 +255,37 @@ Command commandFromJson(const SimRefs& refs, const Json& p, uint8_t defPlayer) {
         if (c.type == kCmdTrade) c.param = res | (p.getBool("sell", false) ? 256 : 0);
         else if (c.type == kCmdTribute) c.param = res | (p["to"].integer(0) << 8) | (amount << 16);
         else if (c.type == kCmdBounty) c.param = res | (amount << 8);
+    }
+    if (c.type == kCmdScript) {   // rules "commands": arguments by name, encoded like the client does
+        game::ScriptEngine* se = refs.mod.scripts();
+        const int k = se ? se->findCommand(p.getStr("id")) : -1;
+        const auto& d = se->commands()[size_t(need(k, "script command", p.getStr("id")))];
+        c.param = k;
+        const Json& a = p["args"];
+        for (auto& ad : d.args) {
+            const Json& v = a[ad.name];
+            switch (ad.kind) {
+            case game::ScriptArgDef::Point:
+                if (!v.isArray()) throw std::runtime_error("args." + ad.name + ": [x, z] expected");
+                c.args.push_back(toFixed(v[0].toDouble(0)).raw); c.args.push_back(toFixed(v[1].toDouble(0)).raw);
+                break;
+            case game::ScriptArgDef::Unit: case game::ScriptArgDef::Entity: {
+                Entity e = refs.one(v);
+                if (!e.valid()) throw std::runtime_error("args." + ad.name + " matches no live object");
+                c.args.push_back(int64_t(e.packed()));
+                break;
+            }
+            case game::ScriptArgDef::Enum: {
+                int64_t idx = ad.def;
+                if (v.isString()) idx = need(int(std::find(ad.values.begin(), ad.values.end(), v.str()) - ad.values.begin()) < int(ad.values.size())
+                                             ? int(std::find(ad.values.begin(), ad.values.end(), v.str()) - ad.values.begin()) : -1, "args." + ad.name + " value", v.str());
+                c.args.push_back(idx);
+                break;
+            }
+            case game::ScriptArgDef::Bool: c.args.push_back(v.isNull() ? ad.def : v.boolean() ? 1 : 0); break;
+            default: c.args.push_back(v.isNull() ? ad.def : v.integer(ad.def)); break;
+            }
+        }
     }
     if (p.has("rect")) {
         const Json& r = p["rect"];

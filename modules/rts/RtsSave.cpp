@@ -108,7 +108,7 @@ void io(Archive& a, ScriptData& x) { a(x.blob, x.hash); x.serial = 0; }   // scr
 void io(Archive& a, ScriptStats::Entry& x) { a(x.stat, x.base); }   // scripting: game.set_stat_base
 void io(Archive& a, ScriptStats& x) { a(x.list); }
 void io(Archive& a, ScriptStore::Timer& x) { a(x.tick, x.seq, x.fn, x.arg); }   // scripting (RtsScript.h)
-void io(Archive& a, ScriptStore& x) { a(x.state, x.started, x.disabled, x.disabledFns, x.inside, x.timers, x.timerSeq); }
+void io(Archive& a, ScriptStore& x) { a(x.state, x.started, x.disabled, x.disabledFns, x.inside, x.timers, x.timerSeq, x.cmdReady); }
 void io(Archive& a, TriggerState& x) { a(x.enabled, x.fired, x.inside, x.edge, x.vars, x.messages, x.started); }
 void io(Archive& a, RoadGraph& x) { a(x.nodes, x.adj); }
 void io(Archive& a, SpatialHash& x) { a(x.cell, x.w, x.h, x.buckets, x.used); }

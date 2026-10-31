@@ -10004,6 +10004,133 @@ TEST(script_g4_unit_control) {   // direct control, state queries, all commands,
     CHECK(c->deserialize(bytes, &err) && c->checksum() == a->checksum());
 }
 
+// ---- G1: script commands (rules "commands" -> kCmdScript -> on_command)
+static const char* kCmdRules = R"J({
+  "rally": {"label": "Rally", "hotkey": "R", "targets": ["footman"], "cost": {"gold": 50}, "cooldown": 2,
+            "args": [{"name": "where", "type": "point"}, {"name": "power", "type": "int", "min": 1, "max": 3, "default": 1},
+                     {"name": "mode", "type": "enum", "values": ["calm", "angry"], "default": "angry"}]},
+  "refuse": {"cost": {"gold": 10}},
+  "spin": {"fn": "cmd_spin"}
+})J";
+static const char* kCmdScript = R"(
+    function on_command(player, id, args)
+      if id == "refuse" then return false end
+      game.add_var("n_" .. id, 1)
+      game.set_var("last_player", player)
+      game.set_var("power", args.power)
+      game.set_var("units", #args.units)
+      game.set_var("angry", args.mode == "angry" and 1 or 0)
+      game.set_var("wx", args.where.x)
+      for _, h in ipairs(args.units) do game.order(h, "move", args.where.x, args.where.z) end
+    end
+    function cmd_spin(player) while true do end end
+)";
+static std::unique_ptr<Simulation> cmdSim() {
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("commands", Json::parse(kCmdRules));
+    rules.set("scripts", Json::parse(R"(["scripts/c.lua"])"));
+    Json src = Json::object(); src.set("scripts/c.lua", Json::string(kCmdScript));
+    rules.set("$scriptSources", src);
+    auto sim = std::make_unique<Simulation>(SimConfig{}, std::make_unique<game::RtsModule>());
+    sim->setup(rules, Json::parseFile(kSkirmish + "/maps/valley.json"));
+    return sim;
+}
+TEST(script_g1_commands) {
+    auto a = cmdSim();
+    auto& m = mod(*a);
+    auto* se = m.scripts();
+    CHECK(se->commands().size() == 3 && se->commands()[0].id == "rally" && se->findCommand("spin") == 2);   // sorted by id
+    CHECK(se->commands()[0].pick == 0 && se->commands()[0].args[2].def == 1);
+    Entity hall = findType(*a, "townhall", 1);
+    const Vec3 hp = a->world().get<Transform>(hall).pos;
+    Entity f1 = m.spawn(*a, uint16_t(m.rules().findType("footman")), 1, hp + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    Entity enemy = m.spawn(*a, uint16_t(m.rules().findType("footman")), 2, hp + Vec3{Fixed::fromInt(5), Fixed{}, Fixed{}});
+    auto rally = [&](uint8_t p, std::vector<Entity> units, int64_t power, int64_t mode = 1) {
+        Command c; c.player = p; c.type = game::kCmdScript; c.param = 0; c.units = std::move(units);
+        c.args = {(hp.x + Fixed::fromInt(6)).raw, hp.z.raw, power, mode};
+        a->submit(c);
+    };
+    auto& vars = m.state(*a).trig.vars;
+    const Fixed g0 = gold(*a, 1);
+    rally(1, {f1, enemy, hall}, 2);                       // the enemy unit and the hall are dropped
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(1) && vars["power"] == Fixed::fromInt(2) && vars["units"] == Fixed::fromInt(1));
+    CHECK(vars["angry"] == Fixed::fromInt(1) && vars["last_player"] == Fixed::fromInt(1) && vars["wx"] == hp.x + Fixed::fromInt(6));
+    CHECK(gold(*a, 1) == g0 - Fixed::fromInt(50));
+    CHECK(se->commandCooldown(*a, 1, 0).raw > 0);
+    rally(1, {f1}, 2);                                    // cooldown (2 s)
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(1));
+    for (int i = 0; i < 50; ++i) a->step();
+    rally(1, {f1}, 9);                                    // out of range
+    rally(1, {enemy}, 1);                                 // no own footman: refused
+    { Command c; c.player = 1; c.type = game::kCmdScript; c.param = 0; c.units = {f1}; c.args = {1, 2}; a->submit(c); }   // arg count
+    { Command c; c.player = 1; c.type = game::kCmdScript; c.param = 7; a->submit(c); }                                  // unknown index
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(1));
+    rally(1, {f1}, 3, 0);
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(vars["n_rally"] == Fixed::fromInt(2) && vars["power"] == Fixed::fromInt(3) && vars["angry"] == Fixed{});
+    CHECK(a->world().get<game::Orders>(f1).queue.size() == 1);
+    const Fixed g1 = gold(*a, 1);
+    { Command c; c.player = 1; c.type = game::kCmdScript; c.param = se->findCommand("refuse"); a->submit(c); }
+    // player 2 burns its own budget in the same tick: player 1's command still runs
+    { Command c; c.player = 2; c.type = game::kCmdScript; c.param = se->findCommand("spin"); a->submit(c); }
+    for (int i = 0; i < 52; ++i) a->step();
+    rally(1, {f1}, 1);
+    { Command c; c.player = 2; c.type = game::kCmdScript; c.param = se->findCommand("spin"); a->submit(c); }
+    for (int i = 0; i < 3; ++i) a->step();
+    CHECK(gold(*a, 1) == g1 - Fixed::fromInt(50));       // refuse: nothing paid; rally paid
+    CHECK(vars["n_rally"] == Fixed::fromInt(3) && vars["n_refuse"] == Fixed{});
+    CHECK(scriptLogHas(*a, "instruction budget exceeded"));
+    // wire format: args survive replay / network encoding
+    Command c; c.player = 1; c.type = game::kCmdScript; c.param = 0; c.units = {f1}; c.args = {-5, 1 << 20, 3, 0};
+    ByteWriter bw; writeCommand(bw, c);
+    ByteReader br(bw.buf.data(), bw.buf.size());
+    Command back = readCommand(br);
+    CHECK(back == c);
+    Command plain; plain.type = game::kCmdStop; ByteWriter bw2; writeCommand(bw2, plain);
+    ByteReader br2(bw2.buf.data(), bw2.buf.size());
+    CHECK(readCommand(br2) == plain && bw2.buf.size() + 8 + 4 + 32 == bw.buf.size());
+    // determinism with commands, rollback and the cooldown table
+    auto b = cmdSim();
+    auto c2 = cmdSim();
+    for (auto* s : {b.get(), c2.get()}) {
+        Entity h = findType(*s, "townhall", 1);
+        Entity f = mod(*s).spawn(*s, uint16_t(mod(*s).rules().findType("footman")), 1, s->world().get<Transform>(h).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+        Command k; k.player = 1; k.type = game::kCmdScript; k.param = 0; k.units = {f};
+        k.args = {(hp.x + Fixed::fromInt(6)).raw, hp.z.raw, 2, 1};
+        s->submit(k);
+    }
+    for (int i = 0; i < 10; ++i) { b->step(); c2->step(); }
+    CHECK(b->checksum() == c2->checksum());
+    std::string bytes = b->serialize(), err;
+    auto d = cmdSim();
+    CHECK(d->deserialize(bytes, &err) && d->checksum() == b->checksum());
+    CHECK(mod(*d).scripts()->commandCooldown(*d, 1, 0).raw > 0);
+}
+
+TEST(script_g1_view_send) {   // view.send encodes by name; the simulation runs it like a card click
+    auto sim = cmdSim();
+    Json rules = Json::parseFile(kSkirmish + "/rules.json");
+    rules.set("commands", Json::parse(kCmdRules));
+    rules.set("viewScripts", Json::parse(R"(["scripts/view/v.lua"])"));
+    rules.set("$scriptSources", Json::parse(R"J({"scripts/view/v.lua":
+        "local sent = false\nview.on_frame(function() if sent then return end sent = true\nlocal f = game.units{owner = 1, type = 'footman'}[1]\nlocal h = game.units{owner = 1, type = 'townhall'}[1]\nlocal x, z = game.pos(h)\nview.send('rally', {where = {x = x + 2, z = z}, power = 3, mode = 'calm', units = {f}}) end)"})J"));
+    Json map = Json::parseFile(kSkirmish + "/maps/valley.json");
+    Entity hall = findType(*sim, "townhall", 1);
+    mod(*sim).spawn(*sim, uint16_t(mod(*sim).rules().findType("footman")), 1, sim->world().get<Transform>(hall).pos + Vec3{Fixed::fromInt(3), Fixed{}, Fixed{}});
+    game::ViewScripts vs;
+    CHECK(vs.load(*sim, rules, map, 1));
+    vs.update(*sim, 0.016f);
+    auto cmds = vs.takeCommands();
+    CHECK(cmds.size() == 1 && cmds[0].type == game::kCmdScript && cmds[0].args.size() == 4 && cmds[0].args[2] == 3 && cmds[0].args[3] == 0);
+    for (auto& e : vs.log()) if (e.error) std::printf("  view log: %s\n", e.text.c_str());
+    for (auto& c : cmds) { c.player = 1; sim->submit(c); }
+    for (int i = 0; i < 3; ++i) sim->step();
+    CHECK(mod(*sim).state(*sim).trig.vars["n_rally"] == Fixed::fromInt(1));
+}
+
 int main() {
     for (auto& [name, fn] : registry()) {
         int before = g_failed;

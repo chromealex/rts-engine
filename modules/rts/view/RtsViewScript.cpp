@@ -34,6 +34,7 @@ struct ViewScripts::Impl {
     std::map<std::string, std::vector<int>> handlers;   // event -> function refs (LUA_NOREF: disabled)
     std::vector<int> frame;
     std::vector<ViewRequest> requests;
+    std::vector<Command> commands;
     std::shared_ptr<Collector> collector;
     uint8_t player = 0;
     explicit Impl(ViewScripts& s) : self(s) {}
@@ -85,6 +86,22 @@ int vNotice(lua_State* L, Vm& vm) { return vRequest(L, vm, ViewRequest::Notice);
 int vEffect(lua_State* L, Vm& vm) { return vRequest(L, vm, ViewRequest::Effect); }
 int vSound(lua_State* L, Vm& vm) { return vRequest(L, vm, ViewRequest::Sound); }
 int vPlayer(lua_State* L, Vm& vm) { lua_pushinteger(L, viewOf(vm).player); return 1; }
+// view.send(id, args): a rules "commands" command from the local player (args as in on_command; the
+// selection goes in args.units). The simulation validates it again when it arrives.
+int vSend(lua_State* L, Vm& vm) {
+    const char* id = lua_tostring(L, 1);
+    ScriptEngine* se = vm.module ? vm.module->scripts() : nullptr;
+    const int k = id && se ? se->findCommand(id) : -1;
+    if (k < 0) return fail(vm, std::string("view.send: unknown command '") + (id ? id : "?") + "'");
+    Command c;
+    c.type = kCmdScript;
+    c.param = k;
+    if (!encodeScriptArgs(L, vm, 2, se->commands()[size_t(k)], c)) return -1;
+    auto& q = viewOf(vm).commands;
+    if (q.size() < 64) q.push_back(std::move(c));
+    lua_pushboolean(L, 1);
+    return 1;
+}
 } // namespace
 
 ViewScripts::ViewScripts() : impl_(std::make_unique<Impl>(*this)) {}
@@ -95,7 +112,7 @@ bool ViewScripts::load(Simulation& sim, const Json& rules, const Json& map, uint
     Impl& im = *impl_;
     detach();
     im.vm.close();
-    im.handlers.clear(); im.frame.clear(); im.requests.clear();
+    im.handlers.clear(); im.frame.clear(); im.requests.clear(); im.commands.clear();
     log_.clear();
     const auto files = scriptFiles(rules, map, true);
     if (files.empty() || sim.module().name() != "rts") return false;
@@ -110,7 +127,8 @@ bool ViewScripts::load(Simulation& sim, const Json& rules, const Json& map, uint
     for (auto& [p, t] : rules["$scriptSources"].members()) vm.sources[p] = t.str();
     openGameApi(vm);
     static const luaL_Reg funcs[] = {{"on", bind<vOn>}, {"on_frame", bind<vOnFrame>}, {"notice", bind<vNotice>},
-                                     {"effect", bind<vEffect>}, {"sound", bind<vSound>}, {"player", bind<vPlayer>}, {nullptr, nullptr}};
+                                     {"effect", bind<vEffect>}, {"sound", bind<vSound>}, {"player", bind<vPlayer>},
+                                     {"send", bind<vSend>}, {nullptr, nullptr}};
     luaL_newlib(vm.L, funcs);
     lua_setglobal(vm.L, "view");
     for (auto& f : files) {
@@ -187,6 +205,12 @@ void ViewScripts::update(Simulation& sim, float dt) {
 std::vector<ViewRequest> ViewScripts::takeRequests() {
     std::vector<ViewRequest> out;
     out.swap(impl_->requests);
+    return out;
+}
+
+std::vector<Command> ViewScripts::takeCommands() {
+    std::vector<Command> out;
+    out.swap(impl_->commands);
     return out;
 }
 

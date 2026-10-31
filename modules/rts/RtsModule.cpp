@@ -966,6 +966,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
         return;
     }
 
+    if (cmd.type == kCmdScript) { script_->runCommand(sim, cmd); return; }   // rules "commands" (RtsScriptCommands.cpp)
     if (cmd.type == kCmdAutoBuild) { script_->callStd(sim, StdFn::AutoBuild, {cmd.player, cmd.param}); return; }   // lua/commands.lua
 
     std::vector<Entity> sel;

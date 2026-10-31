@@ -26,6 +26,7 @@
 // file-level locals must not be mutated by handlers (that state would escape snapshots) - see docs.
 // Replays re-run setup, so the VM is re-created identically from the same sources.
 #pragma once
+#include <climits>
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
@@ -36,11 +37,12 @@
 #include "../../engine/core/Fixed.h"
 #include "../../engine/data/Json.h"
 
-namespace rts { class Simulation; class Hasher; }
+namespace rts { class Simulation; class Hasher; struct Command; }
 
 namespace rts::game {
 
 class RtsModule;
+struct Rules;
 struct EffectDef;
 struct EffectCtx;
 
@@ -60,6 +62,8 @@ struct ScriptStore {
     struct Timer { uint32_t tick = 0; uint32_t seq = 0; std::string fn, arg; }; // game.after(); arg serialized
     std::vector<Timer> timers;                  // sorted by (tick, seq)
     uint32_t timerSeq = 0;
+    std::vector<uint32_t> cmdReady;             // script commands: tick each (player, command) is off cooldown
+                                                // (index player * commands + command; empty until one is used)
     bool userScripts = false;                   // the game has its own simulation scripts: hashed only then (the
                                                 // standard library keeps its state in the C++ GameState)
     void hash(Hasher& h) const;
@@ -79,6 +83,32 @@ struct ScriptStats {
     struct Entry { uint8_t stat = 0; Fixed base{}; };
     std::vector<Entry> list;
 };
+
+// A script-defined player command (rules "commands": {id: {...}}). Sent as kCmdScript: param = index
+// in commands() (sorted by id), args = one int64 per scalar argument (points: x then z as raw fx; units
+// and entities: packed handles; enums: value index; bools: 0 / 1), units = the selection.
+struct ScriptArgDef {
+    enum Kind : uint8_t { Int, Enum, Bool, Point, Unit, Entity };
+    std::string name;
+    Kind kind = Int;
+    int64_t min = INT32_MIN, max = INT32_MAX, def = 0;   // Int range / default (Enum, Bool: index / 0-1)
+    std::vector<std::string> values;                     // Enum
+    bool own = false;                                    // Unit: must belong to the issuing player
+    int slots() const { return kind == Point ? 2 : 1; }
+};
+struct ScriptCommandDef {
+    std::string id, label, icon, hotkey, tip;
+    std::vector<ScriptArgDef> args;
+    std::vector<std::pair<uint16_t, Fixed>> cost;       // resource index, amount: paid when the handler accepts
+    Fixed cooldown{};                                    // seconds per player
+    std::vector<uint16_t> types;                         // "targets": selected unit types it is shown for / accepts
+    uint64_t tags = 0;                                   //   ... or tags ("tag:x"); none of both = no units needed
+    bool needUnits = false;                              // targets given: at least one matching own unit
+    std::string fn;                                      // handler: global function (default on_command)
+    int pick = -1;                                       // first Point / Unit / Entity arg: what a click fills in
+};
+// Parses rules "commands" (unknown types / tags / resources are reported in `errors`).
+std::vector<ScriptCommandDef> parseScriptCommands(const Json& rules, const Rules& R, std::vector<std::string>* errors = nullptr);
 
 struct ScriptLogEntry {
     bool error = false;
@@ -129,6 +159,13 @@ public:
     void callAction(Simulation& sim, const std::string& fn, const Json& args, uint8_t player, Entity unit, Vec3 at, const std::string& trigger);
     void queueEffect(const EffectDef& e, const EffectCtx& ctx, std::vector<Entity> targets);
 
+    // Script commands (rules "commands"): definitions, and the kCmdScript handler (RtsModule::applyCommand).
+    const std::vector<ScriptCommandDef>& commands() const { return commands_; }
+    int findCommand(const std::string& id) const;
+    void runCommand(Simulation& sim, const Command& cmd);
+    // Seconds (fx) until `player` can use command `index` again (0 = ready).
+    Fixed commandCooldown(Simulation& sim, uint8_t player, int index) const;
+
     bool hasFunction(const std::string& name) const;
     const std::vector<ScriptLogEntry>& log() const { return log_; }
     int errorCount() const { return errors_; }
@@ -139,6 +176,7 @@ public:
 private:
     std::unique_ptr<Impl> impl_;
     std::vector<ScriptLogEntry> log_;
+    std::vector<ScriptCommandDef> commands_;
     int errors_ = 0;
     bool userScripts_ = false;
     friend struct Impl;
