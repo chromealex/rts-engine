@@ -479,7 +479,8 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         w.each<Unit, Owner, Orders>([&](Entity e, Unit& u, Owner& o, Orders&) {
             if (o.player == player_ && !R.types[u.type].structure && !R.types[u.type].weapons.empty() && u.hp.raw > 0 && controllable(w, e, u) && !(u.flags & kUnitInTransit)) all.push_back(e);
         });
-        if (!anyStructure && !all.empty()) {
+        if (anyStructure) hadStructure_ = true;
+        if (!anyStructure && hadStructure_ && !all.empty()) {   // (not before the first base: MCVs, commanders)
             if (now < allInTick_) return;
             allInTick_ = now + 20 * rate;   // also units stuck in other orders (walking into a lost garrison...)
             const Vec3 from = w.get<Transform>(all[0]).pos;
@@ -548,7 +549,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     const bool maxed = eco.supplyCap.raw > 0 && eco.supplyUsed * 10 >= eco.supplyCap * 9 && eco.supplyCap * 10 >= R.supplyCap * 8;
     if (maxed) needed = std::min(needed, std::max(4, int(home.size()) * 3 / 4));
     // clearly stronger than everything the enemy fields: go now with what we have
-    if (!defend && hasEnemy_ && int(homeIdle.size()) >= 3) {
+    if (!defend && hasEnemy_ && int(homeIdle.size()) >= 3 && now > 180 * rate) {   // (not with the start kit)
         int64_t ours = 0, theirs = 0;
         for (Entity e : army) ours += strengthOf(R.types[w.get<Unit>(e).type], w.get<Unit>(e));
         w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) {
@@ -819,7 +820,7 @@ void RtsAI::stateIo(Archive& a) {
     io(a, player_); io(a, next_); io(a, wave_); io(a, lastBuildTick_); io(a, lastTechTick_); io(a, saveForWorkers_);
     io(a, lastDungeonTick_); io(a, lastSkillTick_); io(a, savingFor_); io(a, savingUntil_); io(a, lastSettlersTick_);
     io(a, lastMechTick_); io(a, turnActed_);
-    io(a, rallyTick_); io(a, lastSiteTick_); io(a, allInTick_); io(a, spotRetryTick_); io(a, expandTick_); io(a, rebalanceTick_); io(a, raided_);
+    io(a, rallyTick_); io(a, lastSiteTick_); io(a, allInTick_); io(a, spotRetryTick_); io(a, expandTick_); io(a, rebalanceTick_); io(a, raided_); io(a, hadStructure_);
     io(a, home_); io(a, enemyHome_); io(a, hasHome_); io(a, hasEnemy_); io(a, homeCell_); io(a, enemyCell_);
     io(a, mainRoute_); io(a, altRoute_); io(a, routeTick_); io(a, routeEnemyCell_); io(a, rally_); io(a, hasRally_);
     io(a, chokeCell_); io(a, watchCell_); io(a, wave_units_); io(a, scouts_); io(a, waypoints_);
