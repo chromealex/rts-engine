@@ -73,9 +73,9 @@ starfall 3 9414b942578b7391
 tiles2d 1 9423370c461043c7
 tiles2d 2 04b95ebc469a08fe
 tiles2d 3 96eaf2517dea8b58
-underlord 1 6106de43560f3fb0
-underlord 2 7da90cd0aa9a5e06
-underlord 3 abeb50828dcb6a92
+underlord 1 28eae97bc53f024f
+underlord 2 5dab98eb048a4a9e
+underlord 3 8d29e4ec8c6f9b55
 triggerlab 1 f1f9e3b7efe182b0
 triggerlab 2 ee5c1b7405974d65
 triggerlab 3 5ab343e4e6c1b238

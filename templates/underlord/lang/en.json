@@ -6,7 +6,7 @@
   "howto.like": "Dungeon Keeper: imps, rooms, creatures and the keeper's hand.",
   "howto.goal": "Keep your dungeon heart and destroy the other one.",
   "howto.tip": "Every claimed tile gives mana — keep the imps claiming.",
-  "howto.step1": "Mark rock and the imps dig it; gold veins pay gold, kept in the heart and treasuries.",
+  "howto.step1": "Mark rock and the imps dig it; gold veins pay gold, kept in the heart and treasuries. Idle imps claim the floor and reinforce the walls around it: enemy imps can't dig through a reinforced wall until they take the floor behind it.",
   "howto.step2": "Rooms attract creatures through the portal: a lair for all, a library for warlocks, a hatchery for bile demons.",
   "howto.step3": "Creatures eat, sleep and want wages; unhappy ones leave.",
   "howto.step4": "Research from the library and the workshop unlocks spells (sight of evil, lightning, heal) and traps (gas, lightning, word of power). Heroes don't see a trap until it goes off."

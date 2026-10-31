@@ -483,26 +483,35 @@ def laneclash():
 
 
 def underlord():
-    m = Map("Two Keeps", 48, 32, duel() + [{"name": "Герои", "team": 3, "waves": True}])
-    m.rows = [['D'] * 48 for _ in range(32)]
+    # Dungeon Keeper: two keeps in solid rock, each with its own gold near home and a gem seam further out; a
+    # neutral portal on each side; heroes drop into a sealed cave in the middle. Veins are kept away from the
+    # centre line so the keepers meet only when one of them tunnels for a fight.
+    m = Map("Two Keeps", 64, 40, duel() + [{"name": "Герои", "team": 3, "waves": True}])
+    m.rows = [['D'] * 64 for _ in range(40)]
     m.border('#')
-    # dungeon pockets around the hearts
-    m.rect(2, 10, 9, 12, '.')
-    # gold veins and a gem seam
-    for (x, y) in [(12, 9), (13, 9), (12, 22), (14, 15), (20, 6), (21, 6), (18, 25)]:
-        m.cell(x, y, 'G'); m.cell(47 - x, 31 - y, 'G')
-    m.cell(23, 15, 'J'); m.cell(24, 16, 'J')
-    # neutral portals in open caves on each side of the middle
-    m.rect(14, 2, 6, 5, '.')
-    m.ent("dungeon_heart", 1, [6, 16])
+    # the dungeon pocket around the heart, a cave for the portal, a few small caverns to claim
+    m.rect(3, 14, 9, 11, '.')
+    m.rect(16, 3, 6, 5, '.')
+    m.rect(5, 30, 4, 3, '.')
+    m.rect(17, 24, 3, 3, '.')
+    # impenetrable rock ribs shape the digging
+    m.rect(13, 9, 1, 4, '#'); m.rect(24, 18, 1, 5, '#'); m.rect(10, 34, 8, 1, '#')
+    # gold: clusters within a dozen cells of the heart, a gem seam (infinite) in the far corner of each half
+    gold = [(13, 12), (14, 12), (14, 13), (15, 20), (15, 21), (7, 11), (8, 11), (8, 27), (9, 27), (9, 28),
+            (20, 16), (21, 16), (21, 17), (13, 30), (22, 29), (23, 29), (24, 10), (25, 10)]
+    for (x, y) in gold:
+        m.cell(x, y, 'G'); m.cell(63 - x, 39 - y, 'G')
+    for (x, y) in [(9, 30), (9, 31), (10, 31)]:
+        m.cell(x, y, 'J'); m.cell(63 - x, 39 - y, 'J')
+    m.ent("dungeon_heart", 1, [7, 19])
     for i in range(4):
-        m.ent("imp", 1, [9 + (i % 2) * 0.8, 13 + i])
-    m.ent("portal", 0, [17, 4])
-    # heroes from the surface: a party drops in at the middle cave now and then
-    m.rect(22, 13, 4, 6, '.', sym=False)
-    m.extra["waves"] = [{"time": 420, "player": 3, "at": [24, 16], "spread": 1, "spawn": [{"type": "dwarf", "count": 2}, {"type": "wizard", "count": 1}],
+        m.ent("imp", 1, [10 + (i % 2) * 0.8, 16.5 + i])
+    m.ent("portal", 0, [19, 5])
+    # heroes from the surface: a party drops into the middle cave now and then (sealed until someone digs in)
+    m.rect(30, 16, 4, 8, '.', sym=False)
+    m.extra["waves"] = [{"time": 420, "player": 3, "at": [32, 20], "spread": 1, "spawn": [{"type": "dwarf", "count": 2}, {"type": "wizard", "count": 1}],
                          "every": 300, "growth": 1.3, "repeats": 5},
-                        {"time": 900, "player": 3, "at": [24, 16], "spread": 1, "spawn": [{"type": "knight", "count": 2}], "every": 420, "growth": 1.2, "repeats": 3}]
+                        {"time": 900, "player": 3, "at": [32, 20], "spread": 1, "spawn": [{"type": "knight", "count": 2}], "every": 420, "growth": 1.2, "repeats": 3}]
     write("underlord", m, "two_keeps")
 
 
