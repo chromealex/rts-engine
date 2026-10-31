@@ -91,8 +91,12 @@ float catmull(float a, float b, float c, float d, float t) {
 float PlanetSurface::gridCavity(int face, int i, int j) const {
     if (!k_) return 0.5f;
     const int G = m_;
-    const int il = std::max(i - 1, 0), ir = std::min(i + 1, G), jl = std::max(j - 1, 0), jr = std::min(j + 1, G);
-    const float lap = 0.25f * (gridHeight(face, il, j) + gridHeight(face, ir, j) + gridHeight(face, i, jl) + gridHeight(face, i, jr)) - gridHeight(face, i, j);
+    // neighbours past the face edge come from the next face (no one-sided bias along the seams)
+    auto H = [&](int x, int y) {
+        if (x >= 0 && y >= 0 && x <= G && y <= G) return gridHeight(face, x, y);
+        return heightAt(dirFromFace(face, float(x) / float(k_), float(y) / float(k_)));
+    };
+    const float lap = 0.25f * (H(i - 1, j) + H(i + 1, j) + H(i, j - 1) + H(i, j + 1)) - gridHeight(face, i, j);
     const float cs = radius_ * 1.5708f / float(G);   // sample spacing (world units)
     return std::clamp(0.5f + lap / cs * 2.5f, 0.0f, 1.0f);
 }
@@ -136,7 +140,7 @@ void PlanetSurface::synthRect(const PlanetBody& b, int face, int i0, int j0, int
     if (b.detailK > 0) {
         const int K = b.detailK, ME = N * K, SE = (ME + 1) * (ME + 1);
         if (b.detail.size() == size_t(6 * SE)) {
-            auto E = [&](int x, int y) { return float(b.detail[size_t((face * (ME + 1) + y) * (ME + 1) + x)]) / 16.0f; };
+            auto E = [&](int x, int y) { return float(b.detail[size_t((face * (ME + 1) + y) * (ME + 1) + x)]) / kPlanetDetailUnit; };
             for (int j = j0; j <= j1; ++j)
                 for (int i = i0; i <= i1; ++i) {
                     float h;
@@ -264,7 +268,7 @@ bool PlanetSurface::updateDetail(const std::vector<int16_t>& detail, Rect (&sr)[
         for (int j = 0; j <= M; ++j)
             for (int i = 0; i <= M; ++i) {
                 const size_t id = size_t(gridIndex(f, i, j));
-                const float h = float(detail[id]) / 16.0f;
+                const float h = float(detail[id]) / kPlanetDetailUnit;
                 if (h == dh_[id]) continue;
                 dh_[id] = h;
                 Rect& r = sr[f];

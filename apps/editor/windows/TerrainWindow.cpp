@@ -152,9 +152,15 @@ private:
         const bool inv = io.KeyShift;
         const std::string id = ed.planetBodyId(body);
         if (mode_ == 6) { planetMaterial(ed.doc(), id, dir, radius_, inv ? -1 : layer_); return; }
+        if (mode_ >= 7) { ed.status = "Эрозия / штамп: только на плоских картах"; return; }
         Sculpt op = mode_ == 0 ? (inv ? Sculpt::Lower : Sculpt::Raise) : mode_ == 1 ? (inv ? Sculpt::Raise : Sculpt::Lower)
                   : mode_ == 2 ? Sculpt::Smooth : mode_ == 3 ? Sculpt::Flatten : mode_ == 4 ? Sculpt::Noise : Sculpt::Set;
         const float st = mode_ <= 1 || mode_ == 4 ? strength_ * 0.25f : mode_ == 5 ? target_ : blend_ * 0.5f;
+        if (detail_) { // the body's detail grid (sub-cell, created on first use; the corners follow it)
+            std::string err;
+            if (planetDetailSculpt(ed.ws(), id, op, dir, radius_, st, hardness_, seed_, &err) < 0) ed.status = err;
+            return;
+        }
         planetSculpt(ed.doc(), id, op, dir, radius_, st, seed_);
     }
 

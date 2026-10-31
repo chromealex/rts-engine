@@ -55,6 +55,14 @@ void GameClient::fitPlanetCamera() {
     if (std::getenv("RTS_PLANET_CAM_FIGHT")) // testing: look at a ground unit that is fighting
         for (auto& o : scene_.objects)
             if (o.body >= 0 && o.hasTarget && !o.isProjectile && !(rules_.types[o.type].layer & kLayerOrbit)) { body = o.body; dir = o.pos; break; }
+    if (const char* e = std::getenv("RTS_PLANET_CAM_SUN")) { // testing: turn the view towards the lit side (0..1)
+        const int star = W.starOf(body);
+        if (star >= 0 && star != body && dot(dir, dir) > 0) {
+            const float3 sun = normalize(W.center(star, scene_.seconds) - W.center(body, scene_.seconds));
+            const float t = std::clamp(float(std::atof(e)), -1.0f, 1.0f);   // < 0: towards the night side
+            dir = normalize(normalize(dir) * (1.0f - std::fabs(t)) + sun * t) * length(dir);
+        }
+    }
     pc.reset(W, body, view_.planets().surface(body), scene_.seconds, dir);
     if (dist > 0) pc.distance = dist;
     if (pitchDeg > 0) pc.pitch = pitchDeg * 3.14159265f / 180.0f;

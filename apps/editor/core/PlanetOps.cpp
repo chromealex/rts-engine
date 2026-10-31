@@ -79,6 +79,7 @@ int planetSculpt(MapDoc& doc, const std::string& id, Sculpt op, float3 dir, floa
     const CornerCache& cc = cornersOf(N);
     std::vector<int16_t>& items = body->corners;
     items.resize(cc.dirs.size(), 0);
+    const std::vector<int16_t> before = body->detailScale > 0 ? items : std::vector<int16_t>{};
     const float cellAngle = 2.0f * kQuarterPi / float(N);   // ~ one cell at the face centre
     const float ang = std::max(radius, 0.5f) * cellAngle;
     dir = render::normalize(dir);
@@ -133,6 +134,7 @@ int planetSculpt(MapDoc& doc, const std::string& id, Sculpt op, float3 dir, floa
         if (items[k] != it->second) ++changed;
         items[k] = it->second;
     }
+    if (!before.empty() && changed) planetDetailFollowCorners(*body, before);
     doc.touched();
     return changed;
 }
@@ -213,7 +215,11 @@ void registerPlanetOps(Workspace& ws) {
     };
     const char* where = R"J({"body": {"type": "string", "description": "planet / moon id of the map world block"},
         "face": {"type": "integer", "description": "0..5, docs/planets.md"}, "dir": {"type": "array", "items": {"type": "number"}, "description": "surface direction [x, y, z] instead of face/x/y"}})J";
-    wrap("terrain_sculpt", " Planets: pass body + face + x, y (cells on that face) or dir [x,y,z]; radius in cells; the brush is 3D and crosses face seams.",
+    wrap("terrain_detail", " Planets: pass body (id) for that body's detail grid (6 faces x (N*scale+1)^2 samples; seams equal; "
+         "maps/<map>.<body>.detail.r16 on save).", R"({"body": {"type": "string", "description": "planet / moon id of the map world block"}})",
+         [w, needMap](const Json& p) { needMap(); return planetDetailOp(*w, p); });
+    wrap("terrain_sculpt", " Planets: pass body + face + x, y (cells on that face) or dir [x,y,z]; radius in cells; the brush is 3D and crosses face seams. "
+         "detail=true (default when the body has a detail grid) sculpts the body's detail grid (sub-cell radius, hardness; created on first use, corners follow).",
          where, [w, needMap](const Json& p) {
              needMap();
              std::string err;
@@ -222,6 +228,25 @@ void registerPlanetOps(Workspace& ws) {
              Sculpt op = Sculpt::Raise;
              if (!parseSculpt(p.getStr("op"), op)) throw std::runtime_error("op must be raise, lower, smooth, flatten, noise or set");
              const int N = b->faceSize;
+             const bool detail = p.has("detail") ? p.getBool("detail") : b->detailScale > 0;
+             if (detail) { // the detail grid: sub-cell brush, corners follow
+                 w->map.beginEdit();
+                 const float rad = float(p["radius"].toDouble(2)), str = float(p["strength"].toDouble(0.5));
+                 const float hard = float(p["hardness"].toDouble(0.3));
+                 const uint32_t seed = uint32_t(p.getInt("seed", 1));
+                 int n = 0;
+                 std::string err2;
+                 auto dab = [&](float3 d) { const int c = planetDetailSculpt(*w, p.getStr("body"), op, d, rad, str, hard, seed, &err2); if (c < 0) throw std::runtime_error(err2); n += c; };
+                 if (p["points"].isArray()) {
+                     const int f = int(p["face"].integer(0));
+                     for (auto& q : p["points"].items()) dab(planetDir(f, float(q[0].toDouble()), float(q[1].toDouble()), N));
+                 } else dab(readDir(p, N));
+                 w->note({Change::Map, 0, 0, -1, -1, -1, "Планета " + p.getStr("body") + ": " + sculptName(op) + " (детально)"});
+                 Json r = okJson("Планета " + p.getStr("body") + ": " + sculptName(op) + " (детально x" + std::to_string(b->detailScale) + "), сэмплов изменено: " + std::to_string(n));
+                 r.set("samples", Json::number(int64_t(n)));
+                 r.set("scale", Json::number(int64_t(b->detailScale)));
+                 return r;
+             }
              w->map.beginEdit();
              int n = 0;
              if (p["points"].isArray()) {
@@ -275,6 +300,7 @@ void registerPlanetOps(Workspace& ws) {
                            e.set("id", Json::string(b.id));
                            for (const char* k : {"kind", "radius", "seaLevel", "orbitAltitude", "orbit"}) if (b.meta.has(k)) e.set(k, b.meta[k]);
                            e.set("faceSize", Json::number(int64_t(b.faceSize)));
+                           e.set("detailScale", Json::number(int64_t(b.detailScale)));
                            if (!b.corners.empty()) {
                                auto [mn, mx] = std::minmax_element(b.corners.begin(), b.corners.end());
                                e.set("heightMin", Json::number(double(*mn) / 16.0, 2)); e.set("heightMax", Json::number(double(*mx) / 16.0, 2));

@@ -10452,3 +10452,136 @@ TEST(ai_invades_separate_planets) {
     CHECK(transits >= 6);        // fleets, not pairs of scouts
     CHECK(sim.result() != 0);    // and they win the match
 }
+// ------------------------------------------------------------------ planet detail grids (agent-terrain)
+
+TEST(planet_detail_grid_seams_and_height) {
+    using namespace rts::render;
+    rts::game::PlanetBody b;
+    b.id = "m"; b.kind = rts::game::PlanetBody::Kind::Moon; b.radius = 12; b.faceSize = 8;
+    const int N = 8, S = (N + 1) * (N + 1);
+    rts::game::CubeSphere cs(N);
+    b.corners.assign(size_t(6 * S), 0);
+    for (int f = 0; f < 6; ++f)   // smooth relief as a function of the direction: seam duplicates equal
+        for (int j = 0; j <= N; ++j)
+            for (int i = 0; i <= N; ++i) {
+                const auto d = cs.cornerDir(f, i, j);
+                b.corners[size_t(cs.cornerId(f, i, j))] = int16_t(std::lround(16.0 * 2.0 * std::sin(3.0 * d.x.toDouble()) * std::cos(2.0 * d.z.toDouble())));
+            }
+    b.flags.assign(size_t(6 * N * N), rts::game::kCellGround);
+    rts::game::PlanetSurface s;
+    s.init(b);
+    CHECK(s.detailScale() == 0 && s.gridSize() == N);
+    const float3 probe = normalize(float3{0.3f, 0.8f, -0.4f});
+    CHECK(s.heightAt(probe) == s.coarseHeightAt(probe));   // no detail: the corner surface, unchanged
+    rts::game::PlanetDetailParams p;
+    p.k = 4; p.roughness = 0.08f; p.craters = 0.6f; p.seed = 7;
+    s.initDetail(b, p);
+    const int M = N * 4;
+    CHECK(s.detailScale() == 4 && s.gridSize() == M);
+    // seam samples: one direction (bit-identical) and one height on every face that has them
+    rts::game::CubeSphere ds(M);
+    bool same = true;
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= M; ++j)
+            for (int i = 0; i <= M; ++i) {
+                if (i != 0 && j != 0 && i != M && j != M) continue;
+                int dup[3];
+                const int c = ds.cornerDuplicates(f, i, j, dup);
+                for (int k = 1; k < c; ++k) {
+                    const int g = dup[k] / ((M + 1) * (M + 1)), jj = (dup[k] % ((M + 1) * (M + 1))) / (M + 1), ii = dup[k] % (M + 1);
+                    const float3 a = s.gridDir(f, i, j), e = s.gridDir(g, ii, jj);
+                    if (a.x != e.x || a.y != e.y || a.z != e.z || s.gridHeight(f, i, j) != s.gridHeight(g, ii, jj)) same = false;
+                }
+            }
+    CHECK(same);
+    // heightAt follows the drawn grid; it differs from the corner surface by the synthesised relief only
+    float maxDev = 0, maxGrid = 0;
+    for (int j = 1; j < M; j += 3)
+        for (int i = 1; i < M; i += 5) {
+            maxGrid = std::max(maxGrid, std::fabs(s.heightAt(s.gridDir(2, i, j)) - s.gridHeight(2, i, j)));
+            maxDev = std::max(maxDev, std::fabs(s.gridHeight(2, i, j) - s.coarseHeightAt(s.gridDir(2, i, j))));
+        }
+    CHECK(maxGrid < 2e-3f);
+    CHECK(maxDev > 0.01f && maxDev < 2.5f);   // relief + craters, but no runaway overshoot
+    // the ray hits the detail surface
+    float3 hit;
+    const float3 dd = s.gridDir(1, 7, 9);
+    CHECK(s.raycast(dd * 100.0f, dd * -1.0f, hit) && length(hit - s.gridPos(1, 7, 9)) < 0.05f);
+    // explicit detail: decode + resample to another k; seams stay equal
+    std::vector<int16_t> ex(size_t(6) * size_t(M + 1) * size_t(M + 1));
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= M; ++j)
+            for (int i = 0; i <= M; ++i) ex[size_t(s.gridIndex(f, i, j))] = int16_t(std::lround(s.gridHeight(f, i, j) * rts::game::kPlanetDetailUnit));
+    std::vector<int16_t> back;
+    CHECK(rts::game::decodePlanetDetail(rts::game::encodePlanetDetail(ex), N, 4, back, nullptr) && back == ex);
+    CHECK(!rts::game::decodePlanetDetail("xx", N, 4, back, nullptr));
+    b.detail = ex; b.detailK = 4;
+    rts::game::PlanetSurface e2;
+    e2.init(b);
+    rts::game::PlanetDetailParams p2; p2.k = 2;
+    e2.initDetail(b, p2);
+    CHECK(e2.gridSize() == 2 * N && std::fabs(e2.gridHeight(3, 6, 10) - s.gridHeight(3, 12, 20)) < 0.01f);
+    // map keys
+    Json map = Json::parse(R"({"world": {"bodies": [{"id": "p", "kind": "planet", "radius": 20, "faceSize": 4,
+        "terrain": {"style": "smooth", "detailLook": {"scale": 2, "roughness": 0.1, "craters": 0.3}, "detail": {"scale": 2, "file": "maps/x.r16"}}}]}})");
+    rts::game::PlanetWorld w = rts::game::loadPlanetWorld(map);
+    CHECK(w.bodies[0].style == 1 && w.bodies[0].detailScale == 2 && std::fabs(w.bodies[0].craters - 0.3f) < 1e-6f && w.bodies[0].detailK == 2 && w.bodies[0].detail.empty());
+    std::vector<std::string> warn;
+    rts::game::loadPlanetDetailFiles(w, map, [](const std::string& f, std::string& out) { out.assign(size_t(6 * 9 * 9 * 2), '\0'); return f == "maps/x.r16"; }, &warn);
+    CHECK(w.bodies[0].detail.size() == size_t(6 * 9 * 9) && warn.empty());
+}
+
+#ifdef RTS_TESTS_EDITOR_CORE
+#include "apps/editor/core/PlanetOps.h"
+TEST(planet_detail_editor_sculpt_seams_save) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / ("rts_pdetail_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(root);
+    fs::copy(kPlanets, root / "planets", fs::copy_options::recursive);
+    editor::Workspace ws;
+    ws.engineDir = RTS_SOURCE_DIR;
+    std::string err;
+    CHECK(ws.openGame((root / "planets").string(), &err));
+    auto ok = [](const Json& r) { if (r.has("error")) std::printf("  (op error) %s\n", r.getStr("error").c_str()); return !r.has("error"); };
+    CHECK(ok(ws.call("map_open", Json::parse(R"({"file": "maps/two_worlds.json"})"))));
+    CHECK(ok(ws.call("terrain_detail", Json::parse(R"({"body": "luna", "action": "create", "scale": 4})"))));
+    editor::DocBody* b = editor::planetBody(ws.map, "luna");
+    CHECK(b && b->detailScale == 4);
+    // a dab right on the seam of face 0 (x = 0): both faces change, duplicates equal, corners follow
+    Json r = ws.call("terrain_sculpt", Json::parse(R"({"body": "luna", "op": "raise", "face": 0, "x": 0.0, "y": 6, "radius": 1.5, "strength": 1})"));
+    CHECK(ok(r) && r["samples"].integer() > 50);
+    const int N = b->faceSize, M = N * 4;
+    rts::game::CubeSphere cs(M);
+    int bad = 0, faces = 0;
+    bool touched[6] = {};
+    const std::vector<int16_t> fresh = b->detail;
+    for (int f = 0; f < 6; ++f)
+        for (int j = 0; j <= M; ++j)
+            for (int i = 0; i <= M; ++i) {
+                if (i != 0 && j != 0 && i != M && j != M) continue;
+                int dup[3];
+                const int c = cs.cornerDuplicates(f, i, j, dup);
+                for (int k = 1; k < c; ++k) if (b->detail[size_t(dup[k])] != b->detail[size_t(dup[0])]) ++bad;
+            }
+    for (int f = 0; f < 6; ++f) for (int j = 0; j <= M; ++j) for (int i = 0; i <= M; ++i) if (b->detail[b->detailIndex(f, i, j)] > 200) touched[f] = true;
+    for (bool t : touched) faces += t;
+    CHECK(bad == 0 && faces >= 2);
+    CHECK(b->corners[b->cornerIndex(0, 0, 6)] == int16_t(std::lround(b->detail[b->detailIndex(0, 0, 24)] * 16.0 / 256.0)));
+    // corner sculpt carries the detail along
+    const int16_t before = b->detail[b->detailIndex(2, 20, 20)];
+    CHECK(ok(ws.call("terrain_sculpt", Json::parse(R"({"body": "luna", "op": "raise", "face": 2, "x": 5, "y": 5, "radius": 2, "strength": 1, "detail": false})"))));
+    CHECK(b->detail[b->detailIndex(2, 20, 20)] > before);
+    // save + reload: the detail file round-trips
+    const std::vector<int16_t> saved = b->detail;
+    CHECK(ok(ws.call("map_save", Json::parse("{}"))));
+    CHECK(fs::exists(root / "planets/maps/two_worlds.luna.detail.r16"));
+    editor::MapDoc doc;
+    CHECK(doc.load((root / "planets/maps/two_worlds.json").string(), &err));
+    CHECK(doc.data.bodies[2].detailScale == 4 && doc.data.bodies[2].detail == saved);
+    Json info = ws.call("terrain_detail", Json::parse(R"({"body": "luna", "action": "info"})"));
+    CHECK(info["scale"].integer() == 4);
+    CHECK(!ok(ws.call("terrain_sculpt", Json::parse(R"({"body": "luna", "op": "erode", "face": 0, "x": 3, "y": 3, "detail": true})"))));
+    (void)fresh;
+    fs::remove_all(root);
+}
+#endif

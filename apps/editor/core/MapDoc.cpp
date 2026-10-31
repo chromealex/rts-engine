@@ -77,6 +77,16 @@ bool MapDoc::load(const std::string& file, std::string* err) {
             return true;
         };
         if (!game::applyCornersFile(j, read, err)) return false;
+        // planet detail grids (world body terrain.detail.file): attached as "blob" like the corners
+        if (Json* wj = j.find("world"); wj && wj->find("bodies"))
+            for (size_t bi = 0; bi < wj->find("bodies")->size(); ++bi) {
+                Json* t = wj->find("bodies")->at(bi).find("terrain");
+                Json* dj = t ? t->find("detail") : nullptr;
+                if (!dj || !dj->isObject() || dj->has("blob") || !dj->has("file")) continue;
+                std::string bytes;
+                if (read(dj->getStr("file"), bytes)) dj->set("blob", Json::string(std::move(bytes)));
+                else if (err) *err = "world body detail: cannot read '" + dj->getStr("file") + "' (dropped)";
+            }
         if (!loadJson(j, err)) return false;
         // visual detail heightmap (+ splat): kept as int16 / RGBA8 for editing, written back by save()
         if (const Json& dj = j["terrain"]["detail"]; dj.isObject()) {
@@ -346,7 +356,10 @@ bool MapDoc::save(const std::string& file, std::string* err) {
     path = file;  // the default corners file name follows the map file
     namespace fs = std::filesystem;
     std::error_code ec;
-    if (!oldPath.empty() && !fs::equivalent(oldPath, file, ec)) { data.cornersFile.clear(); data.detailFile.clear(); } // "save as": own files
+    if (!oldPath.empty() && !fs::equivalent(oldPath, file, ec)) { // "save as": own files
+        data.cornersFile.clear(); data.detailFile.clear();
+        for (auto& b : data.bodies) b.detailFile.clear();
+    }
     Json j = toJson();
     if (Json* t = j.find("terrain"); t && t->has("cornersBlob")) {
         const std::string cf = cornersPath(file, t->getStr("cornersFile"));
@@ -373,6 +386,15 @@ bool MapDoc::save(const std::string& file, std::string* err) {
     if (Json* wj = j.find("world"); wj && wj->find("bodies"))
         for (size_t bi = 0; bi < wj->find("bodies")->size(); ++bi) {
             Json* t = wj->find("bodies")->at(bi).find("terrain");
+            if (Json* dj = t ? t->find("detail") : nullptr; dj && dj->has("blob")) { // planet detail grid
+                const std::string df = cornersPath(file, dj->getStr("file"));
+                std::ofstream c(df, std::ios::binary);
+                const std::string& blob = (*dj)["blob"].str();
+                c.write(blob.data(), std::streamsize(blob.size()));
+                if (!c) { if (err) *err = "cannot write " + df; path = oldPath; return false; }
+                dj->erase("blob");
+                if (bi < data.bodies.size()) data.bodies[bi].detailFile = dj->getStr("file");
+            }
             if (!t || !t->has("cornersBlob")) continue;
             const std::string cf = cornersPath(file, t->getStr("cornersFile"));
             std::ofstream c(cf, std::ios::binary);

@@ -1588,6 +1588,9 @@ Flat maps are untouched (same checksums).
 
 - `kind`: `planet`, `moon` (surface: `faceSize` 2..512), `star` (no surface). `radius` 2..1200, radius + orbitAltitude
   <= 1500; `orbitAltitude` default 0.15 x radius. `orbit.around` must name an earlier body. At most 16 bodies.
+- Visual detail per body (`docs/terrain.md` "Planets"): `terrain.style` (`smooth` / `classic`, default the game's),
+  `terrain.detailLook {scale, roughness, craters}`, `terrain.detail {scale, file}` (int16 LE 1/256 units, 6 x
+  (faceSize*scale+1)^2, written by the editor). Presentation only: the simulation and checksums ignore them.
 - Positions on planet maps are `{body, face, x, y}` (cell coordinates on that face, 0..faceSize); `[x, z]` is an error.
   Fields per face (`fields` in a face: digit rows per resource) or `fields: [{center: {body, face, x, y}, radius}]`.
 - Per-face rows / levels use the flat-map characters; `rules terrain.model: "heightfield"` makes corners drive slopes

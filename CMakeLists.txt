@@ -396,9 +396,10 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
     modules/rts/view/RtsFog.cpp
-    modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
+    modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
 # visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
-add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
+# + the planet surface maths (RtsPlanet*: float cube-sphere surface, detail grid synthesis; editor planet detail ops)
+add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp)
 target_link_libraries(rts_terrain_detail PUBLIC rts_game)
 target_link_libraries(rts_game_view PUBLIC rts_game rts_models rts_imgui)
 target_link_libraries(rts_game_view PUBLIC rts_terrain_detail)
@@ -676,7 +677,6 @@ if(RTS_BUILD_TESTS)
     target_link_libraries(rts_tests PRIVATE rts_game rts_game_audio rts_audiopack)
     target_link_libraries(rts_tests PRIVATE rts_game_fx)
     target_link_libraries(rts_tests PRIVATE rts_terrain_detail)   # terrain detail surface tests (agent-terrain)
-    target_sources(rts_tests PRIVATE modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp)   # planet view maths (float, no GPU)
     target_link_libraries(rts_tests PRIVATE rts_game_view)   # fog of war look parsing (view, no GPU)
     target_sources(rts_tests PRIVATE engine/ui/UiLua.cpp)    # UI Lua sandbox (no RmlUi)
     target_link_libraries(rts_tests PRIVATE rts_lua)
@@ -776,7 +776,7 @@ if(RTS_BUILD_TOOLS OR RTS_BUILD_TESTS)
 endif()
 if(TARGET rts_editor_core) # lighting agent: light_* / lighting_set operations
     target_sources(rts_editor_core PRIVATE apps/editor/core/LightOps.cpp)
-    target_sources(rts_editor_core PRIVATE apps/editor/core/PlanetOps.cpp)   # planet-render agent: planet sculpt / paint
+    target_sources(rts_editor_core PRIVATE apps/editor/core/PlanetOps.cpp apps/editor/core/PlanetDetailOps.cpp)   # planet-render agent: planet sculpt / paint
 endif()
 if(TARGET rts_tests) # lighting agent: GPU-free lighting logic under test
     target_sources(rts_tests PRIVATE modules/rts/view/RtsLightsData.cpp engine/render/QualityGovernor.cpp)
