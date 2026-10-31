@@ -477,7 +477,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) { if (o.player == player_ && R.types[u.type].structure) anyStructure = true; });
         std::vector<Entity> all;
         w.each<Unit, Owner, Orders>([&](Entity e, Unit& u, Owner& o, Orders&) {
-            if (o.player == player_ && !R.types[u.type].structure && u.hp.raw > 0 && controllable(w, e, u) && !(u.flags & kUnitInTransit)) all.push_back(e);
+            if (o.player == player_ && !R.types[u.type].structure && !R.types[u.type].weapons.empty() && u.hp.raw > 0 && controllable(w, e, u) && !(u.flags & kUnitInTransit)) all.push_back(e);
         });
         if (!anyStructure && !all.empty()) {
             if (now < allInTick_) return;
@@ -493,9 +493,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             if (best.valid()) {
                 std::vector<Entity> armed, bare;
                 for (Entity e : all) (R.types[w.get<Unit>(e).type].weapons.empty() ? bare : armed).push_back(e);
-                attack(armed, w.get<Transform>(best).pos);
-                // units without weapons (garrison walkers) go into the enemy structure
-                if (!bare.empty()) { Command c; c.type = kCmdSmart; c.units = bare; c.target = best; send(sim, c); }
+                attack(armed, w.get<Transform>(best).pos);   // units without weapons (garrison walkers) are left alone
             }
             return;
         }
