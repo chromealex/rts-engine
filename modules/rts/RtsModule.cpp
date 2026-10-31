@@ -894,7 +894,7 @@ Vec3 RtsModule::freeSpotNear(Simulation& sim, Entity s, uint8_t layer, const Vec
                 const Fixed d = dist2D(cc, *toward);
                 if (!any || d < bestD) { any = true; best = cc; bestD = d; }
             }
-            if (any) return best;
+        if (any) return best;
         }
     return c;
 }

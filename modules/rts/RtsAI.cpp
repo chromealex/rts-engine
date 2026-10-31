@@ -359,6 +359,7 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
         if (milProducers < want && !candidates.empty()) {
             uint16_t pick = candidates[rng_.below(uint32_t(candidates.size()))];
+            if (getenv("AIDBG3")) std::fprintf(stderr, "t=%u p%d armyProducer %d/%d pick %s req=%d\n", sim.tick() / sim.tickRate(), player_, milProducers, want, R.types[pick].id.c_str(), int(m.requirementsMet(sim, player_, R.types[pick].requires_)));
             if (!m.requirementsMet(sim, player_, R.types[pick].requires_)) {
                 for (auto& rq : R.types[pick].requires_)
                     if (!rq.tech && count[rq.index] == 0 && build(sim, m, rq.index)) return true;

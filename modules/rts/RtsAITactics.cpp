@@ -430,6 +430,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     const uint32_t now = sim.tick(), rate = sim.tickRate();
     if (cfg_.terrain) ensureTerrain(sim, m);
     refreshBases(sim, m);
+    if (now % (30 * rate) < 16) AIDBG("t=%u p%d tactics army=%zu idle=%zu wave=%zu esc=%d\n", now / rate, player_, army.size(), idleArmy.size(), wave_units_.size(), escalation_);
     if (!hasHome_) return;
     auto usable = [&](Entity e) {
         if (!w.alive(e) || !w.has<Unit>(e) || !w.has<Owner>(e) || w.get<Owner>(e).player != player_) return false;
@@ -515,6 +516,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         }
         if (n > 0) c = c / Fixed::fromInt(n);
         const bool killed = lastKillTick_ > waveTick_;
+        if (now % (30 * rate) < cfg_.thinkTicks + 2) AIDBG("t=%u p%d wave state n=%d/%zu idle=%d wp=%zu/%zu\n", now / rate, player_, n, wave_units_.size(), idle, wp_, waypoints_.size());
         if (n * 100 < waveStart_ * retreatPct_ && escalation_ < 3 && !killed) {
             // beaten: back to the rally point, bigger next time
             AIDBG("t=%u p%d wave retreat %d/%d\n", now / rate, player_, n, waveStart_);
@@ -581,7 +583,11 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                     AIDBG("t=%u p%d wave retarget %s\n", now / rate, player_, R.types[w.get<Unit>(best).type].id.c_str());
                     waypoints_.push_back(w.get<Transform>(best).pos);
                     ++wp_; wpTick_ = now;
-                    attack(wave_units_, waypoints_[wp_]);
+                    if (dist(waypoints_[wp_], c) < Fixed::fromInt(10)) {
+                        // close: attack it by name (attack-moves skip what they don't pick up by themselves,
+                        // e.g. unfinished construction sites)
+                        Command a; a.type = kCmdAttack; a.units = wave_units_; a.target = best; send(sim, a);
+                    } else attack(wave_units_, waypoints_[wp_]);
                 } else { wave_units_.clear(); waypoints_.clear(); }
             } else {
                 // stragglers and units done fighting catch up
@@ -691,6 +697,43 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         if (ord && idleOrders(*ord) && dist(w.get<Transform>(e).pos, g.centerOf(watchCell_ >= 0 ? watchCell_ : homeCell_)) > Fixed::fromInt(3)) {
             Command c; c.type = kCmdMove; c.units = {e}; c.point = g.centerOf(watchCell_ >= 0 ? watchCell_ : homeCell_); send(sim, c);
         }
+    }
+    // ---- producers' rally points: workers come out on the side of their nearest resource, the army on the
+    //      side of the rally point (the sim spawns on the side facing the rally: mirrored bases play alike)
+    if (now >= rallyTick_ && !S) {
+        rallyTick_ = now + 20 * rate;
+        w.each<Production, Unit, Owner, Transform>([&](Entity e, Production& pr, Unit& u, Owner& o, Transform& tr) {
+            if (o.player != player_ || (u.flags & kUnitUnderConstruction)) return;
+            const UnitType& pt = R.types[u.type];
+            bool workers = false, fighters = false;
+            uint32_t gathers = 0;
+            for (uint16_t k : pt.produces) {
+                const UnitType& ut = R.types[k];
+                if (ut.structure) continue;
+                if (ut.worker) { workers = true; for (auto& gd : ut.gathers) gathers |= 1u << gd.res; }
+                else if (!ut.weapons.empty()) fighters = true;
+            }
+            Vec3 to{};
+            if (workers) {
+                Fixed bd{};
+                bool f = false;
+                w.each<ResourceStock, Transform>([&](Entity, ResourceStock& rs, Transform& nt) {
+                    if (!(gathers & (1u << rs.res)) || (!rs.infinite && rs.amount.raw <= 0)) return;
+                    const Fixed d = dist(nt.pos, tr.pos);
+                    if (!f || d < bd) { f = true; bd = d; to = nt.pos; }
+                });
+                if (!f) return;
+            } else if (fighters && hasRally_) to = rally_;
+            else return;
+            // a point just outside the structure toward `to` (workers stay idle there and get a job)
+            const Vec2 d = (to - tr.pos).xz();
+            const Fixed l = d.length();
+            if (l.raw <= 0) return;
+            const Fixed out = Fixed::fromInt(std::max(pt.footprintW, pt.footprintH)) / 2 + Fixed::fromRatio(3, 2);
+            const Vec3 p = workers ? tr.pos + Vec3{d.x * out / l, Fixed{}, d.y * out / l} : to;
+            if (pr.hasRally && dist(pr.rally, p) < Fixed::fromInt(1) && !w.alive(pr.rallyTarget)) return;
+            Command c; c.type = kCmdRally; c.units = {e}; c.point = p; send(sim, c);
+        });
     }
     // ---- the rest waits on the rally point (high ground in front of the base)
     if (hasRally_ && !defend) {

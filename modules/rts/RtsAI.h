@@ -79,6 +79,7 @@ private:
     // ---- agent-ai-terrain
     bool configured_ = false;
     int retreatPct_ = 35, holdSec_ = 30;
+    uint32_t rallyTick_ = 0;
     std::shared_ptr<const AITerrain> terr_;   // immutable once built (copies of the bot share it)
     Vec3 home_{}, enemyHome_{};
     bool hasHome_ = false, hasEnemy_ = false;
