@@ -578,7 +578,9 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         if (n > 0 && dist(c, waveCentre_) > Fixed::fromInt(2)) { waveCentre_ = c; waveMoveTick_ = now; }
         const bool stuck = n > 0 && now > waveMoveTick_ + 30 * rate;
         if (stuck) waveMoveTick_ = now;
-        if (n * 100 < waveStart_ * retreatPct_ && escalation_ < 3 && !killed) {
+        if (now > waveTick_ + 240 * rate) {   // a fresh wave (all idle units, a new target) after 4 min
+            wave_units_.clear(); waypoints_.clear();
+        } else if (n * 100 < waveStart_ * retreatPct_ && escalation_ < 3 && !killed) {
             // beaten: back to the rally point, bigger next time
             Command mv; mv.type = kCmdMove; mv.units = wave_units_; mv.point = hasRally_ ? rally_ : home_; send(sim, mv);
             wave_units_.clear(); waypoints_.clear();
