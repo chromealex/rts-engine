@@ -557,6 +557,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             theirs += strengthOf(t, u);   // towers count too
         });
         if (ours >= theirs * 2 + 1) needed = std::min(needed, int(homeIdle.size()));
+        enemyDefenceless_ = theirs == 0;
     }
     if (!wave_units_.empty()) {
         // ---------- manage the wave in flight
@@ -689,7 +690,7 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             const Vec3 goal = w.get<Transform>(best).pos;
             waypoints_.clear();
             std::vector<int> routeCells;
-            if (terr_ && cfg_.terrain) {
+            if (terr_ && cfg_.terrain && !enemyDefenceless_) {   // nothing left to fight: straight there
                 const bool toBase = !mainRoute_.empty() && enemyCell_ >= 0 && dist(goal, enemyHome_) < Fixed::fromInt(14);
                 const bool alt = escalation_ >= 1 && (wave_ % 2) && !altRoute_.empty();
                 if (toBase) routeCells = alt ? altRoute_ : mainRoute_;
@@ -789,13 +790,8 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             Command c; c.type = kCmdRally; c.units = {e}; c.point = p; send(sim, c);
         });
     }
-    // ---- the rest waits on the rally point (high ground in front of the base)
-    if (hasRally_ && !defend) {
-        std::vector<Entity> go;
-        for (Entity e : homeIdle)
-            if (bodyOk(e, rally_) && dist(w.get<Transform>(e).pos, rally_) > Fixed::fromInt(6) + fxSqrt(Fixed::fromInt(int64_t(homeIdle.size())))) go.push_back(e);
-        if (!go.empty()) { Command c; c.type = kCmdAttack; c.units = go; c.point = rally_; send(sim, c); }
-    }
+    // (the army gathers on the rally point through the producers' rally; idle units are not re-sent there, a unit
+    //  walking back would not count as ready for the next wave)
 }
 
 // ---------------------------------------------------------------- save states
