@@ -80,6 +80,7 @@ private:
     bool configured_ = false;
     int retreatPct_ = 35, holdSec_ = 30;
     uint32_t rallyTick_ = 0, lastSiteTick_ = 0;
+    uint32_t allInTick_ = 0;
     bool raided_ = false;            // enemies came to our base at least once
     std::shared_ptr<const AITerrain> terr_;   // immutable once built (copies of the bot share it)
     Vec3 home_{}, enemyHome_{};

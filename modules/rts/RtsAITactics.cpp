@@ -483,6 +483,35 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     const uint32_t calm = std::max(lastKillTick_, lastEscalateTick_);
     if (now > 480 * rate && now > calm + cfg_.escalateSeconds * rate && escalation_ < 3) { ++escalation_; lastEscalateTick_ = now; }
 
+    // nothing left to defend: every unit attacks (a hidden survivor would only drag the match out)
+    {
+        bool anyStructure = false;
+        w.each<Unit, Owner>([&](Entity, Unit& u, Owner& o) { if (o.player == player_ && R.types[u.type].structure) anyStructure = true; });
+        std::vector<Entity> all;
+        w.each<Unit, Owner, Orders>([&](Entity e, Unit& u, Owner& o, Orders&) {
+            if (o.player == player_ && !R.types[u.type].structure && u.hp.raw > 0 && controllable(w, e, u) && !(u.flags & kUnitInTransit)) all.push_back(e);
+        });
+        if (!anyStructure && !all.empty()) {
+            if (now < allInTick_) return;
+            allInTick_ = now + 20 * rate;   // also units stuck in other orders (walking into a lost garrison...)
+            const Vec3 from = w.get<Transform>(all[0]).pos;
+            Entity best; Fixed bd{};
+            w.each<Unit, Owner, Transform>([&](Entity t, Unit& u, Owner& o, Transform& tr) {
+                if (!m.hostile(sim, player_, o.player) || o.player == kHostileNeutral || u.hp.raw <= 0 || (u.flags & kUnitOffMap)) return;
+                if (S && S->bodyAt(tr.pos) != S->bodyAt(from)) return;
+                const Fixed d = dist(tr.pos, from) + (R.types[u.type].structure ? Fixed{} : Fixed::fromInt(4));
+                if (!best.valid() || d < bd) { best = t; bd = d; }
+            });
+            if (best.valid()) {
+                std::vector<Entity> armed, bare;
+                for (Entity e : all) (R.types[w.get<Unit>(e).type].weapons.empty() ? bare : armed).push_back(e);
+                attack(armed, w.get<Transform>(best).pos);
+                // units without weapons (garrison walkers) go into the enemy structure
+                if (!bare.empty()) { Command c; c.type = kCmdSmart; c.units = bare; c.target = best; send(sim, c); }
+            }
+            return;
+        }
+    }
     if (S) planetOps(sim, m, idleArmy);
     std::vector<Entity> home, homeIdle;
     for (Entity e : army) if (!inList(wave_units_, e) && !inList(scouts_, e) && !inList(invaders_, e)) home.push_back(e);
