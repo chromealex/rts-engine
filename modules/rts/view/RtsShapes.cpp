@@ -2,6 +2,7 @@
 // 1x1 footprint) built with MeshBuilder and turned into Models, one node per part.
 #include "RtsView.h"
 
+#include <cmath>
 #include <map>
 #include <memory>
 
@@ -54,6 +55,33 @@ void RtsView::buildShapes(gfx::Device& dev) {
         b.color(cream).cone({0.95f, 0.66f, 0.18f}, 0.04f, 0.14f, 5).cone({0.95f, 0.66f, -0.18f}, 0.04f, 0.14f, 5)
                       .cone({1.13f, 0.66f, 0}, 0.04f, 0.14f, 5).cone({0.77f, 0.66f, 0}, 0.04f, 0.14f, 5); });
 
+    // dungeon creatures (Dungeon Keeper-like games): imp, goblin, mage, troll, bat
+    add("imp", "body", true, [&](MeshBuilder& b) { b.transform(mat4::scale({1, 0.75f, 1})).sphere({0, 0.26f, 0}, 0.2f, 6, 10); b.transform(mat4{}); });
+    add("imp", "head", false, [&](MeshBuilder& b) {
+        const uint32_t hide = rgba(176, 92, 70);
+        b.color(hide).sphere({0.04f, 0.5f, 0}, 0.19f, 6, 10); b.cone({0, 0.6f, 0.14f}, 0.06f, 0.2f, 5).cone({0, 0.6f, -0.14f}, 0.06f, 0.2f, 5);
+        b.color(hide).box({0.18f, 0.06f, 0.1f}, {0.14f, 0.12f, 0.08f}).box({0.18f, 0.06f, -0.1f}, {0.14f, 0.12f, 0.08f});
+        b.color(wood).box({0.22f, 0.3f, 0.14f}, {0.05f, 0.4f, 0.05f}); b.color(metal).box({0.22f, 0.5f, 0.14f}, {0.2f, 0.06f, 0.06f}); });
+    add("goblin", "body", true, [&](MeshBuilder& b) { b.box({0, 0.36f, 0}, {0.3f, 0.42f, 0.34f}); });
+    add("goblin", "head", false, [&](MeshBuilder& b) {
+        const uint32_t hide = rgba(112, 150, 70);
+        b.color(hide).sphere({0.02f, 0.72f, 0}, 0.15f, 6, 10); b.cone({0, 0.75f, 0.16f}, 0.05f, 0.18f, 4).cone({0, 0.75f, -0.16f}, 0.05f, 0.18f, 4);
+        b.color(hide).box({0, 0.08f, 0.1f}, {0.14f, 0.16f, 0.1f}).box({0, 0.08f, -0.1f}, {0.14f, 0.16f, 0.1f});
+        b.color(wood).cylinder({0.2f, 0.2f, 0.18f}, 0.025f, 0.6f, 6); b.color(metal).cone({0.2f, 0.8f, 0.18f}, 0.07f, 0.16f, 6); });
+    add("mage", "body", true, [&](MeshBuilder& b) { b.cylinder({0, 0, 0}, 0.24f, 0.62f, 10, true, 0.14f); b.cone({0, 0.84f, 0}, 0.2f, 0.34f, 10); });
+    add("mage", "rest", false, [&](MeshBuilder& b) { b.color(skin).sphere({0.02f, 0.72f, 0}, 0.13f, 6, 10); b.color(wood).cylinder({0.2f, 0.05f, 0.12f}, 0.025f, 0.95f, 6); b.color(gold).sphere({0.2f, 1.02f, 0.12f}, 0.06f, 4, 8); });
+    add("troll", "body", true, [&](MeshBuilder& b) { b.transform(mat4::scale({1.1f, 0.9f, 1.25f})).sphere({0, 0.45f, 0}, 0.36f, 7, 12); b.transform(mat4{}); });
+    add("troll", "rest", false, [&](MeshBuilder& b) {
+        const uint32_t hide = rgba(96, 110, 92);
+        b.color(hide).sphere({0.2f, 0.8f, 0}, 0.17f, 6, 10); b.box({0, 0.12f, 0.18f}, {0.22f, 0.24f, 0.16f}).box({0, 0.12f, -0.18f}, {0.22f, 0.24f, 0.16f});
+        b.box({0.1f, 0.45f, 0.42f}, {0.16f, 0.4f, 0.14f}).box({0.1f, 0.45f, -0.42f}, {0.16f, 0.4f, 0.14f});
+        b.color(wood).cylinder({0.35f, 0.3f, 0.42f}, 0.05f, 0.5f, 6); b.color(darkStone).sphere({0.35f, 0.82f, 0.42f}, 0.12f, 5, 8); });
+    add("bat", "body", true, [&](MeshBuilder& b) { b.transform(mat4::scale({1.3f, 0.8f, 0.8f})).sphere({0, 0, 0}, 0.16f, 6, 10); b.transform(mat4{}); });
+    add("bat", "rest", false, [&](MeshBuilder& b) {
+        const uint32_t wing = rgba(70, 48, 72);
+        b.color(wing).box({-0.05f, 0.02f, 0.3f}, {0.3f, 0.02f, 0.4f}).box({-0.05f, 0.02f, -0.3f}, {0.3f, 0.02f, 0.4f});
+        b.color(wing).cone({0.1f, 0.1f, 0.08f}, 0.04f, 0.12f, 4).cone({0.1f, 0.1f, -0.08f}, 0.04f, 0.12f, 4); b.color(rgba(255, 60, 60)).sphere({0.19f, 0.03f, 0.06f}, 0.025f, 3, 5).sphere({0.19f, 0.03f, -0.06f}, 0.025f, 3, 5); });
+
     // ---- structures (sized to a 1x1 footprint; scaled by the footprint at draw time)
     add("hall", "base", false, [&](MeshBuilder& b) { b.color(stone).box({0, 0.35f, 0}, {0.9f, 0.7f, 0.9f}); b.color(wood).box({0.46f, 0.18f, 0}, {0.04f, 0.35f, 0.2f}); });
     add("hall", "roof", true, [&](MeshBuilder& b) { b.cone({0, 0.7f, 0}, 0.66f, 0.45f, 4); b.cylinder({0.25f, 0.7f, 0.25f}, 0.08f, 0.5f, 8); });
@@ -75,6 +103,15 @@ void RtsView::buildShapes(gfx::Device& dev) {
     add("rock", "base", false, [&](MeshBuilder& b) { b.color(darkStone).transform(mat4::scale({1, 0.6f, 0.9f})).sphere({0, 0.2f, 0}, 0.45f, 5, 7); });
     add("mushroomhouse", "stem", false, [&](MeshBuilder& b) { b.color(cream).cylinder({0, 0, 0}, 0.2f, 0.55f, 14, true, 0.17f); b.color(wood).box({0.19f, 0.15f, 0}, {0.03f, 0.25f, 0.12f}); });
     add("mushroomhouse", "cap", true, [&](MeshBuilder& b) { b.transform(mat4::translate({0, 0.55f, 0}) * mat4::scale({1, 0.5f, 1})).sphere({0, 0, 0}, 0.45f, 7, 16); });
+    // dungeon heart: a stone plinth with a beating core; portal: a ring of standing stones around a dark well
+    add("heart", "base", false, [&](MeshBuilder& b) {
+        b.color(darkStone).box({0, 0.08f, 0}, {0.95f, 0.16f, 0.95f}).cylinder({0, 0.16f, 0}, 0.34f, 0.12f, 12);
+        for (float a = 0; a < 6.2f; a += 1.5708f) b.color(stone).box({0.42f * std::cos(a), 0.3f, 0.42f * std::sin(a)}, {0.1f, 0.6f, 0.1f}); });
+    add("heart", "roof", true, [&](MeshBuilder& b) { b.transform(mat4::scale({1, 0.85f, 1})).sphere({0, 0.6f, 0}, 0.3f, 8, 14); b.transform(mat4{}); b.cone({0, 0.82f, 0}, 0.06f, 0.2f, 6); });
+    add("portal", "base", false, [&](MeshBuilder& b) {
+        b.color(dark).cylinder({0, 0.0f, 0}, 0.42f, 0.06f, 14);
+        for (float a = 0.4f; a < 6.4f; a += 1.0472f) b.color(darkStone).box({0.44f * std::cos(a), 0.3f, 0.44f * std::sin(a)}, {0.1f, 0.6f, 0.14f}); });
+    add("portal", "roof", true, [&](MeshBuilder& b) { b.cylinder({0, 0.06f, 0}, 0.3f, 0.02f, 14); b.cylinder({0, 0.58f, 0}, 0.5f, 0.06f, 14, true, 0.42f); });
     add("structure", "base", false, [&](MeshBuilder& b) { b.color(stone).box({0, 0.3f, 0}, {0.9f, 0.6f, 0.9f}); });
     add("structure", "roof", true, [&](MeshBuilder& b) { b.box({0, 0.63f, 0}, {0.95f, 0.06f, 0.95f}); });
     (void)roofTile;
