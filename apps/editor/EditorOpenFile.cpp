@@ -12,6 +12,7 @@ namespace fs = std::filesystem;
 namespace rts::editor {
 
 void Editor::initFileAssoc() {
+    setFileAssocLogo((fs::path(opt_.engineDir) / "apps" / "editor" / "branding" / "icon_1024.png").string());
     const std::string done = ensureFileAssociation(opt_.editorExe);
     if (!done.empty()) ws_.log("editor", done);
     assoc_ = fileAssociationStatus(opt_.editorExe);

@@ -935,7 +935,7 @@ target_sources(rts_game_view PRIVATE modules/rts/view/RtsViewScript.cpp)
 # ---------------------------------------------------------------------------
 # Project files `<Title>.rtsproj` and opening them from the OS (project-file agent): ProjectFile /
 # FileAssoc in the editor core (Linux mime + .desktop, Windows HKCU registry, macOS LaunchServices),
-# the editor's own Info.plist (document type com.rtsengine.project) and its icons drawn by
+# the editor's own Info.plist (document type com.rtsengine.project) and the document icon drawn by
 # rts_projicon (tools/branding/ProjectIcon.*).
 # ---------------------------------------------------------------------------
 if(TARGET rts_editor_core)
@@ -962,10 +962,11 @@ if(TARGET rts_editor)
             MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}" MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}")
         if(TARGET rts_projicon)
             add_dependencies(rts_editor rts_projicon)
-            # Resources/AppIcon.icns (editor) and Resources/rtsproj.icns (document icon in Finder)
+            # Resources/rtsproj.icns: the document icon in Finder, drawn from the editor logo
             add_custom_command(TARGET rts_editor POST_BUILD
                 COMMAND $<TARGET_FILE:rts_projicon> "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources"
-                COMMENT "Editor and .rtsproj icons")
+                        "${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/branding/icon_1024.png"
+                COMMENT ".rtsproj document icon")
         endif()
     endif()
 endif()

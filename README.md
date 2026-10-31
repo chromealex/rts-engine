@@ -225,7 +225,8 @@ rtsbuild --project ~/RTSGames/dune2 --target macos
   программу не перебивает. Вручную: «Проект → Сделать редактор программой по умолчанию для .rtsproj»;
   состояние — внизу слева в хабе. Отключить: `RTS_FILE_ASSOC=off`.
   - **macOS:** тип `com.rtsengine.project` объявлен в Info.plist `RTSEditor.app`
-    (`platform/macos/EditorInfo.plist.in`, иконки рисует `rts_projicon`); редактор регистрирует бандл
+    (`platform/macos/EditorInfo.plist.in`; иконку документа `rtsproj.icns` рисует `rts_projicon` из логотипа
+    редактора `apps/editor/branding/icon_1024.png`); редактор регистрирует бандл
     в LaunchServices (`lsregister -f`) и становится обработчиком по умолчанию. Двойной клик и
     `open -a RTSEditor x.rtsproj` открывают проект в уже запущенном редакторе (при несохранённой
     карте он спросит, сохранить ли её).

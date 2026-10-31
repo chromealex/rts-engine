@@ -25,6 +25,10 @@ struct AssocStatus {
     std::string detail;          // readable state (Russian), e.g. who handles .rtsproj instead
 };
 
+// Master image for the icons registration writes (editor logo, apps/editor/branding/icon_1024.png);
+// empty or unreadable: the engine's built-in icon.
+void setFileAssocLogo(const std::string& pngPath);
+
 AssocStatus fileAssociationStatus(const std::string& editorExe);
 // Registers this editor (exe path; macOS: the binary inside RTSEditor.app) as the handler of .rtsproj.
 bool registerFileAssociation(const std::string& editorExe, std::string* message);

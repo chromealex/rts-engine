@@ -85,6 +85,8 @@ bool automated() {
 
 [[maybe_unused]] fs::path iconsDir() { return home() / ".rtsengine" / "icons"; }
 
+std::string& logoPath() { static std::string p; return p; }
+
 // ------------------------------------------------------------------------------------- Linux
 #if !defined(_WIN32) && !defined(__APPLE__)
 const char* kIconName = "application-x-rtsengine-project";
@@ -196,12 +198,14 @@ AssocStatus statusLinux(const std::string& exe) {
 
 bool registerLinux(const std::string& exe, std::string* msg) {
     const fs::path data = xdgDataHome();
+    branding::Image logo;
+    const branding::Image* lp = !logoPath().empty() && branding::loadImageFile(logoPath(), logo) ? &logo : nullptr;
     // icons: hicolor theme sizes for the mime type and the launcher
     for (int px : {16, 24, 32, 48, 64, 128, 256}) {
         const fs::path dir = data / "icons" / "hicolor" / (std::to_string(px) + "x" + std::to_string(px));
         std::string err;
-        if (!branding::writePng((dir / "mimetypes" / (std::string(kIconName) + ".png")).string(), branding::projectDocumentIcon(px), &err) ||
-            !branding::writePng((dir / "apps" / (std::string(kAppIconName) + ".png")).string(), branding::editorAppIcon(px), &err)) {
+        if (!branding::writePng((dir / "mimetypes" / (std::string(kIconName) + ".png")).string(), branding::projectDocumentIcon(px, lp), &err) ||
+            !branding::writePng((dir / "apps" / (std::string(kAppIconName) + ".png")).string(), branding::editorAppIcon(px, lp), &err)) {
             if (msg) *msg = err;
             return false;
         }
@@ -289,7 +293,7 @@ AssocStatus statusWindows() {
 bool registerWindows(std::string* msg) {
     const fs::path icons = iconsDir();
     std::string err;
-    if (branding::writeEditorIcons(icons.string(), &err).empty()) { if (msg) *msg = err; return false; }
+    if (branding::writeEditorIcons(icons.string(), logoPath(), &err).empty()) { if (msg) *msg = err; return false; }
     const std::wstring pid = progId(), ico = (icons / "rtsproj.ico").wstring();
     bool ok = regSet(kClasses + L".rtsproj", nullptr, pid) &&
               regSet(kClasses + L".rtsproj", L"Content Type", utf8ToWide(kProjectMimeType)) &&
@@ -376,6 +380,8 @@ bool registerMac(const std::string& exe, std::string* msg) {
 #endif
 
 } // namespace
+
+void setFileAssocLogo(const std::string& pngPath) { logoPath() = pngPath; }
 
 std::string xdgDataHome() {
     if (const char* v = std::getenv("XDG_DATA_HOME"); v && *v == '/') return v;
