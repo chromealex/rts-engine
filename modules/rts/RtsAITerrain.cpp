@@ -16,19 +16,14 @@ void AITerrain::build(Simulation& sim, RtsModule& m) {
     pass.assign(size_t(cells), 0);
     const Fixed lh = R.levelHeight.raw > 0 ? R.levelHeight : Fixed::fromInt(1);
     const uint16_t lim = g.slopeLimitFor(kLayerGround);
-    // structures of players don't count as terrain (they die); neutral blockers (trees, mines, rocks) do
-    std::vector<uint8_t> playerBlock(size_t(cells), 0);
-    wd.each<Footprint, Owner>([&](Entity, Footprint& f, Owner& o) {
-        if (o.player == 0 || o.player == kHostileNeutral) return;
-        for (int y = f.y; y < f.y + f.h; ++y)
-            for (int x = f.x; x < f.x + f.w; ++x)
-                if (x >= 0 && y >= 0 && x < g.w && y < g.h) playerBlock[size_t(y * g.w + x)] = 1;
-    });
+    // terrain only (no structures, trees or rocks): the analysis must come out the same whenever it is built
+    // (match start, or the first think after loading a save state)
+    (void)wd;
     int32_t lo = 1 << 30, hi = -(1 << 30);
     for (int c = 0; c < cells; ++c) {
         const size_t i = size_t(c);
         const bool ground = (g.flags[i] & kCellGround) && (!g.hf || g.slope.empty() || g.slope[i] <= lim);
-        pass[i] = ground && (!g.blocked[i] || playerBlock[i]) ? 1 : 0;
+        pass[i] = ground ? 1 : 0;
         Fixed h{};
         if (sphere) h = g.surf->cellHeight(c) / lh;
         else if (g.hf) h = g.cellHeight(c % g.w, c / g.w) / lh;

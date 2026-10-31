@@ -16,7 +16,7 @@ struct AITerrain {
     bool sphere = false;
     bool relief = false;                  // some cells are higher than others
     std::vector<int32_t> elev;            // height advantage units * kUnit: cliff level, or height / levelHeight
-    std::vector<uint8_t> pass;            // walkable for the default ground layer (terrain + static neutral blockers)
+    std::vector<uint8_t> pass;            // walkable for the default ground layer (terrain only)
     std::vector<uint8_t> clear;           // steps to the nearest non-walkable cell (capped at 15): corridor half-width
     std::vector<int32_t> over;            // how much the highest ground within kOverR cells rises above this cell
     std::vector<int32_t> crest;           // elev minus the lowest ground within kOverR cells (prominence)

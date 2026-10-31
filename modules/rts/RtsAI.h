@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 #include "../../engine/core/Random.h"
 #include "RtsModule.h"
@@ -34,6 +35,10 @@ public:
     RtsAI(uint8_t player, uint64_t seed, AIConfig cfg = {}) : player_(player), rng_(seed, player), cfg_(cfg) {}
     void update(Simulation& sim);
     uint8_t player() const { return player_; }
+    // Bot state for save states (next to Simulation::serialize): a bot restored from it plays on exactly like
+    // the one that was saved; the terrain analysis is rebuilt from the map on the first think.
+    std::string saveState() const;
+    bool loadState(const std::string& bytes);
 
 private:
     void economy(Simulation& sim, RtsModule& m);
@@ -60,6 +65,7 @@ private:
     bool build(Simulation& sim, RtsModule& m, uint16_t type, int depth = 0, const Vec3* at = nullptr);
     bool train(Simulation& sim, RtsModule& m, uint16_t type); // from any idle producer
     void send(Simulation& sim, Command c);
+    void stateIo(class rts::Archive& a);
 
     uint8_t player_;
     Random rng_;

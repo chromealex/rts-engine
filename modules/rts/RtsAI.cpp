@@ -113,7 +113,7 @@ bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type, int depth, const
         int score = ord.queue.empty() ? 0 : ord.queue.front().type == OrderType::Build ? 1 << 20 : 10;
         if (score < bestScore) { bestScore = score; builder = e; bpos = tr.pos; }
     });
-    if (!builder.valid() || bestScore >= (1 << 20)) { if (getenv("AIDBG3")) std::fprintf(stderr, "t=%u p%d build %s: no builder\n", sim.tick() / sim.tickRate(), player_, bt.id.c_str()); return false; }
+    if (!builder.valid() || bestScore >= (1 << 20)) { return false; }
     Vec3 spot;
     if (at) {
         spot = *at;
@@ -149,7 +149,7 @@ bool RtsAI::build(Simulation& sim, RtsModule& m, uint16_t type, int depth, const
                 if (!ok && R.buildRadius <= 0) ok = findSpot(sim, m, type, home_, 32, spot, false);   // anywhere flat in reach
             }
         }
-        if (!ok && !m.findAutoSpot(sim, player_, type, spot)) { if (getenv("AIDBG3")) std::fprintf(stderr, "t=%u p%d build %s: no spot\n", sim.tick() / sim.tickRate(), player_, bt.id.c_str()); return false; }
+        if (!ok && !m.findAutoSpot(sim, player_, type, spot)) { return false; }
     }
     Command c;
     c.type = kCmdBuild; c.units = {builder}; c.param = type; c.point = spot;
@@ -348,7 +348,6 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             if (o.player != player_ || ord.queue.empty() || ord.queue.front().type != OrderType::Build) return;
             if (std::find(sitesHere.begin(), sitesHere.end(), ord.queue.front().target) != sitesHere.end()) {
                 ++building;
-                if (getenv("AIDBG3") && sim.tick() % 400 < 15) { Entity t = ord.queue.front().target; auto& cs = w.get<Construction>(t); std::fprintf(stderr, "  site %s at %.1f,%.1f progress %.2f state %d\n", R.types[w.get<Unit>(t).type].id.c_str(), w.get<Transform>(t).pos.x.toDouble(), w.get<Transform>(t).pos.z.toDouble(), cs.progress.toDouble(), ord.queue.front().state); }
                 sitesHere.erase(std::remove(sitesHere.begin(), sitesHere.end(), ord.queue.front().target), sitesHere.end());
             }
         });
@@ -402,7 +401,6 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
         if (milProducers < want && !candidates.empty()) {
             uint16_t pick = candidates[rng_.below(uint32_t(candidates.size()))];
-            if (getenv("AIDBG3")) std::fprintf(stderr, "t=%u p%d armyProducer %d/%d pick %s req=%d\n", sim.tick() / sim.tickRate(), player_, milProducers, want, R.types[pick].id.c_str(), int(m.requirementsMet(sim, player_, R.types[pick].requires_)));
             if (!m.requirementsMet(sim, player_, R.types[pick].requires_)) {
                 for (auto& rq : R.types[pick].requires_)
                     if (!rq.tech && count[rq.index] == 0 && build(sim, m, rq.index)) return true;
@@ -474,7 +472,6 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
         }
         if (!any) continue;
         Command c; c.type = kCmdGather; c.units = {wk};
-        if (getenv("AIDBG2")) { Vec3 tp = field ? bestField : w.get<Transform>(best).pos; std::fprintf(stderr, "t=%u p%d gather from %.2f,%.2f -> %s %.2f,%.2f score %.3f\n", sim.tick(), player_, p.x.toDouble(), p.z.toDouble(), field ? "field" : R.types[w.get<Unit>(best).type].id.c_str(), tp.x.toDouble(), tp.z.toDouble(), bestScore.toDouble()); }
         if (field) c.point = bestField; else c.target = best;
         send(sim, c);
         if (!field) {
@@ -637,7 +634,6 @@ void RtsAI::economy(Simulation& sim, RtsModule& m) {
             for (uint16_t rq : missing) if (build(sim, m, rq)) return;
     }
     // 7) military production buildings (and the tech they require)
-    if (getenv("AIDBG3") && sim.tick() % 400 < 15) std::fprintf(stderr, "t=%u p%d step7 last=%u building=%d sup=%d/%d\n", sim.tick() / sim.tickRate(), player_, lastBuildTick_ / sim.tickRate(), building, int(eco.supplyUsed.toInt()), int(eco.supplyCap.toInt()));
     if (sim.tick() > lastBuildTick_ + 100 && building == 0 && armyProducer(false)) return;
     // 8) towers at the chokepoint toward the enemy (agent-ai-terrain), once the army is under way
     if (sim.tick() > lastBuildTick_ + 100 && building == 0 && sim.tick() > 240 * sim.tickRate() && wave_ > 0) buildTowers(sim, m);
@@ -928,17 +924,16 @@ bool RtsAI::expand(Simulation& sim, RtsModule& m, const std::vector<int>& count)
     });
     for (int r = 0; r < int(R.resources.size()); ++r) {
         if (!(gathered & (1u << r))) continue;
-        bool nearAny = false, farAny = false;
-        Vec3 best{};
-        Fixed bestD{};
+        bool nearAny = false;
+        std::vector<std::pair<Fixed, Vec3>> far;   // candidate nodes by distance from home
         w.each<ResourceStock, Unit, Owner, Transform>([&](Entity, ResourceStock& rs, Unit& nu, Owner& no, Transform& nt) {
             if (rs.res != r || (!rs.infinite && rs.amount.raw <= 0) || (R.types[nu.type].ownerOnly && no.player != player_)) return;
             for (auto& [dp, mask] : drops) if ((mask & (1u << r)) && dist(dp, nt.pos) < Fixed::fromInt(12)) { nearAny = true; return; }
             for (Vec3 e : enemies) if (dist(e, nt.pos) < Fixed::fromInt(16)) return;   // not under their walls
-            const Fixed d = dist(nt.pos, home_);
-            if (!farAny || d < bestD) { farAny = true; bestD = d; best = nt.pos; }
+            far.push_back({dist(nt.pos, home_), nt.pos});
         });
-        if (nearAny || !farAny) continue;
+        if (nearAny || far.empty()) continue;
+        std::sort(far.begin(), far.end(), [](auto& a, auto& b) { return a.first != b.first ? a.first < b.first : (a.second.x != b.second.x ? a.second.x < b.second.x : a.second.z < b.second.z); });
         // the cheapest structure that takes this resource and that our builders can make
         int pick = -1;
         int64_t pickCost = 0;
@@ -955,8 +950,8 @@ bool RtsAI::expand(Simulation& sim, RtsModule& m, const std::vector<int>& count)
         }
         if (pick < 0) continue;
         Vec3 spot;
-        if (!findSpot(sim, m, uint16_t(pick), best, 7, spot, true)) continue;
-        if (build(sim, m, uint16_t(pick), 0, &spot)) return true;
+        for (size_t k = 0; k < far.size() && k < 4; ++k)   // a few nodes (trees and cliffs may crowd the nearest)
+            if (findSpot(sim, m, uint16_t(pick), far[k].second, 9, spot, true)) return build(sim, m, uint16_t(pick), 0, &spot);
     }
     return false;
 }

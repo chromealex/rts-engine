@@ -366,6 +366,16 @@ static int play(const Args& a) {
         std::string bytes((std::istreambuf_iterator<char>(f)), {}), err;
         if (!sim.deserialize(bytes, &err)) { std::printf("Load failed: %s\n", err.c_str()); return 2; }
         if (!a.quiet) std::printf("Loaded %s: t=%us\n", a.loadFile.c_str(), sim.tick() / sim.tickRate());
+        // the bots' own state (waves, routes, timers), saved next to the simulation (agent-ai-terrain)
+        if (std::ifstream af(a.loadFile + ".ai", std::ios::binary); af) {
+            Json st = Json::parse(std::string((std::istreambuf_iterator<char>(af)), {}));
+            for (auto& b : bots) {
+                const std::string hex = st.getStr(std::to_string(b.player()), "");
+                std::string raw;
+                for (size_t i = 0; i + 1 < hex.size(); i += 2) raw.push_back(char(std::stoi(hex.substr(i, 2), nullptr, 16)));
+                if (!hex.empty() && !b.loadState(raw)) { std::printf("Load failed: bot %d state\n", int(b.player())); return 2; }
+            }
+        }
     }
     std::map<uint16_t, int> ev;
     const uint32_t maxTicks = a.maxSeconds * sim.tickRate();
@@ -380,6 +390,15 @@ static int play(const Args& a) {
         if (a.saveAt && sim.tick() == a.saveAt * sim.tickRate() && !a.saveFile.empty()) {
             std::string bytes = sim.serialize();
             std::ofstream(a.saveFile, std::ios::binary) << bytes;
+            Json st = Json::object();
+            for (auto& b : bots) {
+                const std::string raw = b.saveState();
+                std::string hex;
+                static const char* d = "0123456789abcdef";
+                for (unsigned char ch : raw) { hex.push_back(d[ch >> 4]); hex.push_back(d[ch & 15]); }
+                st.set(std::to_string(b.player()), Json::string(hex));
+            }
+            std::ofstream(a.saveFile + ".ai", std::ios::binary) << st.dump();
             std::printf("Saved %s: t=%us, %zu bytes, checksum %016llx\n", a.saveFile.c_str(), a.saveAt, bytes.size(), (unsigned long long)sim.checksum());
         }
     }

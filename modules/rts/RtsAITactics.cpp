@@ -13,12 +13,8 @@
 //     mirrored starts don't favour one side), stuck builders released.
 #include "RtsAI.h"
 #include "RtsAITerrain.h"
+#include "../../engine/core/Archive.h"
 #include <algorithm>
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <string>
-#define AIDBG(...) do { if (std::getenv("AIDBG")) std::fprintf(stderr, __VA_ARGS__); } while (0)
 
 namespace rts::game {
 
@@ -59,14 +55,6 @@ void RtsAI::applyRulesConfig(RtsModule& m) {
     if (a.exposureWeight >= 0) cfg_.exposureWeight = a.exposureWeight;
     if (a.escalateSeconds >= 0) cfg_.escalateSeconds = uint32_t(a.escalateSeconds);
     if (a.terrain >= 0) cfg_.terrain = a.terrain != 0;
-    if (const char* e = std::getenv("AICFG")) {   // TEMP experiments
-        std::string v(e);
-        auto get = [&](const char* k, int& out) { auto p = v.find(std::string(k) + "="); if (p != std::string::npos) out = std::atoi(v.c_str() + p + std::strlen(k) + 1); };
-        int t = cfg_.terrain ? 1 : 0, esc = int(cfg_.escalateSeconds);
-        get("towers", cfg_.towers); get("scouts", cfg_.scouts); get("terrain", t); get("esc", esc); get("first", cfg_.firstAttackArmy);
-        get("retreat", retreatPct_); get("crowd", crowdFree_); get("crowdcost", crowdCost_); get("hold", holdSec_);
-        cfg_.terrain = t != 0; cfg_.escalateSeconds = uint32_t(esc);
-    }
 }
 
 void RtsAI::ensureTerrain(Simulation& sim, RtsModule& m) {
@@ -180,9 +168,6 @@ void RtsAI::refreshBases(Simulation& sim, RtsModule& m) {
             if (watchCell_ < 0 || s > bs) { watchCell_ = c; bs = s; }
         }
     } else watchCell_ = mainRoute_[size_t(n * 2 / 5)];
-    AIDBG("t=%u p%d route n=%d alt=%zu relief=%d rally=%.1f,%.1f elev=%d choke=%d(%d) watch=%d elev=%d crest=%d homeElev=%d\n", now / sim.tickRate(), player_, n, altRoute_.size(), int(T.relief),
-          rally_.x.toDouble(), rally_.z.toDouble(), hasRally_ ? T.elev[size_t(g.cellOf(rally_))] : -1, chokeCell_, chokeCell_ >= 0 ? T.clear[size_t(chokeCell_)] : -1,
-          watchCell_, watchCell_ >= 0 ? T.elev[size_t(watchCell_)] : -1, watchCell_ >= 0 ? T.crest[size_t(watchCell_)] : -1, T.elev[size_t(mainRoute_[0])]);
 }
 
 // Build spot near `near`: valid placement with a one-cell gap, off the lanes between dropoffs and resources,
@@ -249,7 +234,8 @@ bool RtsAI::findSpot(Simulation& sim, RtsModule& m, uint16_t type, Vec3 near, in
             int x0, y0;
             RtsModule::footprintAt(t, p, x0, y0, S);
             if (x0 < 0 && S) continue;
-            if (!g.areaBuildable(x0 - 1, y0 - 1, t.footprintW + 2, t.footprintH + 2)) continue;
+            const int gap = defensive ? 0 : 1;   // towers / outposts may stand close to trees and cliffs
+            if (!g.areaBuildable(x0 - gap, y0 - gap, t.footprintW + 2 * gap, t.footprintH + 2 * gap)) continue;
             const int pc = g.cellOf(p);
             bool bad = false;
             for (auto& [c, until] : badSpots_) if (until > now && c == pc) bad = true;
@@ -462,7 +448,6 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
     const uint32_t now = sim.tick(), rate = sim.tickRate();
     if (cfg_.terrain) ensureTerrain(sim, m);
     refreshBases(sim, m);
-    if (now % (30 * rate) < 16) AIDBG("t=%u p%d tactics army=%zu idle=%zu wave=%zu esc=%d\n", now / rate, player_, army.size(), idleArmy.size(), wave_units_.size(), escalation_);
     if (!hasHome_) return;
     auto usable = [&](Entity e) {
         if (!w.alive(e) || !w.has<Unit>(e) || !w.has<Owner>(e) || w.get<Owner>(e).player != player_) return false;
@@ -578,10 +563,8 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
         }
         if (n > 0) c = c / Fixed::fromInt(n);
         const bool killed = lastKillTick_ > waveTick_;
-        if (now % (30 * rate) < cfg_.thinkTicks + 2) AIDBG("t=%u p%d wave state n=%d/%zu idle=%d wp=%zu/%zu\n", now / rate, player_, n, wave_units_.size(), idle, wp_, waypoints_.size());
         if (n * 100 < waveStart_ * retreatPct_ && escalation_ < 3 && !killed) {
             // beaten: back to the rally point, bigger next time
-            AIDBG("t=%u p%d wave retreat %d/%d\n", now / rate, player_, n, waveStart_);
             Command mv; mv.type = kCmdMove; mv.units = wave_units_; mv.point = hasRally_ ? rally_ : home_; send(sim, mv);
             wave_units_.clear(); waypoints_.clear();
             ++failedWaves_;
@@ -624,7 +607,6 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 }
             }
             if (advance && !last) {
-                AIDBG("t=%u p%d wave wp %zu/%zu n=%d near=%d idle=%d\n", now / rate, player_, wp_ + 1, waypoints_.size(), n, near, idle);
                 ++wp_; wpTick_ = now; holdUntil_ = 0;
                 std::vector<Entity> go;
                 for (Entity e : wave_units_) if (!(w.get<Unit>(e).flags & kUnitInTransit)) go.push_back(e);
@@ -641,7 +623,6 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 });
                 if (best.valid()) {
                     waveTarget_ = best;
-                    AIDBG("t=%u p%d wave retarget %s\n", now / rate, player_, R.types[w.get<Unit>(best).type].id.c_str());
                     waypoints_.push_back(w.get<Transform>(best).pos);
                     ++wp_; wpTick_ = now;
                     if (dist(waypoints_[wp_], c) < Fixed::fromInt(10)) {
@@ -731,7 +712,6 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
                 waveTarget_ = best;
                 for (Entity e : go) homeIdle.erase(std::remove(homeIdle.begin(), homeIdle.end(), e), homeIdle.end());
                 if (!defend) ++wave_;
-                AIDBG("t=%u p%d wave %d launch n=%zu wps=%zu route=%zu esc=%d target=%s\n", now / rate, player_, wave_, go.size(), waypoints_.size(), routeCells.size(), escalation_, R.types[w.get<Unit>(best).type].id.c_str());
             }
         }
     }
@@ -803,6 +783,44 @@ void RtsAI::tactics(Simulation& sim, RtsModule& m, std::vector<Entity>& idleArmy
             if (bodyOk(e, rally_) && dist(w.get<Transform>(e).pos, rally_) > Fixed::fromInt(6) + fxSqrt(Fixed::fromInt(int64_t(homeIdle.size())))) go.push_back(e);
         if (!go.empty()) { Command c; c.type = kCmdAttack; c.units = go; c.point = rally_; send(sim, c); }
     }
+}
+
+// ---------------------------------------------------------------- save states
+std::string RtsAI::saveState() const {
+    std::string out;
+    Archive a(&out);
+    RtsAI& b = const_cast<RtsAI&>(*this);   // io() takes references; writing does not modify
+    b.stateIo(a);
+    return out;
+}
+
+bool RtsAI::loadState(const std::string& bytes) {
+    Archive a(bytes);
+    stateIo(a);
+    return a.ok();
+}
+
+void RtsAI::stateIo(Archive& a) {
+    uint32_t version = 1;
+    io(a, version);
+    if (version != 1) { a.fail(); return; }
+    uint64_t rs = rng_.state(), ri = rng_.inc();
+    io(a, rs); io(a, ri);
+    if (!a.writing()) rng_.restore(rs, ri);
+    io(a, player_); io(a, next_); io(a, wave_); io(a, lastBuildTick_); io(a, lastTechTick_); io(a, saveForWorkers_);
+    io(a, lastDungeonTick_); io(a, lastSkillTick_); io(a, savingFor_); io(a, savingUntil_); io(a, lastSettlersTick_);
+    io(a, lastMechTick_); io(a, turnActed_);
+    io(a, rallyTick_); io(a, lastSiteTick_); io(a, allInTick_); io(a, spotRetryTick_); io(a, expandTick_); io(a, raided_);
+    io(a, home_); io(a, enemyHome_); io(a, hasHome_); io(a, hasEnemy_); io(a, homeCell_); io(a, enemyCell_);
+    io(a, mainRoute_); io(a, altRoute_); io(a, routeTick_); io(a, routeEnemyCell_); io(a, rally_); io(a, hasRally_);
+    io(a, chokeCell_); io(a, watchCell_); io(a, wave_units_); io(a, scouts_); io(a, waypoints_);
+    uint64_t wp = wp_; io(a, wp); wp_ = size_t(wp);
+    io(a, wpTick_); io(a, waveTick_); io(a, holdUntil_); io(a, waveStart_); io(a, waveEnemyStructs_); io(a, waveTarget_);
+    io(a, escalation_); io(a, failedWaves_); io(a, lastKillTick_); io(a, lastEscalateTick_); io(a, scoutTick_); io(a, enemyStructsSeen_);
+    uint32_t n = a.count(buildWatch_.size(), 8);
+    if (!a.writing()) buildWatch_.assign(n, StuckBuild{});
+    for (uint32_t i = 0; i < n && a.ok(); ++i) { io(a, buildWatch_[i].entity); io(a, buildWatch_[i].since); io(a, buildWatch_[i].point); io(a, buildWatch_[i].progress); }
+    io(a, badSpots_); io(a, invaders_); io(a, invadeBody_); io(a, invasions_); io(a, invadeTick_); io(a, enemyOffBody_);
 }
 
 } // namespace rts::game
