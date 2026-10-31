@@ -16,6 +16,7 @@
 #include "core/FileAssoc.h"
 #include "core/Net.h"
 #include "core/Workspace.h"
+#include "core/FieldOps.h"
 #include "engine/fx/ParticleSystem.h"
 #include "engine/render/TextureCache.h"
 #include "engine/gfx/Gfx.h"
@@ -232,6 +233,7 @@ private:
     double gridRebuildAt_ = 0;
     bool playTerrainBuilt_ = false;
     game::RtsScene scene_;
+    FieldPreview fieldPreview_;   // grid field initial values for the Scene view (FieldOps.h)
     double time_ = 0;
     bool quit_ = false;
     // EditorOpenFile.cpp

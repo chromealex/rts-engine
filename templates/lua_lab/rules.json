@@ -244,7 +244,8 @@
      "splash": 1.2,
      "cooldown": 4,
      "projectileSpeed": 9,
-     "damageType": "siege"
+     "damageType": "siege",
+     "onHit": {"chance": 0.15, "effects": [{"type": "field", "field": "fire", "max": 100}]}
     }
    ],
    "cost": {
@@ -579,28 +580,25 @@
    "view": {
     "shape": "tree"
    }
-  },
-  "fire": {
-   "name": "Fire",
-   "invulnerable": true,
-   "health": {
-    "max": 1
-   },
-   "move": {
-    "speed": 0,
-    "radius": 0.05,
-    "mass": 100
-   },
-   "sight": 0,
-   "veterancy": false,
-   "countsForVictory": false,
-   "view": {
-    "shape": "flag",
-    "scale": 0.5
-   }
   }
  },
  "scriptBudget": 20000000,
+ // grid fields (docs/fields.md): the fire prototype runs on C++ kernels; scripts/fire.lua only lays the fuel
+ "fields": {
+  "fuel": {"type": "int", "min": 0, "max": 100, "view": {"show": false}},
+  "fire": {
+   "type": "int", "min": 0, "max": 100,
+   "kernels": [
+    {"type": "spread", "period": 10, "above": 1, "set": 100, "chance": 0.1, "fuelChance": 0.0175, "fuel": {"field": "fuel", "min": 1}},
+    {"type": "consume", "period": 10, "fuel": "fuel", "amount": 1, "above": 1, "out": 0}
+   ],
+   "effects": [
+    {"type": "damage", "above": 1, "perSecond": 18, "period": 10, "structures": false},
+    {"type": "speed", "above": 1, "mul": 0.7}
+   ],
+   "view": {"preset": "fire", "particles": {"effect": "fire_smoke", "above": 1, "max": 24, "every": 1.5}}
+  }
+ },
  "playerAbilities": [
   {
    "id": "ignite",
@@ -613,8 +611,10 @@
    },
    "effects": [
     {
-     "type": "script",
-     "fn": "ignite_at"
+     "type": "field",
+     "field": "fire",
+     "max": 100,
+     "radius": 1.5
     }
    ]
   },

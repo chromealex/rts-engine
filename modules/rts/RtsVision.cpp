@@ -42,7 +42,9 @@ struct VisionCache {
     std::vector<std::pair<int32_t, Fixed>> sraises, sraisesNew;   // planet blockers
     std::vector<int32_t> touch;                                    // cells to re-evaluate this pass
     // planets
-    std::vector<Fixed> blockers, ground;
+    std::vector<Fixed> blockers, ground, groundSq;   // ground: radius of terrain + blocker (+1 raw), 0 = not yet
+    std::vector<std::vector<int64_t>> warp;            // per body: CubeSphere cell-edge table (raw)
+    std::vector<std::vector<Fixed>> stepFrac;          // per step count: Fixed::fromRatio(st, steps)
     std::vector<Vec3> center;
     std::vector<uint8_t> centerOk;
     // flat line-of-sight rays per radius: targets in the reference's order, sample offsets (sdy * W + sdx)
@@ -67,7 +69,7 @@ struct VisionCache {
         TW = (w + kTile - 1) / kTile; TH = (h + kTile - 1) / kTile;
         dirty.assign(size_t(TW) * size_t(TH), 0); dirtyList.clear();
         entries.clear(); raises.clear(); sraises.clear();
-        corner.clear(); level.clear(); dig.clear(); blockers.clear(); ground.clear(); center.clear(); centerOk.clear();
+        corner.clear(); level.clear(); dig.clear(); blockers.clear(); ground.clear(); groundSq.clear(); center.clear(); centerOk.clear(); warp.clear();
     }
     void clearDirty() { for (int32_t t : dirtyList) dirty[size_t(t)] = 0; dirtyList.clear(); }
     int tileOf(int c) const { return (c / W / kTile) * TW + (c % W) / kTile; }
@@ -105,6 +107,48 @@ inline bool sqrtGreater(Fixed L, Fixed s) {
     if (L.raw >= (int64_t(1) << 47) || s.raw >= (int64_t(1) << 31) - 1) return fxSqrt(L) > s;
     const int64_t s1 = s.raw + 1;
     return (L.raw << Fixed::kFracBits) >= s1 * s1;
+}
+// CubeSphere::cellFromDir(d) as (face, x, y), exact: same face choice and division, the binary search over the
+// cell-edge table replaced by a walk from a hint (the previous sample's cell on the same face).
+inline Fixed dotFace(Vec3 a, IVec3 b) {
+    Fixed r{};
+    if (b.x) r += b.x > 0 ? a.x : -a.x;
+    if (b.y) r += b.y > 0 ? a.y : -a.y;
+    if (b.z) r += b.z > 0 ? a.z : -a.z;
+    return r;
+}
+struct DirCell { int face = -1, x = 0, y = 0; };
+inline void cellOfDir(const std::vector<int64_t>& wp, int n, Vec3 d, DirCell& io) {
+    const Fixed ax = fxAbs(d.x), ay = fxAbs(d.y), az = fxAbs(d.z);
+    if (ax.raw == 0 && ay.raw == 0 && az.raw == 0) { io = {0, n / 2, n / 2}; return; }
+    int face;
+    if (ax >= ay && ax >= az) face = d.x.raw >= 0 ? 0 : 1;
+    else if (ay >= az) face = d.y.raw >= 0 ? 2 : 3;
+    else face = d.z.raw >= 0 ? 4 : 5;
+    const SphereFace& f = kSphereFaces[face];
+    const Fixed dn = dotFace(d, f.n);
+    auto cellOf = [&](Fixed du, int hint) {   // max i in [0, n-1] with warp[i] <= clamp(du / dn) (0 if none)
+        int i = std::clamp(hint, 0, n - 1);
+        constexpr int64_t kLim = int64_t(1) << 30;
+        if (du.raw > -kLim && du.raw < kLim && dn.raw > 0 && dn.raw < kLim) {
+            // du / dn = trunc(x / dn), x = du.raw << 16 (Fixed division); w <= trunc(x / dn) without dividing:
+            // x >= 0: w * dn <= x; x < 0 (trunc = ceil): (w - 1) * dn < x. The upper clamp never matters for
+            // i <= n - 1, the lower one gives 0 like an empty walk.
+            const int64_t x = du.raw * Fixed::kOne, D = dn.raw;
+            auto le = [&](int64_t wv) { return x >= 0 ? wv * D <= x : (wv - 1) * D < x; };
+            while (i + 1 <= n - 1 && le(wp[size_t(i) + 1])) ++i;
+            while (i > 0 && !le(wp[size_t(i)])) --i;
+            return i;
+        }
+        const int64_t sw = std::clamp((du / dn).raw, wp.front(), wp.back());
+        while (i + 1 <= n - 1 && wp[size_t(i) + 1] <= sw) ++i;
+        while (i > 0 && wp[size_t(i)] > sw) --i;
+        return i;
+    };
+    const bool same = io.face == face;
+    io.x = cellOf(dotFace(d, f.u), same ? io.x : n / 2);
+    io.y = cellOf(dotFace(d, f.v), same ? io.y : n / 2);
+    io.face = face;
 }
 } // namespace
 
@@ -168,7 +212,7 @@ void RtsModule::visionFlatFast(Simulation& sim) {
             if (v != 2) { v = 2; gs.visibleCells[q].push_back(int32_t(i)); }
         }
     };
-    const bool losAll = los || rules_.fog.lineOfSight;
+    const bool losAll = los || rules_.fog.lineOfSight || (fields_ && fields_->blocksVision());   // grid fields can block sight
     if (!vcache_) vcache_ = std::make_shared<VisionCache>();
     VisionCache& vc = *vcache_;
     std::vector<int64_t>& base = gs.visionBase;
@@ -205,6 +249,7 @@ void RtsModule::visionFlatFast(Simulation& sim) {
                     for (int x = cx - rr; x <= cx + rr; ++x)
                         if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rr * rr) raise(x, y, h);
             });
+        if (fields_ && fields_->blocksVision()) fields_->visionBlockers(sim, raise);   // grid fields (smoke, walls of fire)
         std::sort(vc.raisesNew.begin(), vc.raisesNew.end());
     }
     auto occOf = [&](int32_t i) {   // occluder height of a cell: ground, undug rock, the highest blocker on it
@@ -353,6 +398,8 @@ void RtsModule::visionFlatFast(Simulation& sim) {
                     if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
                         see(o.player, size_t(y * W + x));
         });
+    if (fields_ && fields_->active())   // grid fields with a reveal effect (creep sight, burning cells light up)
+        fields_->reveal(sim, [&](uint8_t p, size_t i) { if (p < np) see(p, i); });
 }
 
 // ----------------------------------------------------------------- planets
@@ -401,8 +448,14 @@ void RtsModule::visionSphereFast(Simulation& sim) {
     if (fresh) {
         vc.reset(g.w, g.h, true);
         vc.center.assign(n, Vec3{}); vc.centerOk.assign(n, 0);
+        vc.warp.resize(S.bodies.size());
+        for (size_t b = 0; b < S.bodies.size(); ++b) {
+            const CubeSphere& cb = S.cubeOf(int(b));
+            vc.warp[b].resize(size_t(cb.faceSize()) + 1);
+            for (int i = 0; i <= cb.faceSize(); ++i) vc.warp[b][size_t(i)] = cb.edgeWarp(i).raw;
+        }
         if (los) {
-            vc.blockers.assign(n, Fixed{}); vc.ground.assign(n, Fixed{});
+            vc.blockers.assign(n, Fixed{}); vc.ground.assign(n, Fixed{}); vc.groundSq.assign(n, Fixed{});
             if (useDig) { vc.dig = g.dig; for (size_t i = 0; i < g.dig.size(); ++i) if (g.dig[i]) vc.blockers[i] = rock; }
             for (auto& [c, h] : vc.sraisesNew) vc.blockers[size_t(c)] = fxMax(vc.blockers[size_t(c)], h);
         }
@@ -417,7 +470,7 @@ void RtsModule::visionSphereFast(Simulation& sim) {
         }
         for (int32_t i : vc.touch) {
             const Fixed b = blockOf(i);
-            if (b != vc.blockers[size_t(i)]) { vc.blockers[size_t(i)] = b; vc.ground[size_t(i)] = Fixed{}; vc.markDirty(i); }
+            if (b != vc.blockers[size_t(i)]) { vc.blockers[size_t(i)] = b; vc.ground[size_t(i)] = Fixed{}; vc.markDirty(i); }   // ground refilled lazily
         }
         if (!vc.dirtyList.empty())
             for (auto& en : vc.entries) {
@@ -457,14 +510,23 @@ void RtsModule::visionSphereFast(Simulation& sim) {
         cells.clear();
         const int M = cube.faceSize();
         if (k >= M) { for (int i = 0; i < 6 * M * M; ++i) { const SphereCell sc = cube.cell(i); cells.push_back(S.gridCell(body, sc.face, sc.x, sc.y)); } }
-        else
-            for (int dy = -k; dy <= k; ++dy)
-                for (int dx = -k; dx <= k; ++dx) {
-                    int nn = S.offset(c, dx, dy);
-                    if (nn < 0) { const int mid = S.offset(c, 0, dy); nn = mid < 0 ? -1 : S.offset(mid, dx, 0); }
-                    if (nn >= 0) cells.push_back(nn);
-                }
+        else {
+            int cb, cf, cx, cy;
+            if (S.cellFace(c, cb, cf, cx, cy) && cx - k >= 0 && cy - k >= 0 && cx + k < M && cy + k < M) {
+                // the whole square inside one face: offsets are plain grid steps (no seam folds)
+                for (int dy = -k; dy <= k; ++dy)
+                    for (int dx = -k; dx <= k; ++dx) cells.push_back(c + dy * g.w + dx);
+            } else
+                for (int dy = -k; dy <= k; ++dy)
+                    for (int dx = -k; dx <= k; ++dx) {
+                        int nn = S.offset(c, dx, dy);
+                        if (nn < 0) { const int mid = S.offset(c, 0, dy); nn = mid < 0 ? -1 : S.offset(mid, dx, 0); }
+                        if (nn >= 0) cells.push_back(nn);
+                    }
+        }
         const bool march = los && !air && !t.seesOver;
+        const std::vector<int64_t>& wp = vc.warp[size_t(body)];
+        const int rowBase = S.bodies[size_t(body)].rowBase;
         for (int32_t nc : cells) {
             if (!full && mine[size_t(nc)] == 2) continue;   // already lit for this owner (and its sharers) this pass
             if (!vc.centerOk[size_t(nc)]) { vc.center[size_t(nc)] = S.cellCenter(nc); vc.centerOk[size_t(nc)] = 1; }
@@ -476,17 +538,21 @@ void RtsModule::visionSphereFast(Simulation& sim) {
                 // stay above the ground radius of the cell under it (hills and the horizon)
                 const Vec3 tgt = cc + S.cellDir(nc) * rules_.terrain.targetHeight;
                 const int steps = int((fxSqrt(L) / cs).floorInt()) + 1;   // about one sample per cell
+                if (vc.stepFrac.size() <= size_t(steps)) vc.stepFrac.resize(size_t(steps) + 1);
+                std::vector<Fixed>& fr = vc.stepFrac[size_t(steps)];
+                if (fr.empty()) { fr.resize(size_t(steps)); for (int st = 1; st < steps; ++st) fr[size_t(st)] = Fixed::fromRatio(st, steps); }
                 const Vec3 d = tgt - eye;
                 bool visible = true;
+                DirCell dc;
                 for (int st = 1; st < steps && visible; ++st) {
-                    const Vec3 p = eye + d * Fixed::fromRatio(st, steps);
+                    const Vec3 p = eye + d * fr[size_t(st)];
                     const Vec3 l = p - o3;
-                    const SphereCell sc = cube.cell(cube.cellFromDir(l));
-                    const int gc = S.gridCell(body, sc.face, sc.x, sc.y);
+                    cellOfDir(wp, M, l, dc);
+                    const int gc = (rowBase + dc.face * M + dc.y) * g.w + dc.x;
                     if (full) en.tiles.push_back(vc.tileOf(gc));
                     Fixed& gr = vc.ground[size_t(gc)];
-                    if (gr.raw == 0) gr = R + S.cellHeight(gc) + vc.blockers[size_t(gc)] + Fixed::fromRaw(1);
-                    if (l.lengthSq() < gr * gr) visible = false;
+                    if (gr.raw == 0) { gr = R + S.cellHeight(gc) + vc.blockers[size_t(gc)] + Fixed::fromRaw(1); vc.groundSq[size_t(gc)] = gr * gr; }
+                    if (l.lengthSq() < vc.groundSq[size_t(gc)]) visible = false;
                 }
                 if (!visible) continue;
             }
@@ -529,7 +595,7 @@ void RtsModule::visionFlatRef(Simulation& sim) {
     // 3D line of sight: ground height per cell (heightfield corners or cliff levels) and an occlusion
     // height that adds dynamic blockers (types with vision.blocks, smoke areas, undug rock).
     // Integer units of 1/64 so the ray test is exact and deterministic.
-    const bool losAll = los || rules_.fog.lineOfSight;
+    const bool losAll = los || rules_.fog.lineOfSight || (fields_ && fields_->blocksVision());   // grid fields can block sight
     std::vector<int64_t>& base = gs.visionBase;
     std::vector<int64_t>& occ = gs.visionOcc;
     if (losAll) {
@@ -573,6 +639,7 @@ void RtsModule::visionFlatRef(Simulation& sim) {
                     for (int x = cx - rr; x <= cx + rr; ++x)
                         if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rr * rr) raise(x, y, h);
             });
+        if (fields_ && fields_->blocksVision()) fields_->visionBlockers(sim, raise);   // grid fields (smoke, walls of fire)
     }
     w.each<Unit, Owner, Transform>([&](Entity e, Unit& u, Owner& o, Transform& tr) {
         if (o.player == 0 || o.player >= np || (u.flags & kUnitOffMap)) return;
@@ -622,6 +689,8 @@ void RtsModule::visionFlatRef(Simulation& sim) {
                     if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r)
                         see(o.player, size_t(y * W + x)); // tracked in visibleCells, so it fades back to explored
         });
+    if (fields_ && fields_->active())   // grid fields with a reveal effect (creep sight, burning cells light up)
+        fields_->reveal(sim, [&](uint8_t p, size_t i) { if (p < np) see(p, i); });
 }
 
 // Reference on spheres (brute force, the pre-cache algorithm).

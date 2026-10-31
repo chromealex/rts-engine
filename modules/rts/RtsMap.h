@@ -212,6 +212,7 @@ struct MapGrid {
     // Tests: optimal A* cell path (unbounded, no clearance) and its 10/14 cost; -1 when none.
     int64_t astarCellCost(int s, int g, uint8_t layer, std::vector<int>* cells = nullptr);
     size_t flowBudgetBytes = size_t(32) << 20;
+    bool blockedGoalNearest = false;   // rules / map movement.blockedGoals: "nearest" (flat maps; planets always do)
     int flowMaxFields = 64;
     // diagnostics (benchmarks): when set, time spent in path searches / field work is added to pathNs
     std::function<int64_t()> clockNs;

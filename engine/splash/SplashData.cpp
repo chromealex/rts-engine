@@ -324,4 +324,29 @@ bool readyToLeave(const Spec& s, float elapsed, bool loaded, bool skipped) {
     return loaded && (skipped || elapsed >= s.minimumTime());
 }
 
+// The engine's loading screen for games without a "splash" block: the RTSEngine mark assembles —
+// the blades slide in from their sides, the orange diamond turns into place and keeps pulsing while
+// loading runs. Art: engine/assets/branding (tools/branding/logo/make_logo.py).
+Json defaultBlock() {
+    static const char* kText = R"({
+      "background": "#0e0f11",
+      "logos": [
+        {"image": "engine/branding/splash_blade_top.png", "scale": 0.34, "anchor": [0.5, 0.47],
+         "animation": [{"t": 0, "opacity": 0, "y": -0.05}, {"t": 0.55, "opacity": 1, "y": 0, "ease": "out"}]},
+        {"image": "engine/branding/splash_blade_left.png", "start": 0.1, "scale": 0.34, "anchor": [0.5, 0.47],
+         "animation": [{"t": 0, "opacity": 0, "x": -0.04, "y": 0.025}, {"t": 0.55, "opacity": 1, "x": 0, "y": 0, "ease": "out"}]},
+        {"image": "engine/branding/splash_blade_right.png", "start": 0.2, "scale": 0.34, "anchor": [0.5, 0.47],
+         "animation": [{"t": 0, "opacity": 0, "x": 0.04, "y": 0.025}, {"t": 0.55, "opacity": 1, "x": 0, "y": 0, "ease": "out"}]},
+        {"image": "engine/branding/splash_diamond.png", "start": 0.55, "scale": 0.34, "anchor": [0.5, 0.47],
+         "animation": {"pulse": {"amount": 0.035, "period": 1.6},
+                       "keyframes": [{"t": 0, "opacity": 0, "scale": 0.3, "rotate": -90},
+                                     {"t": 0.5, "opacity": 1, "scale": 1, "rotate": 0, "ease": "out"}]}}
+      ],
+      "minSeconds": 1.6, "skippable": true, "fadeOut": 0.4,
+      "progress": {"show": true, "color": "#fe6f03", "track": "#ffffff1f", "position": "bottom", "width": 0.28, "height": 4, "offset": 0.1}
+    })";
+    static const Json j = Json::parse(kText);
+    return j;
+}
+
 } // namespace rts::splash

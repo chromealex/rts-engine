@@ -392,7 +392,7 @@ add_library(rts_game_view STATIC modules/rts/view/RtsView.cpp modules/rts/view/R
     modules/rts/view/RtsShapes.cpp modules/rts/view/RtsLook.cpp modules/rts/view/RtsAnimate.cpp
     modules/rts/view/RtsViewDraw.cpp modules/rts/view/RtsPortrait.cpp
     modules/rts/view/RtsLights.cpp modules/rts/view/RtsLightsData.cpp modules/rts/view/RtsGroundFx.cpp modules/rts/view/RtsTerrainRender.cpp modules/rts/view/RtsTerrainDetailMesh.cpp
-    modules/rts/view/RtsFog.cpp
+    modules/rts/view/RtsFog.cpp modules/rts/view/RtsFieldView.cpp
     modules/rts/view/RtsPlanet.cpp modules/rts/view/RtsPlanetDetail.cpp modules/rts/view/RtsPlanetRender.cpp modules/rts/view/RtsPlanetView.cpp modules/rts/view/RtsPlanetGroundFx.cpp)
 # visual terrain detail surface (agent-terrain): shared by the view and the editor core (sculpt, validate)
 add_library(rts_terrain_detail STATIC modules/rts/view/RtsTerrainDetail.cpp)
@@ -559,10 +559,16 @@ if(RTS_BUILD_EDITOR)
     target_link_libraries(rts_editor PRIVATE rts_runtime rts_game_view rts_editor_core)
     target_link_libraries(rts_editor PRIVATE rts_game_fx)
     target_compile_definitions(rts_editor PRIVATE RTS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    if(WIN32)
+        target_sources(rts_editor PRIVATE apps/editor/branding/editor.rc)   # exe + window icon
+    endif()
     if(APPLE)
         set_target_properties(rts_editor PROPERTIES MACOSX_BUNDLE TRUE OUTPUT_NAME "RTSEditor"
             MACOSX_BUNDLE_BUNDLE_NAME "RTS Editor" MACOSX_BUNDLE_GUI_IDENTIFIER "com.rtsengine.editor"
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/Info.plist.in")
+        # application icon (CFBundleIconFile AppIcon; art: tools/branding/logo/make_logo.py)
+        target_sources(rts_editor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/branding/AppIcon.icns")
+        set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/apps/editor/branding/AppIcon.icns" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
         # engine assets (UI font) inside the bundle, so the editor works when moved elsewhere
         add_custom_command(TARGET rts_editor POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_directory "${RTS_ENGINE_ASSETS}" "$<TARGET_BUNDLE_CONTENT_DIR:rts_editor>/Resources/content/engine"
@@ -803,6 +809,10 @@ if(TARGET rts_editor_core)
     target_sources(rts_editor_core PRIVATE apps/editor/core/OverlayOps.cpp)
     target_link_libraries(rts_editor_core PUBLIC rts_overlay_data)
 endif()
+# grid fields in the editor (field_* MCP ops, Scene preview)
+if(TARGET rts_editor_core)
+    target_sources(rts_editor_core PRIVATE apps/editor/core/FieldOps.cpp)
+endif()
 
 # VFX tools (vfx tools agent): Unity particle importer tests (Python, stdlib only) and the fx_* editor
 # operations (list / get / set / delete / templates / import_unity / bind; fx_preview in the editor GUI).
@@ -888,7 +898,7 @@ endif()
 # ---------------------------------------------------------------------------
 set(RTS_LUA_SRC lapi.c lauxlib.c lbaselib.c lcode.c lcorolib.c lctype.c ldebug.c ldo.c ldump.c lfunc.c lgc.c
     llex.c lmathlib.c lmem.c lobject.c lopcodes.c lparser.c lstate.c lstring.c lstrlib.c ltable.c ltablib.c
-    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c rts_linit.c)
+    ltm.c lundump.c lutf8lib.c lvm.c lzio.c rts_lua.c)
 list(TRANSFORM RTS_LUA_SRC PREPEND third_party/lua/)
 add_library(rts_lua STATIC ${RTS_LUA_SRC})
 target_include_directories(rts_lua PUBLIC third_party/lua)
@@ -906,6 +916,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 endif()
 target_sources(rts_game PRIVATE modules/rts/RtsScript.cpp modules/rts/RtsScriptEngine.cpp modules/rts/RtsScriptApi.cpp
     modules/rts/RtsScriptStd.cpp)
+# grid fields (G5): data, kernels, Lua `field` table (docs/fields.md)
+target_sources(rts_game PRIVATE modules/rts/RtsGridFields.cpp modules/rts/RtsGridFieldData.cpp modules/rts/RtsGridFieldsApi.cpp)
 # the engine's standard Lua library (rule-level mechanics) is compiled in: modules/rts/lua/*.lua
 file(GLOB RTS_STD_LUA CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/modules/rts/lua/*.lua)
 set(RTS_STD_LUA_H ${CMAKE_CURRENT_BINARY_DIR}/gen/RtsStdLua.h)

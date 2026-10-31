@@ -135,6 +135,7 @@ enum class EffectKind : uint8_t {
     AddCharges,     // structure with larva charges: + amount, up to `limit` (inject larvae)
     TeleportGroup,  // units around one end moved to the other, keeping formation; may come back after `duration`
     Script,     // {"type": "script", "fn": "name", ...}: a Lua function (RtsScript.h), runs in the tick's scripts phase
+    Field,      // {"type": "field", "field": id, "add" | "set" | "max": n, "radius": r}: grid field cells (RtsGridFields.h)
 };
 
 struct EffectDef {
@@ -173,6 +174,12 @@ struct EffectDef {
     uint8_t tpFrom = 0, tpTo = 0; // TeleportGroup "origin" / "destination": 0 point, 1 caster, 2 second point (pointPair)
     std::string scriptFn;      // Script: global function of the simulation scripts
     Json scriptArgs;           // Script: the effect's JSON (ctx.args)
+    // Field: grid field cells around the point (radius 0: one cell); per-player fields write the owner's layer
+    std::string fieldName;
+    int16_t field = -1;        // index into Rules::gridFields (resolved by loadGridFieldRules)
+    uint8_t fieldOp = 0;       // 0 add, 1 set, 2 max
+    Fixed fieldAmount{};
+    int32_t fieldValue = 0;    // fieldAmount in the field's raw units
 };
 
 // What autocast / the AI aims a skill at.

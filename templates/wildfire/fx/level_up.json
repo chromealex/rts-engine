@@ -1,0 +1,10 @@
+// Hero level up: golden sparkles rising around the unit.
+{
+  "emitters": [
+    { "texture": "builtin:spark", "blend": "additive", "burst": 18, "life": [0.7, 1.2], "speed": [0.8, 1.6],
+      "spread": 20, "shape": "ring", "radius": 0.7, "drag": 0.5, "size": [0.15, 0.25],
+      "color": [[0, "#fff0a0ff"], [0.7, "#ffc84080"], [1, "#ffa02000"]] },
+    { "texture": "builtin:ring", "blend": "additive", "align": "ground", "burst": 1, "life": 0.7, "speed": 0,
+      "size": 1.0, "sizeOverLife": [[0, 0.4], [1, 2.6]], "color": [[0, "#ffe080a0"], [1, "#ffb03000"]] }
+  ]
+}

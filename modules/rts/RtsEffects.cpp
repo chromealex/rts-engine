@@ -552,6 +552,9 @@ void RtsModule::applyEffect(Simulation& sim, const EffectDef& e, int list, int i
         }
         break;
     }
+    case EffectKind::Field:    // grid field cells (RtsGridFields.cpp)
+        if (fields_) fields_->applyEffect(sim, e, ctx);
+        break;
     case EffectKind::Script:   // deferred to the scripts phase of this tick (never runs inside a system's loop)
         if (script_) script_->queueEffect(e, ctx, targets());
         break;
