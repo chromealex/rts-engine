@@ -10364,3 +10364,91 @@ TEST(planet_fog_blur_seams_and_speed) {
     std::printf("  fog blur faceSize 256 (%zu cells), radius 2: old %.2f ms, new %.2f ms per update\n", n, tOld, tNew);
     CHECK(tNew < tOld);
 }
+
+// ---- agent-ai-terrain: terrain analysis, bot save states, invasions of other planets
+#include "modules/rts/RtsAITerrain.h"
+TEST(ai_terrain_analysis_high_ground_routes_chokes) {
+    // 24x12 level map: a level-1 plateau in the middle (x 8..15) with a ramp, walls at the top and bottom rows
+    // leave a 2-cell gap (choke) at x = 20.
+    std::string rows, levels;
+    for (int y = 0; y < 12; ++y) {
+        std::string r(24, '.'), l(24, '0');
+        for (int x = 8; x < 16; ++x) l[size_t(x)] = '1';
+        if (y == 6) r[7] = '/', r[16] = '/';
+        if (y != 5 && y != 6) r[20] = '#';
+        rows += std::string(y ? "," : "") + "\"" + r + "\"";
+        levels += std::string(y ? "," : "") + "\"" + l + "\"";
+    }
+    auto sim = makeSimJson(R"({"types": {"hall": {"structure": {"footprint": [2, 2]}}}})",
+                           "{\"size\":[24,12],\"players\":[{\"name\":\"A\"},{\"name\":\"B\"}],\"terrain\":{\"rows\":[" + rows + "],\"levels\":[" + levels + "]}}");
+    auto& g = mod(*sim).state(*sim).grid;
+    game::AITerrain T;
+    T.build(*sim, mod(*sim));
+    CHECK(T.relief);
+    CHECK(T.elev[size_t(g.index(10, 3))] == game::AITerrain::kUnit && T.elev[size_t(g.index(3, 3))] == 0);
+    CHECK(T.over[size_t(g.index(5, 3))] == game::AITerrain::kUnit);   // overlooked by the plateau
+    CHECK(T.over[size_t(g.index(10, 3))] == 0);
+    CHECK(T.crest[size_t(g.index(9, 3))] == game::AITerrain::kUnit);  // edge of the plateau: prominent
+    CHECK(T.clear[size_t(g.index(20, 5))] <= 1 && T.clear[size_t(g.index(3, 6))] >= 3);
+    // from the west to the east side: the plain route climbs over the plateau, the weighted one goes around it
+    std::vector<int> plain, weighted;
+    CHECK(T.route(g, g.index(2, 3), g.index(22, 3), 0, 0, nullptr, plain));
+    CHECK(T.route(g, g.index(2, 3), g.index(22, 3), 400, 120, nullptr, weighted));
+    auto maxElev = [&](const std::vector<int>& r) { int32_t m = 0; for (int c : r) m = std::max(m, T.elev[size_t(c)]); return m; };
+    CHECK(!plain.empty() && !weighted.empty());
+    CHECK(maxElev(weighted) <= maxElev(plain));
+    // every route passes the choke
+    bool viaGap = false;
+    for (int c : weighted) if (c % g.w == 20) viaGap = (c / g.w == 5 || c / g.w == 6);
+    CHECK(viaGap);
+}
+
+TEST(ai_bot_state_survives_save_load) {
+    // a bot match saved at 90 s and continued from the save (sim + bot states) ends exactly like the original
+    for (const std::string& game : {kSkirmish, std::string(RTS_SOURCE_DIR) + "/templates/metaltide"}) {
+        const std::string map = game == kSkirmish ? "maps/valley.json" : "maps/twin_craters.json";
+        auto a = makeSim(game, map, 4);
+        std::vector<game::RtsAI> botsA;
+        for (auto& p : a->players()) botsA.emplace_back(p.slot, 4);
+        std::string simBytes;
+        std::vector<std::string> botBytes;
+        for (uint32_t t = 0; t < 20 * 150 && a->result() == 0; ++t) {
+            if (t == 20 * 90) { simBytes = a->serialize(); for (auto& b : botsA) botBytes.push_back(b.saveState()); }
+            for (auto& b : botsA) b.update(*a);
+            a->step();
+        }
+        auto b = makeSim(game, map, 4);
+        CHECK(b->deserialize(simBytes));
+        std::vector<game::RtsAI> botsB;
+        for (auto& p : b->players()) botsB.emplace_back(p.slot, 99);   // other seed: everything comes from the state
+        for (size_t i = 0; i < botsB.size(); ++i) CHECK(botsB[i].loadState(botBytes[i]));
+        while (b->tick() < a->tick() && b->result() == 0) { for (auto& bt : botsB) bt.update(*b); b->step(); }
+        CHECK(b->checksum() == a->checksum());
+        CHECK(!botsB[0].loadState("garbage"));
+    }
+}
+
+TEST(ai_invades_separate_planets) {
+    // one planet per player (generated "separate" layout): the only way to win is an orbit fleet to the other body
+    Json tmpl = Json::parseFile(kPlanets + "/maps/two_worlds.json");
+    Json map = tmpl;
+    Json g = Json::object();
+    g.set("preset", Json::string("rocky")); g.set("seed", Json::number(int64_t(1))); g.set("players", Json::number(int64_t(2)));
+    Json params = Json::object(); params.set("layout", Json::string("separate"));
+    g.set("params", params); g.set("templateData", tmpl);
+    map.set("generate", g);
+    SimConfig cfg; cfg.seed = 1;
+    Simulation sim(cfg, std::make_unique<game::RtsModule>());
+    sim.setup(Json::parseFile(kPlanets + "/rules.json"), map);
+    std::vector<game::RtsAI> bots;
+    for (auto& p : sim.players()) bots.emplace_back(p.slot, 1);
+    int transits = 0;
+    for (uint32_t t = 0; t < 20 * 900 && sim.result() == 0; ++t) {
+        for (auto& b : bots) b.update(sim);
+        sim.step();
+        for (auto& e : sim.events()) if (e.type == game::kEvTransitStart) ++transits;
+    }
+    std::printf("  separate planets: %d transfers, result %d at %u s\n", transits, sim.result(), sim.tick() / sim.tickRate());
+    CHECK(transits >= 6);        // fleets, not pairs of scouts
+    CHECK(sim.result() != 0);    // and they win the match
+}
