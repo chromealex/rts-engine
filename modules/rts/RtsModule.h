@@ -18,6 +18,7 @@
 #include "RtsScript.h"
 #include "RtsMech.h"
 #include "RtsGridFields.h"
+#include "RtsNative.h"
 #include <memory>
 
 namespace rts::game {
@@ -478,6 +479,7 @@ struct VisionCache;   // RtsVision.cpp
 class RtsModule final : public GameModule {
 public:
     RtsModule();
+    explicit RtsModule(std::vector<NativeDefinition> nativeDefinitions);
     ~RtsModule() override;
     std::string name() const override { return "rts"; }
     void setup(Simulation& sim, const Json& rules, const Json& map) override;
@@ -795,6 +797,8 @@ private:
     void captureOriginals(Simulation& sim, Entity structure, uint8_t from, uint8_t to);
     void flushDeathSpawns(Simulation& sim);
     std::unique_ptr<GridFields> fields_;   // grid fields config + kernels (state: GridFieldStore resource)
+    std::vector<NativeDefinition> nativeDefinitions_;
+    NativeModules native_;
     std::unique_ptr<ScriptEngine> script_; // Lua VM (RtsScript.h); its persistent state is the ScriptStore resource
     // foundations, traps, group teleports, charge effects (RtsFidelity.cpp)
     void sysFidelity(Simulation& sim);
