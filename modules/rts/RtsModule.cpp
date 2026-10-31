@@ -80,6 +80,7 @@ void RtsModule::setup(Simulation& sim, const Json& rulesJson, const Json& map) {
     if (g.surf)   // planets: bodies above the cell threshold (RtsHpaSphere.cpp)
         for (auto& t : rules_.types)
             if (t.speed.raw > 0 && !(t.layer & kLayerAir)) g.prepareHpaSphere(t.pathLayer);
+    native_.load(*this, sim, rulesJson, nativeDefinitions_);
 }
 
 void RtsModule::setupMap(Simulation& sim, const Json& map) {
@@ -947,6 +948,7 @@ void RtsModule::applyCommand(Simulation& sim, const Command& cmd) {
     GameState& gs = state(sim);
     auto* pi = sim.player(cmd.player);
     if (!pi || !pi->alive) return;
+    if (cmd.type >= 32768) { native_.command(*this, sim, cmd); return; }
     const bool queue = cmd.flags & kCmdQueue;
     if (cmd.type >= kCmdStance || mechOn(sim) || (cmd.type == kCmdRally && (cmd.flags & kCmdQueue))) { if (applyMechCommand(sim, cmd)) return; }   // agent-mech
     if (cmd.type >= kCmdDig && cmd.type <= kCmdPlayerAbility) { applyDungeonCommand(sim, cmd); return; }
@@ -1388,6 +1390,7 @@ void RtsModule::hashState(Simulation& sim, Hasher& h) {
     }
     for (auto e : gs.trig.enabled) h.u32(e);
     h.u32(gs.nextWaveTick);
+    native_.hash(sim, h);
     if (auto* ss = w.resource<ScriptStore>()) ss->hash(h);   // only games with scripts
     if (gs.grid.hf) { // only heightfield games: every other game keeps its exact checksums
         h.u32(uint32_t(rules_.terrain.model)); h.u32(uint32_t(gs.grid.corner.size()));

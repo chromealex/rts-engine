@@ -562,7 +562,8 @@ void ScriptStore::hash(Hasher& h) const {
 }
 
 // The module owns the engine (unique_ptr of an incomplete type in RtsModule.h).
-RtsModule::RtsModule() = default;
+RtsModule::RtsModule() : nativeDefinitions_(compiledNativeModules()) {}
+RtsModule::RtsModule(std::vector<NativeDefinition> definitions) : nativeDefinitions_(std::move(definitions)) {}
 RtsModule::~RtsModule() = default;
 
 } // namespace rts::game
