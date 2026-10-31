@@ -7,6 +7,7 @@
 #include "Editor.h"
 #include "EditorIcons.h"
 #include "EditorUtil.h"
+#include "core/ProjectFile.h"
 #include "core/Projects.h"
 
 namespace fs = std::filesystem;
@@ -62,7 +63,8 @@ ImU32 tint(const std::string& id) {   // stable colour per template for the card
 
 void Editor::showProjectHub(int tab) { showPicker_ = true; g_hub.tab = tab; g_hub.error.clear(); }
 
-// Folder browser as a modal: returns true when a folder was chosen (in `out`).
+// Folder browser as a modal: returns true when a folder was chosen (in `out`). Opening a project, it
+// also lists .rtsproj files (a click on one opens it, like a double-click in the OS file manager).
 static bool folderBrowser(bool& open, std::string& dir, char* newFolder, size_t newFolderSize, bool needProject, std::string& out) {
     bool chosen = false;
     if (open) ImGui::OpenPopup("Выбор папки");
@@ -87,6 +89,19 @@ static bool folderBrowser(bool& open, std::string& dir, char* newFolder, size_t 
             if (it->is_directory(e2) && it->path().filename().string()[0] != '.') subs.push_back(it->path());
         }
         std::sort(subs.begin(), subs.end());
+        if (needProject) {
+            std::vector<fs::path> files;
+            for (auto it = fs::directory_iterator(dir, fs::directory_options::skip_permission_denied, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+                std::error_code e2;
+                if (it->is_regular_file(e2) && isProjectFilePath(it->path().string())) files.push_back(it->path());
+            }
+            std::sort(files.begin(), files.end());
+            for (auto& f : files) {
+                std::string label = std::string(ICON_FILE) + "  " + f.filename().string();
+                if (ImGui::Selectable(label.c_str(), false, ImGuiSelectableFlags_AllowDoubleClick)) { out = f.string(); chosen = true; }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Файл проекта: открыть");
+            }
+        }
         for (auto& s : subs) {
             const bool isProject = fs::exists(s / "game.json", ec);
             std::string label = std::string(isProject ? ICON_GAME : ICON_PROJECT) + "  " + s.filename().string();
@@ -96,7 +111,7 @@ static bool folderBrowser(bool& open, std::string& dir, char* newFolder, size_t 
                 else dir = s.string();
             }
         }
-        if (subs.empty()) ImGui::TextDisabled("Пустая папка");
+        if (subs.empty() && !(needProject && !findProjectFile(dir).empty())) ImGui::TextDisabled("Пустая папка");
         ImGui::EndChild();
         if (!needProject) {
             ImGui::SetNextItemWidth(200);
@@ -113,7 +128,7 @@ static bool folderBrowser(bool& open, std::string& dir, char* newFolder, size_t 
         ImGui::BeginDisabled(!here);
         if (ImGui::Button(needProject ? "Открыть этот проект" : "Выбрать эту папку", ImVec2(180, 0))) { out = dir; chosen = true; }
         ImGui::EndDisabled();
-        if (needProject && !here) { ImGui::SameLine(); ImGui::TextDisabled("Папка проекта содержит game.json"); }
+        if (needProject && !here) { ImGui::SameLine(); ImGui::TextDisabled("Выберите файл .rtsproj или папку с game.json"); }
         ImGui::SameLine(ImGui::GetWindowWidth() - 110);
         if (ImGui::Button("Отмена", ImVec2(90, 0))) open = false;
         if (chosen) { open = false; ImGui::CloseCurrentPopup(); }
@@ -137,6 +152,14 @@ void Editor::drawGamePicker() {
     ImGui::Spacing(); ImGui::Spacing();
     if (ImGui::Selectable(ICON_PROJECT "  Проекты", H.tab == 0, 0, ImVec2(0, 30))) H.tab = 0;
     if (ImGui::Selectable(ICON_PLUS "  Новый проект", H.tab == 1, 0, ImVec2(0, 30))) H.tab = 1;
+    {   // .rtsproj double-click: does the OS know this editor?
+        const AssocStatus& fa = fileAssoc();
+        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - (ws_.project.dir.empty() ? 40 : 80) - (fa.registered || !fa.supported ? 0 : 30));
+        if (fa.registered) ImGui::TextDisabled(ICON_CHECK " .rtsproj: этот редактор");
+        else ImGui::TextColored(ImVec4(1, 0.7f, 0.4f, 1), ICON_WARNING " .rtsproj: %s", fa.supported ? "не связан" : "недоступно");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Двойной клик по файлу проекта .rtsproj открывает его в редакторе.\n%s", fa.detail.c_str());
+        if (!fa.registered && fa.supported && ImGui::Button(ICON_LINK " Связать", ImVec2(-1, 0))) registerFileAssoc();
+    }
     if (!ws_.project.dir.empty()) {
         ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 40);
         if (ImGui::Button("Закрыть", ImVec2(-1, 0))) showPicker_ = false;
@@ -169,7 +192,7 @@ void Editor::drawGamePicker() {
             const ImVec2 p0 = ImGui::GetCursorScreenPos();
             if (ImGui::Selectable("##p", current, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap, ImVec2(0, 48)) &&
                 ImGui::IsMouseDoubleClicked(0) && pr.exists)
-                openGame(pr.dir);
+                requestOpenProject(pr.file.empty() ? pr.dir : pr.file);
             ImDrawList* dl = ImGui::GetWindowDrawList();
             dl->AddRectFilled(ImVec2(p0.x + 6, p0.y + 8), ImVec2(p0.x + 38, p0.y + 40), tint(pr.name), 6);
             const std::string letter = pr.name.empty() ? "?" : pr.name.substr(0, (unsigned char)pr.name[0] >= 0xC0 ? 2 : 1);
@@ -184,12 +207,12 @@ void Editor::drawGamePicker() {
             else ImGui::TextColored(ImVec4(1, 0.55f, 0.4f, 1), ICON_WARNING " папка не найдена: %s", pr.dir.c_str());
             ImGui::EndGroup();
             ImGui::PopClipRect();
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pr.dir.c_str());
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", (pr.file.empty() ? pr.dir : pr.file).c_str());
             ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x + right - 250, p0.y + 14));
             ImGui::TextDisabled("%s", ago(pr.lastOpened).c_str());
             ImGui::SameLine(right - 140);
             ImGui::BeginDisabled(!pr.exists);
-            if (ImGui::Button(current ? "Открыт" : "Открыть", ImVec2(90, 0))) openGame(pr.dir);
+            if (ImGui::Button(current ? "Открыт" : "Открыть", ImVec2(90, 0))) requestOpenProject(pr.file.empty() ? pr.dir : pr.file);
             ImGui::EndDisabled();
             ImGui::SameLine();
             if (ui::toolButton(ICON_CLOSE, "Убрать из списка (файлы не удаляются)", false, true)) forgetProject(pr.dir);
@@ -250,12 +273,12 @@ void Editor::drawGamePicker() {
             std::string err;
             const std::string dir = createProject(ws_.engineDir, H.templates[size_t(H.templ)].id, H.title, H.location, "", &err);
             if (dir.empty()) H.error = err;
-            else { H.error.clear(); openGame(dir); }
+            else { H.error.clear(); requestOpenProject(dir); }
         }
     }
     if (folderBrowser(H.browsing, H.browseDir, H.newFolder, sizeof H.newFolder, H.browseFor == 1, browsed)) {
         if (H.browseFor == 0) std::snprintf(H.location, sizeof H.location, "%s", browsed.c_str());
-        else openGame(browsed);
+        else requestOpenProject(browsed);
     }
     ImGui::EndChild();
     ImGui::End();

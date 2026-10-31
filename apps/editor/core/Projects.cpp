@@ -7,6 +7,7 @@
 #include <fstream>
 #include "engine/data/Json.h"
 #include "engine/pack/FileCopy.h"
+#include "ProjectFile.h"
 
 namespace fs = std::filesystem;
 
@@ -54,6 +55,7 @@ std::string canonical(const std::string& dir) {
 // folders of a project that are outputs or editor state, never copied into a new project
 bool skipped(const fs::path& rel) {
     const std::string top = rel.begin() == rel.end() ? std::string() : rel.begin()->string();
+    if (std::distance(rel.begin(), rel.end()) == 1 && isProjectFilePath(top)) return true;   // the new project gets its own
     return top == "Builds" || top == "dist" || top == "logs" || top == "Logs" || top == ".rtsengine";
 }
 
@@ -112,6 +114,7 @@ std::vector<ProjectInfo> recentProjects() {
         ProjectInfo info;
         info.dir = p.getStr("dir");
         info.name = p.getStr("name", fs::path(info.dir).filename().string());
+        info.file = p.getStr("file");
         info.lastOpened = (long long)p["opened"].integer(0);
         std::error_code ec;
         info.exists = fs::exists(fs::path(info.dir) / "game.json", ec);
@@ -121,13 +124,14 @@ std::vector<ProjectInfo> recentProjects() {
     return out;
 }
 
-void rememberProject(const std::string& dir, const std::string& name) {
+void rememberProject(const std::string& dir, const std::string& name, const std::string& file) {
     const std::string d = canonical(dir);
     Json j = loadRegistry();
     Json list = Json::array();
     Json me = Json::object();
     me.set("dir", Json::string(d));
     me.set("name", Json::string(name));
+    if (!file.empty()) me.set("file", Json::string(canonical(file)));
     me.set("opened", Json::number(int64_t(std::time(nullptr))));
     list.push(me);
     for (auto& p : j["projects"].items()) if (canonical(p.getStr("dir")) != d && list.size() < 50) list.push(p);
@@ -198,10 +202,14 @@ std::string createProject(const std::string& engineDir, const std::string& templ
         }
         if (templateId != "empty") m.set("template", Json::string(templateId));
         writeFile(dst / "game.json", m.dump() + "\n");
+        ProjectFile pf;
+        pf.name = title;
+        std::string perr;
+        if (!writeProjectFile((dst / projectFileName(title)).string(), pf, &perr)) return fail(perr);
     } catch (const std::exception& e) {
         return fail(std::string("не удалось создать проект: ") + e.what());
     }
-    rememberProject(dst.string(), title);
+    rememberProject(dst.string(), title, (dst / projectFileName(title)).string());
     return dst.lexically_normal().string();
 }
 

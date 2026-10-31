@@ -34,6 +34,7 @@ enum class EventType : uint8_t {
     Resized, FocusGained, FocusLost, QuitRequested,
     TextInputEnded,   // the user closed the on-screen keyboard (Done, Back, hide key): blur the field
     KeyboardChanged,  // on-screen keyboard shown/hidden/resized: see softKeyboardHeight()
+    OpenFile,         // the OS asks the app to open a document (double-click, Open With, Dock drop): Event::path
 };
 
 struct Event {
@@ -46,6 +47,7 @@ struct Event {
     int64_t touchId = 0;
     uint8_t mods = 0;
     bool repeat = false;
+    std::string path;            // OpenFile: absolute path (UTF-8); delivered after init, between frames
 };
 
 struct AppConfig {

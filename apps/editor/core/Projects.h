@@ -15,6 +15,7 @@ struct TemplateInfo {
 
 struct ProjectInfo {
     std::string dir, name;
+    std::string file;           // <dir>/<Title>.rtsproj when known (ProjectFile.h)
     long long lastOpened = 0;   // unix seconds
     bool exists = false;
 };
@@ -24,13 +25,14 @@ std::vector<TemplateInfo> listTemplates(const std::string& engineDir);   // "emp
 std::string projectsRegistry();                         // ~/.rtsengine/projects.json
 std::string defaultProjectsDir();                       // ~/RTSProjects
 std::vector<ProjectInfo> recentProjects();              // most recent first
-void rememberProject(const std::string& dir, const std::string& name);
+void rememberProject(const std::string& dir, const std::string& name, const std::string& file = "");
 void forgetProject(const std::string& dir);
 
 // Folder name for a project title: "Моя стратегия" -> "Моя стратегия" (keeps letters, digits, spaces, - _).
 std::string projectFolderName(const std::string& title);
-// Creates <parentDir>/<folder> from a template id ("empty" or a templates/ folder). Returns the new
-// project folder or "" with a readable error.
+// Creates <parentDir>/<folder> from a template id ("empty" or a templates/ folder) with its
+// <Title>.rtsproj (the template's own .rtsproj is not copied). Returns the new project folder or ""
+// with a readable error.
 std::string createProject(const std::string& engineDir, const std::string& templateId, const std::string& title,
                           const std::string& parentDir, const std::string& folder, std::string* error);
 

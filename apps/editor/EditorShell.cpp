@@ -54,8 +54,8 @@ void Editor::drawMenuBar() {
             int n = 0;
             for (auto& pr : recentProjects()) {
                 if (!pr.exists || ++n > 12) continue;
-                if (ImGui::MenuItem(pr.name.c_str(), nullptr, pr.dir == ws_.project.dir)) openGame(pr.dir);
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", pr.dir.c_str());
+                if (ImGui::MenuItem(pr.name.c_str(), nullptr, pr.dir == ws_.project.dir)) requestOpenProject(pr.file.empty() ? pr.dir : pr.file);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", (pr.file.empty() ? pr.dir : pr.file).c_str());
             }
             if (n == 0) ImGui::TextDisabled("пока пусто");
             ImGui::EndMenu();
@@ -65,6 +65,9 @@ void Editor::drawMenuBar() {
             if (ws_.project.load(ws_.project.dir, &err)) { reloadRules(); status = "Правила перечитаны"; } else status = "Ошибка: " + err;
         }
         ImGui::Separator();
+        if (item(ICON_LINK, "Сделать редактор программой по умолчанию для .rtsproj", nullptr, fileAssoc().registered, fileAssoc().supported))
+            registerFileAssoc();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", fileAssoc().detail.c_str());
         if (item(ICON_PLUG, "Подключить ИИ-агента (MCP)…")) focusWindow("agent");
         ImGui::Separator();
         if (item(ICON_EXIT, "Выход")) quit_ = true;

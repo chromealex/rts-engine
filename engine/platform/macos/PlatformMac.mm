@@ -217,6 +217,14 @@ static void updateSizes(NSView* view) {
     }
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)app { return YES; }
+// Documents from Finder (double-click, Open With, a drop on the Dock icon) and `open -a App file`:
+// at launch they arrive before applicationDidFinishLaunching, so they are queued and delivered as
+// EventType::OpenFile after init (PlatformCommon pluginFrame).
+- (void)application:(NSApplication*)app openURLs:(NSArray<NSURL*>*)urls {
+    for (NSURL* u in urls)
+        if (u.isFileURL && u.path) detail::requestOpenFile(u.path.UTF8String);
+    if (g_window) [NSApp activateIgnoringOtherApps:YES];
+}
 - (BOOL)windowShouldClose:(NSWindow*)w {
     Event e; e.type = EventType::QuitRequested; detail::dispatch(e);
     return YES;
@@ -280,6 +288,9 @@ int run(const AppConfig& cfg, AppCallbacks cb) {
         NSArray* dirs = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES);
         if (dirs.count) S.userDir = std::string([dirs[0] UTF8String]) + "/" + cfg.title;
 
+        // argv is the app's own business (rtsMain parses it): AppKit must not turn bare arguments into
+        // openURLs requests as well
+        [[NSUserDefaults standardUserDefaults] registerDefaults:@{@"NSTreatUnknownArgumentsAsOpen": @"NO"}];
         [NSApplication sharedApplication];
         [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         // Minimal menu so Cmd+Q works.

@@ -21,6 +21,7 @@ namespace rts::editor { void registerUiOps(Workspace& ws); }         // UiOps.cp
 #include "BrandingOps.h"
 #include "ToolchainOps.h"
 #include "Projects.h"
+#include "ProjectFile.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -392,15 +393,22 @@ std::vector<GameInfo> Workspace::listGames() const {
 }
 
 bool Workspace::openGame(const std::string& idOrDir, std::string* err) {
-    std::string dir = idOrDir;
-    if (!fs::exists(fs::path(dir) / "game.json")) dir = gamesDir() + "/" + idOrDir;
-    if (!fs::exists(fs::path(dir) / "game.json")) { if (err) *err = "no game.json in " + idOrDir; return false; }
+    // a .rtsproj (double-click / Open with), a project folder, its game.json, or a template id
+    std::string why;
+    std::string dir = resolveProjectDir(idOrDir, &why);
+    if (dir.empty() && !isProjectFilePath(idOrDir) && fs::exists(fs::path(gamesDir()) / idOrDir / "game.json")) dir = gamesDir() + "/" + idOrDir;
+    if (dir.empty()) { if (err) *err = why.empty() ? "no game.json in " + idOrDir : why; return false; }
     std::error_code ec;
     dir = fs::weakly_canonical(dir, ec).string();
     if (!project.load(dir, err)) return false;
     {   // recent projects (shared with rtsmcp); the engine's own templates aren't user projects
         const std::string tpl = fs::weakly_canonical(fs::path(gamesDir()), ec).string();
-        if (dir.rfind(tpl, 0) != 0) rememberProject(dir, project.manifest.getStr("name", fs::path(dir).filename().string()));
+        const bool isTemplate = dir.rfind(tpl, 0) == 0;
+        bool created = false;
+        // projects made before .rtsproj existed get one (migration); templates carry a committed one
+        project.file = isTemplate ? findProjectFile(dir) : ensureProjectFile(dir, &created);
+        if (created) log("editor", "Создан файл проекта " + fs::path(project.file).filename().string() + " (двойной клик по нему открывает проект)");
+        if (!isTemplate) rememberProject(dir, project.manifest.getStr("name", fs::path(dir).filename().string()), project.file);
     }
     // open the first map of the game (or a fresh one)
     std::string first = project.manifest["maps"][0].getStr("file");
@@ -461,6 +469,7 @@ void Workspace::registerCoreOps() {
         for (auto& pr : recentProjects()) {
             Json j = Json::object();
             j.set("name", str(pr.name)); j.set("dir", str(pr.dir)); j.set("exists", Json::fromBool(pr.exists));
+            if (!pr.file.empty()) j.set("file", str(pr.file));
             j.set("open", Json::fromBool(pr.dir == project.dir));
             arr.push(j);
         }
@@ -481,12 +490,13 @@ void Workspace::registerCoreOps() {
         r.set("games", projectsJson());
         return r;
     });
-    add("open_game", "Open a game project by folder path (or a template id from templates/ to edit the template itself); opens its first map.",
-        R"({"properties": {"game": {"type": "string", "description": "project folder (absolute) or template id"}}, "required": ["game"]})", [this](const Json& p) {
+    add("open_game", "Open a game project by its .rtsproj file or folder path (or a template id from templates/ to edit the template itself); opens its first map.",
+        R"({"properties": {"game": {"type": "string", "description": "project .rtsproj file or folder (absolute), or a template id"}}, "required": ["game"]})", [this](const Json& p) {
             std::string err;
             if (!openGame(ps(p, "game"), &err)) throw std::runtime_error(err);
             Json r = ok();
             r.set("dir", str(project.dir));
+            if (!project.file.empty()) r.set("file", str(project.file));
             r.set("summary", str("Открыт проект " + project.manifest.getStr("name")));
             return r;
         });
@@ -500,6 +510,7 @@ void Workspace::registerCoreOps() {
         if (!openGame(dir, &err)) throw std::runtime_error(err);
         Json r = ok();
         r.set("dir", str(dir));
+        if (!project.file.empty()) r.set("file", str(project.file));
         r.set("summary", str("Создан проект «" + name + "» в " + dir));
         return r;
     };
